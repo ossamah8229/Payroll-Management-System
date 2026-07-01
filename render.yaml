@@ -1,0 +1,52 @@
+# Render Blueprint — matches the deployment topology in docs/architecture/deployment.md:
+# a Web Service for the Express API, a Static Site for the built Vite/React app, and a
+# managed PostgreSQL database. PITR (point-in-time recovery) must be enabled on the database
+# via the Render dashboard/plan tier — it is not configurable from this blueprint file.
+#
+# Environment variables marked `sync: false` must be set manually in the Render dashboard
+# (secrets are never committed to this file or to source control).
+
+databases:
+  - name: payroll-postgres
+    plan: standard
+    databaseName: payroll
+    user: payroll
+
+services:
+  - type: web
+    name: payroll-backend
+    runtime: node
+    plan: starter
+    rootDir: backend
+    buildCommand: npm install --workspaces=false && npm run build --prefix .. --workspace shared && npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: payroll-postgres
+          property: connectionString
+      - key: SESSION_SECRET
+        sync: false
+      - key: CSRF_SECRET
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: PORT
+        value: 4000
+
+  - type: web
+    name: payroll-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

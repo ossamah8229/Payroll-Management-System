@@ -3,7 +3,23 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Project scaffolding only. No application code has been written yet.
+> **Status:** Phase 1 complete (project foundation: auth, RBAC/audit infrastructure, app shell).
+> See `docs/IMPLEMENTATION_PLAN.md` for the full phase roadmap and `docs/architecture/*.md` for
+> the frozen architecture this implements.
+
+## Getting Started
+
+```bash
+npm install
+docker compose up -d          # local PostgreSQL
+```
+
+See `backend/README.md` for database migration/seed setup, then:
+
+```bash
+npm run dev:backend           # http://localhost:4000
+npm run dev:frontend          # http://localhost:5173
+```
 
 ## Project Structure
 

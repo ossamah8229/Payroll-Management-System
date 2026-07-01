@@ -12,6 +12,8 @@ node_modules/
 # Build output
 dist/
 build/
+dist-types-*/
+*.tsbuildinfo
 
 # Logs
 *.log
@@ -20,6 +22,7 @@ npm-debug.log*
 # Editor
 .vscode/
 .idea/
+.claude/
 
 # Local storage (StorageProvider local filesystem implementation)
 backend/storage/

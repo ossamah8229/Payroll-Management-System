@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: payroll
+          POSTGRES_PASSWORD: payroll_ci_password
+          POSTGRES_DB: payroll_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U payroll -d payroll_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://payroll:payroll_ci_password@localhost:5432/payroll_ci
+      SESSION_SECRET: ci-session-secret-not-for-production
+      CSRF_SECRET: ci-csrf-secret-not-for-production
+      CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build shared package
+        run: npm run build:shared
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Prisma generate
+        run: npm run prisma:generate
+
+      - name: Prisma migrate deploy
+        run: npm run prisma:migrate --workspace backend -- deploy
+
+      - name: Run backend tests
+        run: npm run test --workspace backend
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Build frontend
+        run: npm run build:frontend

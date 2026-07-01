@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens — docs/design-system.md §1.1. Fixed, shared tokens are plain values; the accent
+ * triad is the one part of the palette a signed-in user can override at runtime (Settings →
+ * Theme, a later phase) by rewriting these three variables — see src/providers/theme-provider.tsx.
+ */
+:root {
+  --color-bg: #f0ede8;
+  --color-surface: #fafaf8;
+  --color-surface-2: #ffffff;
+  --color-border: #d8d4cc;
+  --color-border-strong: #b8b2a8;
+  --color-text: #1a1816;
+  --color-text-muted: #6b6560;
+  --color-text-faint: #9c978f;
+
+  --accent: #1b4f72;
+  --accent-light: #ebf2f8;
+  --accent-mid: #2e6ea6;
+
+  --color-green: #1a6b3a;
+  --color-green-light: #e8f5ee;
+  --color-amber: #8b5e00;
+  --color-amber-light: #fff8e6;
+  --color-red: #8b1a1a;
+  --color-red-light: #fbe8e8;
+  --color-purple: #4a2080;
+  --color-purple-light: #f0ebf8;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+  }
+}

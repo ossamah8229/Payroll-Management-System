@@ -1,0 +1,151 @@
+// Payroll Management System — Prisma schema
+//
+// Phase 1 scope only. This file intentionally implements a subset of the full design in
+// docs/architecture/database-schema.md — exactly the tables needed to establish the
+// authentication, RBAC, and audit-log foundation (Role, Permission, RolePermission, User,
+// ProjectSite [minimal — see note below], UserSiteAssignment, AuditLog).
+//
+// Every other table in database-schema.md (Bank, Employee, PayrollCycle, PayrollEntry,
+// Correction, BalanceAdjustment, Advance, AdjustmentType, BackupPackage, BackupPackageFile,
+// CompanySettings) is deferred to the phase that actually builds the module owning it, added
+// via a new additive migration at that time — per Principle 8 (prefer additive schema
+// evolution) and docs/IMPLEMENTATION_PLAN.md's phase breakdown. Nothing here contradicts
+// database-schema.md; it is a strict subset, sequenced deliberately.
+//
+// Naming: model and field names match database-schema.md exactly (PascalCase models, camelCase
+// fields) with no @map/@@map renaming to snake_case — that document never specifies a snake_case
+// physical naming convention, and Prisma handles camelCase columns natively (it quotes
+// identifiers in generated SQL), so introducing snake_case here would have been an unrequested
+// deviation, not a requirement.
+//
+// ProjectSite is included now, minimally (id/name/branchCode/isActive only — no `defaultBankId`
+// yet, since `Bank` doesn't exist until Phase 2), because `UserSiteAssignment` needs a real
+// foreign-key target for Phase 1's RBAC site-scoping infrastructure to be genuine, not a stub.
+// `defaultBankId` is added additively in the Phase 2 migration alongside `Bank`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Role → Permission RBAC (docs/architecture/authentication.md). A named bundle of permissions;
+/// Master Admin and Payroll Staff today, extensible to future roles (e.g. an ESS "Employee" role)
+/// as a data change, never a code change.
+model Role {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String   @unique @db.VarChar(40)
+  name        String   @db.VarChar(80)
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  users           User[]
+  rolePermissions RolePermission[]
+}
+
+/// An individual, checkable capability (e.g. `payroll:release`) — the atomic unit RBAC
+/// middleware checks per route.
+model Permission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String   @unique @db.VarChar(80)
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  rolePermissions RolePermission[]
+}
+
+/// Join table — which permissions a role grants. Pure join semantics, so this is the one
+/// relationship in the schema where cascade delete is appropriate (a row has no meaning
+/// without both parents).
+model RolePermission {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+/// A login account — Master Admin or Payroll Staff. Not to be confused with `Employee` (Phase 2),
+/// who is paid but does not log in. Never hard-deleted — deactivated via `isActive`.
+model User {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roleId           String    @db.Uuid
+  name             String    @db.VarChar(120)
+  email            String    @unique @db.VarChar(255)
+  passwordHash     String    @db.VarChar(255)
+  avatarStorageKey String?
+  themeAccentColor String    @default("#1B4F72") @db.VarChar(7)
+  isActive         Boolean   @default(true)
+  lastLoginAt      DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  role            Role                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  siteAssignments UserSiteAssignment[]
+  auditLogEntries AuditLog[]
+
+  @@index([roleId])
+}
+
+/// Project site master data. Minimal in Phase 1 — see the file-level note above. Full CRUD and
+/// business rules (e.g. delete blocked while employees remain assigned) land in Phase 2 alongside
+/// Employee Registry, which is the module that actually enforces that rule.
+model ProjectSite {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String   @unique @db.VarChar(160)
+  branchCode String?  @db.VarChar(20)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  userAssignments UserSiteAssignment[]
+}
+
+/// Which project sites a Payroll Staff user may access (docs/architecture/authentication.md).
+/// Master Admin has implicit, unrestricted access and has no rows here.
+model UserSiteAssignment {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  siteId    String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site ProjectSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, siteId])
+  @@index([userId])
+  @@index([siteId])
+}
+
+/// Permanent, append-only record of every financial and administrative action (Principle 3).
+/// Immutability is enforced at two layers: no application code path updates or deletes a row
+/// (only `auditLog.record(...)`, an insert), and — for defense in depth — a database trigger
+/// (see prisma/migrations/20260701164509_audit_log_immutability) rejects any UPDATE or DELETE
+/// against this table outright.
+model AuditLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  occurredAt  DateTime @default(now()) @db.Timestamptz(6)
+  actorUserId String?  @db.Uuid
+  action      String   @db.VarChar(100)
+  entityType  String   @db.VarChar(60)
+  entityId    String?  @db.Uuid
+  metadata    Json?
+  ipAddress   String?  @db.Inet
+  userAgent   String?
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([occurredAt(sort: Desc)])
+}

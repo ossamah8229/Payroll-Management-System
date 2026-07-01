@@ -1,0 +1,87 @@
+import express, { type Express } from 'express';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import helmet from 'helmet';
+import pinoHttp from 'pino-http';
+import { Pool } from 'pg';
+import { env, isProduction } from './config/env';
+import { logger } from './lib/logger';
+import { attachUser } from './common/middleware/attach-user';
+import { csrfProtection, issueCsrfCookie } from './common/middleware/csrf';
+import { errorHandler } from './common/middleware/error-handler';
+import { authRouter } from './modules/auth/auth.routes';
+
+const PgSession = connectPgSimple(session);
+
+/**
+ * A dedicated `pg` Pool for the session store, separate from Prisma's own connection pool.
+ * `connect-pg-simple` speaks directly to Postgres via `pg`; Prisma manages its own pool
+ * internally and the two are intentionally not shared, since they have different lifecycle and
+ * pooling needs.
+ */
+const sessionPool = new Pool({ connectionString: env.DATABASE_URL });
+
+export function createApp(): Express {
+  const app = express();
+
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1); // required for correct req.ip / secure cookies behind Render's proxy
+
+  app.use(helmet());
+  app.use(
+    cors({
+      origin: env.CORS_ORIGIN,
+      credentials: true,
+    }),
+  );
+  app.use(
+    pinoHttp({
+      logger,
+      autoLogging: !isProduction ? { ignore: (req) => req.url === '/health' } : true,
+    }),
+  );
+  app.use(express.json());
+  app.use(cookieParser());
+
+  app.use(
+    session({
+      store: new PgSession({
+        pool: sessionPool,
+        tableName: 'session',
+        // Explicit creation is disabled in production — the table is created via a documented
+        // migration step (see backend/README.md), not implicitly at runtime, so a first request
+        // in production can never race a table-creation attempt.
+        createTableIfMissing: !isProduction,
+      }),
+      name: 'connect.sid',
+      secret: env.SESSION_SECRET,
+      resave: false,
+      saveUninitialized: false,
+      rolling: true,
+      cookie: {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        maxAge: 1000 * 60 * 60 * 8, // 8 hours idle timeout, rolling
+      },
+    }),
+  );
+
+  app.use(issueCsrfCookie);
+  app.use(csrfProtection);
+  app.use(attachUser);
+
+  // Liveness check — deliberately touches nothing but the process itself (no DB, no session
+  // store), so it reflects whether the HTTP server is up, independent of dependency health.
+  app.get('/health', (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
+  app.use('/api/v1/auth', authRouter);
+
+  app.use(errorHandler);
+
+  return app;
+}
