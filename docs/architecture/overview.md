@@ -1,0 +1,122 @@
+# Architecture Overview
+
+## Overall Architecture: Modular Monolith
+
+The system is a single deployable Express + TypeScript application, backed by one PostgreSQL
+database — not a microservices architecture. At this project's actual scale (~1,500 employees, a
+small internal user base, one company) a distributed architecture would add operational risk
+(network calls, partial failures, eventual consistency) without solving a real problem, directly
+conflicting with Principle 4 (never sacrifice correctness for performance/complexity that isn't
+needed).
+
+What a monolith *doesn't* get for free — clean separation of concerns — is enforced by discipline
+instead: the backend is organized into one folder per business domain under `backend/src/modules/`
+(`docs/architecture/folder-structure.md`), and modules interact through each other's service-layer
+functions, never by reaching directly into another module's database tables. This is what makes the
+system's core invariants (Payroll Entry as single source of truth, immutable released payroll,
+append-only audit log) enforceable in practice rather than just documented in principle.
+
+## Major Modules
+
+| Module | Owns | Responsibility |
+|---|---|---|
+| **Authentication** | Sessions, CSRF tokens | Login/logout, session lifecycle (`docs/architecture/authentication.md`), password verification. Publishes the current-user/permission context every other module's access-control middleware depends on. Depends on no other module. |
+| **Employee Registry** | `Employee` | Identity, employment, and bank details (CNIC, name, father's name, DOB/DOJ/DOL, designation, deputed site, bank/account). Enforces CNIC as the unique cross-system key and historical preservation (DOL, never hard-delete). **Payroll Staff are fully site-scoped here — view, edit, and create are all restricted to their assigned sites, with no global access**; Master Admin is unrestricted (`docs/architecture/authentication.md`). Editing `Employee.siteId` (a transfer) never cascades into any existing `PayrollEntry` — see Payroll Entry, below. |
+| **Project Sites** | `ProjectSite` | Site master data (name, bank, branch code). Referenced by Employee Registry (deputed site) and Authentication/Settings (Payroll Staff site assignment). Blocks deletion while employees remain assigned. |
+| **Payroll Entry** | `PayrollEntry` (Draft-cycle writes) | The single editable data-capture surface for a cycle's monthly figures (gross pay, days, OT, leave, EOBI, advances, fines, hold) — Principle 1. Site, designation, and bank fields are copied from `Employee` when the entry is created, then behave as ordinary Draft-editable fields (same as `grossPay`) — an `Employee` update never reaches back to change them. Payroll-data site-scoping is enforced against `PayrollEntry.siteId`, not `Employee.siteId`. All downstream financial views read from what this module produces; none maintain an independent copy. |
+| **Payroll Processing** | `PayrollCycle`, `calcNet` | Owns the cycle lifecycle (Draft → Released → Archived, `docs/architecture/data-and-storage.md` §4), including the explicit "Finalize Cycle" action that transitions Draft → Released. Finalization is blocked — with no Master Admin override — while any non-held employee remains unreleased. Also owns the deterministic net-salary calculation (Principle 5) and orchestrates new-cycle creation: archiving the outgoing cycle, generating its backup package, and selecting which employees receive a new `PayrollEntry` (every active employee, plus any employee with a pending Balance Adjustment still to settle). |
+| **Release Salary** | Release/Hold flags | Per-employee release, bulk Release All/Hold All scoped by site. Writes release/hold status; never independently edits payroll figures, and does not itself transition the cycle's own status (that's Payroll Processing's Finalize action, above). |
+| **Corrections** | `Correction` | The Correction workflow, triggered whenever a `PayrollEntry` has been individually released **or** its cycle is no longer Draft (`docs/architecture/data-and-storage.md` §4) — before/after preview computed against the entry's *current effective state* (replaying any prior corrections, not the stale original — `docs/architecture/post-release-corrections.md`), mandatory reason + standardized Adjustment Type, Master-Admin-only approval. Never mutates the underlying `PayrollEntry` (Principle 9). |
+| **Balance Adjustments** | `BalanceAdjustment` | The automatic settlement pipeline: always created on Correction approval (a zero-difference correction still creates one, typed `NONE` and immediately settled), surfaced automatically in the active Draft cycle, marked `SETTLED` automatically on release — merged into that release's ordinary payment amount, never a second transfer. No manual transfer between cycles, ever. A correction to an advance-deduction field also reconciles the linked `Advance`'s balance in the same transaction. |
+| **Bank Sheets** | (derived, read-only) | Released, non-held, bank-account-holding employees for a cycle/bank/site — exactly one row per employee, amount = net salary ± any settling Balance Adjustments. No data entry — filters and export only. |
+| **Cash Receiving** | (derived, read-only) | Same as Bank Sheets, for employees without a bank account, matching the Cash Receiving Sheet format — also exactly one row per employee. |
+| **Statements** | (read/aggregation only) | Per-employee ledger: earnings, deductions, corrections, and balance adjustments across cycles, with running balance. Reads Payroll Entry, Corrections, and Balance Adjustments; owns no primary data of its own. |
+| **Reports** | (read-only queries) | Fines & EOBI Report and future reports. Each report is an isolated, side-effect-free query module — this is also the extensibility seam for future reports (see below). |
+| **Dashboard** | (read-only, cached) | Summary stats, per-site payroll summary, release progress, deduction breakdown. The most read-heavy module; a candidate for short-TTL caching. |
+| **Settings** | `User`, `Role`, `CompanySettings` | Company Details (Master-Admin-only; feeds Payslip/Bank Sheet headers), My Profile, Theme, and User Management (accounts, role assignment, per-site assignment for Payroll Staff) — the "Settings & Profile" and "User Management" screens both live here, working with Authentication's permission model. |
+| **Audit Log** | `AuditLog` | Append-only recorder and query surface for every financial/administrative action across all other modules (Principle 3). Receives events; never depends on other modules' internals. |
+
+## Interactions & High-Level Data Flow
+
+```
+                        ┌──────────────────┐     ┌────────────────┐
+                        │ Employee Registry │     │ Project Sites  │   ← master/reference data
+                        └─────────┬─────────┘     └───────┬────────┘
+                                  └────────────┬───────────┘
+                                               ▼
+                                     ┌───────────────────┐
+                                     │   Payroll Entry    │  ← current Draft cycle, single source of truth
+                                     └──────────┬─────────┘
+                                                │  orchestrated by
+                                                ▼
+                                     ┌───────────────────┐
+                                     │ Payroll Processing │  ← cycle lifecycle, calcNet
+                                     └──────────┬─────────┘
+                                                ▼
+                                     ┌───────────────────┐
+                                     │   Release Salary    │
+                                     └──────────┬─────────┘
+                              ┌──────────────────┼──────────────────┐
+                              ▼                                    ▼
+                    ┌─────────────────┐                  ┌───────────────────┐
+                    │   Bank Sheets    │                  │  Cash Receiving    │   ← derived, read-only
+                    └─────────────────┘                  └───────────────────┘
+
+   (once an entry is individually released, or its cycle is no longer Draft, further changes to it
+    flow through:)
+
+   ┌─────────────┐        ┌──────────────────────┐        (next Draft cycle)
+   │ Corrections  │ ─────► │ Balance Adjustments   │ ─────► automatically surfaced, then merged into
+   └─────────────┘        └──────────────────────┘         that cycle's Bank Sheet / Cash Receiving
+                                                             row on release; shown separately on
+                                                             Payslips / Statements
+
+   Every mutation above (release, hold, correction — including zero-difference, balance adjustment
+   created/settled, advance reconciled, cycle finalized/archived, employee/user/role change) →
+   Audit Log  (append-only, same transaction)
+
+   Statements, Reports, Dashboard  ←  read-only aggregations over all of the above
+
+   Authentication + Settings  →  cross-cutting: gate every module's access via
+                                  role + site-scoping middleware; not part of the payroll
+                                  data flow itself
+```
+
+The load-bearing path is **Employee Registry / Project Sites → Payroll Entry → Payroll Processing →
+Release Salary → (Bank Sheets / Cash Receiving)**, with **Corrections → Balance Adjustments**
+providing the only route by which an entry that requires the Correction workflow (individually
+released, or its cycle no longer Draft) can still have its outcome change — always by adding a new,
+linked record, never by editing the path it branches from.
+
+## Extensibility: Adding Future Modules Without Changing Payroll Processing
+
+Payroll Processing owns the cycle state machine and `calcNet` — the one piece of the system where an
+uncontrolled change would be highest-risk. Each future module integrates at a **defined seam**
+instead of modifying it:
+
+- **Biometric Attendance** — becomes a new *caller* of Payroll Entry's existing "set attendance
+  figures" service function (the same function manual entry already uses to write `days`/`ot`), via
+  a sync/aggregation service that turns raw punch records into those same fields. Payroll Processing
+  never needs to know whether `days` came from a person typing or a biometric sync — the input
+  contract is unchanged. Manual entry keeps working as an override.
+- **Leave Management** — same pattern as Biometric Attendance: a new module owns leave requests,
+  approvals, and balance tracking, and feeds its computed "leave days for this cycle" into Payroll
+  Entry through the existing field/service contract, rather than introducing a second, parallel leave
+  calculation inside Payroll Processing.
+- **ESS (Employee Self-Service) Portal** — requires a third role. Authentication's RBAC is already
+  modeled as Role → Permission (`docs/architecture/authentication.md`), so an "Employee" role with a
+  narrow, self-scoped permission set is a data change. ESS gets its own API namespace
+  (`/api/v1/ess/...`) that composes existing *read* paths (Statements, Payslip generation,
+  Corrections history) scoped to the requesting employee's own CNIC — it consumes existing modules'
+  outputs and never touches Payroll Processing's internals.
+- **Gratuity** — a new, isolated module that reads Employee (DOJ/DOL) and historical cycle data
+  through Payroll Processing's and Employee Registry's existing read APIs (not by querying their
+  tables directly), computes a gratuity figure on exit, and writes to its own table. It never
+  modifies core payroll tables or `calcNet`.
+
+The common thread: a future module either (a) calls an existing module's already-published write
+path with new upstream data (attendance, leave), or (b) consumes existing modules' read paths to
+compute something new (ESS, Gratuity, additional Reports) — never (c) modifies Payroll Processing's
+internal state machine or calculation logic, and never reaches into another module's tables directly.
+This is the same modular-monolith discipline already governing the current 15 modules, applied
+concretely to what comes next.

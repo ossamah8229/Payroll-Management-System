@@ -1,0 +1,2066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FTM Payroll — Broom Services (Pvt) Ltd</title>
+<style>:root {
+  --bg:#F0EDE8;--surface:#FAFAF8;--surface2:#FFFFFF;--border:#D8D4CC;--border-strong:#B8B2A8;
+  --text:#1A1816;--text-muted:#6B6560;--text-faint:#9C978F;
+  --accent:#1B4F72;--accent-light:#EBF2F8;--accent-mid:#2E6EA6;
+  --green:#1A6B3A;--green-light:#E8F5EE;--amber:#8B5E00;--amber-light:#FFF8E6;
+  --red:#8B1A1A;--red-light:#FBE8E8;--purple:#4A2080;--purple-light:#F0EBF8;
+  --radius:8px;--radius-lg:12px;
+  --shadow-md:0 4px 16px rgba(0,0,0,0.10),0 0 0 1px rgba(0,0,0,0.04);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);min-height:100vh;display:flex;}
+.sidebar{width:220px;min-height:100vh;background:var(--accent);display:flex;flex-direction:column;flex-shrink:0;position:fixed;top:0;left:0;bottom:0;z-index:50;}
+.sidebar-logo{padding:20px 16px 16px;border-bottom:1px solid rgba(255,255,255,0.12);}
+.sidebar-logo .company{font-size:13px;font-weight:700;color:#fff;letter-spacing:.02em;line-height:1.3;}
+.sidebar-logo .sub{font-size:11px;color:rgba(255,255,255,.55);margin-top:2px;}
+.sidebar-logo .badge{display:inline-block;background:rgba(255,255,255,.15);color:rgba(255,255,255,.9);font-size:10px;padding:2px 7px;border-radius:20px;margin-top:6px;}
+.nav{flex:1;padding:12px 0;overflow-y:auto;}
+.nav-section{font-size:10px;font-weight:600;color:rgba(255,255,255,.35);letter-spacing:.08em;text-transform:uppercase;padding:14px 16px 4px;}
+.nav-item{display:flex;align-items:center;gap:9px;padding:8px 16px;font-size:13px;color:rgba(255,255,255,.7);cursor:pointer;border-left:2px solid transparent;transition:all .15s;}
+.nav-item:hover{background:rgba(255,255,255,.08);color:#fff;}
+.nav-item.active{background:rgba(255,255,255,.12);color:#fff;border-left-color:rgba(255,255,255,.7);font-weight:500;}
+.nav-item .icon{width:16px;text-align:center;font-size:14px;flex-shrink:0;}
+.nav-badge{margin-left:auto;background:rgba(255,255,255,.18);color:rgba(255,255,255,.9);font-size:10px;padding:1px 6px;border-radius:10px;}
+.sidebar-footer{padding:12px 16px;border-top:1px solid rgba(255,255,255,.12);}
+.sidebar-user{display:flex;align-items:center;gap:9px;}
+.user-avatar{width:28px;height:28px;background:rgba(255,255,255,.2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;font-weight:600;flex-shrink:0;}
+.user-info .name{font-size:12px;color:#fff;font-weight:500;}
+.user-info .role{font-size:10px;color:rgba(255,255,255,.5);}
+.main{margin-left:220px;flex:1;display:flex;flex-direction:column;min-height:100vh;}
+.topbar{background:var(--surface2);border-bottom:1px solid var(--border);padding:0 28px;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;flex-wrap:wrap;gap:8px;}
+.page-title{font-size:15px;font-weight:600;}
+.page-subtitle{font-size:12px;color:var(--text-muted);}
+.topbar-right{display:flex;align-items:center;gap:8px;}
+.month-badge{background:var(--accent-light);color:var(--accent);font-size:12px;font-weight:600;padding:5px 12px;border-radius:20px;}
+.content{padding:24px 28px;flex:1;}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;}
+.stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 18px;}
+.stat-label{font-size:11px;color:var(--text-muted);font-weight:500;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+.stat-value{font-size:21px;font-weight:700;letter-spacing:-.02em;}
+.stat-sub{font-size:11px;color:var(--text-muted);margin-top:3px;}
+.stat-card.green .stat-value{color:var(--green);}
+.stat-card.amber .stat-value{color:var(--amber);}
+.stat-card.red .stat-value{color:var(--red);}
+.stat-card.blue .stat-value{color:var(--accent);}
+.section{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;}
+.section-header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+.section-title{font-size:13px;font-weight:600;}
+.section-body{padding:18px;}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--radius);font-size:12px;font-weight:500;cursor:pointer;border:none;transition:all .15s;white-space:nowrap;}
+.btn-primary{background:var(--accent);color:#fff;}
+.btn-primary:hover{background:var(--accent-mid);}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border);}
+.btn-secondary:hover{background:var(--bg);border-color:var(--border-strong);}
+.btn-green{background:var(--green);color:#fff;}
+.btn-green:hover{background:#15593A;}
+.btn-amber{background:var(--amber);color:#fff;}
+.btn-sm{padding:5px 10px;font-size:11px;}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;}
+.table-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th{background:var(--bg);color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;}
+td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+.td-name{font-weight:500;}
+.td-cnic{font-family:monospace;font-size:11px;color:var(--text-muted);}
+.td-num{text-align:right;font-variant-numeric:tabular-nums;}
+.td-amount{text-align:right;font-weight:500;font-variant-numeric:tabular-nums;}
+.td-deduct{text-align:right;color:var(--red);font-variant-numeric:tabular-nums;}
+.td-net{text-align:right;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums;}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;white-space:nowrap;}
+.badge-green{background:var(--green-light);color:var(--green);}
+.badge-amber{background:var(--amber-light);color:var(--amber);}
+.badge-red{background:var(--red-light);color:var(--red);}
+.badge-blue{background:var(--accent-light);color:var(--accent);}
+.badge-purple{background:var(--purple-light);color:var(--purple);}
+.badge-gray{background:var(--bg);color:var(--text-muted);}
+.badge-hold{background:#FDE8E8;color:#8B1A1A;border:1px solid #F0B8B8;}
+.filter-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;}
+.filter-group{display:flex;flex-direction:column;gap:3px;}
+.filter-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;}
+select,input[type="text"],input[type="number"],input[type="password"]{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);padding:6px 10px;font-size:12px;color:var(--text);outline:none;}
+select:focus,input:focus{border-color:var(--accent-mid);box-shadow:0 0 0 3px var(--accent-light);}
+input[type="text"]{width:200px;}
+.inline-edit{width:100%;min-width:72px;padding:5px 7px;font-size:12px;text-align:right;border:1px solid var(--border);background:var(--surface2);border-radius:5px;font-variant-numeric:tabular-nums;}
+.inline-edit:hover{border-color:var(--border-strong);}
+.inline-edit:focus{border-color:var(--accent-mid);background:var(--surface2);box-shadow:0 0 0 2px var(--accent-light);}
+.inline-edit.deduct{color:var(--red);}
+#payroll-tbody td{padding:7px 8px;}
+.payroll-table-wrap table{font-size:12.5px;}
+.payroll-table-wrap th{font-size:10px;padding:9px 8px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.form-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+.field{display:flex;flex-direction:column;gap:4px;}
+.field label{font-size:11px;font-weight:600;color:var(--text-muted);}
+.field input,.field select{width:100%;}
+.field-hint{font-size:10px;color:var(--text-faint);margin-top:2px;}
+.divider{border:none;border-top:1px solid var(--border);margin:16px 0;}
+.subsection-title{font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.page{display:none;}
+.page.active{display:block;}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center;}
+.modal-overlay.open{display:flex;}
+.modal{background:var(--surface2);border-radius:var(--radius-lg);box-shadow:var(--shadow-md);width:580px;max-width:95vw;max-height:90vh;overflow-y:auto;}
+.modal-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.modal-title{font-size:14px;font-weight:700;}
+.modal-body{padding:20px;}
+.modal-footer{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;}
+.close-btn{background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);padding:2px 6px;border-radius:4px;}
+.close-btn:hover{background:var(--bg);color:var(--text);}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--text);color:#fff;padding:10px 16px;border-radius:var(--radius);font-size:12px;font-weight:500;z-index:999;opacity:0;transform:translateY(8px);transition:all .2s;pointer-events:none;max-width:360px;}
+.toast.show{opacity:1;transform:translateY(0);}
+.progress-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px;}
+.progress-fill{height:100%;border-radius:3px;transition:width .4s;}
+.progress-fill.green{background:var(--green);}
+.progress-fill.amber{background:#D4A017;}
+.summary-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.summary-row:last-child{border-bottom:none;font-weight:700;font-size:14px;}
+.summary-row.deduct{color:var(--red);}
+.summary-row.net{color:var(--green);}
+.timeline-item{display:flex;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);}
+.timeline-item:last-child{border-bottom:none;}
+.timeline-dot{width:8px;height:8px;border-radius:50%;background:var(--accent-mid);margin-top:5px;flex-shrink:0;}
+.timeline-title{font-size:12px;font-weight:600;}
+.timeline-detail{font-size:11px;color:var(--text-muted);margin-top:2px;}
+.att-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px;}
+.day-cell{aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;cursor:pointer;transition:all .1s;border:1px solid transparent;}
+.day-cell.present{background:var(--green-light);color:var(--green);border-color:#B8DEC8;}
+.day-cell.absent{background:var(--red-light);color:var(--red);border-color:#F0C0C0;}
+.day-cell.empty{opacity:0;pointer-events:none;}
+.day-cell:hover:not(.empty){filter:brightness(.95);transform:scale(1.05);}
+.drag-row{cursor:grab;}
+.drag-row.dragging{opacity:.4;background:var(--accent-light)!important;}
+.drag-row.drag-over{border-top:2px solid var(--accent-mid);}
+.drag-handle{cursor:grab;color:var(--text-faint);padding:0 4px;font-size:14px;user-select:none;}
+.drag-handle:hover{color:var(--text-muted);}
+.quick-add-btn{position:fixed;bottom:32px;right:32px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:24px;cursor:pointer;box-shadow:0 4px 16px rgba(27,79,114,.4);display:flex;align-items:center;justify-content:center;z-index:40;transition:all .2s;}
+.quick-add-btn:hover{background:var(--accent-mid);transform:scale(1.08);}
+.quick-add-btn .tooltip{position:absolute;right:60px;background:var(--text);color:#fff;font-size:11px;font-weight:500;padding:5px 10px;border-radius:6px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s;}
+.quick-add-btn:hover .tooltip{opacity:1;}
+.hold-toggle{width:32px;height:18px;border-radius:10px;border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;}
+.hold-toggle.released{background:var(--border-strong);}
+.hold-toggle.held{background:var(--red);}
+.hold-toggle::after{content:'';position:absolute;width:12px;height:12px;border-radius:50%;background:#fff;top:3px;transition:left .2s;}
+.hold-toggle.released::after{left:17px;}
+.hold-toggle.held::after{left:3px;}
+.payslip-preview{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;font-family:'Times New Roman',serif;font-size:12px;background:white;max-width:680px;margin:0 auto;}
+.payslip-header{background:#f8f8f8;border-bottom:2px solid #333;padding:12px 16px;text-align:center;}
+.payslip-company{font-size:13px;font-weight:bold;margin-top:4px;}
+.payslip-meta{display:grid;grid-template-columns:1fr 1fr;}
+.payslip-meta-item{padding:6px 12px;border-right:1px solid #ccc;border-bottom:1px solid #ccc;font-size:11px;}
+.payslip-meta-item:nth-child(even){border-right:none;}
+.payslip-meta-label{color:#555;}
+.payslip-meta-value{font-weight:bold;margin-top:1px;}
+.payslip-body{display:grid;grid-template-columns:1fr 1fr;}
+.payslip-col{padding:10px 12px;}
+.payslip-col:first-child{border-right:1px solid #ccc;}
+.payslip-col-title{font-weight:bold;font-size:12px;border-bottom:1px solid #ccc;padding-bottom:4px;margin-bottom:6px;}
+.payslip-row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px;}
+.payslip-row.total{border-top:1px solid #ccc;margin-top:4px;padding-top:5px;font-weight:bold;}
+.payslip-net{background:#f0f0f0;border-top:2px solid #333;padding:8px 12px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;}
+.user-card{border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;display:flex;align-items:center;gap:12px;margin-bottom:8px;background:var(--surface2);}
+.user-card-avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#fff;flex-shrink:0;}
+.cash-sheet{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;font-size:11px;background:white;}
+.cash-sheet table{font-size:11px;}
+.cash-sheet th{font-size:9px;}
+.site-card{border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px;background:var(--surface2);}
+
+/* MULTI-SELECT FILTER */
+.multiselect{position:relative;display:inline-block;}
+.multiselect-trigger{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);padding:6px 10px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:160px;justify-content:space-between;}
+.multiselect-trigger:hover{border-color:var(--border-strong);}
+.multiselect-panel{display:none;position:absolute;top:calc(100% + 4px);left:0;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-md);z-index:30;min-width:240px;max-height:280px;overflow-y:auto;padding:6px;}
+.multiselect-panel.open{display:block;}
+.multiselect-option{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:12px;cursor:pointer;border-radius:5px;}
+.multiselect-option:hover{background:var(--bg);}
+.multiselect-actions{display:flex;gap:6px;padding:6px 8px;border-top:1px solid var(--border);margin-top:4px;}
+
+/* REPORT CARDS */
+.report-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;}
+.report-row{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--border);font-size:12px;}
+.report-row:last-child{border-bottom:none;}
+.report-row:hover{background:var(--bg);}
+
+/* CYCLE INPUT */
+.cycle-input{width:100%;text-align:center;}
+
+/* COMPANY SETTINGS */
+.logo-upload{width:90px;height:90px;border-radius:var(--radius);border:2px dashed var(--border-strong);display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--text-faint);cursor:pointer;background:var(--bg);flex-shrink:0;}
+.theme-swatch{width:48px;height:48px;border-radius:50%;cursor:pointer;border:3px solid transparent;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:16px;}
+.theme-swatch.active{border-color:var(--text);}
+.avatar-upload{width:64px;height:64px;border-radius:50%;border:2px dashed var(--border-strong);display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--text-faint);cursor:pointer;background:var(--bg);flex-shrink:0;}
+
+/* TEAM PANEL (chat/todo sidebar) */
+.team-panel{position:fixed;top:0;right:-340px;width:340px;height:100vh;background:var(--surface2);border-left:1px solid var(--border);box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:80;transition:right .25s;display:flex;flex-direction:column;}
+.team-panel.open{right:0;}
+.team-toggle{position:fixed;bottom:32px;right:96px;width:52px;height:52px;border-radius:50%;background:var(--purple);color:#fff;border:none;font-size:20px;cursor:pointer;box-shadow:0 4px 16px rgba(74,32,128,.4);display:flex;align-items:center;justify-content:center;z-index:40;}
+.team-toggle:hover{transform:scale(1.08);}
+.team-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.team-tabs{display:flex;border-bottom:1px solid var(--border);}
+.team-tab{flex:1;text-align:center;padding:10px;font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;border-bottom:2px solid transparent;}
+.team-tab.active{color:var(--purple);border-bottom-color:var(--purple);}
+.team-body{flex:1;overflow-y:auto;padding:12px 14px;}
+.chat-msg{margin-bottom:12px;}
+.chat-msg .who{font-size:11px;font-weight:700;color:var(--accent);}
+.chat-msg .when{font-size:9px;color:var(--text-faint);margin-left:6px;font-weight:400;}
+.chat-msg .text{font-size:12px;margin-top:2px;background:var(--bg);padding:7px 10px;border-radius:8px;display:inline-block;}
+.team-input-row{padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:6px;}
+.team-input-row input{flex:1;}
+.todo-item{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;}
+.todo-item:last-child{border-bottom:none;}
+.todo-item.done .todo-text{text-decoration:line-through;color:var(--text-faint);}
+.todo-text{flex:1;}
+.todo-meta{font-size:9.5px;color:var(--text-faint);margin-top:2px;}
+
+/* CORRECTION MODAL */
+.correction-compare{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;background:var(--bg);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;}
+.correction-compare .old-val{text-align:center;}
+.correction-compare .new-val{text-align:center;}
+.correction-compare .label{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;}
+.correction-compare .amt{font-size:18px;font-weight:700;}
+.correction-compare .old-val .amt{color:var(--text-muted);text-decoration:line-through;}
+.correction-compare .new-val .amt{color:var(--accent);}
+.correction-result{border-radius:var(--radius);padding:12px 14px;margin-top:10px;font-size:13px;font-weight:600;text-align:center;}
+.correction-result.owed{background:var(--green-light);color:var(--green);}
+.correction-result.deduct{background:var(--red-light);color:var(--red);}
+.correction-result.none{background:var(--bg);color:var(--text-muted);}
+.locked-badge{display:inline-flex;align-items:center;gap:4px;background:var(--purple-light);color:var(--purple);font-size:10px;font-weight:600;padding:3px 9px;border-radius:20px;}
+
+/* STATEMENT OF ACCOUNT */
+.statement-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+.statement-table th{background:var(--bg);padding:8px 10px;text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);border-bottom:1px solid var(--border);}
+.statement-table td{padding:8px 10px;border-bottom:1px solid var(--border);}
+.statement-table .credit{color:var(--green);text-align:right;font-variant-numeric:tabular-nums;}
+.statement-table .debit{color:var(--red);text-align:right;font-variant-numeric:tabular-nums;}
+.statement-table .bal{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;}
+.statement-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;}
+.statement-summary-card{background:var(--bg);border-radius:var(--radius);padding:10px 14px;text-align:center;}
+.statement-summary-card .lbl{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;}
+.statement-summary-card .val{font-size:16px;font-weight:700;margin-top:3px;}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="company">Broom Services<br>(Pvt) Limited</div>
+    <div class="sub">HR & Payroll System</div>
+    <div class="badge">April 2026</div>
+  </div>
+  <nav class="nav">
+    <div class="nav-section">Overview</div>
+    <div class="nav-item active" onclick="showPage('dashboard',this)"><span class="icon">⬛</span> Dashboard</div>
+    <div class="nav-section">Payroll</div>
+    <div class="nav-item" onclick="showPage('payroll',this)"><span class="icon">📋</span> Payroll Entry<span class="nav-badge">15</span></div>
+    <div class="nav-item" onclick="showPage('release',this)"><span class="icon">💳</span> Release Salary</div>
+    <div class="nav-item" onclick="showPage('reports',this)"><span class="icon">🚩</span> Fines & EOBI Report</div>
+    <div class="nav-item" onclick="showPage('payslip',this)"><span class="icon">🧾</span> Payslips</div>
+    <div class="nav-item" onclick="showPage('banksheet',this)"><span class="icon">🏦</span> Bank Sheets</div>
+    <div class="nav-item" onclick="showPage('cashsheet',this)"><span class="icon">💵</span> Cash Receiving</div>
+    <div class="nav-section">Employees</div>
+    <div class="nav-item" onclick="showPage('employees',this)"><span class="icon">👤</span> Employee Registry</div>
+    <div class="nav-item" onclick="showPage('advances',this)"><span class="icon">💰</span> Advances</div>
+    <div class="nav-item" onclick="showPage('sites',this)"><span class="icon">🏢</span> Project Sites</div>
+    <div class="nav-section">Admin</div>
+    <div class="nav-item" onclick="showPage('settings',this)"><span class="icon">⚙️</span> Settings & Profile</div>
+    <div class="nav-item" onclick="showPage('users',this)"><span class="icon">🔐</span> User Management</div>
+    <div class="nav-item" onclick="showPage('logs',this)"><span class="icon">📜</span> Audit Log</div>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="sidebar-user">
+      <div class="user-avatar">SA</div>
+      <div class="user-info"><div class="name">Salman Ahmed</div><div class="role">Master Admin</div></div>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div>
+      <div class="page-title" id="page-title">Dashboard</div>
+      <div class="page-subtitle" id="page-subtitle">Overview for April 2026</div>
+    </div>
+    <div class="topbar-right">
+      <span class="month-badge">April 2026</span>
+      <button class="btn btn-secondary btn-sm" onclick="showModal('choose-import-modal')">⬆ Import</button>
+      <button class="btn btn-secondary btn-sm" onclick="showModal('choose-export-modal')">⬇ Export</button>
+      <button class="btn btn-primary" onclick="openNewCycleModal()">🔄 New Payroll Cycle</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- DASHBOARD -->
+    <div class="page active" id="page-dashboard">
+      <div class="stats-row">
+        <div class="stat-card blue"><div class="stat-label">Total Employees</div><div class="stat-value">1,334</div><div class="stat-sub">Across all project sites</div></div>
+        <div class="stat-card green"><div class="stat-label">Total Net Payroll</div><div class="stat-value">PKR 48,237,450</div><div class="stat-sub">April 2026</div></div>
+        <div class="stat-card amber"><div class="stat-label">Total Advances</div><div class="stat-value">PKR 1,240,000</div><div class="stat-sub">This month</div></div>
+        <div class="stat-card red"><div class="stat-label">Pending Release</div><div class="stat-value">847</div><div class="stat-sub">Salaries not yet released</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;">
+        <div class="section">
+          <div class="section-header"><span class="section-title">Project Sites — Payroll Summary</span><button class="btn btn-secondary btn-sm" onclick="showPage('sites',null)">Manage Sites</button></div>
+          <div class="table-wrap"><table><thead><tr><th>Project / Site</th><th>Employees</th><th>Bank</th><th style="text-align:right">Net Payroll</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="td-name">ABL City Region</td><td>103</td><td><span class="badge badge-blue">ABL</span></td><td class="td-amount">PKR 3,824,000</td><td><span class="badge badge-green">Released</span></td></tr>
+            <tr><td class="td-name">ABL East Region</td><td>98</td><td><span class="badge badge-blue">ABL</span></td><td class="td-amount">PKR 3,611,200</td><td><span class="badge badge-green">Released</span></td></tr>
+            <tr><td class="td-name">ABL South Region</td><td>112</td><td><span class="badge badge-blue">ABL</span></td><td class="td-amount">PKR 4,120,800</td><td><span class="badge badge-amber">Partial</span></td></tr>
+            <tr><td class="td-name">ABL West Region</td><td>127</td><td><span class="badge badge-blue">ABL</span></td><td class="td-amount">PKR 4,670,900</td><td><span class="badge badge-red">Pending</span></td></tr>
+            <tr><td class="td-name">ABL Head Office</td><td>89</td><td><span class="badge badge-blue">ABL</span></td><td class="td-amount">PKR 3,277,800</td><td><span class="badge badge-red">Pending</span></td></tr>
+            <tr><td class="td-name">Dolmen Mall</td><td>34</td><td><span class="badge badge-purple">HBL</span></td><td class="td-amount">PKR 1,250,459</td><td><span class="badge badge-green">Released</span></td></tr>
+            <tr><td class="td-name">Islamabad</td><td>9</td><td><span class="badge badge-amber">MCB / Cash</span></td><td class="td-amount">PKR 244,000</td><td><span class="badge badge-red">Pending</span></td></tr>
+          </tbody></table></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div class="section">
+            <div class="section-header"><span class="section-title">Release Progress</span></div>
+            <div class="section-body">
+              <div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;font-size:12px;"><span>Bank transfers</span><span style="font-weight:600;color:var(--green)">487 / 1,334</span></div><div class="progress-bar"><div class="progress-fill green" style="width:36%"></div></div></div>
+              <div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;font-size:12px;"><span>Cash payments</span><span style="font-weight:600;color:var(--amber)">0 / 47</span></div><div class="progress-bar"><div class="progress-fill amber" style="width:0%"></div></div></div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">847 employees awaiting release</div>
+            </div>
+          </div>
+          <div class="section">
+            <div class="section-header"><span class="section-title">Deductions This Month</span></div>
+            <div class="section-body" style="font-size:12px;">
+              <div class="summary-row"><span>EOBI (×1,334)</span><span>PKR 533,600</span></div>
+              <div class="summary-row"><span>Advances deducted</span><span>PKR 840,000</span></div>
+              <div class="summary-row"><span>Eid advances</span><span>PKR 250,000</span></div>
+              <div class="summary-row"><span>Fines / Absent</span><span>PKR 116,840</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYROLL ENTRY -->
+    <div class="page" id="page-payroll">
+      <div class="filter-row">
+        <div class="filter-group"><div class="filter-label">Project / Site</div>
+          <div class="multiselect" id="payroll-site-filter">
+            <div class="multiselect-trigger" onclick="toggleMultiselect('payroll-site-filter')"><span id="payroll-site-label">All Sites</span><span>▾</span></div>
+            <div class="multiselect-panel" id="payroll-site-panel"></div>
+          </div>
+        </div>
+        <div class="filter-group"><div class="filter-label">Search</div>
+          <input type="text" placeholder="Name or CNIC…" id="search-payroll" oninput="filterPayroll()">
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="showModal('emp-modal')">👤+ Quick Add Employee</button>
+          <button class="btn btn-secondary btn-sm" onclick="showModal('payroll-import-modal')">⬆ Import Payroll</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportPayroll()">⬇ Export Payroll</button>
+          <button class="btn btn-secondary btn-sm" onclick="showToast('Attendance saved for all employees')">💾 Save All</button>
+          <button class="btn btn-primary btn-sm" onclick="showToast('⚡ Payroll calculated for all employees')">⚡ Calculate Payroll</button>
+        </div>
+      </div>
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--accent);margin-bottom:12px;">
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--accent);margin-bottom:12px;">
+        💡 All monthly figures live here — gross pay, days, OT, leave, advances, fines, and Hold. <strong>Cycle</strong> sets whether per-day pay is calculated on a 30, 27, or 26 day month for that employee — type any number. <strong>OT Rate/Hr</strong> and <strong>Leave Rate/Day</strong> can be set per employee since these vary by project site — leave them blank to use the standard rate derived from gross pay. Click any number to edit it directly. Holding a salary here automatically removes it from Bank Sheets and Release until you unhold it.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);">⚡ Bulk apply to filtered employees:</span>
+        <input type="number" id="bulk-cycle" placeholder="Cycle days" style="width:100px;">
+        <button class="btn btn-secondary btn-sm" onclick="copyToAll('cycleDays','bulk-cycle')">Copy to All</button>
+        <span style="color:var(--border-strong);">|</span>
+        <input type="number" id="bulk-otrate" placeholder="OT Rate/Hr" style="width:100px;">
+        <button class="btn btn-secondary btn-sm" onclick="copyToAll('otRate','bulk-otrate')">Copy to All</button>
+        <span style="color:var(--border-strong);">|</span>
+        <input type="number" id="bulk-leaverate" placeholder="Leave Rate/Day" style="width:110px;">
+        <button class="btn btn-secondary btn-sm" onclick="copyToAll('leaveRate','bulk-leaverate')">Copy to All</button>
+      </div>
+      </div>
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Attendance & Payroll Entry — April 2026</span>
+          <span style="font-size:11px;color:var(--text-muted);">☰ Drag rows to reorder · click any figure to edit</span>
+        </div>
+        <div class="table-wrap payroll-table-wrap">
+          <table style="min-width:1620px;"><colgroup>
+            <col style="width:22px;"><col style="width:34px;"><col style="width:160px;"><col style="width:140px;">
+            <col style="width:110px;"><col style="width:100px;"><col style="width:64px;">
+            <col style="width:64px;"><col style="width:80px;">
+            <col style="width:80px;"><col style="width:64px;"><col style="width:80px;">
+            <col style="width:80px;"><col style="width:70px;"><col style="width:44px;"><col style="width:80px;">
+            <col style="width:80px;"><col style="width:80px;"><col style="width:110px;"><col style="width:90px;"><col style="width:54px;"><col style="width:70px;">
+          </colgroup>
+          <thead><tr>
+            <th></th><th>#</th><th>Employee</th><th>Site</th>
+            <th>Designation</th><th>Gross Pay</th><th>Days</th>
+            <th>OT Hrs</th><th>OT Rate/Hr</th>
+            <th>Allowance</th><th>Leave</th><th>Leave Rate/Day</th>
+            <th>Cycle</th><th>EOBI Amt</th><th>EOBI?</th><th>Advance</th>
+            <th>Eid Adv.</th><th>Fine</th><th class="td-net">Net Salary</th><th>Status</th><th>Hold</th><th></th>
+          </tr></thead>
+          <tbody id="payroll-tbody"></tbody></table>
+        </div>
+      </div>
+      <button class="quick-add-btn" onclick="showModal('emp-modal')" title="Quick Add Employee">
+        <span style="font-size:22px;line-height:1;">+</span>
+        <span class="tooltip">Quick Add Employee</span>
+      </button>
+    </div>
+
+    <!-- RELEASE SALARY -->
+    <div class="page" id="page-release">
+      <div class="filter-row">
+        <div class="filter-group"><div class="filter-label">Project Site</div>
+          <div class="multiselect" id="release-site-filter">
+            <div class="multiselect-trigger" onclick="toggleMultiselect('release-site-filter')"><span id="release-site-label">All Sites</span><span>▾</span></div>
+            <div class="multiselect-panel" id="release-site-panel"></div>
+          </div>
+        </div>
+        <div class="filter-group"><div class="filter-label">Payment Method</div>
+          <select><option>All</option><option>Bank Transfer</option><option>Cash</option></select>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-amber" onclick="holdAll()">⏸ Hold All (Site)</button>
+          <button class="btn btn-green" onclick="releaseAll()">✅ Release All (Site)</button>
+        </div>
+      </div>
+      <div style="background:var(--amber-light);border:1px solid #F0D080;border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--amber);margin-bottom:12px;">
+        ⚠️ <strong>Hold</strong> keeps a salary from releasing even with "Release All", and excludes it from Bank Sheets and Cash Sheets automatically.
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1.5fr 1fr 1fr 1fr 1fr 130px;gap:10px;padding:8px 12px;background:var(--bg);border-radius:var(--radius);font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
+        <div>Employee</div><div>Site</div><div>Method</div><div>Net Salary</div><div>Hold</div><div>Status</div><div>Action</div>
+      </div>
+      <div id="release-list"></div>
+    </div>
+
+    <!-- PAYSLIPS -->
+    <div class="page" id="page-payslip">
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:20px;">
+        <div class="section">
+          <div class="section-header"><span class="section-title">Select Employee</span></div>
+          <div class="section-body">
+            <div class="field" style="margin-bottom:12px;"><label>Search</label><input type="text" placeholder="Name or CNIC…" oninput="filterPayslipSearch(this.value)" style="width:100%;"></div>
+            <div id="payslip-list" style="max-height:420px;overflow-y:auto;"></div>
+          </div>
+        </div>
+        <div id="payslip-area"><div style="text-align:center;padding:60px 20px;color:var(--text-muted);"><div style="font-size:40px;margin-bottom:12px;">🧾</div><div style="font-size:14px;font-weight:600;">Select an employee to preview payslip</div></div></div>
+      </div>
+    </div>
+
+    <!-- BANK SHEET -->
+    <div class="page" id="page-banksheet">
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:8px 14px;font-size:11.5px;color:var(--accent);margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+        🔒 <strong>Read-only</strong> — this sheet is generated automatically from Payroll Entry. To change any figure, go to Payroll Entry; corrections to released salaries require Master Admin approval there.
+      </div>
+      <div class="filter-row" style="margin-bottom:14px;">
+        <div class="filter-group"><div class="filter-label">Bank</div><select id="bs-bank" onchange="renderBankSheet()"><option>ABL</option><option>HBL</option><option>MCB</option></select></div>
+        <div class="filter-group"><div class="filter-label">Project Site</div><select id="bs-site" onchange="renderBankSheet()"><option>All Sites</option></select></div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end;">
+          <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨 Print</button>
+          <button class="btn btn-primary" onclick="showToast('Bank Sheet PDF downloaded')">⬇ Download PDF</button>
+          <button class="btn btn-secondary btn-sm" onclick="showToast('Bank Sheet XLSX downloaded')">⬇ Download XLSX</button>
+        </div>
+      </div>
+      <div id="bs-held-note" style="font-size:11px;color:var(--text-muted);margin-bottom:10px;"></div>
+      <div class="section">
+        <div class="section-header"><span class="section-title" id="bs-title">ABL Bank Sheet — April 2026</span><span style="font-size:11px;color:var(--text-muted);" id="bs-total"></span></div>
+        <div class="table-wrap"><table><thead><tr><th>Customer #</th><th>Customer ID Card #</th><th>Branch Code</th><th>Account #</th><th style="text-align:right">Amount</th><th>Title of Account</th></tr></thead>
+        <tbody id="bs-tbody"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- CASH RECEIVING SHEET -->
+    <div class="page" id="page-cashsheet">
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:8px 14px;font-size:11.5px;color:var(--accent);margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+        🔒 <strong>Read-only</strong> — this sheet is generated automatically from Payroll Entry. To change any figure, go to Payroll Entry; corrections to released salaries require Master Admin approval there.
+      </div>
+      <div class="filter-row" style="margin-bottom:14px;">
+        <div class="filter-group"><div class="filter-label">Project Site</div><select id="cash-site" onchange="renderCashSheet()"><option>Islamabad</option></select></div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end;">
+          <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨 Print</button>
+          <button class="btn btn-primary" onclick="showToast('Cash Receiving Sheet PDF downloaded')">⬇ Download PDF</button>
+        </div>
+      </div>
+      <div id="cash-held-note" style="font-size:11px;color:var(--text-muted);margin-bottom:10px;"></div>
+      <div class="cash-sheet">
+        <div style="padding:14px;border-bottom:1px solid var(--border);text-align:center;">
+          <div style="font-size:14px;font-weight:700;">Broom Services (Private) Limited</div>
+          <div style="font-size:11px;color:var(--text-muted);">Cash Salary Receiving Sheet — April 2026</div>
+        </div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>Sr.</th><th>Emp#</th><th>Name</th><th>Designation</th><th>Area</th><th>Branch Code / Location</th>
+          <th>Gross Pay</th><th>Cycle Days</th><th>Working Days</th><th>OT Hrs</th><th>OT Amount</th><th>Allowance</th><th>Deduction</th><th>Net Salary</th><th>Signature</th>
+        </tr></thead><tbody id="cash-tbody"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- EMPLOYEES -->
+    <div class="page" id="page-employees">
+      <div class="filter-row">
+        <div class="filter-group"><div class="filter-label">Search</div><input type="text" placeholder="Name, CNIC, or site…" style="width:260px;" id="emp-search" oninput="renderEmpList()"></div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end;">
+          <button class="btn btn-secondary btn-sm" onclick="showModal('import-modal')">⬆ Import Employees</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportEmployees()">⬇ Export List</button>
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('emp-modal-title').textContent='Add New Employee';showModal('emp-modal')">+ Add Employee</button>
+        </div>
+      </div>
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--accent);margin-bottom:14px;">
+        💡 This page holds identity and employment details only — CNIC, bank info, deputed project. Monthly figures (days, advances, hold, etc.) are entered in <a href="#" onclick="showPage('payroll',null);return false;" style="color:var(--accent);font-weight:600;">Payroll Entry →</a>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:16px;">
+        <div class="section" style="margin-bottom:0;">
+          <div class="section-header"><span class="section-title">All Employees</span></div>
+          <div id="emp-list" style="max-height:560px;overflow-y:auto;"></div>
+        </div>
+        <div id="emp-profile-area">
+          <div style="text-align:center;padding:60px 20px;color:var(--text-muted);"><div style="font-size:40px;margin-bottom:12px;">👤</div><div style="font-size:14px;font-weight:600;">Select an employee to view full profile</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADVANCES -->
+    <div class="page" id="page-advances">
+      <div class="filter-row">
+        <div class="filter-group"><div class="filter-label">Type</div><select><option>All</option><option>Advance/Loan</option><option>Eid Advance</option></select></div>
+        <div class="filter-group"><div class="filter-label">Month</div><select><option>April 2026</option><option>March 2026</option></select></div>
+        <div style="margin-left:auto;"><button class="btn btn-primary btn-sm" onclick="showModal('advance-modal')">+ Record Advance</button></div>
+      </div>
+      <div class="section">
+        <div class="section-header"><span class="section-title">Advances — April 2026</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Employee</th><th>CNIC</th><th>Site</th><th>Type</th><th style="text-align:right">This Month</th><th style="text-align:right">Remaining Balance</th><th>Date</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="td-name">Sunny (Em#2)</td><td class="td-cnic">3520292053431</td><td>ABL City</td><td><span class="badge badge-purple">Advance/Loan</span></td><td class="td-amount">PKR 5,000</td><td class="td-amount" style="color:var(--text-muted);">PKR 0 — Paid off</td><td>5 Apr</td><td><span class="badge badge-green">Deducted</span></td></tr>
+          <tr><td class="td-name">Sunny Younas</td><td class="td-cnic">3520160787825</td><td>ABL East</td><td><span class="badge badge-purple">Advance/Loan</span></td><td class="td-amount">PKR 25,000</td><td class="td-amount" style="color:var(--amber);font-weight:600;">PKR 25,000</td><td>1 Apr</td><td><span class="badge badge-amber">Installment 1 of 3</span></td></tr>
+          <tr><td class="td-name">Kamran Habib</td><td class="td-cnic">3520130095611</td><td>ABL East</td><td><span class="badge badge-purple">Advance/Loan</span></td><td class="td-amount">PKR 15,000</td><td class="td-amount" style="color:var(--text-muted);">PKR 0 — Paid off</td><td>8 Apr</td><td><span class="badge badge-green">Deducted</span></td></tr>
+          <tr><td class="td-name">Hoghan Masih</td><td class="td-cnic">3520218099017</td><td>ABL City</td><td><span class="badge badge-purple">Advance/Loan</span></td><td class="td-amount">PKR 5,000</td><td class="td-amount" style="color:var(--text-muted);">PKR 0 — Paid off</td><td>28 Mar</td><td><span class="badge badge-green">Deducted</span></td></tr>
+          <tr><td class="td-name">Irfan Masih</td><td class="td-cnic">3520211124243</td><td>ABL South</td><td><span class="badge badge-purple">Advance/Loan</span></td><td class="td-amount">PKR 5,000</td><td class="td-amount" style="color:var(--text-muted);">PKR 0 — Paid off</td><td>29 Mar</td><td><span class="badge badge-green">Deducted</span></td></tr>
+          <tr><td class="td-name">Adil Naveed Masih</td><td class="td-cnic">3510205838521</td><td>Head Office</td><td><span class="badge badge-purple">Advance/Loan</span></td><td class="td-amount">PKR 5,000</td><td class="td-amount" style="color:var(--text-muted);">PKR 0 — Paid off</td><td>3 Apr</td><td><span class="badge badge-green">Deducted</span></td></tr>
+        </tbody></table></div>
+        <div style="padding:10px 18px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border);">💡 Remaining balance updates automatically based on what you deduct each month in Payroll Entry — no need to recalculate manually.</div>
+      </div>
+    </div>
+
+    <!-- FINES & EOBI REPORT -->
+    <div class="page" id="page-reports">
+      <div class="filter-row">
+        <div class="filter-group"><div class="filter-label">Project Sites</div>
+          <div class="multiselect" id="report-site-filter">
+            <div class="multiselect-trigger" onclick="toggleMultiselect('report-site-filter')"><span id="report-site-label">All Sites</span><span>▾</span></div>
+            <div class="multiselect-panel" id="report-site-panel"></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="report-card">
+          <div class="section-header"><span class="section-title">🚩 Employees Fined This Month</span><span id="fine-count" class="badge badge-red"></span></div>
+          <div id="fine-list"></div>
+        </div>
+        <div class="report-card">
+          <div class="section-header"><span class="section-title">🔓 EOBI Exempted Employees</span><span id="eobi-exempt-count" class="badge badge-amber"></span></div>
+          <div id="eobi-exempt-list"></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+        <div class="report-card">
+          <div class="section-header"><span class="section-title">⏸ Salaries Currently On Hold</span><span id="hold-count" class="badge badge-hold"></span></div>
+          <div id="hold-list"></div>
+        </div>
+        <div class="report-card">
+          <div class="section-header"><span class="section-title">💰 Active Advances / Eid Advances</span><span id="adv-count" class="badge badge-purple"></span></div>
+          <div id="adv-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROJECT SITE MANAGEMENT -->
+    <div class="page" id="page-sites">
+      <div class="filter-row">
+        <div style="margin-left:auto;"><button class="btn btn-primary btn-sm" onclick="showAddSite()">+ Add Project Site</button></div>
+      </div>
+      <div class="section">
+        <div class="section-header"><span class="section-title">All Project / Client Sites</span></div>
+        <div class="section-body"><div id="site-list"></div></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS & PROFILE -->
+    <div class="page" id="page-settings">
+      <div class="tabs">
+        <div class="tab active" onclick="showSettingsTab('company',this)">🏢 Company Details</div>
+        <div class="tab" onclick="showSettingsTab('profile',this)">👤 My Profile</div>
+        <div class="tab" onclick="showSettingsTab('theme',this)">🎨 Theme</div>
+      </div>
+
+      <div id="settings-company" class="settings-tab">
+        <div class="section">
+          <div class="section-header"><span class="section-title">Company Details</span><span class="badge badge-purple">Master Admin only</span></div>
+          <div class="section-body">
+            <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:18px;">
+              <div class="logo-upload" onclick="showToast('Logo upload — select a PNG or SVG file')">📷</div>
+              <div>
+                <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Company Logo</div>
+                <div style="font-size:11px;color:var(--text-muted);">Appears on payslips, bank sheets, and the sidebar. PNG/SVG, max 2MB.</div>
+                <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="showToast('Logo upload — select a PNG or SVG file')">Upload Logo</button>
+              </div>
+            </div>
+            <div class="form-grid">
+              <div class="field"><label>Company Name</label><input type="text" id="set-company-name" value="Broom Services (Private) Limited" style="width:100%;"></div>
+              <div class="field"><label>Registered Address</label><input type="text" id="set-company-address" value="DIC, Lahore, Pakistan" style="width:100%;"></div>
+              <div class="field"><label>Phone</label><input type="text" placeholder="+92 42 1234567"></div>
+              <div class="field"><label>Email</label><input type="text" placeholder="info@broomservices.pk"></div>
+            </div>
+            <div style="margin-top:16px;"><button class="btn btn-primary" onclick="saveCompanyDetails()">Save Company Details</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="settings-profile" class="settings-tab" style="display:none;">
+        <div class="section">
+          <div class="section-header"><span class="section-title">My Profile</span></div>
+          <div class="section-body">
+            <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:18px;">
+              <div class="avatar-upload" onclick="showToast('Profile picture upload — select an image')">📷</div>
+              <div>
+                <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Profile Picture</div>
+                <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="showToast('Profile picture upload — select an image')">Upload Photo</button>
+              </div>
+            </div>
+            <div class="form-grid">
+              <div class="field"><label>Display Name</label><input type="text" value="Salman Ahmed" style="width:100%;"></div>
+              <div class="field"><label>Email</label><input type="text" value="salman@broomservices.pk" style="width:100%;"></div>
+              <div class="field"><label>New Password</label><input type="password" placeholder="Leave blank to keep current"></div>
+              <div class="field"><label>Confirm New Password</label><input type="password" placeholder="Repeat new password"></div>
+            </div>
+            <div style="margin-top:16px;"><button class="btn btn-primary" onclick="showToast('✅ Profile updated')">Save Profile</button></div>
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-header"><span class="section-title">Manage Other Users' Profiles</span><span class="badge badge-purple">Master Admin only</span></div>
+          <div class="section-body" style="font-size:12px;color:var(--text-muted);">As Master Admin, you can edit any user's name and photo from <a href="#" onclick="showPage('users',null);return false;" style="color:var(--accent);font-weight:600;">User Management →</a></div>
+        </div>
+      </div>
+
+      <div id="settings-theme" class="settings-tab" style="display:none;">
+        <div class="section">
+          <div class="section-header"><span class="section-title">Portal Theme</span></div>
+          <div class="section-body">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">Pick an accent color for your own view — this won't affect other users.</div>
+            <div style="display:flex;gap:14px;">
+              <div class="theme-swatch active" style="background:#1B4F72;" onclick="setTheme('#1B4F72',this)" title="Default Blue">✓</div>
+              <div class="theme-swatch" style="background:#1A6B3A;" onclick="setTheme('#1A6B3A',this)" title="Green"></div>
+              <div class="theme-swatch" style="background:#4A2080;" onclick="setTheme('#4A2080',this)" title="Purple"></div>
+              <div class="theme-swatch" style="background:#8B1A1A;" onclick="setTheme('#8B1A1A',this)" title="Red"></div>
+              <div class="theme-swatch" style="background:#8B5E00;" onclick="setTheme('#8B5E00',this)" title="Amber"></div>
+              <div class="theme-swatch" style="background:#1A1816;" onclick="setTheme('#1A1816',this)" title="Charcoal"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- USER MANAGEMENT -->
+    <div class="page" id="page-users">
+      <div style="display:grid;grid-template-columns:1fr 1.2fr;gap:20px;">
+        <div>
+          <div class="section">
+            <div class="section-header"><span class="section-title">System Users</span><button class="btn btn-primary btn-sm" onclick="showModal('user-modal')">+ Add User</button></div>
+            <div class="section-body">
+              <div class="user-card">
+                <div class="user-card-avatar" style="background:var(--accent);">SA</div>
+                <div style="flex:1;"><div style="font-size:13px;font-weight:700;">Salman Ahmed</div><div style="font-size:11px;color:var(--text-muted);">salman@broomservices.pk</div></div>
+                <span class="badge badge-purple">Master Admin</span>
+              </div>
+              <div class="user-card">
+                <div class="user-card-avatar" style="background:var(--green);">HB</div>
+                <div style="flex:1;"><div style="font-size:13px;font-weight:700;">Hira Bibi</div><div style="font-size:11px;color:var(--text-muted);">hira@broomservices.pk</div><div style="font-size:10px;color:var(--text-faint);">ABL City, East Regions</div></div>
+                <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+                  <span class="badge badge-blue">Payroll Staff</span>
+                  <div style="display:flex;gap:4px;"><button class="btn btn-secondary btn-sm" onclick="showModal('user-modal')">Edit</button><button class="btn btn-sm" style="background:var(--red-light);color:var(--red);border:1px solid #F0C0C0;" onclick="showToast('User deactivated')">Deactivate</button></div>
+                </div>
+              </div>
+              <div class="user-card">
+                <div class="user-card-avatar" style="background:var(--amber);">AK</div>
+                <div style="flex:1;"><div style="font-size:13px;font-weight:700;">Asim Khan</div><div style="font-size:11px;color:var(--text-muted);">asim@broomservices.pk</div><div style="font-size:10px;color:var(--text-faint);">ABL South, West, Head Office</div></div>
+                <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+                  <span class="badge badge-blue">Payroll Staff</span>
+                  <div style="display:flex;gap:4px;"><button class="btn btn-secondary btn-sm" onclick="showModal('user-modal')">Edit</button><button class="btn btn-sm" style="background:var(--red-light);color:var(--red);border:1px solid #F0C0C0;" onclick="showToast('User deactivated')">Deactivate</button></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-header"><span class="section-title">Role Permissions</span></div>
+          <div class="section-body">
+            <table><thead><tr><th>Permission</th><th style="text-align:center;">Master Admin</th><th style="text-align:center;">Payroll Staff</th></tr></thead>
+            <tbody>
+              <tr><td>View Dashboard</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--green);">✓</td></tr>
+              <tr><td>Enter Payroll Data</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--green);">✓ (assigned sites)</td></tr>
+              <tr><td>Add / Edit Employees</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--green);">✓</td></tr>
+              <tr><td>Release / Hold Salary</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--text-muted);">✗</td></tr>
+              <tr><td>Generate Bank / Cash Sheets</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--text-muted);">✗</td></tr>
+              <tr><td>Manage Project Sites</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--text-muted);">✗</td></tr>
+              <tr><td>Import / Export Data</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--text-muted);">✗</td></tr>
+              <tr><td>Manage Users</td><td style="text-align:center;color:var(--green);">✓</td><td style="text-align:center;color:var(--text-muted);">✗</td></tr>
+            </tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AUDIT LOG -->
+    <div class="page" id="page-logs">
+      <div class="section">
+        <div class="section-header"><span class="section-title">Audit Log — All Actions</span></div>
+        <div class="section-body">
+          <div class="timeline-item"><div class="timeline-dot"></div><div><div class="timeline-title">Payroll calculated — April 2026</div><div class="timeline-detail">Salman Ahmed · 29 Apr 2026, 10:14 AM</div></div></div>
+          <div class="timeline-item"><div class="timeline-dot" style="background:var(--red)"></div><div><div class="timeline-title">Salary held — Mansha Gill — "Punishment hold"</div><div class="timeline-detail">Salman Ahmed · 27 Apr 2026, 9:10 AM</div></div></div>
+          <div class="timeline-item"><div class="timeline-dot" style="background:var(--purple)"></div><div><div class="timeline-title">Project site added — Islamabad</div><div class="timeline-detail">Salman Ahmed · 2 Apr 2026, 11:00 AM</div></div></div>
+          <div class="timeline-item"><div class="timeline-dot" style="background:var(--green)"></div><div><div class="timeline-title">487 salaries released — ABL City & East Region</div><div class="timeline-detail">Salman Ahmed · 28 Apr 2026, 3:45 PM · PKR 18,247,200</div></div></div>
+          <div class="timeline-item"><div class="timeline-dot"></div><div><div class="timeline-title">User account created — Asim Khan (Payroll Staff)</div><div class="timeline-detail">Salman Ahmed · 1 Jan 2026, 10:00 AM</div></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<!-- MODALS -->
+<div class="modal-overlay" id="newcycle-modal">
+  <div class="modal">
+    <div class="modal-header"><span class="modal-title">🔄 Start New Payroll Cycle</span><button class="close-btn" onclick="closeModal('newcycle-modal')">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Creates a new cycle copying all employee records. Attendance figures reset to 0; gross pay, bank details and project sites carry forward.</p>
+      <div class="form-grid">
+        <div class="field"><label>New Month</label><select><option>May 2026</option><option>June 2026</option></select></div>
+        <div class="field"><label>Copy base data from</label><select><option>April 2026</option></select></div>
+      </div>
+      <div id="newcycle-adjustments-note" style="margin-top:14px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('newcycle-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="startNewCycle()">Create Cycle</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="emp-modal">
+  <div class="modal" style="width:620px;">
+    <div class="modal-header"><span class="modal-title" id="emp-modal-title">+ Quick Add Employee</span><button class="close-btn" onclick="closeModal('emp-modal')">✕</button></div>
+    <div class="modal-body">
+      <div class="subsection-title">Identity</div>
+      <div class="form-grid">
+        <div class="field"><label>Full Name</label><input type="text" placeholder="Employee name"></div>
+        <div class="field"><label>Father's Name</label><input type="text" placeholder="Father's name"></div>
+        <div class="field"><label>CNIC * (Unique ID)</label><input type="text" placeholder="XXXXXXXXXXXXX"><div class="field-hint">13-digit · primary identifier</div></div>
+        <div class="field"><label>Mobile Number</label><input type="text" placeholder="03XX-XXXXXXX"></div>
+      </div>
+      <hr class="divider">
+      <div class="subsection-title">Employment</div>
+      <div class="form-grid">
+        <div class="field"><label>Designation</label><select><option>Daily wager</option><option>Supervisor</option><option>Glass Cleaner</option><option>Other</option></select></div>
+        <div class="field"><label>Date of Joining</label><input type="text" placeholder="DD/MM/YYYY"></div>
+        <div class="field"><label>Deputed Project Site</label><select id="emp-site-select"></select></div>
+        <div class="field"><label>Gross Pay (PKR)</label><input type="number" placeholder="e.g. 37000"></div>
+        <div class="field"><label>Pay Type</label><select><option>Daily wage</option><option>Monthly</option></select></div>
+      </div>
+      <hr class="divider">
+      <div class="subsection-title">EOBI</div>
+      <div class="form-grid">
+        <div class="field"><label>EOBI Applicable?</label><select id="emp-eobi-on"><option value="true">Yes — deduct EOBI</option><option value="false">No — exempt this employee</option></select></div>
+        <div class="field"><label>EOBI Amount (PKR)</label><input type="number" id="emp-eobi-amt" value="400" placeholder="e.g. 400"><div class="field-hint">Standard is PKR 400; adjust if different</div></div>
+      </div>
+      <hr class="divider">
+      <div class="subsection-title">Bank Details (leave blank for cash payment)</div>
+      <div class="form-grid">
+        <div class="field"><label>Bank</label><select><option>ABL</option><option>HBL</option><option>MCB</option><option>— None (Cash)</option></select></div>
+        <div class="field"><label>Branch Code</label><input type="text" placeholder="e.g. 0909"></div>
+        <div class="field"><label>Account Number</label><input type="text" placeholder="Account number"></div>
+        <div class="field"><label>Title of Account</label><input type="text" placeholder="As per bank records"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('emp-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="closeModal('emp-modal');showToast('✅ Employee added successfully')">Save Employee</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="site-modal">
+  <div class="modal" style="width:420px;">
+    <div class="modal-header"><span class="modal-title" id="site-modal-title">Add Project Site</span><button class="close-btn" onclick="closeModal('site-modal')">✕</button></div>
+    <div class="modal-body">
+      <div class="field" style="margin-bottom:14px;"><label>Site Name</label><input type="text" id="site-name" placeholder="e.g. ABL City Region Lahore" style="width:100%;"></div>
+      <div class="form-grid">
+        <div class="field"><label>Bank</label><select id="site-bank"><option>ABL</option><option>HBL</option><option>MCB</option></select></div>
+        <div class="field"><label>Branch Code</label><input type="text" id="site-branch" placeholder="e.g. 0909"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('site-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSite()">Save Site</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="import-modal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header"><span class="modal-title">⬆ Import Employee Data</span><button class="close-btn" onclick="closeModal('import-modal')">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Import uses your company's official payroll template format. Employees matched by CNIC or Employee Code will be updated; new ones will be added.</p>
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:10px 14px;font-size:11.5px;margin-bottom:14px;">
+        <strong>Template columns (in order):</strong><br>
+        Sr. No · Project · Employee Number/Code · Religion · Name · Father Name · CNIC · DOB · DOJ · DOL · Mobile Number · Designation · Area · Branch Code · Area/Location · Project Bank · Bank Branch Code · Account Number · Basic/Gross Pay
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="downloadTemplate()" style="margin-bottom:16px;">⬇ Download Blank Template (CSV)</button>
+      <hr class="divider">
+      <div style="border:2px dashed var(--border-strong);border-radius:var(--radius-lg);padding:28px;text-align:center;background:var(--bg);margin-bottom:10px;cursor:pointer;position:relative;">
+        <input type="file" accept=".csv" onchange="handleImportFile(this)" style="position:absolute;inset:0;opacity:0;cursor:pointer;">
+        <div style="font-size:30px;margin-bottom:6px;">📂</div>
+        <div style="font-size:13px;font-weight:600;">Click to select your filled-in template</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">.csv exported from the template above</div>
+      </div>
+      <div id="import-preview" style="display:none;background:var(--green-light);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--green);">
+        📄 <strong id="import-filename"></strong><br><span id="import-rowcount"></span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('import-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmImport()">Import File</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="user-modal">
+  <div class="modal" style="width:460px;">
+    <div class="modal-header"><span class="modal-title">+ Add / Edit User</span><button class="close-btn" onclick="closeModal('user-modal')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-grid" style="margin-bottom:14px;">
+        <div class="field"><label>Full Name</label><input type="text" placeholder="User's name"></div>
+        <div class="field"><label>Email / Username</label><input type="text" placeholder="user@broomservices.pk"></div>
+        <div class="field"><label>Password</label><input type="password" placeholder="Set password"></div>
+        <div class="field"><label>Confirm Password</label><input type="password" placeholder="Repeat password"></div>
+        <div class="field" style="grid-column:1/-1"><label>Role</label><select><option>Payroll Staff</option><option>Master Admin</option></select></div>
+      </div>
+      <div class="subsection-title">Assign Project Sites</div>
+      <div id="user-site-checks" style="display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('user-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="closeModal('user-modal');showToast('✅ User account created — credentials sent by email')">Save User</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="att-modal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header"><span class="modal-title" id="att-title">Attendance Calendar</span><button class="close-btn" onclick="closeModal('att-modal')">✕</button></div>
+    <div class="modal-body">
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;display:flex;gap:16px;align-items:center;">
+        <div style="width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;" id="att-avatar">A</div>
+        <div><div style="font-size:14px;font-weight:700;" id="att-name">-</div><div style="font-size:11px;color:var(--text-muted);" id="att-meta">-</div></div>
+      </div>
+      <div class="subsection-title">Click days to toggle Present / Absent</div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px;">
+        <div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Mon</div><div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Tue</div><div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Wed</div><div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Thu</div><div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Fri</div><div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Sat</div><div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px;">Sun</div>
+      </div>
+      <div class="att-grid" id="att-grid"></div>
+      <div style="display:flex;gap:8px;margin-top:8px;font-size:11px;">
+        <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;background:var(--green-light);border:1px solid #B8DEC8;border-radius:2px;display:inline-block;"></span>Present</span>
+        <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;background:var(--red-light);border:1px solid #F0C0C0;border-radius:2px;display:inline-block;"></span>Absent</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('att-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCalendar()">Save Days to Payroll Entry</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="advance-modal">
+  <div class="modal" style="width:460px;">
+    <div class="modal-header"><span class="modal-title">+ Record Advance</span><button class="close-btn" onclick="closeModal('advance-modal')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field" style="grid-column:1/-1"><label>Search Employee</label><input type="text" placeholder="Name or CNIC…" style="width:100%;"></div>
+        <div class="field"><label>Advance Type</label><select><option>Advance / Loan</option><option>Eid Advance</option></select></div>
+        <div class="field"><label>Total Advance Given (PKR)</label><input type="number" placeholder="e.g. 50000"></div>
+        <div class="field"><label>Date Given</label><input type="text" placeholder="DD/MM/YYYY"></div>
+        <div class="field"><label>Repayment</label><select id="adv-repay-type" onchange="toggleInstallmentField()"><option value="full">Deduct in full next payroll</option><option value="installment">Deduct in installments</option></select></div>
+      </div>
+      <div id="installment-field" style="display:none;margin-top:14px;">
+        <div class="field"><label>Monthly Installment Amount (PKR)</label><input type="number" placeholder="e.g. 5000"><div class="field-hint">You'll enter this amount manually in Payroll Entry each month — the remaining balance shown there updates automatically as you do.</div></div>
+      </div>
+      <div class="field" style="margin-top:14px;"><label>Notes (optional)</label><input type="text" placeholder="Reason or remarks…" style="width:100%;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('advance-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="closeModal('advance-modal');showToast('✅ Advance recorded — outstanding balance will track as you deduct installments in Payroll Entry')">Record Advance</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="correction-modal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header">
+      <span class="modal-title">✏️ Correct a Released Salary <span class="locked-badge">🔒 Locked Month</span></span>
+      <button class="close-btn" onclick="closeModal('correction-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--accent);margin-bottom:14px;">
+        This employee's salary was already released. Any change now requires a reason and must be approved by the Master Admin — this keeps an audit trail and protects against accidental errors.
+      </div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:14px;font-weight:700;" id="corr-emp-name">-</div>
+        <div style="font-size:11px;color:var(--text-muted);" id="corr-emp-meta">-</div>
+      </div>
+      <div class="subsection-title">Changing: <span id="corr-field-label" style="color:var(--accent);"></span></div>
+      <div class="correction-compare">
+        <div class="old-val"><div class="label">Old Value</div><div class="amt" id="corr-old-field">-</div></div>
+        <div style="font-size:18px;color:var(--text-faint);">→</div>
+        <div class="new-val"><div class="label">New Value</div><div class="amt" id="corr-new-field">-</div></div>
+      </div>
+      <div class="correction-compare">
+        <div class="old-val"><div class="label">Old Net Salary</div><div class="amt" id="corr-old-net">-</div></div>
+        <div style="font-size:18px;color:var(--text-faint);">→</div>
+        <div class="new-val"><div class="label">New Net Salary</div><div class="amt" id="corr-new-net">-</div></div>
+      </div>
+      <div class="correction-result" id="corr-result"></div>
+      <div class="field" style="margin-top:16px;">
+        <label>Reason for this correction *</label>
+        <input type="text" id="corr-reason" placeholder="e.g. Attendance miscounted, fine entered twice, OT hours corrected…" style="width:100%;">
+        <div class="field-hint">Required — this is saved permanently in the employee's audit log and Statement of Account.</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="pendingCorrection=null;closeModal('correction-modal');renderPayroll();">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmCorrection()">Approve Correction</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- PAYROLL-SPECIFIC IMPORT (exports/imports exactly what's shown in Payroll Entry) -->
+<div class="modal-overlay" id="payroll-import-modal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header"><span class="modal-title">⬆ Import Payroll Data</span><button class="close-btn" onclick="closeModal('payroll-import-modal')">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Imports the full Payroll Entry sheet as displayed — gross pay, days, OT, leave, EOBI, advances, fines, hold status, and cycle settings. Matched by CNIC.</p>
+      <div style="background:var(--accent-light);border-radius:var(--radius);padding:10px 14px;font-size:11.5px;margin-bottom:14px;">
+        <strong>Columns:</strong> CNIC, Name, Site, Designation, Gross Pay, Days, OT Hrs, OT Rate, Allowance, Leave, Leave Rate, Cycle Days, EOBI Amount, EOBI On, Advance, Eid Advance, Fine, Hold, Released
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="exportPayroll()" style="margin-bottom:16px;">⬇ Export Current Payroll First (to use as a starting template)</button>
+      <hr class="divider">
+      <div style="border:2px dashed var(--border-strong);border-radius:var(--radius-lg);padding:28px;text-align:center;background:var(--bg);margin-bottom:10px;cursor:pointer;position:relative;">
+        <input type="file" accept=".csv" onchange="handlePayrollImportFile(this)" style="position:absolute;inset:0;opacity:0;cursor:pointer;">
+        <div style="font-size:30px;margin-bottom:6px;">📂</div>
+        <div style="font-size:13px;font-weight:600;">Click to select your filled-in payroll CSV</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">.csv exported from this same screen</div>
+      </div>
+      <div id="payroll-import-preview" style="display:none;background:var(--green-light);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--green);">
+        📄 <strong id="payroll-import-filename"></strong><br><span id="payroll-import-rowcount"></span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('payroll-import-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmPayrollImport()">Import File</button>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD-LEVEL CHOOSERS -->
+<div class="modal-overlay" id="choose-import-modal">
+  <div class="modal" style="width:420px;">
+    <div class="modal-header"><span class="modal-title">⬆ What would you like to import?</span><button class="close-btn" onclick="closeModal('choose-import-modal')">✕</button></div>
+    <div class="modal-body">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button class="btn btn-secondary" style="justify-content:flex-start;padding:14px 16px;" onclick="closeModal('choose-import-modal');showModal('payroll-import-modal')">
+          📋&nbsp; <strong>Payroll Data</strong> — gross pay, days, OT, deductions, hold status
+        </button>
+        <button class="btn btn-secondary" style="justify-content:flex-start;padding:14px 16px;" onclick="closeModal('choose-import-modal');showModal('import-modal')">
+          👤&nbsp; <strong>Employee Details</strong> — identity, bank info, deputed site
+        </button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('choose-import-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="choose-export-modal">
+  <div class="modal" style="width:420px;">
+    <div class="modal-header"><span class="modal-title">⬇ What would you like to export?</span><button class="close-btn" onclick="closeModal('choose-export-modal')">✕</button></div>
+    <div class="modal-body">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button class="btn btn-secondary" style="justify-content:flex-start;padding:14px 16px;" onclick="closeModal('choose-export-modal');exportPayroll()">
+          📋&nbsp; <strong>Payroll Data</strong> — exactly what's shown in Payroll Entry
+        </button>
+        <button class="btn btn-secondary" style="justify-content:flex-start;padding:14px 16px;" onclick="closeModal('choose-export-modal');exportEmployees()">
+          👤&nbsp; <strong>Employee Details</strong> — identity, bank info, deputed site
+        </button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('choose-export-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- TEAM PANEL: CHAT + TO-DO -->
+<button class="team-toggle" onclick="toggleTeamPanel()" title="Team Chat & To-Dos">💬</button>
+<div class="team-panel" id="team-panel">
+  <div class="team-header">
+    <span style="font-size:13px;font-weight:700;">Team Collaboration</span>
+    <button class="close-btn" onclick="toggleTeamPanel()">✕</button>
+  </div>
+  <div class="team-tabs">
+    <div class="team-tab active" onclick="showTeamTab('chat',this)">💬 Chat</div>
+    <div class="team-tab" onclick="showTeamTab('todo',this)">✅ To-Dos</div>
+  </div>
+  <div class="team-body" id="team-chat-body">
+    <div class="chat-msg"><span class="who">Hira Bibi</span><span class="when">9:14 AM</span><div class="text">Recorded 8 Eid advances for ABL City Region, all linked to April payroll.</div></div>
+    <div class="chat-msg"><span class="who">Asim Khan</span><span class="when">10:02 AM</span><div class="text">Mansha Gill's fine needs review before we release West Region — putting on hold for now.</div></div>
+    <div class="chat-msg"><span class="who">Salman Ahmed</span><span class="when">10:20 AM</span><div class="text">Good call. I'll check it before releasing the rest of West Region today.</div></div>
+  </div>
+  <div class="team-body" id="team-todo-body" style="display:none;">
+    <div class="todo-item done"><input type="checkbox" checked onclick="toggleTodo(this)"><div><div class="todo-text">Verify Eid advances for ABL East Region</div><div class="todo-meta">Hira Bibi · Done</div></div></div>
+    <div class="todo-item"><input type="checkbox" onclick="toggleTodo(this)"><div><div class="todo-text">Review Mansha Gill's fine before releasing West Region</div><div class="todo-meta">Asim Khan · Due today</div></div></div>
+    <div class="todo-item"><input type="checkbox" onclick="toggleTodo(this)"><div><div class="todo-text">Confirm Islamabad cash sheet totals with site supervisor</div><div class="todo-meta">Salman Ahmed · Due tomorrow</div></div></div>
+    <div style="margin-top:10px;"><input type="text" id="new-todo" placeholder="Add a task…" style="width:100%;" onkeydown="if(event.key==='Enter')addTodo()"></div>
+  </div>
+  <div class="team-input-row" id="team-chat-input">
+    <input type="text" id="new-chat-msg" placeholder="Message the team…" onkeydown="if(event.key==='Enter')sendChatMsg()">
+    <button class="btn btn-primary btn-sm" onclick="sendChatMsg()">Send</button>
+  </div>
+</div>
+
+<script>// ===== NUMBER FORMAT (international: 100,000 not 1,00,000) =====
+function pkr(n){ return 'PKR ' + Math.round(n||0).toLocaleString('en-US'); }
+function num(n){ return Math.round(n||0).toLocaleString('en-US'); }
+
+// ===== PROJECT SITES (master list, editable) =====
+let sites = [
+  {id:1,name:'ABL City Region Lahore',bank:'ABL',branch:'909',employees:103},
+  {id:2,name:'ABL East Region Lahore',bank:'ABL',branch:'1223',employees:98},
+  {id:3,name:'ABL South Region Lahore',bank:'ABL',branch:'1096',employees:112},
+  {id:4,name:'ABL West Region Lahore',bank:'ABL',branch:'5366',employees:127},
+  {id:5,name:'ABL Head Office Lahore',bank:'ABL',branch:'528',employees:89},
+  {id:6,name:'Dolmen Mall Karachi',bank:'HBL',branch:'5989',employees:34},
+  {id:7,name:'Islamabad',bank:'MCB',branch:'—',employees:9},
+];
+
+// ===== EMPLOYEE MASTER DATA =====
+// Identity & employment fields live in Employee Registry.
+// Monthly variable fields (days, ot, allow, leave, adv, eid, fine, hold, released) live in Payroll Entry.
+let employees = [
+  {id:1,empCode:'V001',name:'Vicky Waris',cnic:'3520170200661',father:'Waris Masih',religion:'Christian',dob:'05/03/1990',mobile:'0301-1234567',site:'ABL City Region Lahore',project:'ABL City Region',desig:'Supervisor',joining:'12/01/2021',dol:'',gross:57000,payType:'Monthly',bank:'ABL',branch:'909',acct:'0010138945900026',acctTitle:'VICKY WARIS',
+   days:30,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:2,empCode:'V002',name:'Sunny (Em#2)',cnic:'3520292053431',father:'Billa Masih',religion:'Christian',dob:'14/07/1992',mobile:'0302-2345678',site:'ABL City Region Lahore',project:'ABL City Region',desig:'Daily wager',joining:'03/05/2022',dol:'',gross:37000,payType:'Daily wage',bank:'ABL',branch:'979',acct:'0010066766970016',acctTitle:'SUNNY MASIH',
+   days:29,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:5000,advBalance:5000,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:3,empCode:'V003',name:'Muhammad Furqan',cnic:'3520255548605',father:'Muhammad Farooq',religion:'Muslim',dob:'21/11/1995',mobile:'0333-3456789',site:'ABL City Region Lahore',project:'ABL City Region',desig:'Daily wager',joining:'19/08/2023',dol:'',gross:37000,payType:'Daily wage',bank:'ABL',branch:'541',acct:'0010084080800012',acctTitle:'MUHAMMAD FURQAN',
+   days:30,ot:0,allow:0,leave:2,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:true,
+   corrections:[{date:'02/05/2026',field:'Working Days',oldValue:30,newValue:28,oldNet:39676.92,newNet:37230.10,diff:-2446.82,reason:'Attendance was miscounted — 2 absent days missed in original entry',by:'Salman Ahmed (Master Admin)',type:'deduct'}],
+   pendingAdjustment:2447},
+  {id:4,empCode:'V004',name:'Shahbaz Masih',cnic:'3520117814579',father:'Jahangeer Masih',religion:'Christian',dob:'09/02/1988',mobile:'0321-4567890',site:'ABL South Region Lahore',project:'ABL South Region',desig:'Supervisor',joining:'02/02/2020',dol:'',gross:55000,payType:'Monthly',bank:'ABL',branch:'1096',acct:'0010045261620015',acctTitle:'SHAHBAZ MASIH',
+   days:30,ot:0,allow:0,leave:0,eobi:0,eobiOn:false,cycleDays:30,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:true,corrections:[],pendingAdjustment:0},
+  {id:5,empCode:'V005',name:'Hoghan Masih',cnic:'3520218099017',father:'Roshan Masih',religion:'Christian',dob:'17/06/1993',mobile:'0345-5678901',site:'ABL City Region Lahore',project:'ABL City Region',desig:'Daily wager',joining:'11/11/2022',dol:'',gross:37000,payType:'Daily wage',bank:'ABL',branch:'213',acct:'0010064662320019',acctTitle:'HOGHAN MASIH',
+   days:30,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:5000,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:6,empCode:'V006',name:'Arif Bhatti',cnic:'3520186463957',father:'Bashir Faranes',religion:'Muslim',dob:'30/12/1991',mobile:'0312-6789012',site:'ABL West Region Lahore',project:'ABL West Region',desig:'Supervisor',joining:'23/04/2021',dol:'',gross:55000,payType:'Monthly',bank:'ABL',branch:'5366',acct:'0020139986420015',acctTitle:'ARIF BHATTI',
+   days:26,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:26,otRate:280,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:7,empCode:'V007',name:'Mansha Gill',cnic:'3520179798811',father:'Shamas Din',religion:'Christian',dob:'04/04/1994',mobile:'0307-7890123',site:'ABL West Region Lahore',project:'ABL West Region',desig:'Daily wager',joining:'14/09/2023',dol:'',gross:37000,payType:'Daily wage',bank:'ABL',branch:'1082',acct:'0010146336160017',acctTitle:'MANSHA GILL',
+   days:24,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:26,otRate:280,leaveRate:null,adv:0,eid:0,fine:2467,hold:true,released:false,corrections:[],pendingAdjustment:0},
+  {id:8,empCode:'V008',name:'Adil Naveed Masih',cnic:'3510205838521',father:'Iqbal Masih',religion:'Christian',dob:'19/01/1987',mobile:'0334-8901234',site:'ABL Head Office Lahore',project:'ABL Head Office',desig:'Supervisor',joining:'06/06/2019',dol:'',gross:41000,payType:'Monthly',bank:'ABL',branch:'528',acct:'0010061318050013',acctTitle:'ADIL NAVEED MASIH',
+   days:30,ot:8,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:350,leaveRate:1800,adv:5000,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:9,empCode:'V009',name:'Ayoub Yaqoob',cnic:'3520177570777',father:'Yaqoob Masih',religion:'Christian',dob:'25/10/1996',mobile:'0300-9012345',site:'ABL Head Office Lahore',project:'ABL Head Office',desig:'Glass Cleaner',joining:'17/03/2022',dol:'',gross:38000,payType:'Daily wage',bank:'ABL',branch:'528',acct:'0010043249540020',acctTitle:'AYOUB YAQOOB',
+   days:29,ot:36,allow:0,leave:1,eobi:400,eobiOn:true,cycleDays:30,otRate:350,leaveRate:1800,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:10,empCode:'V010',name:'Sunny Younas',cnic:'3520160787825',father:'Younas Masih',religion:'Christian',dob:'08/08/1990',mobile:'0316-0123456',site:'ABL East Region Lahore',project:'ABL East Region',desig:'Supervisor',joining:'08/08/2020',dol:'',gross:55000,payType:'Monthly',bank:'ABL',branch:'1223',acct:'0010049255940016',acctTitle:'SUNNY YOUNAS',
+   days:30,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:25000,advBalance:50000,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:11,empCode:'V011',name:'Kamran Habib',cnic:'3520130095611',father:'Habib Masih',religion:'Muslim',dob:'12/05/1999',mobile:'0303-1122334',site:'ABL East Region Lahore',project:'ABL East Region',desig:'Daily wager',joining:'25/01/2024',dol:'',gross:37000,payType:'Daily wage',bank:'ABL',branch:'175',acct:'0010107886430010',acctTitle:'KAMRAN HABIB',
+   days:23,ot:0,allow:0,leave:0,eobi:0,eobiOn:false,cycleDays:30,otRate:null,leaveRate:null,adv:15000,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:12,empCode:'V012',name:'Irfan Masih',cnic:'3520211124243',father:'Soba Masih',religion:'Christian',dob:'03/03/1998',mobile:'0345-2233445',site:'ABL South Region Lahore',project:'ABL South Region',desig:'Daily wager',joining:'30/07/2023',dol:'',gross:37000,payType:'Daily wage',bank:'ABL',branch:'1347',acct:'0010075343850017',acctTitle:'IRFAN MASIH',
+   days:30,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:5000,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:13,empCode:'V013',name:'Samas',cnic:'6110112345671',father:'—',religion:'Muslim',dob:'',mobile:'',site:'Islamabad',project:'Islamabad',desig:'Daily wager',joining:'01/02/2024',dol:'',gross:40000,payType:'Daily wage',bank:'',branch:'',acct:'',acctTitle:'',
+   days:21,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:27,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:14,empCode:'V014',name:'Nadir Ali',cnic:'6110112345672',father:'—',religion:'Muslim',dob:'',mobile:'',site:'Islamabad',project:'Islamabad',desig:'Daily wager',joining:'14/05/2023',dol:'',gross:40000,payType:'Daily wage',bank:'',branch:'',acct:'',acctTitle:'',
+   days:27,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:27,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:15,empCode:'V015',name:'Adnan',cnic:'6110112345673',father:'—',religion:'Muslim',dob:'',mobile:'',site:'Islamabad',project:'Islamabad',desig:'Daily wager',joining:'09/09/2022',dol:'',gross:40000,payType:'Daily wage',bank:'',branch:'',acct:'',acctTitle:'',
+   days:17,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:27,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+  {id:16,empCode:'S102',name:'Amir',cnic:'',father:'',religion:'',dob:'',mobile:'',site:'Outfitters Shop',project:'Outfitters Shop',desig:'Daily wager',joining:'',dol:'',gross:40000,payType:'Daily wage',bank:'ABL',branch:'0773',acct:'0010153998890016',acctTitle:'AMIR',
+   days:27,ot:0,allow:0,leave:0,eobi:400,eobiOn:true,cycleDays:30,otRate:null,leaveRate:null,adv:0,eid:0,fine:0,hold:false,released:false,corrections:[],pendingAdjustment:0},
+];
+
+function calcNet(e) {
+  const cycle = e.cycleDays || 30;
+  const rate = e.gross / cycle; // per-day rate based on this site's cycle (26, 27, or 30 days)
+  const earned = rate * e.days;
+  const otRate = (e.otRate!=null && e.otRate!=='') ? +e.otRate : (rate/8); // per-hour OT rate — site-specific if set
+  const otEarned = (e.ot||0) * otRate;
+  const leaveRate = (e.leaveRate!=null && e.leaveRate!=='') ? +e.leaveRate : rate; // per-day leave rate — site-specific if set
+  const leaveEarned = leaveRate * (e.leave || 0);
+  const totalEarning = earned + otEarned + (e.allow||0) + leaveEarned;
+  const eobiAmt = e.eobiOn ? (e.eobi||0) : 0;
+  const totalDeduct = eobiAmt + (e.adv||0) + (e.eid||0) + (e.fine||0);
+  return { earned, otEarned, leaveEarned, totalEarning, totalDeduct, net: totalEarning - totalDeduct, rate, otRate, leaveRate, eobiAmt, cycle };
+}
+
+function toggleEobi(id) {
+  const e = employees.find(x=>x.id===id); if(!e) return;
+  if(e.released) { openCorrectionFlow(id, 'eobiOn', !e.eobiOn); return; }
+  e.eobiOn = !e.eobiOn;
+  if(e.eobiOn && !e.eobi) e.eobi = 400;
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+  showToast(e.eobiOn ? `EOBI now applies to ${e.name} — PKR ${e.eobi}` : `EOBI exempted for ${e.name}`);
+}
+
+function hasBank(e){ return e.bank && e.acct; }
+
+// ===================== SALARY CORRECTION WORKFLOW (for already-released months) =====================
+const FIELD_LABELS = {
+  gross:'Gross Pay', days:'Working Days', ot:'OT Hours', otRate:'OT Rate/Hr',
+  allow:'Allowance', leave:'Leave Days', leaveRate:'Leave Rate/Day', cycleDays:'Salary Cycle',
+  eobi:'EOBI Amount', eobiOn:'EOBI Applicable', adv:'Advance Deduction', eid:'Eid Advance Deduction', fine:'Fine'
+};
+
+let pendingCorrection = null;
+
+function openCorrectionFlow(id, field, newValue) {
+  const e = employees.find(x=>x.id===id); if(!e) return;
+  const before = calcNet(e);
+  const trial = Object.assign({}, e, {[field]: newValue});
+  const after = calcNet(trial);
+  pendingCorrection = { id, field, oldValue: e[field], newValue, before, after };
+
+  document.getElementById('corr-emp-name').textContent = e.name;
+  document.getElementById('corr-emp-meta').textContent = `${e.cnic} · ${e.site} · Released salary for April 2026`;
+  document.getElementById('corr-field-label').textContent = FIELD_LABELS[field] || field;
+  document.getElementById('corr-old-field').textContent = field==='eobiOn' ? (e[field]?'Yes':'No') : (e[field]??'—');
+  document.getElementById('corr-new-field').textContent = field==='eobiOn' ? (newValue?'Yes':'No') : newValue;
+  document.getElementById('corr-old-net').textContent = pkr(before.net);
+  document.getElementById('corr-new-net').textContent = pkr(after.net);
+  document.getElementById('corr-reason').value = '';
+  updateCorrectionResult();
+  showModal('correction-modal');
+}
+
+function updateCorrectionResult() {
+  if(!pendingCorrection) return;
+  const diff = pendingCorrection.after.net - pendingCorrection.before.net;
+  const box = document.getElementById('corr-result');
+  if(Math.abs(diff) < 1) {
+    box.className = 'correction-result none';
+    box.textContent = 'No change in net salary.';
+  } else if(diff > 0) {
+    box.className = 'correction-result owed';
+    box.textContent = `💰 ${pkr(diff)} is owed back to the employee — will show as a Balance Owed.`;
+  } else {
+    box.className = 'correction-result deduct';
+    box.textContent = `📉 ${pkr(-diff)} was overpaid — will be auto-deducted from next month's payroll.`;
+  }
+}
+
+function confirmCorrection() {
+  if(!pendingCorrection) return;
+  const reason = document.getElementById('corr-reason').value.trim();
+  if(!reason) { showToast('Please enter a reason for this correction'); return; }
+  const e = employees.find(x=>x.id===pendingCorrection.id);
+  const diff = pendingCorrection.after.net - pendingCorrection.before.net;
+
+  // Apply the field change
+  e[pendingCorrection.field] = pendingCorrection.newValue;
+
+  // Log the correction
+  e.corrections = e.corrections || [];
+  e.corrections.push({
+    date: new Date().toLocaleDateString('en-GB'),
+    field: FIELD_LABELS[pendingCorrection.field] || pendingCorrection.field,
+    oldValue: pendingCorrection.oldValue,
+    newValue: pendingCorrection.newValue,
+    oldNet: pendingCorrection.before.net,
+    newNet: pendingCorrection.after.net,
+    diff,
+    reason,
+    by: 'Salman Ahmed (Master Admin)',
+    type: diff > 0 ? 'owed' : (diff < 0 ? 'deduct' : 'none')
+  });
+
+  // Carry forward the adjustment
+  if(diff < 0) {
+    e.pendingAdjustment = (e.pendingAdjustment||0) + (-diff); // amount to auto-deduct next cycle
+    showToast(`✅ Correction logged. PKR ${num(-diff)} will be deducted automatically from next month's payroll.`);
+  } else if(diff > 0) {
+    e.pendingAdjustment = (e.pendingAdjustment||0) - diff; // negative = owed to employee
+    showToast(`✅ Correction logged. PKR ${num(diff)} is owed to ${e.name} — shown in their Statement of Account.`);
+  } else {
+    showToast('✅ Correction logged.');
+  }
+
+  pendingCorrection = null;
+  closeModal('correction-modal');
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+}
+
+// ===================== PAYROLL ENTRY (all monthly controls live here) =====================
+function renderPayroll() {
+  const tbody = document.getElementById('payroll-tbody');
+  const rows = employees.filter(e => matchesSiteFilter(e, 'payroll'));
+  tbody.innerHTML = rows.map((e) => {
+    const c = calcNet(e);
+    const i = employees.indexOf(e);
+    const statusBadge = e.hold ? '<span class="badge badge-hold">On Hold</span>' : (e.released ? '<span class="badge badge-green">Released</span>' : '<span class="badge badge-amber">Pending</span>');
+    return `<tr class="drag-row" draggable="true" data-id="${e.id}">
+      <td><span class="drag-handle">⋮⋮</span></td>
+      <td>${i+1}</td>
+      <td class="td-name" title="${e.name}">${e.name}<div style="font-size:9.5px;color:var(--text-muted);font-weight:400;font-family:monospace;">${e.cnic}</div></td>
+      <td style="font-size:11.5px;" title="${e.site}">${e.site.replace(' Lahore','').replace('ABL ','')}</td>
+      <td><span class="badge ${e.desig==='Supervisor'?'badge-blue':e.desig==='Glass Cleaner'?'badge-purple':'badge-gray'}">${e.desig}</span></td>
+      <td><input class="inline-edit" type="number" value="${e.gross}" onchange="updateField(${e.id},'gross',this.value)" title="Gross pay (PKR)"></td>
+      <td><input class="inline-edit" type="number" value="${e.days}" onchange="updateField(${e.id},'days',this.value)" title="Working days"></td>
+      <td><input class="inline-edit" type="number" value="${e.ot}" onchange="updateField(${e.id},'ot',this.value)" title="Overtime hours"></td>
+      <td><input class="inline-edit" type="number" value="${e.otRate!=null?e.otRate:''}" placeholder="${num(c.otRate)}" onchange="updateField(${e.id},'otRate',this.value)" title="OT rate per hour (PKR) — varies by site, leave blank to use default"></td>
+      <td><input class="inline-edit" type="number" value="${e.allow}" onchange="updateField(${e.id},'allow',this.value)" title="Allowance (PKR)"></td>
+      <td><input class="inline-edit" type="number" value="${e.leave}" onchange="updateField(${e.id},'leave',this.value)" title="Claimed leave days"></td>
+      <td><input class="inline-edit" type="number" value="${e.leaveRate!=null?e.leaveRate:''}" placeholder="${num(c.leaveRate)}" onchange="updateField(${e.id},'leaveRate',this.value)" title="Leave rate per day (PKR) — varies by site, leave blank to use default"></td>
+      <td><input class="inline-edit cycle-input" type="number" min="1" max="31" value="${e.cycleDays}" onchange="updateCycle(${e.id},this.value)" title="Salary cycle — number of days used to calculate per-day rate (e.g. 30, 26, 27)"></td>
+      <td>
+        <input class="inline-edit" type="number" value="${e.eobi}" onchange="updateField(${e.id},'eobi',this.value)" title="EOBI deduction (PKR) — set to 0 if not applicable" ${e.eobiOn?'':'style="opacity:.4;"'}>
+      </td>
+      <td style="text-align:center;"><button class="hold-toggle ${e.eobiOn?'held':'released'}" onclick="toggleEobi(${e.id})" title="${e.eobiOn?'EOBI applies — click to exempt':'EOBI exempt — click to apply'}" style="${e.eobiOn?'background:var(--accent);':''}"></button></td>
+      <td>
+        <input class="inline-edit deduct" type="number" value="${e.adv}" onchange="updateField(${e.id},'adv',this.value)" title="This month's advance/loan installment">
+        ${e.advBalance ? `<div style="font-size:9px;color:var(--text-faint);text-align:right;margin-top:2px;">Bal: ${num(Math.max(0,(e.advBalance||0)-(e.adv||0)))}</div>` : ''}
+      </td>
+      <td>
+        <input class="inline-edit deduct" type="number" value="${e.eid}" onchange="updateField(${e.id},'eid',this.value)" title="This month's Eid advance installment">
+        ${e.eidBalance ? `<div style="font-size:9px;color:var(--text-faint);text-align:right;margin-top:2px;">Bal: ${num(Math.max(0,(e.eidBalance||0)-(e.eid||0)))}</div>` : ''}
+      </td>
+      <td><input class="inline-edit deduct" type="number" value="${e.fine}" onchange="updateField(${e.id},'fine',this.value)" title="Fine / absent deduction"></td>
+      <td class="td-net">${pkr(c.net)}</td>
+      <td>${statusBadge}</td>
+      <td style="text-align:center;"><button class="hold-toggle ${e.hold?'held':'released'}" onclick="quickHold(${e.id})" title="${e.hold?'Remove hold':'Hold this salary'}"></button></td>
+      <td><button class="btn btn-secondary btn-sm" onclick="openAtt(${e.id})">📅</button></td>
+    </tr>`;
+  }).join('');
+  attachDragHandlers(tbody);
+}
+
+function updateField(id, field, value) {
+  const e = employees.find(x=>x.id===id); if(!e) return;
+  const parsedValue = (field==='otRate' || field==='leaveRate') ? (value==='' ? null : (+value || 0)) : (+value || 0);
+  if(e.released) { openCorrectionFlow(id, field, parsedValue); renderPayroll(); return; }
+  e[field] = parsedValue;
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+}
+
+function updateCycle(id, value) {
+  const e = employees.find(x=>x.id===id); if(!e) return;
+  if(e.released) { openCorrectionFlow(id, 'cycleDays', +value); renderPayroll(); return; }
+  e.cycleDays = +value;
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+  showToast(`${e.name} now calculated on a ${value}-day cycle — ${pkr(e.gross/value)} per day`);
+}
+
+function quickHold(id) {
+  const e = employees.find(x=>x.id===id); if(!e) return;
+  e.hold = !e.hold;
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet(); renderEmpList();
+  showToast(e.hold ? `⏸ ${e.name} held — will be excluded from Bank Sheet & Release` : `🔓 Hold removed — ${e.name} is back in the release queue`);
+}
+
+function attachDragHandlers(tbody) {
+  let dragSrcId = null;
+  tbody.querySelectorAll('.drag-row').forEach(row => {
+    row.addEventListener('dragstart', e => { dragSrcId = +row.dataset.id; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { row.classList.remove('dragging'); tbody.querySelectorAll('.drag-over').forEach(r=>r.classList.remove('drag-over')); });
+    row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drag-over'); });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      const targetId = +row.dataset.id;
+      if(dragSrcId===null||dragSrcId===targetId) return;
+      const srcIdx = employees.findIndex(x=>x.id===dragSrcId);
+      const tgtIdx = employees.findIndex(x=>x.id===targetId);
+      const moved = employees.splice(srcIdx,1)[0];
+      employees.splice(tgtIdx,0,moved);
+      renderPayroll();
+      showToast('Row reordered — serial numbers updated');
+    });
+  });
+}
+
+function filterPayroll() {
+  const q = document.getElementById('search-payroll').value.toLowerCase();
+  document.querySelectorAll('#payroll-tbody tr').forEach(r => { r.style.display=r.textContent.toLowerCase().includes(q)?'':'none'; });
+}
+
+// ===== Attendance calendar modal (detail editor, optional path) =====
+let currentEmpId = null;
+function openAtt(id) {
+  const e = employees.find(x=>x.id===id); currentEmpId=id;
+  document.getElementById('att-title').textContent = 'Attendance Calendar — ' + e.name;
+  document.getElementById('att-avatar').textContent = e.name[0];
+  document.getElementById('att-name').textContent = e.name;
+  document.getElementById('att-meta').textContent = e.cnic + ' · ' + e.desig + ' · ' + e.site;
+  buildCal(e.days);
+  showModal('att-modal');
+}
+
+function buildCal(presentDays) {
+  const g=document.getElementById('att-grid'); const offset=2; const total=30;
+  let h=''; for(let i=0;i<offset;i++) h+=`<div class="day-cell empty"></div>`;
+  for(let d=1;d<=total;d++) h+=`<div class="day-cell ${d<=presentDays?'present':'absent'}" onclick="toggleDay(this)">${d}</div>`;
+  g.innerHTML=h;
+}
+function toggleDay(el) { el.classList.toggle('present'); el.classList.toggle('absent'); }
+function saveCalendar() {
+  const days = document.querySelectorAll('#att-grid .present').length;
+  updateField(currentEmpId, 'days', days);
+  closeModal('att-modal');
+  showToast('✅ Calendar saved — working days updated to '+days);
+}
+
+// ===================== RELEASE SALARY =====================
+function renderRelease() {
+  const list=document.getElementById('release-list');
+  const rows = employees.filter(e => matchesSiteFilter(e, 'release'));
+  list.innerHTML = rows.map(e => {
+    const c=calcNet(e);
+    let statusBadge = e.hold ? '<span class="badge badge-hold">On Hold</span>' : (e.released?'<span class="badge badge-green">Released</span>':'<span class="badge badge-amber">Pending</span>');
+    let action = e.hold
+      ? `<button class="btn btn-secondary btn-sm" onclick="quickHold(${e.id});renderRelease();" style="border-color:var(--red);color:var(--red);">🔓 Unhold</button>`
+      : e.released
+        ? `<button class="btn btn-secondary btn-sm" onclick="showPayslip(${e.id});showPage('payslip',null)">🧾 Slip</button>`
+        : `<button class="btn btn-green btn-sm" onclick="releaseOne(${e.id})">✅ Release</button>`;
+    return `<div style="display:grid;grid-template-columns:2fr 1.5fr 1fr 1fr 1fr 1fr 130px;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;align-items:center;font-size:12px;background:${e.hold?'var(--red-light)':e.released?'#F5FBF7':'var(--surface2)'};">
+      <div><div style="font-weight:500;">${e.name}</div><div style="font-size:10px;color:var(--text-muted);">${e.cnic}</div></div>
+      <div style="font-size:11px;">${e.site.replace(' Lahore','').replace('ABL ','')}</div>
+      <div><span class="badge ${hasBank(e)?'badge-blue':'badge-gray'}">${hasBank(e)?e.bank:'Cash'}</span></div>
+      <div style="font-weight:600;color:var(--green);">${pkr(c.net)}</div>
+      <div><button class="hold-toggle ${e.hold?'held':'released'}" onclick="quickHold(${e.id});renderRelease();" title="${e.hold?'Remove hold':'Put on hold'}"></button></div>
+      <div>${statusBadge}</div>
+      <div>${action}</div>
+    </div>`;
+  }).join('');
+}
+
+function releaseOne(id) {
+  const e=employees.find(x=>x.id===id); if(!e||e.hold)return;
+  e.released=true; renderRelease(); renderPayroll();
+  showToast(`✅ Salary released — ${e.name}`);
+}
+function releaseAll() {
+  const rows = employees.filter(e => matchesSiteFilter(e, 'release'));
+  const count = rows.filter(e=>!e.hold&&!e.released).length;
+  rows.forEach(e=>{ if(!e.hold) e.released=true; });
+  renderRelease(); renderPayroll();
+  showToast(`✅ ${count} salaries released. ${rows.filter(e=>e.hold).length} remain on hold for the selected site(s).`);
+}
+function holdAll() {
+  const rows = employees.filter(e => matchesSiteFilter(e, 'release'));
+  const count = rows.filter(e=>!e.hold).length;
+  rows.forEach(e=>{ if(!e.released) e.hold=true; });
+  renderRelease(); renderPayroll(); renderBankSheet(); renderCashSheet();
+  showToast(`⏸ ${count} employees placed on hold for the selected site(s)`);
+}
+
+
+// ===================== PAYSLIPS =====================
+function renderPayslipList() {
+  document.getElementById('payslip-list').innerHTML = employees.map(e=>`
+    <div onclick="showPayslip(${e.id})" style="padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer;border-radius:6px;margin-bottom:2px;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+      <div style="font-size:12px;font-weight:600;">${e.name}</div>
+      <div style="font-size:10px;color:var(--text-muted);">${e.cnic} · ${e.desig}</div>
+    </div>`).join('');
+}
+function filterPayslipSearch(q) {
+  document.querySelectorAll('#payslip-list > div').forEach(el=>{ el.style.display=el.textContent.toLowerCase().includes(q.toLowerCase())?'':'none'; });
+}
+function showPayslip(id) {
+  const e=employees.find(x=>x.id===id); const c=calcNet(e);
+  document.getElementById('payslip-area').innerHTML=`
+    <div style="display:flex;gap:10px;margin-bottom:14px;justify-content:flex-end;">
+      <button class="btn btn-primary" onclick="showToast('Payslip PDF downloading…')">⬇ Download PDF</button>
+      <button class="btn btn-secondary btn-sm" onclick="showToast('Printing…')">🖨 Print</button>
+    </div>
+    <div class="payslip-preview">
+      <div class="payslip-header">
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:bold;">
+          <div>Salary Slip<br><span style="font-weight:normal;font-size:11px;">FTM of</span></div>
+          <div style="text-align:center;">April 2026<br><span style="font-weight:normal;font-size:11px;">Pay Period</span></div>
+          <div style="text-align:right;">01/04/2026<br><span style="font-weight:normal;font-size:11px;">30/04/2026</span></div>
+        </div>
+        <div class="payslip-company">Broom Services (Private) Limited</div>
+      </div>
+      <div class="payslip-meta">
+        <div class="payslip-meta-item"><div class="payslip-meta-label">Employee Name:</div><div class="payslip-meta-value">${e.name}</div></div>
+        <div class="payslip-meta-item"><div class="payslip-meta-label">Father Name:</div><div class="payslip-meta-value">${e.father}</div></div>
+        <div class="payslip-meta-item"><div class="payslip-meta-label">Account Number:</div><div class="payslip-meta-value">${e.acct||'— (Cash)'}</div></div>
+        <div class="payslip-meta-item"><div class="payslip-meta-label">CNIC:</div><div class="payslip-meta-value">${e.cnic}</div></div>
+        <div class="payslip-meta-item"><div class="payslip-meta-label">Designation:</div><div class="payslip-meta-value">${e.desig}</div></div>
+        <div class="payslip-meta-item"><div class="payslip-meta-label">Deputed Location:</div><div class="payslip-meta-value">${e.site.replace('Lahore','').trim()}</div></div>
+      </div>
+      <div class="payslip-body">
+        <div class="payslip-col">
+          <div class="payslip-col-title">Earning</div>
+          <div style="display:grid;grid-template-columns:1fr auto auto;gap:2px 10px;font-size:10px;color:#888;font-weight:600;margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid #eee;">
+            <span>Description</span><span>Days/Hrs</span><span>Amount</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;font-size:11px;">
+            <span>Basic Pay</span><span></span><span>${num(e.gross)}.00</span>
+            <span>Working Days</span><span>${e.days}.00</span><span>${num(c.earned)}</span>
+            ${e.ot>0?`<span>Overtime</span><span>${e.ot}.00</span><span>${num(c.otEarned)}</span>`:''}
+            ${(e.leave||0)>0?`<span>Claimed Leaves</span><span>${e.leave}.00</span><span>${num(c.leaveEarned)}</span>`:''}
+            ${(e.allow||0)>0?`<span>Allowance</span><span></span><span>${num(e.allow)}</span>`:''}
+          </div>
+          <div class="payslip-row total"><span>Total Earning</span><span>${num(c.totalEarning)}</span></div>
+        </div>
+        <div class="payslip-col">
+          <div class="payslip-col-title">Deduction</div>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:11px;">
+            <span>Absent/Late</span><span>${e.fine?num(e.fine):''}</span>
+            <span>EOBI Contribution</span><span>${c.eobiAmt?num(c.eobiAmt):'—'}</span>
+            <span>Advance salaries/loan</span><span>${e.adv?num(e.adv):''}</span>
+            <span>Eid Advance</span><span>${e.eid?num(e.eid):''}</span>
+          </div>
+          <div class="payslip-row total"><span>Total Deduction</span><span>${num(c.totalDeduct)}</span></div>
+        </div>
+      </div>
+      <div class="payslip-net"><span>Net Salary</span><span style="text-decoration:underline;">${num(c.net)}.00</span></div>
+    </div>`;
+}
+
+// ===================== BANK SHEET (only employees WITH bank accounts, excludes Hold) =====================
+// ===================== BANK SHEET — READ-ONLY, fully derived from Payroll Entry. No data entry here. =====================
+function renderBankSheet() {
+  const bank = document.getElementById('bs-bank')?.value || 'ABL';
+  const site = document.getElementById('bs-site')?.value || 'All Sites';
+  const eligible = employees.filter(e => hasBank(e) && e.bank===bank && (site==='All Sites'||e.site===site));
+  const rows = eligible.filter(e => e.released && !e.hold);
+  const notReleased = eligible.filter(e => !e.released).length;
+  const onHold = eligible.filter(e => e.released && e.hold).length;
+  const tbody = document.getElementById('bs-tbody');
+  const total = rows.reduce((s,e)=>s+calcNet(e).net,0);
+  tbody.innerHTML = rows.map((e,i)=>{
+    const c=calcNet(e);
+    return `<tr><td>${i+1}</td><td class="td-cnic">${e.cnic}</td><td>${e.branch}</td><td class="td-cnic">${e.acct}</td><td class="td-amount">${pkr(c.net)}</td><td>${e.acctTitle||e.name.toUpperCase()}</td></tr>`;
+  }).join('') + (rows.length ? `<tr style="background:var(--bg);font-weight:700;"><td colspan="4" style="text-align:right;padding:10px 12px;font-size:12px;">TOTAL</td><td class="td-amount" style="color:var(--green);">${pkr(total)}</td><td></td></tr>` : `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted);">No released salaries match this bank/site yet. Release salaries in Payroll Entry / Release Salary first.</td></tr>`);
+  document.getElementById('bs-title').textContent = bank + ' Bank Sheet — April 2026';
+  document.getElementById('bs-total').textContent = rows.length + ' entries · Total: ' + pkr(total);
+  let note = [];
+  if(notReleased>0) note.push(`${notReleased} employee(s) not yet released`);
+  if(onHold>0) note.push(`${onHold} employee(s) excluded — On Hold`);
+  document.getElementById('bs-held-note').textContent = note.length ? `ℹ️ ${note.join(' · ')}. Manage this in Payroll Entry / Release Salary — figures here are read-only.` : '';
+}
+
+// ===================== CASH RECEIVING SHEET — READ-ONLY, fully derived from Payroll Entry. No data entry here. =====================
+function renderCashSheet() {
+  const site = document.getElementById('cash-site')?.value || 'Islamabad';
+  const eligible = employees.filter(e => !hasBank(e) && e.site===site);
+  const rows = eligible.filter(e => e.released && !e.hold);
+  const notReleased = eligible.filter(e => !e.released).length;
+  const onHold = eligible.filter(e => e.released && e.hold).length;
+  const tbody = document.getElementById('cash-tbody');
+  let totalGross=0, totalDays=0, totalOT=0, totalOTAmt=0, totalAllow=0, totalDeduct=0, totalNet=0;
+  tbody.innerHTML = rows.map((e,i)=>{
+    const c = calcNet(e);
+    totalGross+=e.gross; totalDays+=e.days; totalOT+=e.ot; totalOTAmt+=c.otEarned; totalAllow+=(e.allow||0); totalDeduct+=c.totalDeduct; totalNet+=c.net;
+    return `<tr>
+      <td>${i+1}</td><td>${e.id}</td><td class="td-name">${e.name}</td><td>${e.desig}</td><td>${site}</td>
+      <td>${e.branch||'Not Available'}</td><td class="td-amount">${num(e.gross)}</td><td class="td-num">${e.cycleDays}</td><td class="td-num">${e.days}</td>
+      <td class="td-num">${e.ot||'-'}</td><td class="td-num">${e.ot?num(c.otEarned):'-'}</td><td class="td-num">${e.allow?num(e.allow):'-'}</td>
+      <td class="td-deduct">${e.fine||e.adv||e.eid?num((e.fine||0)+(e.adv||0)+(e.eid||0)):'-'}</td>
+      <td class="td-net">${num(c.net)}</td><td style="min-width:60px;"></td>
+    </tr>`;
+  }).join('') + (rows.length ? `<tr style="background:var(--bg);font-weight:700;">
+      <td colspan="6" style="text-align:right;padding:8px;">TOTAL</td>
+      <td class="td-amount">${num(totalGross)}</td><td></td><td class="td-num">${totalDays}</td>
+      <td class="td-num">${totalOT||'-'}</td><td class="td-num">${totalOTAmt?num(totalOTAmt):'-'}</td><td class="td-num">${totalAllow?num(totalAllow):'-'}</td>
+      <td class="td-deduct">${num(totalDeduct)}</td><td class="td-net">${num(totalNet)}</td><td></td>
+    </tr>` : `<tr><td colspan="15" style="text-align:center;padding:20px;color:var(--text-muted);">No released cash salaries for this site yet. Release salaries in Payroll Entry / Release Salary first.</td></tr>`);
+  let note = [];
+  if(notReleased>0) note.push(`${notReleased} employee(s) not yet released`);
+  if(onHold>0) note.push(`${onHold} employee(s) excluded — On Hold`);
+  document.getElementById('cash-held-note').textContent = note.length ? `ℹ️ ${note.join(' · ')}. Manage this in Payroll Entry / Release Salary — figures here are read-only.` : '';
+}
+
+// ===================== EMPLOYEE REGISTRY (identity & employment only — no monthly figures) =====================
+function renderEmpList() {
+  const q = document.getElementById('emp-search')?.value?.toLowerCase() || '';
+  const rows = employees.filter(e => !q || e.name.toLowerCase().includes(q) || e.cnic.includes(q) || e.site.toLowerCase().includes(q));
+  document.getElementById('emp-list').innerHTML = rows.map(e=>`
+    <div onclick="showEmpProfile(${e.id})" style="padding:11px 16px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+      <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">${e.name[0]}</div>
+      <div><div style="font-size:12px;font-weight:600;">${e.name}</div><div style="font-size:10px;color:var(--text-muted);">${e.cnic}</div><div style="font-size:10px;color:var(--text-faint);">${e.site.replace(' Lahore','')}</div></div>
+      <div style="margin-left:auto;">${e.hold?'<span class="badge badge-hold">On Hold</span>':'<span class="badge badge-green" style="font-size:9px;">Active</span>'}</div>
+    </div>`).join('');
+}
+
+function showEmpProfile(id) {
+  const e=employees.find(x=>x.id===id); const c=calcNet(e);
+  document.getElementById('emp-profile-area').innerHTML=`
+    <div class="section">
+      <div class="section-header"><span class="section-title">Employee Profile</span>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" id="btn-profile-tab" onclick="showProfileTab(${e.id},'details',this)">👤 Profile</button>
+          <button class="btn btn-secondary btn-sm" id="btn-statement-tab" onclick="showProfileTab(${e.id},'statement',this)">📄 Statement of Accounts</button>
+          <button class="btn btn-secondary btn-sm" onclick="showPayslip(${e.id});showPage('payslip',null)">🧾 Payslip</button>
+          <button class="btn btn-secondary btn-sm" onclick="showEditEmployee(${e.id})">✏️ Edit Details</button>
+        </div>
+      </div>
+      <div class="section-body">
+        <div style="background:var(--accent-light);border-radius:var(--radius);padding:14px;margin-bottom:14px;display:flex;gap:14px;align-items:center;">
+          <div style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;">${e.name[0]}</div>
+          <div><div style="font-size:15px;font-weight:700;">${e.name}</div><div style="font-size:11px;color:var(--text-muted);">${e.cnic}</div><div style="font-size:11px;margin-top:4px;"><strong>${e.site}</strong> · ${e.desig}</div></div>
+        </div>
+        <div id="profile-tab-details">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            <div>
+              <div class="subsection-title">Identity</div>
+              <div class="summary-row"><span>Father's Name</span><span>${e.father}</span></div>
+              <div class="summary-row"><span>Mobile</span><span>${e.mobile||'— Not on file'}</span></div>
+              <div class="summary-row"><span>Date of Joining</span><span>${e.joining}</span></div>
+              <div class="summary-row"><span>Designation</span><span>${e.desig}</span></div>
+              <div class="summary-row"><span>Pay Type</span><span>${e.payType}</span></div>
+              <div class="summary-row"><span>Gross Pay</span><span>${pkr(e.gross)}</span></div>
+            </div>
+            <div>
+              <div class="subsection-title">Bank & Site</div>
+              <div class="summary-row"><span>Deputed Project</span><span>${e.site}</span></div>
+              <div class="summary-row"><span>Bank</span><span>${e.bank||'— Cash payment'}</span></div>
+              <div class="summary-row"><span>Branch Code</span><span>${e.branch||'—'}</span></div>
+              <div class="summary-row"><span>Account #</span><span>${e.acct||'—'}</span></div>
+              <div class="summary-row"><span>Account Title</span><span>${e.acctTitle||'—'}</span></div>
+              <div class="subsection-title" style="margin-top:12px;">This Month's Status</div>
+              ${e.hold?'<span class="badge badge-hold">Salary On Hold</span>':(e.released?'<span class="badge badge-green">Salary Released</span>':'<span class="badge badge-amber">Pending Release</span>')}
+              <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">Net: ${pkr(c.net)} · <a href="#" onclick="showPage('payroll',null);return false;" style="color:var(--accent);">edit in Payroll Entry →</a></span>
+              ${(e.pendingAdjustment||0)!==0 ? `<div style="margin-top:8px;"><span class="badge ${e.pendingAdjustment>0?'badge-amber':'badge-green'}">${e.pendingAdjustment>0?'PKR '+num(e.pendingAdjustment)+' will be deducted next cycle':'PKR '+num(-e.pendingAdjustment)+' owed — credited next cycle'}</span></div>` : ''}
+            </div>
+          </div>
+        </div>
+        <div id="profile-tab-statement" style="display:none;"></div>
+      </div>
+    </div>`;
+}
+
+function showProfileTab(id, tab, el) {
+  const profileBtn = document.getElementById('btn-profile-tab');
+  const statementBtn = document.getElementById('btn-statement-tab');
+  [profileBtn, statementBtn].forEach(b => { b.classList.remove('btn-primary'); b.classList.add('btn-secondary'); });
+  el.classList.remove('btn-secondary'); el.classList.add('btn-primary');
+  document.getElementById('profile-tab-details').style.display = tab==='details' ? 'block' : 'none';
+  document.getElementById('profile-tab-statement').style.display = tab==='statement' ? 'block' : 'none';
+  if(tab==='statement') renderStatement(id);
+}
+
+function renderStatement(id) {
+  const e = employees.find(x=>x.id===id); if(!e) return;
+  const c = calcNet(e);
+  const container = document.getElementById('profile-tab-statement');
+
+  // Build a chronological ledger: payroll entries, advances given, corrections
+  const entries = [];
+  entries.push({date:'01 Apr 2026', desc:'April 2026 — Net Salary Earned', credit:c.totalEarning, debit:0});
+  if(c.eobiAmt) entries.push({date:'01 Apr 2026', desc:'EOBI Contribution', credit:0, debit:c.eobiAmt});
+  if(e.adv) entries.push({date:'01 Apr 2026', desc:'Advance / Loan Deduction', credit:0, debit:e.adv});
+  if(e.eid) entries.push({date:'01 Apr 2026', desc:'Eid Advance Deduction', credit:0, debit:e.eid});
+  if(e.fine) entries.push({date:'01 Apr 2026', desc:'Fine / Absent Deduction', credit:0, debit:e.fine});
+  (e.corrections||[]).forEach(corr => {
+    entries.push({
+      date: corr.date,
+      desc: `Correction — ${corr.field} changed (${corr.oldValue} → ${corr.newValue}). Reason: ${corr.reason}`,
+      credit: corr.diff > 0 ? corr.diff : 0,
+      debit: corr.diff < 0 ? -corr.diff : 0,
+      isCorrection: true
+    });
+  });
+
+  let running = 0;
+  const rows = entries.map(en => { running += en.credit - en.debit; return {...en, balance: running}; });
+  const totalCredit = entries.reduce((s,x)=>s+x.credit,0);
+  const totalDebit = entries.reduce((s,x)=>s+x.debit,0);
+
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:12px;color:var(--text-muted);">Statement of Account — ${e.name} (${e.cnic})</div>
+      <button class="btn btn-secondary btn-sm" onclick="showToast('Statement PDF downloading…')">⬇ Download PDF</button>
+    </div>
+    <div class="statement-summary">
+      <div class="statement-summary-card"><div class="lbl">Total Earned</div><div class="val" style="color:var(--green);">${pkr(totalCredit)}</div></div>
+      <div class="statement-summary-card"><div class="lbl">Total Deducted</div><div class="val" style="color:var(--red);">${pkr(totalDebit)}</div></div>
+      <div class="statement-summary-card"><div class="lbl">Closing Balance</div><div class="val" style="color:var(--accent);">${pkr(running)}</div></div>
+    </div>
+    ${(e.pendingAdjustment||0)!==0 ? `<div class="correction-result ${e.pendingAdjustment>0?'deduct':'owed'}" style="margin-bottom:14px;">${e.pendingAdjustment>0?`📉 PKR ${num(e.pendingAdjustment)} will be auto-deducted next payroll cycle`:`💰 PKR ${num(-e.pendingAdjustment)} owed to employee — will be credited next payroll cycle`}</div>` : ''}
+    <table class="statement-table">
+      <thead><tr><th>Date</th><th>Description</th><th style="text-align:right;">Credit</th><th style="text-align:right;">Debit</th><th style="text-align:right;">Running Balance</th></tr></thead>
+      <tbody>
+        ${rows.map(r=>`<tr ${r.isCorrection?'style="background:var(--amber-light);"':''}>
+          <td>${r.date}</td>
+          <td>${r.isCorrection?'🔧 ':''}${r.desc}</td>
+          <td class="credit">${r.credit?num(r.credit):'—'}</td>
+          <td class="debit">${r.debit?num(r.debit):'—'}</td>
+          <td class="bal">${num(r.balance)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    ${(e.corrections||[]).length ? `<div style="margin-top:10px;font-size:10.5px;color:var(--text-muted);">🔧 Highlighted rows are manual corrections to a previously released salary, each requiring an approved reason.</div>` : ''}
+  `;
+}
+
+function showEditEmployee(id) {
+  showToast('Opening employee edit form…');
+  document.getElementById('emp-modal-title').textContent = 'Edit Employee';
+  showModal('emp-modal');
+}
+
+// ===================== PROJECT SITE MANAGEMENT =====================
+function renderSites() {
+  document.getElementById('site-list').innerHTML = sites.map(s => {
+    const empCount = employees.filter(e=>e.site===s.name).length;
+    return `<div class="site-card">
+      <div style="width:36px;height:36px;border-radius:8px;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">🏢</div>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:700;">${s.name}</div>
+        <div style="font-size:11px;color:var(--text-muted);">${empCount} employees · Branch code ${s.branch}</div>
+      </div>
+      <span class="badge ${s.bank==='ABL'?'badge-blue':s.bank==='HBL'?'badge-purple':'badge-amber'}">${s.bank}</span>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="editSite(${s.id})">✏️ Edit</button>
+        <button class="btn btn-sm" style="background:var(--red-light);color:var(--red);border:1px solid #F0C0C0;" onclick="deleteSite(${s.id})">🗑 Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+  // refresh site dropdowns / multiselects across the app
+  buildMultiselect('payroll'); buildMultiselect('release'); buildMultiselect('report');
+  const bsOpts = '<option>All Sites</option>' + sites.map(s=>`<option>${s.name}</option>`).join('');
+  const bsEl = document.getElementById('bs-site'); if(bsEl){ const cur=bsEl.value; bsEl.innerHTML=bsOpts; bsEl.value=[...bsEl.options].some(o=>o.value===cur)?cur:'All Sites'; }
+  const cashEl = document.getElementById('cash-site'); if(cashEl){ const cur=cashEl.value; cashEl.innerHTML = sites.map(s=>`<option>${s.name}</option>`).join(''); cashEl.value=[...cashEl.options].some(o=>o.value===cur)?cur:cashEl.options[0]?.value; }
+}
+
+function editSite(id) {
+  const s = sites.find(x=>x.id===id);
+  document.getElementById('site-modal-title').textContent = 'Edit Project Site';
+  document.getElementById('site-name').value = s.name;
+  document.getElementById('site-bank').value = s.bank;
+  document.getElementById('site-branch').value = s.branch;
+  document.getElementById('site-modal').dataset.editId = id;
+  showModal('site-modal');
+}
+
+function deleteSite(id) {
+  const s = sites.find(x=>x.id===id);
+  const empCount = employees.filter(e=>e.site===s.name).length;
+  if(empCount>0){ showToast(`⚠️ Cannot delete "${s.name}" — ${empCount} employees are still assigned to it. Reassign them first.`); return; }
+  sites = sites.filter(x=>x.id!==id);
+  renderSites();
+  showToast(`🗑 Project site "${s.name}" deleted`);
+}
+
+function saveSite() {
+  const modal = document.getElementById('site-modal');
+  const editId = modal.dataset.editId;
+  const name = document.getElementById('site-name').value.trim();
+  const bank = document.getElementById('site-bank').value;
+  const branch = document.getElementById('site-branch').value.trim();
+  if(!name){ showToast('Please enter a site name'); return; }
+  if(editId){
+    const s = sites.find(x=>x.id===+editId);
+    s.name=name; s.bank=bank; s.branch=branch;
+    showToast('✅ Project site updated');
+  } else {
+    sites.push({id:Date.now(),name,bank,branch,employees:0});
+    showToast('✅ New project site added');
+  }
+  modal.dataset.editId='';
+  closeModal('site-modal');
+  renderSites();
+}
+
+function showAddSite() {
+  document.getElementById('site-modal-title').textContent = 'Add Project Site';
+  document.getElementById('site-name').value='';
+  document.getElementById('site-bank').value='ABL';
+  document.getElementById('site-branch').value='';
+  document.getElementById('site-modal').dataset.editId='';
+  showModal('site-modal');
+}
+
+// ===================== IMPORT / EXPORT TEMPLATE =====================
+// Official headers — extracted from company's standard payroll template (Outfitters Shop PDF)
+const TEMPLATE_HEADERS = ['Sr. No','Project','Employee Number/Code','Religion','Name','Father Name','CNIC','DOB','DOJ','DOL','Mobile Number','Designation','Area','Branch Code','Area/Location','Project Bank','Bank Branch Code','Account Number','Basic/Gross Pay'];
+
+function downloadTemplate() {
+  const sampleRow = ['1','Outfitters Shop','S102','Muslim','Amir','Father Name','3520100000000','01/01/1990','01/01/2024','','0300-0000000','Daily wager','Islamabad','—','JS Rana Market (S102)','ABL','0773','0010153998890016','40000'];
+  const csv = TEMPLATE_HEADERS.join(',') + '\n' + sampleRow.join(',') + '\n';
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'FTM_Payroll_Employee_Template.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('✅ Template downloaded — fill it in and re-upload to import');
+}
+
+function exportEmployees() {
+  const rows = employees.map((e,i) => [
+    i+1, e.project||e.site, e.empCode||'', e.religion||'', e.name, e.father||'', e.cnic||'',
+    e.dob||'', e.joining||'', e.dol||'', e.mobile||'', e.desig, e.site, e.branch||'',
+    e.site, e.bank||'', e.branch||'', e.acct||'', e.gross
+  ]);
+  const csv = TEMPLATE_HEADERS.join(',') + '\n' + rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'FTM_Employees_Export.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`✅ Exported ${employees.length} employees to CSV (matches official template)`);
+}
+
+let importFileData = null;
+function handleImportFile(input) {
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    importFileData = ev.target.result;
+    const lines = importFileData.split('\n').filter(l=>l.trim());
+    document.getElementById('import-preview').style.display = 'block';
+    document.getElementById('import-filename').textContent = file.name;
+    document.getElementById('import-rowcount').textContent = (lines.length-1) + ' employee rows detected';
+  };
+  reader.readAsText(file);
+}
+
+function confirmImport() {
+  if(!importFileData){ showToast('Please select a file first'); return; }
+  const lines = importFileData.split('\n').filter(l=>l.trim());
+  const headers = lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+  let added=0, updated=0;
+  for(let i=1;i<lines.length;i++) {
+    const cells = lines[i].split(',').map(c=>c.trim().replace(/"/g,''));
+    const get = (h) => { const idx = headers.indexOf(h); return idx>=0 ? cells[idx] : ''; };
+    const cnic = get('CNIC');
+    const empCode = get('Employee Number/Code');
+    let e = employees.find(x => (cnic && x.cnic===cnic) || (empCode && x.empCode===empCode));
+    const data = {
+      project: get('Project'), empCode, religion: get('Religion'), name: get('Name')||'(unnamed)',
+      father: get('Father Name'), cnic, dob: get('DOB'), joining: get('DOJ'), dol: get('DOL'),
+      mobile: get('Mobile Number'), desig: get('Designation')||'Daily wager', site: get('Area/Location')||get('Area')||get('Project'),
+      branch: get('Bank Branch Code')||get('Branch Code'), bank: get('Project Bank'), acct: get('Account Number'),
+      gross: +get('Basic/Gross Pay')||0, payType:'Daily wage',
+      days:0, ot:0, allow:0, leave:0, eobi:400,eobiOn:true, adv:0, eid:0, fine:0, hold:false, released:false
+    };
+    if(e) { Object.assign(e, data); updated++; }
+    else { employees.push({id: Date.now()+i, ...data}); added++; }
+  }
+  closeModal('import-modal');
+  document.getElementById('import-preview').style.display='none';
+  importFileData = null;
+  renderPayroll(); renderEmpList(); renderRelease(); renderBankSheet(); renderCashSheet();
+  showToast(`✅ Import complete — ${added} added, ${updated} updated`);
+}
+
+
+function toggleInstallmentField() {
+  const type = document.getElementById('adv-repay-type').value;
+  document.getElementById('installment-field').style.display = type==='installment' ? 'block' : 'none';
+}
+
+// ===================== PAYROLL ENTRY IMPORT/EXPORT (mirrors exactly what's shown on screen) =====================
+const PAYROLL_HEADERS = ['CNIC','Name','Site','Designation','Gross Pay','Days','OT Hrs','OT Rate','Allowance','Leave','Leave Rate','Cycle Days','EOBI Amount','EOBI On','Advance','Eid Advance','Fine','Hold','Released'];
+
+function exportPayroll() {
+  const rows = employees.map(e => [
+    e.cnic||'', e.name, e.site, e.desig, e.gross, e.days, e.ot, e.otRate??'', e.allow, e.leave, e.leaveRate??'',
+    e.cycleDays, e.eobi, e.eobiOn?'Yes':'No', e.adv, e.eid, e.fine, e.hold?'Yes':'No', e.released?'Yes':'No'
+  ]);
+  const csv = PAYROLL_HEADERS.join(',') + '\n' + rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'FTM_Payroll_April_2026_Export.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`✅ Exported payroll for ${employees.length} employees — exactly as shown in Payroll Entry`);
+}
+
+let payrollImportFileData = null;
+function handlePayrollImportFile(input) {
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    payrollImportFileData = ev.target.result;
+    const lines = payrollImportFileData.split('\n').filter(l=>l.trim());
+    document.getElementById('payroll-import-preview').style.display = 'block';
+    document.getElementById('payroll-import-filename').textContent = file.name;
+    document.getElementById('payroll-import-rowcount').textContent = (lines.length-1) + ' payroll rows detected';
+  };
+  reader.readAsText(file);
+}
+
+function confirmPayrollImport() {
+  if(!payrollImportFileData){ showToast('Please select a file first'); return; }
+  const lines = payrollImportFileData.split('\n').filter(l=>l.trim());
+  const headers = lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+  let updated=0, skipped=0, blockedReleased=0;
+  for(let i=1;i<lines.length;i++) {
+    const cells = lines[i].split(',').map(c=>c.trim().replace(/"/g,''));
+    const get = (h) => { const idx = headers.indexOf(h); return idx>=0 ? cells[idx] : ''; };
+    const cnic = get('CNIC');
+    const e = employees.find(x => cnic && x.cnic===cnic);
+    if(!e) { skipped++; continue; }
+    if(e.released) { blockedReleased++; continue; } // released months are locked — must use correction workflow instead
+    e.gross = +get('Gross Pay')||e.gross;
+    e.days = +get('Days')||0;
+    e.ot = +get('OT Hrs')||0;
+    e.otRate = get('OT Rate')===''?null:+get('OT Rate');
+    e.allow = +get('Allowance')||0;
+    e.leave = +get('Leave')||0;
+    e.leaveRate = get('Leave Rate')===''?null:+get('Leave Rate');
+    e.cycleDays = +get('Cycle Days')||e.cycleDays;
+    e.eobi = +get('EOBI Amount')||0;
+    e.eobiOn = get('EOBI On').toLowerCase()==='yes';
+    e.adv = +get('Advance')||0;
+    e.eid = +get('Eid Advance')||0;
+    e.fine = +get('Fine')||0;
+    e.hold = get('Hold').toLowerCase()==='yes';
+    updated++;
+  }
+  closeModal('payroll-import-modal');
+  document.getElementById('payroll-import-preview').style.display='none';
+  payrollImportFileData = null;
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+  showToast(`✅ Payroll import complete — ${updated} updated, ${skipped} not found${blockedReleased?`, ${blockedReleased} skipped (already released — use Correction workflow instead)`:''}`);
+}
+
+// ===================== NEW PAYROLL CYCLE (carries forward pending adjustments) =====================
+function openNewCycleModal() {
+  const withAdj = employees.filter(e => (e.pendingAdjustment||0) !== 0);
+  const note = document.getElementById('newcycle-adjustments-note');
+  if(withAdj.length) {
+    note.innerHTML = `<div style="background:var(--amber-light);border:1px solid #F0D080;border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--amber);">
+      ⚠️ ${withAdj.length} employee(s) have pending salary correction adjustments that will be applied automatically to next month's payroll:<br>
+      ${withAdj.map(e => `${e.name}: ${e.pendingAdjustment>0 ? 'PKR '+num(e.pendingAdjustment)+' will be deducted' : 'PKR '+num(-e.pendingAdjustment)+' owed — will be added as a credit'}`).join('<br>')}
+    </div>`;
+  } else {
+    note.innerHTML = '';
+  }
+  showModal('newcycle-modal');
+}
+
+function startNewCycle() {
+  let appliedCount = 0;
+  employees.forEach(e => {
+    if((e.pendingAdjustment||0) > 0) { e.adv = (e.adv||0) + e.pendingAdjustment; e.pendingAdjustment = 0; appliedCount++; }
+    else if((e.pendingAdjustment||0) < 0) { e.allow = (e.allow||0) + (-e.pendingAdjustment); e.pendingAdjustment = 0; appliedCount++; }
+    e.released = false; e.hold = false;
+  });
+  closeModal('newcycle-modal');
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+  showToast(`✅ May 2026 payroll cycle created${appliedCount?` — ${appliedCount} correction adjustment(s) carried forward automatically`:''}`);
+}
+
+
+let selectedSites = { payroll: new Set(), release: new Set(), report: new Set() }; // empty set = All Sites
+
+function buildMultiselect(key) {
+  const panel = document.getElementById(key+'-site-panel');
+  if(!panel) return;
+  panel.innerHTML = sites.map(s => `
+    <label class="multiselect-option"><input type="checkbox" value="${s.name}" ${selectedSites[key].has(s.name)?'checked':''} onchange="toggleSiteSelection('${key}','${s.name}',this.checked)"> ${s.name}</label>
+  `).join('') + `<div class="multiselect-actions">
+      <button class="btn btn-secondary btn-sm" onclick="clearSiteSelection('${key}')" style="flex:1;">Clear (All Sites)</button>
+      <button class="btn btn-primary btn-sm" onclick="toggleMultiselect('${key}-site-filter')" style="flex:1;">Done</button>
+    </div>`;
+}
+
+function toggleMultiselect(filterId) {
+  document.querySelectorAll('.multiselect-panel').forEach(p => { if(p.id !== filterId.replace('-filter','-panel')) p.classList.remove('open'); });
+  const panel = document.getElementById(filterId.replace('-filter','-panel'));
+  panel.classList.toggle('open');
+}
+
+function toggleSiteSelection(key, siteName, checked) {
+  if(checked) selectedSites[key].add(siteName); else selectedSites[key].delete(siteName);
+  updateSiteLabel(key);
+  if(key==='payroll') renderPayroll();
+  if(key==='release') renderRelease();
+  if(key==='report') renderReports();
+}
+
+function clearSiteSelection(key) {
+  selectedSites[key].clear();
+  buildMultiselect(key);
+  updateSiteLabel(key);
+  if(key==='payroll') renderPayroll();
+  if(key==='release') renderRelease();
+  if(key==='report') renderReports();
+  toggleMultiselect(key+'-site-filter');
+}
+
+function updateSiteLabel(key) {
+  const label = document.getElementById(key+'-site-label');
+  if(!label) return;
+  const n = selectedSites[key].size;
+  label.textContent = n===0 ? 'All Sites' : n===1 ? [...selectedSites[key]][0].replace(' Lahore','') : n+' sites selected';
+}
+
+function matchesSiteFilter(e, key) {
+  return selectedSites[key].size===0 || selectedSites[key].has(e.site);
+}
+
+document.addEventListener('click', function(ev){
+  document.querySelectorAll('.multiselect').forEach(ms => { if(!ms.contains(ev.target)) ms.querySelector('.multiselect-panel')?.classList.remove('open'); });
+});
+
+// ===================== BULK COPY TO ALL =====================
+function copyToAll(field, inputId) {
+  const val = document.getElementById(inputId).value;
+  if(val==='') { showToast('Enter a value first'); return; }
+  const targets = employees.filter(e => matchesSiteFilter(e, 'payroll'));
+  targets.forEach(e => { e[field] = field==='cycleDays' ? +val : (+val||0); });
+  renderPayroll(); renderRelease(); renderBankSheet(); renderCashSheet();
+  showToast(`✅ Applied to ${targets.length} employee(s)${selectedSites.payroll.size?' in selected sites':''}`);
+}
+
+// ===================== FINES & EOBI REPORTS =====================
+function renderReports() {
+  const filtered = employees.filter(e => matchesSiteFilter(e, 'report'));
+
+  const fined = filtered.filter(e => (e.fine||0) > 0);
+  document.getElementById('fine-count').textContent = fined.length;
+  document.getElementById('fine-list').innerHTML = fined.length ? fined.map(e=>`
+    <div class="report-row"><div><strong>${e.name}</strong><div style="font-size:10px;color:var(--text-muted);">${e.site}</div></div><div style="color:var(--red);font-weight:600;">${pkr(e.fine)}</div></div>
+  `).join('') : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No fines recorded this month 🎉</div>`;
+
+  const eobiExempt = filtered.filter(e => !e.eobiOn);
+  document.getElementById('eobi-exempt-count').textContent = eobiExempt.length;
+  document.getElementById('eobi-exempt-list').innerHTML = eobiExempt.length ? eobiExempt.map(e=>`
+    <div class="report-row"><div><strong>${e.name}</strong><div style="font-size:10px;color:var(--text-muted);">${e.site}</div></div><span class="badge badge-amber">Exempt</span></div>
+  `).join('') : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No exemptions — everyone has EOBI applied</div>`;
+
+  const held = filtered.filter(e => e.hold);
+  document.getElementById('hold-count').textContent = held.length;
+  document.getElementById('hold-list').innerHTML = held.length ? held.map(e=>`
+    <div class="report-row"><div><strong>${e.name}</strong><div style="font-size:10px;color:var(--text-muted);">${e.site}</div></div><button class="btn btn-secondary btn-sm" onclick="quickHold(${e.id});renderReports();">Unhold</button></div>
+  `).join('') : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No salaries on hold</div>`;
+
+  const advanced = filtered.filter(e => (e.adv||0)>0 || (e.eid||0)>0);
+  document.getElementById('adv-count').textContent = advanced.length;
+  document.getElementById('adv-list').innerHTML = advanced.length ? advanced.map(e=>`
+    <div class="report-row"><div><strong>${e.name}</strong><div style="font-size:10px;color:var(--text-muted);">${e.site}</div></div><div style="text-align:right;">${e.adv?`<div style="color:var(--purple);">Loan: ${pkr(e.adv)}</div>`:''}${e.eid?`<div style="color:var(--amber);">Eid: ${pkr(e.eid)}</div>`:''}</div></div>
+  `).join('') : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No active advances</div>`;
+}
+
+// ===================== SETTINGS =====================
+function showSettingsTab(tab, el) {
+  document.querySelectorAll('.settings-tab').forEach(t=>t.style.display='none');
+  document.getElementById('settings-'+tab).style.display='block';
+  document.querySelectorAll('#page-settings .tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function saveCompanyDetails() {
+  const name = document.getElementById('set-company-name').value;
+  document.querySelectorAll('.payslip-company').forEach(el=>el.textContent = name);
+  showToast('✅ Company details updated — will appear on payslips, bank sheets, and sidebar');
+}
+
+function setTheme(color, el) {
+  document.documentElement.style.setProperty('--accent', color);
+  document.querySelectorAll('.theme-swatch').forEach(s=>{s.classList.remove('active'); s.innerHTML='';});
+  el.classList.add('active'); el.innerHTML='✓';
+  showToast('✅ Theme updated for your view');
+}
+
+// ===================== TEAM PANEL: CHAT + TO-DO =====================
+function toggleTeamPanel() { document.getElementById('team-panel').classList.toggle('open'); }
+function showTeamTab(tab, el) {
+  document.querySelectorAll('.team-tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('team-chat-body').style.display = tab==='chat'?'block':'none';
+  document.getElementById('team-todo-body').style.display = tab==='todo'?'block':'none';
+  document.getElementById('team-chat-input').style.display = tab==='chat'?'flex':'none';
+}
+function sendChatMsg() {
+  const input = document.getElementById('new-chat-msg');
+  const text = input.value.trim();
+  if(!text) return;
+  const body = document.getElementById('team-chat-body');
+  const time = new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  body.insertAdjacentHTML('beforeend', `<div class="chat-msg"><span class="who">Salman Ahmed</span><span class="when">${time}</span><div class="text">${text.replace(/</g,'&lt;')}</div></div>`);
+  body.scrollTop = body.scrollHeight;
+  input.value='';
+}
+function addTodo() {
+  const input = document.getElementById('new-todo');
+  const text = input.value.trim();
+  if(!text) return;
+  const body = document.getElementById('team-todo-body');
+  const div = document.createElement('div');
+  div.className = 'todo-item';
+  div.innerHTML = `<input type="checkbox" onclick="toggleTodo(this)"><div><div class="todo-text">${text.replace(/</g,'&lt;')}</div><div class="todo-meta">Salman Ahmed · Just now</div></div>`;
+  body.insertBefore(div, body.lastElementChild);
+  input.value='';
+}
+function toggleTodo(checkbox) { checkbox.closest('.todo-item').classList.toggle('done'); }
+
+const pageMeta={
+  dashboard:['Dashboard','Overview for April 2026'],
+  payroll:['Payroll Entry','All monthly controls — attendance, pay, deductions, hold — edit inline or drag to reorder'],
+  release:['Release Salary','Mark salaries as paid — held employees are skipped automatically'],
+  reports:['Fines & EOBI Report','At-a-glance view of fines, EOBI exemptions, holds, and active advances'],
+  payslip:['Payslips','Generate and download employee payslips'],
+  banksheet:['Bank Sheets','Bank transfer sheet — employees on Hold are excluded automatically'],
+  cashsheet:['Cash Receiving Sheet','For employees with no bank account — held employees excluded automatically'],
+  employees:['Employee Registry','Identity & employment details only — CNIC, bank info, deputed site'],
+  advances:['Advances','Salary advances, Eid advances, and loans'],
+  sites:['Project Site Management','Add, edit, or remove project / client sites'],
+  settings:['Settings & Profile','Company details, your profile, and portal theme'],
+  users:['User Management','Manage login accounts and site permissions'],
+  logs:['Audit Log','Full history of all payroll actions'],
+};
+
+function showPage(id, el) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  const m=pageMeta[id]||[id,''];
+  document.getElementById('page-title').textContent=m[0];
+  document.getElementById('page-subtitle').textContent=m[1];
+  if(el) el.classList.add('active');
+  else { document.querySelectorAll('.nav-item').forEach(n=>{ if(n.getAttribute('onclick')?.includes("'"+id+"'")) n.classList.add('active'); }); }
+  if(id==='payroll') { buildMultiselect('payroll'); renderPayroll(); }
+  if(id==='release') { buildMultiselect('release'); renderRelease(); }
+  if(id==='reports') { buildMultiselect('report'); renderReports(); }
+  if(id==='employees') renderEmpList();
+  if(id==='sites') renderSites();
+  if(id==='banksheet') renderBankSheet();
+  if(id==='cashsheet') renderCashSheet();
+}
+
+
+function showModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+
+let toastT;
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),3200);}
+
+// ===== INIT =====
+document.addEventListener('DOMContentLoaded', function(){
+  document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open');}));
+  renderSites();
+  renderPayroll();
+  renderRelease();
+  renderPayslipList();
+  renderEmpList();
+  renderBankSheet();
+  renderCashSheet();
+});
+</script>
+</body>
+</html>
