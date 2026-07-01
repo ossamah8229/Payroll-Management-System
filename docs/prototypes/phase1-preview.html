@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 1 Visual Preview — Payroll Management System</title>
+<style>
+  /* ===== Design tokens — copied verbatim from frontend/src/index.css ===== */
+  :root {
+    --color-bg: #f0ede8;
+    --color-surface: #fafaf8;
+    --color-surface-2: #ffffff;
+    --color-border: #d8d4cc;
+    --color-border-strong: #b8b2a8;
+    --color-text: #1a1816;
+    --color-text-muted: #6b6560;
+    --color-text-faint: #9c978f;
+
+    --accent: #1b4f72;
+    --accent-light: #ebf2f8;
+    --accent-mid: #2e6ea6;
+
+    --color-green: #1a6b3a;
+    --color-green-light: #e8f5ee;
+    --color-amber: #8b5e00;
+    --color-amber-light: #fff8e6;
+    --color-red: #8b1a1a;
+    --color-red-light: #fbe8e8;
+    --color-purple: #4a2080;
+    --color-purple-light: #f0ebf8;
+
+    --radius: 8px;
+    --radius-lg: 12px;
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.10), 0 0 0 1px rgba(0, 0, 0, 0.04);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== Meta banner (this file only, not part of the app) ===== */
+  .meta-banner {
+    background: var(--accent);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 11px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .meta-banner strong { color: #fff; }
+  .meta-tabs { display: flex; gap: 6px; }
+  .meta-tabs button {
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius);
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .meta-tabs button.is-active { background: #fff; color: var(--accent); }
+
+  .screen { display: none; }
+  .screen.is-active { display: block; }
+
+  /* ===== Login screen (mirrors frontend/src/routes/login-page.tsx) ===== */
+  .login-wrap {
+    min-height: calc(100vh - 37px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .card {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .login-card { width: 100%; max-width: 380px; }
+  .card-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: 1px solid var(--color-border);
+    padding: 14px 18px;
+  }
+  .card-title { font-size: 13px; font-weight: 600; margin: 0; }
+  .card-subtitle { font-size: 11px; color: var(--color-text-muted); }
+  .card-content { padding: 18px; }
+
+  form.stack { display: flex; flex-direction: column; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-muted);
+  }
+  input[type="email"], input[type="password"], input[type="text"] {
+    height: 36px;
+    width: 100%;
+    border-radius: var(--radius);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--color-text);
+    font-family: inherit;
+  }
+  input:focus {
+    outline: none;
+    border-color: var(--accent-mid);
+    box-shadow: 0 0 0 2px var(--accent-light);
+  }
+
+  /* ===== Buttons (mirrors frontend/src/components/ui/button.tsx) ===== */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap;
+    border-radius: var(--radius);
+    font-weight: 500;
+    font-family: inherit;
+    border: none;
+    cursor: pointer;
+    transition: background-color .12s ease;
+    padding: 6px 14px;
+    font-size: 12px;
+  }
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-mid); }
+  .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+  .btn-secondary:hover { background: var(--color-bg); border-color: var(--color-border-strong); }
+  .btn-green { background: var(--color-green); color: #fff; }
+  .btn-amber { background: var(--color-amber); color: #fff; }
+  .btn-block { width: 100%; margin-top: 6px; }
+
+  /* ===== App shell (mirrors app-shell.tsx / sidebar.tsx / topbar.tsx) ===== */
+  .app-shell { min-height: calc(100vh - 37px); background: var(--color-bg); }
+  .sidebar {
+    position: fixed;
+    inset: 37px 0 0 0;
+    width: 220px;
+    display: flex;
+    flex-direction: column;
+    background: var(--accent);
+  }
+  .sidebar-brand {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 20px 16px 16px;
+  }
+  .sidebar-brand .name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.25;
+  }
+  .sidebar-brand .sub {
+    margin-top: 2px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+  }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+  .nav-section-label {
+    padding: 14px 16px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.35);
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    cursor: default;
+  }
+  .nav-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+  .nav-item.is-active {
+    background: rgba(255, 255, 255, 0.12);
+    border-left-color: rgba(255, 255, 255, 0.7);
+    color: #fff;
+    font-weight: 500;
+  }
+  .nav-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .sidebar-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .avatar-on-accent { background: rgba(255, 255, 255, 0.2); color: #fff; }
+  .avatar-on-surface { background: var(--accent-light); color: var(--accent); }
+  .sidebar-footer .who { min-width: 0; }
+  .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
+  .sidebar-footer .who-role { font-size: 10px; color: rgba(255, 255, 255, 0.5); }
+
+  .main-area { margin-left: 220px; display: flex; flex-direction: column; min-height: calc(100vh - 37px); }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    padding: 0 28px;
+  }
+  .topbar .title { font-size: 15px; font-weight: 600; }
+  .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .topbar-user { display: flex; align-items: center; gap: 8px; }
+  .main-content { flex: 1; padding: 28px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ===== Badges (mirrors badge.tsx) ===== */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--radius);
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+  }
+  .badge-green { background: var(--color-green-light); color: var(--color-green); }
+  .badge-amber { background: var(--color-amber-light); color: var(--color-amber); }
+  .badge-red { background: var(--color-red-light); color: var(--color-red); }
+  .badge-blue { background: var(--accent-light); color: var(--accent); }
+  .badge-purple { background: var(--color-purple-light); color: var(--color-purple); }
+  .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
+
+  .muted { color: var(--color-text-muted); }
+  .faint { color: var(--color-text-faint); }
+
+  .showcase-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+  }
+  .type-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--color-border); }
+  .type-row:last-child { border-bottom: none; }
+  .type-label { width: 130px; flex-shrink: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--color-text-faint); }
+
+  .swatch-row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .swatch {
+    width: 84px;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    font-size: 10px;
+    text-align: center;
+  }
+  .swatch .fill { height: 36px; }
+  .swatch .label { padding: 4px; background: var(--color-surface-2); }
+
+  footer.note {
+    padding: 14px 28px 28px;
+    font-size: 11px;
+    color: var(--color-text-faint);
+  }
+</style>
+</head>
+<body>
+
+  <div class="meta-banner">
+    <span><strong>Static visual preview</strong> — reproduces the current Phase 1 UI (commit <code>00517e3</code>) as plain HTML/CSS. Not the live React app; no build step or server required.</span>
+    <div class="meta-tabs">
+      <button type="button" class="is-active" data-target="screen-login">Login page</button>
+      <button type="button" data-target="screen-dashboard">Dashboard / App shell</button>
+    </div>
+  </div>
+
+  <!-- ================= LOGIN SCREEN ================= -->
+  <section id="screen-login" class="screen is-active">
+    <div class="login-wrap">
+      <div class="card login-card">
+        <div class="card-header">
+          <h1 class="card-title">Payroll Management System</h1>
+          <span class="card-subtitle">Sign in to continue</span>
+        </div>
+        <div class="card-content">
+          <form class="stack" onsubmit="return false;">
+            <div class="field">
+              <label for="email">Email</label>
+              <input id="email" type="email" autocomplete="username" placeholder="you@company.com" />
+            </div>
+            <div class="field">
+              <label for="password">Password</label>
+              <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" />
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= DASHBOARD / APP SHELL SCREEN ================= -->
+  <section id="screen-dashboard" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Overview</div>
+          <a href="#" class="nav-item is-active">
+            <span class="nav-icon">▦</span> Dashboard
+          </a>
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item" style="opacity:.4; cursor:not-allowed;">
+            <span class="nav-icon">▤</span> Payroll Entry <span class="faint" style="margin-left:auto; font-size:10px;">Phase 3</span>
+          </a>
+          <div class="nav-section-label">Employees</div>
+          <a href="#" class="nav-item" style="opacity:.4; cursor:not-allowed;">
+            <span class="nav-icon">▥</span> Employee Registry <span class="faint" style="margin-left:auto; font-size:10px;">Phase 2</span>
+          </a>
+          <div class="nav-section-label">Admin</div>
+          <a href="#" class="nav-item" style="opacity:.4; cursor:not-allowed;">
+            <span class="nav-icon">▧</span> Audit Log <span class="faint" style="margin-left:auto; font-size:10px;">Phase 8</span>
+          </a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">MA</div>
+          <div class="who">
+            <div class="who-name">Master Admin</div>
+            <div class="who-role">Master Admin</div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="main-area">
+        <header class="topbar">
+          <div>
+            <div class="title">Dashboard</div>
+            <div class="subtitle">Payroll Management System</div>
+          </div>
+          <div class="topbar-user">
+            <div class="avatar avatar-on-surface">MA</div>
+          </div>
+        </header>
+
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Welcome, Master</h3>
+            </div>
+            <div class="card-content">
+              <p class="muted" style="margin:0;">
+                Signed in as <strong style="color:var(--color-text);">Master Admin</strong>. This is a
+                Phase 1 foundation placeholder — payroll features are built in the phases that follow
+                (see <code>docs/IMPLEMENTATION_PLAN.md</code>).
+              </p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">Design system reference — buttons, badges, typography</h3></div>
+            <div class="card-content">
+              <div class="showcase-grid">
+                <div>
+                  <div class="type-label" style="width:auto; margin-bottom:8px;">Buttons</div>
+                  <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                    <button class="btn btn-primary">Primary</button>
+                    <button class="btn btn-secondary">Secondary</button>
+                    <button class="btn btn-green">Green</button>
+                    <button class="btn btn-amber">Amber</button>
+                    <button class="btn btn-primary btn-sm">Small</button>
+                  </div>
+                </div>
+                <div>
+                  <div class="type-label" style="width:auto; margin-bottom:8px;">Badges</div>
+                  <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                    <span class="badge badge-green">Released</span>
+                    <span class="badge badge-amber">Pending</span>
+                    <span class="badge badge-red">Hold</span>
+                    <span class="badge badge-blue">Info</span>
+                    <span class="badge badge-purple">Master Admin</span>
+                    <span class="badge badge-gray">Designation</span>
+                  </div>
+                </div>
+              </div>
+
+              <div style="margin-top:18px;">
+                <div class="type-label" style="width:auto; margin-bottom:8px;">Typography scale</div>
+                <div class="type-row"><span class="type-label">9.5–10px micro</span><span style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;">Table header / stat label</span></div>
+                <div class="type-row"><span class="type-label">11px meta</span><span style="font-size:11px; color:var(--color-text-muted);">Field hint / secondary line</span></div>
+                <div class="type-row"><span class="type-label">12px body</span><span style="font-size:12px;">Default body text, inputs, buttons</span></div>
+                <div class="type-row"><span class="type-label">13px section</span><span style="font-size:13px; font-weight:600;">Section / card title</span></div>
+                <div class="type-row"><span class="type-label">15px page title</span><span style="font-size:15px; font-weight:600;">Dashboard</span></div>
+                <div class="type-row"><span class="type-label">21px stat</span><span style="font-size:21px; font-weight:700; letter-spacing:-.02em;">1,284,500</span></div>
+              </div>
+
+              <div style="margin-top:18px;">
+                <div class="type-label" style="width:auto; margin-bottom:8px;">Color tokens</div>
+                <div class="swatch-row">
+                  <div class="swatch"><div class="fill" style="background:var(--accent);"></div><div class="label">accent</div></div>
+                  <div class="swatch"><div class="fill" style="background:var(--color-green);"></div><div class="label">green</div></div>
+                  <div class="swatch"><div class="fill" style="background:var(--color-amber);"></div><div class="label">amber</div></div>
+                  <div class="swatch"><div class="fill" style="background:var(--color-red);"></div><div class="label">red</div></div>
+                  <div class="swatch"><div class="fill" style="background:var(--color-purple);"></div><div class="label">purple</div></div>
+                  <div class="swatch"><div class="fill" style="background:var(--color-bg); border-bottom:1px solid var(--color-border);"></div><div class="label">bg</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <footer class="note">
+    Generated 2026-07-01 from <code>docs/design-system.md</code> and the components under
+    <code>frontend/src/components/</code> / <code>frontend/src/routes/</code> as of commit
+    <code>00517e3282c073d5c759233cece13a40f0091dc8</code>. Nav items beyond Dashboard are shown
+    disabled/greyed — they do not exist in the app yet (their phase is labeled).
+  </footer>
+
+  <script>
+    document.querySelectorAll('.meta-tabs button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.meta-tabs button').forEach(function (b) { b.classList.remove('is-active'); });
+        document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
+        btn.classList.add('is-active');
+        document.getElementById(btn.dataset.target).classList.add('is-active');
+      });
+    });
+  </script>
+</body>
+</html>

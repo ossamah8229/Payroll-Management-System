@@ -3,9 +3,9 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 complete (project foundation: auth, RBAC/audit infrastructure, app shell).
-> See `docs/IMPLEMENTATION_PLAN.md` for the full phase roadmap and `docs/architecture/*.md` for
-> the frozen architecture this implements.
+> **Status:** Phase 1 (auth, RBAC/audit infrastructure, app shell) is code-complete; database
+> verification and the Phase 1 review checkpoint are still pending. See "Current Status" below,
+> `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for the up-to-date details.
 
 ## Getting Started
 
@@ -20,6 +20,24 @@ See `backend/README.md` for database migration/seed setup, then:
 npm run dev:backend           # http://localhost:4000
 npm run dev:frontend          # http://localhost:5173
 ```
+
+## Current Status
+
+- **Architecture:** frozen. `docs/PROJECT_PRINCIPLES.md` and `docs/architecture/*.md` are the
+  binding design; implementation follows `docs/IMPLEMENTATION_PLAN.md`'s phase sequencing.
+- **Phase 1 (Auth, RBAC, Audit Log):** code-complete — schema/migrations, session auth, CSRF,
+  RBAC/site-scoping middleware, insert-only Audit Log with a DB-level immutability trigger, tests,
+  and the frontend login/session/app-shell all exist and pass `typecheck`/`lint`. **Not yet
+  confirmed** against a live database, and the plan's mandatory review checkpoint for Phase 1 has
+  not been signed off. See `docs/PROJECT_PROGRESS.md` for the full checklist.
+- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** not started.
+- **Database verification:** pending — the DB-backed test suite (`auth.test.ts`,
+  `audit-log.test.ts`) needs to be run against a real PostgreSQL instance before Phase 1 can be
+  considered done.
+- **Current git checkpoint:** commit `00517e3282c073d5c759233cece13a40f0091dc8` on `main`.
+- A static, framework-free visual preview of the current UI (login page, sidebar, topbar,
+  dashboard placeholder) is available at `docs/prototypes/phase1-preview.html` — open it directly
+  in a browser.
 
 ## Project Structure
 
@@ -70,5 +88,5 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-This structure is currently empty scaffolding. Awaiting approval before any application
-code, dependencies, or framework choices are introduced.
+See `docs/PROJECT_PROGRESS.md` §5 for the exact next action (Postgres-backed test verification),
+and `docs/SESSION_HANDOFF.md` for the full handoff to the next development session.
