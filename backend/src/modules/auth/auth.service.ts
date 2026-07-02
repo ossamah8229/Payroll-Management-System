@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
-import type { PermissionKey, RoleCode, SessionUser } from '@payroll/shared';
+import type { ChangePasswordInput, PermissionKey, RoleCode, SessionUser, UpdateProfileInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import { badRequest } from '../../common/http-error';
 
 /**
  * Verifies email/password against the stored Argon2 hash. Returns the matching active user's ID,
@@ -62,4 +63,34 @@ export async function loadSessionUser(userId: string): Promise<SessionUser | nul
 
 export async function touchLastLogin(userId: string): Promise<void> {
   await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+}
+
+/** Self-service profile update — name and/or the per-user Theme accent color (My Profile / Theme). */
+export async function updateOwnProfile(userId: string, input: UpdateProfileInput): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      ...(input.name !== undefined && { name: input.name }),
+      ...(input.themeAccentColor !== undefined && { themeAccentColor: input.themeAccentColor }),
+    },
+  });
+}
+
+/**
+ * Self-service password change — requires proving the current password first (unlike Master
+ * Admin's user-management reset, which doesn't, since that path is already gated by
+ * `users:manage`). Every other active session for this user stays valid; only a targeted
+ * deactivation invalidates sessions immediately (docs/architecture/authentication.md), and a
+ * voluntary password change isn't that.
+ */
+export async function changeOwnPassword(userId: string, input: ChangePasswordInput): Promise<void> {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
+  const currentPasswordMatches = await argon2.verify(user.passwordHash, input.currentPassword);
+  if (!currentPasswordMatches) {
+    throw badRequest('Current password is incorrect');
+  }
+
+  const passwordHash = await argon2.hash(input.newPassword);
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
 }

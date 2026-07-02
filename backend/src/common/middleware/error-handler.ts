@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
+import { Prisma } from '@prisma/client';
 import { HttpError } from '../http-error';
 import { logger } from '../../lib/logger';
 import { isProduction } from '../../config/env';
@@ -37,6 +38,28 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     };
     res.status(err.statusCode).json(body);
     return;
+  }
+
+  // Known Prisma constraint violations get a clean 4xx response rather than falling through to
+  // the generic 500 below — every CRUD module hits these (unique names/codes, RESTRICT deletes).
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === 'P2002') {
+      const target = (err.meta?.target as string[] | undefined)?.join(', ') ?? 'field';
+      res.status(409).json({
+        error: { code: 'DUPLICATE', message: `A record with this ${target} already exists` },
+      });
+      return;
+    }
+
+    if (err.code === 'P2003') {
+      res.status(409).json({
+        error: {
+          code: 'REFERENCED_ELSEWHERE',
+          message: 'This record cannot be deleted or changed because other records still reference it',
+        },
+      });
+      return;
+    }
   }
 
   logger.error({ err, path: req.path, method: req.method }, 'Unhandled error');

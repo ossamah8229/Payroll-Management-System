@@ -5,12 +5,30 @@ import { PERMISSIONS, ROLE_CODES, ROLE_PERMISSIONS } from '@payroll/shared';
 
 const prisma = new PrismaClient();
 
+/** Fixed, well-known CompanySettings PK — the primary key itself enforces the singleton. */
+const COMPANY_SETTINGS_ID = '00000000-0000-0000-0000-000000000001';
+
+const BANKS = [
+  { code: 'ABL', name: 'Allied Bank Limited' },
+  { code: 'HBL', name: 'Habib Bank Limited' },
+  { code: 'MCB', name: 'MCB Bank Limited' },
+];
+
+const ADJUSTMENT_TYPES = [
+  { code: 'ATTENDANCE_CORRECTION', label: 'Attendance Correction' },
+  { code: 'OVERTIME_CORRECTION', label: 'Overtime Correction' },
+  { code: 'SALARY_REVISION', label: 'Salary Revision' },
+  { code: 'LEAVE_ADJUSTMENT', label: 'Leave Adjustment' },
+  { code: 'FINE_ADJUSTMENT', label: 'Fine Adjustment' },
+  { code: 'ADVANCE_RECOVERY', label: 'Advance Recovery' },
+  { code: 'MANUAL_ADJUSTMENT', label: 'Manual Adjustment' },
+];
+
 /**
  * Idempotent — safe to re-run against an environment that already has seed data (upserts
- * throughout, never blind inserts). Seeds exactly what Phase 1 needs: the permission registry,
- * the two roles with their grants, and one Master Admin account so the system is usable
- * immediately after migration. Later phases extend this file additively (banks, adjustment
- * types, company settings, etc.) rather than replacing it.
+ * throughout, never blind inserts). Seeds the permission registry, the two roles with their
+ * grants, one Master Admin account, the Bank/AdjustmentType lookup tables, and the singleton
+ * CompanySettings row. Later phases extend this file additively rather than replacing it.
  */
 async function main() {
   console.log('Seeding permissions...');
@@ -76,6 +94,34 @@ async function main() {
   } else {
     console.log(`Master Admin account already exists: ${seedEmail}`);
   }
+
+  console.log('Seeding banks...');
+  for (const bank of BANKS) {
+    await prisma.bank.upsert({
+      where: { code: bank.code },
+      update: {},
+      create: bank,
+    });
+  }
+
+  console.log('Seeding adjustment types...');
+  for (const adjustmentType of ADJUSTMENT_TYPES) {
+    await prisma.adjustmentType.upsert({
+      where: { code: adjustmentType.code },
+      update: {},
+      create: adjustmentType,
+    });
+  }
+
+  console.log('Seeding company settings...');
+  await prisma.companySettings.upsert({
+    where: { id: COMPANY_SETTINGS_ID },
+    update: {},
+    create: {
+      id: COMPANY_SETTINGS_ID,
+      companyName: process.env.SEED_COMPANY_NAME ?? 'Company Name (update in Settings)',
+    },
+  });
 
   console.log('Seed complete.');
 }

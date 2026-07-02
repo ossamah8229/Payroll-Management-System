@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import type { LoginInput, SessionUser } from '@payroll/shared';
+import type { ChangePasswordInput, LoginInput, SessionUser, UpdateProfileInput } from '@payroll/shared';
 import { apiRequest, ApiError } from '@/lib/api-client';
 
 const SESSION_QUERY_KEY = ['session', 'me'] as const;
@@ -46,5 +46,24 @@ export function useLogout() {
     onSuccess: () => {
       queryClient.setQueryData(SESSION_QUERY_KEY, null);
     },
+  });
+}
+
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdateProfileInput) =>
+      apiRequest<{ user: SessionUser }>('/api/v1/auth/me', { method: 'PATCH', body: input }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(SESSION_QUERY_KEY, data.user);
+    },
+  });
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (input: ChangePasswordInput) =>
+      apiRequest<void>('/api/v1/auth/change-password', { method: 'POST', body: input }),
   });
 }

@@ -1,9 +1,15 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { loginSchema } from '@payroll/shared';
+import { changePasswordSchema, loginSchema, updateProfileSchema } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { loadSessionUser, touchLastLogin, verifyCredentials } from './auth.service';
+import {
+  changeOwnPassword,
+  loadSessionUser,
+  touchLastLogin,
+  updateOwnProfile,
+  verifyCredentials,
+} from './auth.service';
 
 export const authRouter = Router();
 
@@ -95,4 +101,46 @@ authRouter.post('/logout', requireAuth, (req, res, next) => {
 
 authRouter.get('/me', requireAuth, (req, res) => {
   res.status(200).json({ user: req.currentUser });
+});
+
+authRouter.patch('/me', requireAuth, async (req, res, next) => {
+  try {
+    const input = updateProfileSchema.parse(req.body);
+    await updateOwnProfile(req.currentUser!.id, input);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'user.profile-updated',
+      entityType: 'User',
+      entityId: req.currentUser!.id,
+      metadata: { changes: input },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const sessionUser = await loadSessionUser(req.currentUser!.id);
+    res.status(200).json({ user: sessionUser });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRouter.post('/change-password', requireAuth, async (req, res, next) => {
+  try {
+    const input = changePasswordSchema.parse(req.body);
+    await changeOwnPassword(req.currentUser!.id, input);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'user.password-changed',
+      entityType: 'User',
+      entityId: req.currentUser!.id,
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
 });

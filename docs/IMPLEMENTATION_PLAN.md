@@ -63,7 +63,7 @@ staging deploy.
 
 **Builds:** Prisma schema for the auth/RBAC/audit subset of `docs/architecture/database-schema.md`
 in one initial migration — `Role`, `Permission`, `RolePermission`, `User`, `ProjectSite` (minimal:
-id/name/branchCode/isActive only, no `defaultBankId` yet), `UserSiteAssignment`, `AuditLog`; seed
+id/name/branchCode/isActive only), `UserSiteAssignment`, `AuditLog`; seed
 script (two roles + permissions, one Master Admin user); `express-session` + `connect-pg-simple` +
 Argon2 login/logout; CSRF token issuance/validation middleware; the permission-check middleware and
 the site-scoping middleware (independent layers, per `docs/architecture/authentication.md`); the
@@ -104,10 +104,14 @@ every module built after it.
 
 ### Phase 2 — Master Data: Project Sites, Employee Registry, Settings, Users
 
-**Builds:** an additive migration bringing in `Bank`, `AdjustmentType`, and `CompanySettings` (plus
-`ProjectSite.defaultBankId` now that `Bank` exists), with seed rows (three banks, seven
-`AdjustmentType` rows, singleton `CompanySettings`) — this is the Phase 1 seed-scope item deferred
-here per the resolved scope note (`docs/PROJECT_PROGRESS.md` §3.1); Project Sites CRUD (delete
+**Builds:** an additive migration bringing in `Bank`, `AdjustmentType`, and `CompanySettings`, with
+seed rows (three banks, seven `AdjustmentType` rows, singleton `CompanySettings`) — this is the
+Phase 1 seed-scope item deferred here per the resolved scope note (`docs/PROJECT_PROGRESS.md`
+§3.1). `Bank` has no relationship to `ProjectSite` — Project Sites are physical client work
+locations only, with no banking properties (see `docs/architecture/database-schema.md` §8's
+2026-07-02 revision note; a `ProjectSite.defaultBankId` field was briefly added and then removed
+before this phase's commit, having incorrectly conflated a site's client identity with banking
+data). Project Sites CRUD (delete
 blocked while employees remain assigned); Employee Registry CRUD (CNIC/employee-code partial-unique
 handling, DOL-based soft "leaving," full site-scoped RBAC for Payroll Staff on view/edit/create per
 the C11 decision, generic audit logging on every create/update); Company Details / My Profile / Theme
@@ -179,9 +183,52 @@ top of it.
 **Builds:** Release Salary (per-employee release, bulk Release All/Hold All scoped by site, with the
 corrected C1/C2 behavior — `hold` never gates editability, and freezes only once `released = true`);
 Bank Sheets and Cash Receiving Sheets (derived, read-only, filtered by bank/site, PDF via Puppeteer
-and Excel via ExcelJS, matching the client's exact historical formats); Payslip generation (PDF);
-Advances module (CRUD, `outstandingBalance` tracking, auto-linking a new deduction to the employee's
-`ACTIVE` advance of that type via the explicit `advanceId`/`eidAdvanceId` FKs).
+and Excel via ExcelJS, matching the client's exact historical formats, disbursed from Broom Services'
+own Company Bank Account(s) — see the design note added 2026-07-02 below); Payslip generation (PDF).
+
+**Advances module, explicitly expanded 2026-07-02** (terms below map to the existing `Advance`
+model in `docs/architecture/database-schema.md` §15 except where flagged as new or open):
+
+- **Advance Requests** — recording a new `LOAN` or `EID_ADVANCE` (matches the existing spec's
+  "Record Advance" action, done directly by Payroll Staff per `reference/PROJECT_SPEC.md`'s role
+  description; a formal request/approval workflow, if wanted, is new scope and not yet confirmed).
+- **Outstanding Balances** — `Advance.outstandingBalance`, already fully spec'd (§15); no change.
+- **Installments / Deferred Deductions + Automatic Payroll Recovery — clarified 2026-07-02
+  (RESOLVED).** Payroll Staff defines — and can edit at any time — a repayment schedule for an
+  `INSTALLMENT`-type advance: specifically, the per-cycle deduction amount. "Automatic Payroll
+  Recovery" means the system automatically *applies* that already-approved schedule going forward —
+  it does **not** mean the system calculates or decides the amount. Concretely: at each new-cycle
+  `PayrollEntry` creation (the existing cycle-turnover transaction, Phase 5), the linked `ACTIVE`
+  advance's scheduled amount auto-populates that cycle's `advanceDeduction`/`.eidAdvanceDeduction`
+  field, and `outstandingBalance` decrements accordingly — the field remains staff-editable
+  afterward in Draft, like any other Payroll Entry field, if a one-off change is needed without
+  altering the standing schedule. Editing the schedule itself is a distinct, audit-logged action.
+  This stays fully compatible with `reference/PROJECT_SPEC.md`'s "verified multiple times" rule
+  ("do not build auto-deduction *logic*... just preserve the balance-tracking display") — no value
+  is ever computed by the system, only repeated forward until staff changes it — while removing the
+  need to retype the same amount every month by hand.
+  **Proposed schema addition for Phase 4** (not yet implemented): `Advance.scheduledInstallmentAmount`
+  (numeric, nullable — null means no standing schedule, e.g. a one-off full-deduction advance).
+- **Cash Advances** — advance disbursement to an employee with no bank account on file, parallel to
+  the existing Cash Receiving Sheet concept for salary. **New scope**: the current `Advance` model
+  tracks a balance but not a disbursement *event* or its payment method (cash vs. bank), so this
+  needs its own design pass during Phase 4, not assumed here.
+- **Advance-only Bank Sheets** — a dedicated bank-sheet-style document for disbursing a *new*
+  advance amount via bank transfer, separate from the existing salary Bank Sheet. **New artifact
+  type**, not in the current spec; needs its own design pass during Phase 4 (including which Company
+  Bank Account funds it — see the design note below).
+
+**Company Bank Account design note (added 2026-07-02, pending user approval — not yet implemented):**
+Broom Services owns multiple bank accounts used as the *source* of salary/advance disbursements,
+separate from `Employee.bankId` (an employee's own receiving account) and never attached to
+`ProjectSite` (confirmed 2026-07-02 — see `docs/architecture/database-schema.md` §8's revision
+note). A `CompanyBankAccount` lookup table is proposed for Phase 4 schema work: `id`, `bankId` (FK →
+`Bank`), `accountNumber`, `accountTitle`, a human-readable `label`, `branchCode`, `isActive`,
+`isDefault`. Two open sub-questions need an answer before this is finalized: (1) is disbursement
+same-bank-only (a Broom Services HBL account pays HBL-held employees), or can any company account
+fund any employee via manual selection at Release time; (2) is the source account recorded per
+`PayrollEntry`/per-release (fine-grained, supports mixed sourcing within one cycle) or per Bank
+Sheet generation event (coarser)? See `docs/PROJECT_PROGRESS.md` §3 item 7.
 
 **Depends on:** Phase 3 (Payroll Entry must exist and be reliable before anything derives from it).
 

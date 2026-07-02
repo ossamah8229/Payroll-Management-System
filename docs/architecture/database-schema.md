@@ -177,9 +177,12 @@ project sites" (`PROJECT_SPEC.md`).
 
 ## 7. `Bank`
 
-**Purpose:** Reference list of banks employees and sites can be associated with.
+**Purpose:** Reference list of banks an employee's own receiving account can be at.
 **Why it exists:** Extensible lookup rather than a hardcoded enum — a new bank is a data row
 (Principle 8).
+**Revised 2026-07-02:** this table has no relationship to `ProjectSite` — see §8's revision note.
+Broom Services' own disbursement source account(s) are a distinct concept this table does not
+model; see `docs/PROJECT_PROGRESS.md` for the open item tracking that gap.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -190,28 +193,40 @@ project sites" (`PROJECT_SPEC.md`).
 | `createdAt` | timestamptz | no | `now()` | |
 
 - **Unique constraints:** `code`
-- **Module owner:** Project Sites (shared reference, also used by Employee Registry)
+- **Module owner:** Employee Registry
 - **Row count:** single digits
 
 ## 8. `ProjectSite`
 
-**Purpose:** A client site/project an employee is deputed to (e.g. "ABL City Region Lahore").
+**Purpose:** A physical client work location an employee is deputed to (e.g. "ABL City Region
+Lahore" — Broom Services is a payroll-outsourcing company deputing staff to *client* sites;
+`reference/PROJECT_SPEC.md` names banks as example clients, e.g. "banks like ABL/HBL/MCB, malls,
+retail outfitters"). Project Sites are physical work locations only — no financial/banking
+properties.
 **Why it exists:** Owns site master data; referenced by Employee (deputed site) and User (staff
 assignment).
 **Business rule tie-in:** "Delete is blocked if employees are still assigned" (`PROJECT_SPEC.md`).
+**Revised 2026-07-02 — `defaultBankId` removed (final decision, no longer open):** an earlier
+revision of this table added `defaultBankId` (a "site's typical bank" FK to `Bank`), reasoning that
+a new employee's bank could default from their site. This was incorrect: it conflated a site's
+*client identity* (site names like "ABL City Region Lahore" identify the client, not a bank Broom
+Services itself banks with) with actual banking data. Project Sites have no banking properties in
+this system — employees own their own receiving bank account (`Employee.bankId`), and Broom
+Services' own disbursement source account(s) are a separate, not-yet-modeled concept (see §7).
+Removed from the schema, the one Phase 2 migration that had added it (never applied to any live
+database), and every dependent layer, before the Phase 2 commit.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `name` | varchar(160) | no | — | |
-| `defaultBankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT` — the site's typical bank, a default only; an individual employee's own bank (on `Employee`) is authoritative for that employee's payment routing |
 | `branchCode` | varchar(20) | yes | — | |
 | `isActive` | boolean | no | `true` | |
 | `createdAt` | timestamptz | no | `now()` | |
 | `updatedAt` | timestamptz | no | `now()` | |
 
 - **Unique constraints:** `name`
-- **Indexes:** unique(`name`), (`defaultBankId`)
+- **Indexes:** unique(`name`)
 - **Cascade / business rule enforcement:** deletion is blocked at the application layer while any
   `Employee.siteId` references this row (checked before delete, per spec); the FK itself
   (`Employee.siteId → ProjectSite.id`) is `ON DELETE RESTRICT` as a database-level backstop so this
@@ -708,8 +723,8 @@ Role (many) ──< RolePermission >── (many) Permission
 
 User (many) ──< UserSiteAssignment >── (many) ProjectSite
 
-Bank (1) ───< ProjectSite (many)      [defaultBankId, optional]
-Bank (1) ───< Employee (many)         [bankId, optional]
+Bank (1) ───< Employee (many)         [bankId, optional] — Bank has no relationship to ProjectSite,
+                                        see §8's revision note
 
 ProjectSite (1) ───< Employee (many)
 
@@ -878,32 +893,33 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
 
 ## 26. Design Assumptions Requiring Confirmation
 
-Item 1 below is now **resolved** (final decision, no longer open) and is kept only as a record of
-what was decided and why. Items 2, 4, and 5 remain genuinely open and are unaffected by this round of
-changes. Item 3 is updated to reflect the explicit-linkage schema addition, but the underlying
-business assumption it flags is still worth confirming.
+Items 1, 2, and 4 below are now **resolved** (final decisions, no longer open) and are kept only as a
+record of what was decided and why. Item 5 remains genuinely open (Phase 3's concern, not Phase 2's)
+and is unaffected by this round of changes. Item 3 is updated to reflect the explicit-linkage schema
+addition, but the underlying business assumption it flags is still worth confirming.
 
 1. ~~`PayrollCycle` Draft → Released trigger~~ — **Resolved.** Draft → Released is an explicit
    Master Admin "Finalize Cycle" action, gated by a precondition (no non-held unreleased entries) with
    **no override**. See §10 and `docs/architecture/data-and-storage.md` §4.
-2. **`Employee.cnic` and `.employeeCode` are nullable.** Real client sample data included employees
-   with a blank CNIC. Given CNIC is described as "the primary key across the whole system," this is
-   modeled as nullable-but-unique-when-present rather than strictly required, to accommodate an
-   employee added before their CNIC is on file. Worth confirming this reflects real onboarding
-   practice rather than a data-quality gap that should instead be a hard requirement.
+2. ~~`Employee.cnic` and `.employeeCode` are nullable.~~ — **Resolved 2026-07-02, confirmed as
+   documented.** Real client sample data included employees with a blank CNIC. Given CNIC is
+   described as "the primary key across the whole system," this is modeled as
+   nullable-but-unique-when-present rather than strictly required, to accommodate an employee added
+   before their CNIC is on file. Confirmed by the user before Phase 2 Employee Registry schema work.
 3. **At most one `ACTIVE` `Advance` per employee per type.** Still assumed, and now reinforced rather
    than merely inferred: `PayrollEntry.advanceId`/`.eidAdvanceId` (§12) record the explicit link at
    entry time, but a new deduction is still auto-linked to "the" active advance of that type via this
    same partial-unique-index assumption. If the business does expect concurrent overlapping advances
    of the same type with independently-tracked balances, this still needs a different design (e.g. a
    manual advance picker at entry time rather than auto-linking to a single implied active advance).
-4. **`Employee.religion` and `.designation` are free text, not enums or lookup tables.** Designation
-   values vary a great deal across real client sites and don't drive any calculation logic, so
-   constraining them didn't seem to add value — confirm this matches expectations, particularly if
-   designation is ever expected to drive reporting groupings.
+   Not yet confirmed — revisit before Phase 4 (Advances module).
+4. ~~`Employee.religion` and `.designation` are free text, not enums or lookup tables.~~ —
+   **Resolved 2026-07-02, confirmed as documented.** Designation values vary a great deal across real
+   client sites and don't drive any calculation logic, so constraining them didn't seem to add value.
+   Confirmed by the user before Phase 2 Employee Registry schema work.
 5. **A `PayrollCycle` is exactly one calendar month.** Nothing in the spec suggests non-monthly or
    custom-length pay periods; `year`+`month` is the whole cycle identity. If that ever changes, it's
-   a schema change to this table specifically.
+   a schema change to this table specifically. Not yet confirmed — revisit before Phase 3.
 
 ---
 

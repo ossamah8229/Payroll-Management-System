@@ -12,6 +12,11 @@ import { attachUser } from './common/middleware/attach-user';
 import { csrfProtection, issueCsrfCookie } from './common/middleware/csrf';
 import { errorHandler } from './common/middleware/error-handler';
 import { authRouter } from './modules/auth/auth.routes';
+import { projectSitesRouter } from './modules/project-sites/project-sites.routes';
+import { banksRouter } from './modules/banks/banks.routes';
+import { employeesRouter } from './modules/employees/employees.routes';
+import { settingsRouter } from './modules/settings/settings.routes';
+import { usersRouter } from './modules/users/users.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -80,6 +85,11 @@ export function createApp(): Express {
   });
 
   app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1/sites', projectSitesRouter);
+  app.use('/api/v1/banks', banksRouter);
+  app.use('/api/v1/employees', employeesRouter);
+  app.use('/api/v1/settings', settingsRouter);
+  app.use('/api/v1/users', usersRouter);
 
   app.use(errorHandler);
 

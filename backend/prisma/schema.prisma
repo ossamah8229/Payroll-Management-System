@@ -1,27 +1,29 @@
 // Payroll Management System — Prisma schema
 //
-// Phase 1 scope only. This file intentionally implements a subset of the full design in
-// docs/architecture/database-schema.md — exactly the tables needed to establish the
-// authentication, RBAC, and audit-log foundation (Role, Permission, RolePermission, User,
-// ProjectSite [minimal — see note below], UserSiteAssignment, AuditLog).
+// Phase 1 (Role, Permission, RolePermission, User, ProjectSite, UserSiteAssignment, AuditLog) +
+// Phase 2 master data (Bank, Employee, AdjustmentType, CompanySettings) — see
+// docs/architecture/database-schema.md for the full design and docs/IMPLEMENTATION_PLAN.md for
+// phase sequencing.
 //
-// Every other table in database-schema.md (Bank, Employee, PayrollCycle, PayrollEntry,
-// Correction, BalanceAdjustment, Advance, AdjustmentType, BackupPackage, BackupPackageFile,
-// CompanySettings) is deferred to the phase that actually builds the module owning it, added
-// via a new additive migration at that time — per Principle 8 (prefer additive schema
-// evolution) and docs/IMPLEMENTATION_PLAN.md's phase breakdown. Nothing here contradicts
-// database-schema.md; it is a strict subset, sequenced deliberately.
+// ProjectSite deliberately has no relationship to Bank. Project Sites are physical client work
+// locations only (Broom Services is a payroll-outsourcing company deputing staff to client sites —
+// reference/PROJECT_SPEC.md — and site names like "ABL City Region Lahore" identify the *client*,
+// not a bank Broom Services itself banks with). Employees own their own receiving bank account
+// (Employee.bankId); Broom Services' own source account(s) for disbursement are a distinct concept
+// not yet modeled anywhere in this schema — see docs/PROJECT_PROGRESS.md for the open item.
+//
+// Every other table in database-schema.md (PayrollCycle, PayrollEntry, Correction,
+// BalanceAdjustment, Advance, BackupPackage, BackupPackageFile) is deferred to the phase that
+// actually builds the module owning it, added via a new additive migration at that time — per
+// Principle 8 (prefer additive schema evolution) and docs/IMPLEMENTATION_PLAN.md's phase
+// breakdown. Nothing here contradicts database-schema.md; it is a strict subset, sequenced
+// deliberately.
 //
 // Naming: model and field names match database-schema.md exactly (PascalCase models, camelCase
 // fields) with no @map/@@map renaming to snake_case — that document never specifies a snake_case
 // physical naming convention, and Prisma handles camelCase columns natively (it quotes
 // identifiers in generated SQL), so introducing snake_case here would have been an unrequested
 // deviation, not a requirement.
-//
-// ProjectSite is included now, minimally (id/name/branchCode/isActive only — no `defaultBankId`
-// yet, since `Bank` doesn't exist until Phase 2), because `UserSiteAssignment` needs a real
-// foreign-key target for Phase 1's RBAC site-scoping infrastructure to be genuine, not a stub.
-// `defaultBankId` is added additively in the Phase 2 migration alongside `Bank`.
 
 generator client {
   provider = "prisma-client-js"
@@ -30,6 +32,14 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+/// Closed, code-coupled set (docs/architecture/database-schema.md §1) — how an employee's gross
+/// pay is computed (calcNet, Phase 3) differs structurally by pay type, so a new value would
+/// require a code change regardless of schema representation.
+enum PayType {
+  DAILY_WAGE
+  MONTHLY
 }
 
 /// Role → Permission RBAC (docs/architecture/authentication.md). A named bundle of permissions;
@@ -90,16 +100,32 @@ model User {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  role            Role                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  siteAssignments UserSiteAssignment[]
-  auditLogEntries AuditLog[]
+  role                   Role                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  siteAssignments        UserSiteAssignment[]
+  auditLogEntries        AuditLog[]
+  companySettingsUpdates CompanySettings[]
 
   @@index([roleId])
 }
 
-/// Project site master data. Minimal in Phase 1 — see the file-level note above. Full CRUD and
-/// business rules (e.g. delete blocked while employees remain assigned) land in Phase 2 alongside
-/// Employee Registry, which is the module that actually enforces that rule.
+/// Reference list of banks an employee's own receiving account can be at — an extensible lookup
+/// rather than a hardcoded enum, per Principle 8 (a new bank is a data row). Not related to
+/// ProjectSite: Broom Services' own disbursement source account(s) are a distinct, not-yet-modeled
+/// concept — see the file-level note above.
+model Bank {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String   @unique @db.VarChar(10)
+  name      String   @db.VarChar(120)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  employees Employee[]
+}
+
+/// Project site master data — a physical client work location an employee is deputed to (name,
+/// branch code; no banking properties — see the file-level note above). Delete is blocked at the
+/// application layer while any Employee still references it (checked before delete), with the
+/// Employee.siteId FK as an ON DELETE RESTRICT database-level backstop.
 model ProjectSite {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String   @unique @db.VarChar(160)
@@ -109,6 +135,45 @@ model ProjectSite {
   updatedAt  DateTime @updatedAt @db.Timestamptz(6)
 
   userAssignments UserSiteAssignment[]
+  employees       Employee[]
+}
+
+/// Identity, employment, and bank details for a person on payroll — the Employee Registry
+/// (docs/architecture/database-schema.md §9). Master record of *who* someone is, independent of
+/// any single month's payroll figures (Principle 1: PayrollEntry owns the monthly figures).
+/// Never hard-deleted — `dateOfLeaving` presence marks an employee as having left.
+model Employee {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeCode          String?   @db.VarChar(30)
+  cnic                  String?   @db.VarChar(15)
+  name                  String    @db.VarChar(160)
+  fatherName            String?   @db.VarChar(160)
+  religion              String?   @db.VarChar(40)
+  dateOfBirth           DateTime? @db.Date
+  mobileNumber          String?   @db.VarChar(20)
+  designation           String    @db.VarChar(80)
+  siteId                String    @db.Uuid
+  dateOfJoining         DateTime? @db.Date
+  dateOfLeaving         DateTime? @db.Date
+  payType               PayType   @default(DAILY_WAGE)
+  grossPay              Decimal   @db.Decimal(12, 2)
+  bankId                String?   @db.Uuid
+  branchCode            String?   @db.VarChar(20)
+  accountNumber         String?   @db.VarChar(40)
+  accountTitle          String?   @db.VarChar(160)
+  defaultEobiAmount     Decimal   @default(400.00) @db.Decimal(10, 2)
+  defaultEobiApplicable Boolean   @default(true)
+  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
+
+  site ProjectSite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  bank Bank?       @relation(fields: [bankId], references: [id], onDelete: Restrict)
+
+  // Partial unique indexes (WHERE ... IS NOT NULL) and the CNIC numeric-pattern check constraint
+  // are not expressible via Prisma's schema DSL — both are added by raw SQL in the migration
+  // (docs/architecture/database-schema.md §9).
+  @@index([siteId])
+  @@index([bankId])
 }
 
 /// Which project sites a Payroll Staff user may access (docs/architecture/authentication.md).
@@ -148,4 +213,30 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([actorUserId])
   @@index([occurredAt(sort: Desc)])
+}
+
+/// The standardized classification list for Corrections (Phase 6) — an extensible lookup table
+/// instead of a native enum, so a new type is a data row, never a migration (Principle 8).
+model AdjustmentType {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String   @unique @db.VarChar(40)
+  label     String   @db.VarChar(120)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+}
+
+/// Company name, address, and logo shown on payslips, bank sheets, and the app shell —
+/// Master-Admin-only editable. Singleton enforced by a fixed, well-known primary key (see the
+/// seed script), so the primary key itself guarantees at most one row can ever exist.
+model CompanySettings {
+  id                String   @id @db.Uuid
+  companyName       String   @db.VarChar(200)
+  registeredAddress String?  @db.VarChar(300)
+  phone             String?  @db.VarChar(30)
+  email             String?  @db.VarChar(255)
+  logoStorageKey    String?
+  updatedAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedById       String?  @db.Uuid
+
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
 }

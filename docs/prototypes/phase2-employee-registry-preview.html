@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 2 Visual Preview — Employee Registry — Payroll Management System</title>
+<style>
+  :root {
+    --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
+    --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #9c978f;
+    --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
+    --color-green: #1a6b3a; --color-green-light: #e8f5ee;
+    --color-amber: #8b5e00; --color-amber-light: #fff8e6;
+    --color-red: #8b1a1a; --color-red-light: #fbe8e8;
+    --color-purple: #4a2080; --color-purple-light: #f0ebf8;
+    --radius: 8px; --radius-lg: 12px;
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; }
+  .meta-banner { background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .meta-banner strong { color: #fff; }
+  .meta-tabs { display: flex; gap: 6px; }
+  .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
+  .meta-tabs button.is-active { background: #fff; color: var(--accent); }
+  .screen { display: none; }
+  .screen.is-active { display: block; }
+  .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
+  .card-title { font-size: 13px; font-weight: 600; margin: 0; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 6px 14px; font-size: 12px; }
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+  .app-shell { min-height: calc(100vh - 37px); background: var(--color-bg); }
+  .sidebar { position: fixed; inset: 37px 0 0 0; width: 220px; display: flex; flex-direction: column; background: var(--accent); }
+  .sidebar-brand { border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px 16px 16px; }
+  .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
+  .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.35); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
+  .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .avatar-on-accent { background: rgba(255,255,255,0.2); color: #fff; }
+  .avatar-on-surface { background: var(--accent-light); color: var(--accent); }
+  .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
+  .sidebar-footer .who-role { font-size: 10px; color: rgba(255,255,255,0.5); }
+  .main-area { margin-left: 220px; display: flex; flex-direction: column; min-height: calc(100vh - 37px); }
+  .topbar { position: sticky; top: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
+  .topbar .title { font-size: 15px; font-weight: 600; }
+  .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .main-content { flex: 1; padding: 28px; }
+  .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
+  .badge-green { background: var(--color-green-light); color: var(--color-green); }
+  .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
+  .muted { color: var(--color-text-muted); }
+  .filter-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; padding: 18px 18px 0; }
+  .filter-field { display: flex; flex-direction: column; gap: 6px; }
+  .filter-field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted); }
+  input[type="text"], select { height: 34px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 16px; }
+  table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
+  table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data-table td.actions { width: 40px; text-align: center; color: var(--color-text-muted); }
+  .modal-standalone-wrap { padding: 40px 28px; display: flex; justify-content: center; }
+  .modal { width: 92vw; max-width: 620px; max-height: 85vh; overflow-y: auto; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); padding: 14px 20px; position: sticky; top: 0; background: var(--color-surface-2); }
+  .modal-header h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .modal-close { border: none; background: none; font-size: 16px; color: var(--color-text-muted); cursor: pointer; }
+  .modal-body { padding: 20px; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); padding: 14px 20px; }
+  .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted); margin: 0 0 10px; }
+  .form-section { padding-top: 16px; border-top: 1px solid var(--color-border); margin-top: 16px; }
+  .form-section:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.span-2 { grid-column: span 2; }
+  label { font-size: 11px; font-weight: 500; color: var(--color-text-muted); }
+  footer.note { padding: 14px 28px 28px; font-size: 11px; color: var(--color-text-faint); }
+</style>
+</head>
+<body>
+
+  <div class="meta-banner">
+    <span><strong>Static visual preview</strong> — reproduces the Phase 2 Employee Registry UI as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <div class="meta-tabs">
+      <button type="button" class="is-active" data-target="screen-list">Employee list</button>
+      <button type="button" data-target="screen-form">New/Edit Employee modal</button>
+    </div>
+  </div>
+
+  <section id="screen-list" class="screen is-active">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Overview</div>
+          <a href="#" class="nav-item"><span>▦</span> Dashboard</a>
+          <div class="nav-section-label">Employees</div>
+          <a href="#" class="nav-item is-active"><span>👤</span> Employee Registry</a>
+          <div class="nav-section-label">Admin</div>
+          <a href="#" class="nav-item"><span>🏢</span> Project Sites</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">MA</div>
+          <div><div class="who-name">Master Admin</div><div class="who-role">Master Admin</div></div>
+        </div>
+      </aside>
+
+      <div class="main-area">
+        <header class="topbar">
+          <div>
+            <div class="title">Employee Registry</div>
+            <div class="subtitle">Identity, employment, and bank details</div>
+          </div>
+          <div class="avatar avatar-on-surface">MA</div>
+        </header>
+
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">All Employees</h3>
+              <button class="btn btn-primary btn-sm">+ New Employee</button>
+            </div>
+            <div class="filter-row">
+              <div class="filter-field">
+                <label>Site</label>
+                <select style="width:190px;"><option>All assigned sites</option><option>ABL City Region Lahore</option></select>
+              </div>
+              <div class="filter-field">
+                <label>Search</label>
+                <input type="text" style="width:220px;" placeholder="Name, CNIC, or code" />
+              </div>
+              <label style="display:flex; align-items:center; gap:6px; padding-bottom:8px; color:var(--color-text-muted);">
+                <input type="checkbox" checked /> Active employees only
+              </label>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr><th>Code</th><th>Name</th><th>Designation</th><th>Site</th><th>Pay type</th><th>Gross pay</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="muted">V001</td><td style="font-weight:500;">Muhammad Asif</td><td class="muted">Security Guard</td>
+                  <td class="muted">ABL City Region Lahore</td><td class="muted">Daily wage</td><td class="num">32,000.00</td>
+                  <td><span class="badge badge-green">Active</span></td><td class="actions">⋯</td>
+                </tr>
+                <tr>
+                  <td class="muted">V002</td><td style="font-weight:500;">Bilal Hussain</td><td class="muted">Supervisor</td>
+                  <td class="muted">HBL Corporate Karachi</td><td class="muted">Monthly</td><td class="num">55,000.00</td>
+                  <td><span class="badge badge-green">Active</span></td><td class="actions">⋯</td>
+                </tr>
+                <tr>
+                  <td class="muted">—</td><td style="font-weight:500;">Rashid Mehmood</td><td class="muted">Guard</td>
+                  <td class="muted">ABL City Region Lahore</td><td class="muted">Daily wage</td><td class="num">30,000.00</td>
+                  <td><span class="badge badge-gray">Left</span></td><td class="actions">⋯</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <section id="screen-form" class="screen">
+    <div class="app-shell" style="background: var(--color-bg);">
+      <div class="modal-standalone-wrap">
+        <div class="modal">
+          <div class="modal-header"><h3>New Employee</h3><button class="modal-close">✕</button></div>
+          <div class="modal-body">
+            <div class="form-section">
+              <p class="section-label">Identity</p>
+              <div class="form-grid">
+                <div class="field span-2"><label>Full name</label><input type="text" /></div>
+                <div class="field"><label>Employee code</label><input type="text" placeholder="e.g. V001" /></div>
+                <div class="field"><label>CNIC</label><input type="text" placeholder="13 digits, optional" /></div>
+                <div class="field"><label>Father's name</label><input type="text" /></div>
+                <div class="field"><label>Religion</label><input type="text" /></div>
+                <div class="field"><label>Date of birth</label><input type="text" placeholder="YYYY-MM-DD" /></div>
+                <div class="field"><label>Mobile number</label><input type="text" /></div>
+              </div>
+            </div>
+            <div class="form-section">
+              <p class="section-label">Employment</p>
+              <div class="form-grid">
+                <div class="field"><label>Designation</label><input type="text" /></div>
+                <div class="field"><label>Project site</label><select><option>Select a site</option></select></div>
+                <div class="field"><label>Date of joining</label><input type="text" placeholder="YYYY-MM-DD" /></div>
+                <div class="field"><label>Pay type</label><select><option>Daily wage</option><option>Monthly</option></select></div>
+                <div class="field"><label>Gross pay (template)</label><input type="text" placeholder="0.00" /></div>
+              </div>
+            </div>
+            <div class="form-section">
+              <p class="section-label">Bank &amp; EOBI</p>
+              <div class="form-grid">
+                <div class="field"><label>Bank</label><select><option>None (cash payment)</option></select></div>
+                <div class="field"><label>Branch code</label><input type="text" /></div>
+                <div class="field"><label>Account number</label><input type="text" /></div>
+                <div class="field"><label>Account title</label><input type="text" /></div>
+                <div class="field"><label>Default EOBI amount</label><input type="text" placeholder="400.00" /></div>
+                <label style="display:flex; align-items:center; gap:6px; padding-top:20px;"><input type="checkbox" checked /> EOBI applicable</label>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary">Cancel</button>
+            <button class="btn btn-primary">Create employee</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="note">
+    Generated 2026-07-02 for Phase 2 (Employee Registry CRUD) from <code>frontend/src/routes/employees-page.tsx</code>.
+    Sample data is illustrative, not seed data. Site-scoped RBAC (C11 decision) and CNIC/employee-code
+    uniqueness are enforced server-side — see <code>backend/src/modules/employees/employees.service.ts</code>
+    and <code>backend/tests/employees.test.ts</code>.
+  </footer>
+
+  <script>
+    document.querySelectorAll('.meta-tabs button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.meta-tabs button').forEach(function (b) { b.classList.remove('is-active'); });
+        document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
+        btn.classList.add('is-active');
+        document.getElementById(btn.dataset.target).classList.add('is-active');
+      });
+    });
+  </script>
+</body>
+</html>

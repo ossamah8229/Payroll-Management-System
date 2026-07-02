@@ -12,30 +12,74 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 - Branch: `main`
 - Latest commit at this session's start: `79386593af49dcf58e61fdf81925f8a579e65878` — "docs: add
-  Phase 1 progress, session handoff, and prototype". Working tree was clean.
-- `npm run typecheck` and `npm run lint` status carried forward from the prior session (both clean,
-  0 errors) — not re-run this session since no application code changed.
+  Phase 1 progress, session handoff, and prototype". Working tree was clean. A mid-session commit
+  (`2e804d4`, "docs: close Phase 1 (conditional) and resolve Bank/AdjustmentType/CompanySettings
+  scope") closed Phase 1 before Phase 2 implementation began.
+- `npm run typecheck`, `npm run lint`, and `npm run build` (backend + frontend) all pass cleanly
+  across all three workspaces — verified repeatedly throughout this session, most recently after
+  the last Phase 2 module (Employee Registry import/export) was added.
 - Still no DB-backed test has been run in any session (no Postgres available in the working
-  environment — see §5/§7).
+  environment — see §5/§7). This now applies to Phase 2's test suite too, not just Phase 1's.
 
 ## 2. What was completed today (2026-07-02)
 
-- Resumed per `docs/IMPLEMENTATION_PLAN.md`'s "How to Resume This Project": read
-  `docs/SESSION_HANDOFF.md`, `docs/PROJECT_PROGRESS.md`, `docs/IMPLEMENTATION_PLAN.md`; verified
-  branch/commit/clean tree; confirmed the repository matches the documentation exactly (spot-checked
-  `schema.prisma`'s header comment and table list against the docs' claims).
+**Morning: Phase 1 close-out and decision resolution**
+- Resumed per `docs/IMPLEMENTATION_PLAN.md`'s "How to Resume This Project"; verified branch/commit/
+  clean tree; confirmed the repository matched the documentation exactly.
 - Re-confirmed no Postgres is reachable in this environment (checked for Docker, Docker Compose,
-  Podman, Homebrew, native `psql`/`pg_ctl`, Postgres.app — none present). DB verification remains
-  outstanding; not attempted further per instruction not to spend time installing Postgres.
-- Resolved the Bank/AdjustmentType/CompanySettings Phase-1-vs-Phase-2 scope question with the user:
-  ratified the existing `schema.prisma` narrowing as correct. Updated `docs/IMPLEMENTATION_PLAN.md`'s
-  Phase 1 and Phase 2 "Builds" text to match (Phase 1 no longer references these three tables; Phase
-  2 now explicitly owns their migration + seed data).
-- Presented a status report and obtained the user's **explicit conditional sign-off** on the Phase 1
-  review checkpoint: closed on the basis of code-complete + statically-clean evidence, with the
-  DB-backed test suite tracked as an open item to close out before Phase 9 (not a blocker to Phase 2).
-- **No new application code was written this session** — this was a documentation/handoff and
-  decision-resolution pass, then Phase 2 implementation begins per the user's approval.
+  Podman, Homebrew, native `psql`/`pg_ctl`, Postgres.app — none present), and did not attempt to
+  install one, per instruction.
+- Resolved the Bank/AdjustmentType/CompanySettings Phase-1-vs-Phase-2 scope question with the user
+  (ratified the existing `schema.prisma` narrowing) and the two Employee Registry §26 design
+  assumptions (CNIC/employeeCode nullability, free-text designation/religion) — both updated in
+  `docs/IMPLEMENTATION_PLAN.md`/`docs/architecture/database-schema.md`.
+- Obtained the user's **explicit conditional sign-off** on the Phase 1 review checkpoint and
+  committed the close-out as `2e804d4`.
+
+**Afternoon: Phase 2 implementation, in full**
+- Built all five Phase 2 deliverables per `docs/IMPLEMENTATION_PLAN.md`: the master-data migration
+  (`Bank`/`Employee`/`AdjustmentType`/`CompanySettings`), Project Sites
+  CRUD, Employee Registry CRUD (C11 site-scoped RBAC, CNIC/employeeCode uniqueness, DOL-based
+  leaving), Employee Registry CSV/Excel import/export against the official template, the Settings
+  module (Company Details/My Profile/Theme), and User Management — backend + tests + frontend for
+  each, in that order, verifying `typecheck`/`lint`/`build` after every module rather than only at
+  the end. Full detail in `docs/PROJECT_PROGRESS.md` §1.
+- Added site-scoping boundary tests beyond the per-module basics, specifically covering the C11
+  decision's "direct API call with a manipulated siteId" requirement, including an update-time
+  site-change boundary case.
+- Discovered and documented (did not silently work around) a gap: `StorageProvider`, called for in
+  Phase 0's plan text, was never actually built in any prior session. Scoped Settings/My Profile to
+  text fields only this session and flagged logo/avatar upload as blocked on this — see
+  `docs/PROJECT_PROGRESS.md` §3 item 4 for the resolution options.
+  Also flagged (non-blocking) the Employee Registry import template's two redundant-looking column
+  pairs as an assumption worth client confirmation — §3 item 5.
+- Generated three static HTML prototypes under `docs/prototypes/` at meaningful UI milestones
+  (Project Sites, Employee Registry, Settings+Users) per the user's standing instruction.
+- Added new dependencies: `@radix-ui/react-dialog` (frontend, first Modal component); `exceljs`,
+  `csv-parse`, `csv-stringify`, `multer` (backend, import/export).
+
+**Evening: architectural review before the Phase 2 commit**
+- Before committing, the user reviewed the Phase 2 work and identified that
+  `ProjectSite.defaultBankId` (added during this session) was wrong for Broom Services' actual
+  business model: Project Sites are physical work locations only; employees own their own payment
+  method/bank account; Broom Services itself owns the company bank account(s) used as disbursement
+  *source* accounts. Removed `defaultBankId` completely — schema, the hand-edited (never-applied)
+  migration, shared Zod schema, backend service/routes, frontend form/table, HTML prototype, and
+  `docs/architecture/database-schema.md`'s §7/§8/§21 text (with an explicit dated revision note,
+  since that document is otherwise frozen). See `docs/PROJECT_PROGRESS.md` §3 item 6 for the full
+  reasoning.
+- Performed a full architecture consistency review against the corrected business model and
+  surfaced two further items *without* silently fixing them — `docs/PROJECT_PROGRESS.md` §3 items
+  7–8: (a) Broom Services' own disbursement source bank account(s) aren't modeled anywhere yet
+  (matters for Phase 4, not Phase 2); (b) `ProjectSite` may be missing `address`/`client` fields per
+  the user's own restated model, though site names already encode the client as free text so this
+  may not be a real gap. Both presented to the user for a decision, not resolved.
+- Confirmed the deployment model is unaffected: single-company-per-installation (the `CompanySettings`
+  singleton, fixed-UUID pattern) with no `Tenant`/`Organization`/`Workspace`/`Company` abstraction
+  anywhere in the codebase — nothing needed to change here, this was a confirmation, not a fix.
+- Re-ran `typecheck`/`lint`/`build` after the correction; this file and `docs/PROJECT_PROGRESS.md`
+  updated again to reflect the revised Phase 2 state. A commit is still pending explicit user
+  approval, now for the corrected version of Phase 2.
 
 ## 3. What must not be changed without approval
 
@@ -52,9 +96,20 @@ be enough to resume correctly without re-deriving context from scratch — per
 - Audit Log immutability: no application code path should ever add an update/delete export from
   `audit-log.service.ts`, and the database trigger from the
   `20260701164509_audit_log_immutability` migration must never be dropped or worked around.
-- Existing migrations (`20260701164444_init`, `20260701164509_audit_log_immutability`) should not be
-  edited in place once applied anywhere beyond a fresh local dev database — per Principle 8
-  (additive-first schema evolution), later changes are new migrations, not edits to these.
+- Existing migrations (`20260701164444_init`, `20260701164509_audit_log_immutability`,
+  `20260702084133_phase2_master_data`) should not be edited in place once applied anywhere beyond a
+  fresh local dev database — per Principle 8 (additive-first schema evolution), later changes are
+  new migrations, not edits to these.
+- The C11 decision (Payroll Staff fully site-scoped on Employee Registry view/edit/create, no
+  exceptions) is enforced via `assertSiteAccess()` in
+  `backend/src/modules/employees/employees.service.ts` on every read/write path, including the
+  site-change case on update and the import path. Do not add a code path that trusts a
+  client-supplied `siteId` without this check.
+- The `StorageProvider` gap (`docs/PROJECT_PROGRESS.md` §3 item 4) is a known, flagged deviation
+  from the frozen Phase 0 plan — do not silently build an ad-hoc file-upload mechanism to route
+  around it (e.g. a one-off multer-to-disk handler for the logo). **Confirmed 2026-07-02: deferred
+  until before Phase 5**, not Phase 3 or Phase 4 — do not add file upload UI before then without
+  building `StorageProvider` first.
 
 ## 4. Current frozen architecture (reference index)
 
@@ -63,8 +118,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 - `docs/architecture/overview.md` — the load-bearing data path: Employee Registry → Payroll Entry →
   Payroll Processing → Release → Bank Sheets/Cash Receiving, with Corrections/Balance Adjustments as
   the highest-risk branch.
-- `docs/architecture/database-schema.md` — full 18-table schema (Phase 1 implements a 7-table
-  subset of it; see §1 of `docs/PROJECT_PROGRESS.md`).
+- `docs/architecture/database-schema.md` — full 18-table schema (Phase 1 + Phase 2 together
+  implement an 11-table subset of it; see §1 of `docs/PROJECT_PROGRESS.md`).
 - `docs/architecture/authentication.md` — session-based auth, CSRF double-submit, RBAC +
   site-scoping as independent middleware layers.
 - `docs/architecture/post-release-corrections.md` — the baseline-reconstruction/replay algorithm,
@@ -101,11 +156,39 @@ debt — the first Postgres-capable environment (local Docker, or a CI push) sho
 `npm run test --workspace backend` and check them off for real, but that is no longer a precondition
 for Phase 2 work.
 
-## 6. Next steps, in order
+## 6. Phase 2 completion status
 
-1. **Phase 2 begins now** (Project Sites, Employee Registry, Settings, User Management) per
-   `docs/IMPLEMENTATION_PLAN.md`, following the frozen architecture exactly.
-2. In parallel/opportunistically: the first time a Postgres-capable environment is available, run
+Phase 2 is **code-complete but not yet Definition-of-Done verified**, for the identical reason as
+Phase 1 — no DB-backed evidence yet:
+
+- [x] Master-data migration (`Bank`/`Employee`/`AdjustmentType`/`CompanySettings`) written and
+      validated (`prisma validate`/`generate`/`format`); *not yet applied to a live database*.
+      (`ProjectSite.defaultBankId` was added, then removed the same session after architectural
+      review — see §2 "Evening" and `docs/PROJECT_PROGRESS.md` §3 item 6.)
+- [x] Seed script extended (banks, adjustment types, company settings placeholder) — idempotent by
+      construction (upserts throughout, matching Phase 1's pattern); *not yet run against a live
+      database*.
+- [x] Project Sites, Employee Registry, Settings, User Management: all built, backend + frontend.
+- [x] Employee Registry CSV/Excel import/export against the official template.
+- [x] Site-scoping boundary tests written, covering the C11 decision via direct API calls with a
+      manipulated `siteId` (not just the intended UI path) — *not yet executed against a live
+      database*.
+- [x] `npm run typecheck` clean (all three workspaces).
+- [x] `npm run lint` clean (0 errors, same 2 pre-existing warnings as Phase 1).
+- [x] `npm run build` clean (backend + frontend production builds).
+- [ ] **Master Admin can create a Payroll Staff user, assign sites, and confirm that user's session
+      genuinely cannot see or touch employees/sites outside that assignment** (the Phase 2
+      Definition of Done, `docs/IMPLEMENTATION_PLAN.md`) — logic is implemented and tested, but not
+      executed against a live database this session.
+- [ ] **🛑 Phase 2 review checkpoint sign-off** — not yet obtained (Phase 2 has no explicit 🛑 gate
+      in the plan, unlike Phase 1/3/5/6/9, but the user should still confirm before Phase 3 begins,
+      per this project's general practice this session).
+
+## 7. Next steps, in order
+
+1. Obtain the user's sign-off on Phase 2 (conditional, on the same basis as Phase 1) and a commit
+   approval for this session's work.
+2. The first time a Postgres-capable environment is available, run:
    ```bash
    cp backend/.env.example backend/.env
    npm run prisma:generate --workspace backend
@@ -113,21 +196,36 @@ for Phase 2 work.
    npm run prisma:seed --workspace backend
    npm run test --workspace backend
    ```
-   and confirm `auth.test.ts`, `rbac.test.ts`, `audit-log.test.ts` all pass — or push the branch to
-   get a real CI-backed Postgres run — to finally close the tracked DB-verification item.
-3. Confirm the open design assumptions from `docs/architecture/database-schema.md` §26 (CNIC/
-   employeeCode nullability, free-text designation/religion, calendar-month-only cycles) before they
-   become load-bearing in Phase 2/3 schema work.
+   and confirm the full test suite (Phase 1's three files plus Phase 2's five) passes — or push the
+   branch to get a real CI-backed Postgres run.
+3. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
+   Phase 5, not scheduled into Phase 3 or Phase 4.
+4. Decide how Broom Services' own disbursement source bank account(s) should be modeled
+   (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins.
+5. Decide whether `ProjectSite` needs `address`/`client` fields (`docs/PROJECT_PROGRESS.md` §3
+   item 8) — not blocking, but cheap to resolve before Phase 2's Project Sites UI is relied on for
+   real data entry.
+6. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+   calendar-month-only cycles before Phase 3, at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
+7. Begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet`, the 1,500-row grid, optimistic
+   locking — the largest single phase in the plan.
 
-## 7. Risks and assumptions
+## 8. Risks and assumptions
 
 - **Assumption**: the migrations as written are correct and will apply cleanly — this is inferred
   from code review and clean `prisma generate`/typecheck, not from an actual `migrate deploy` run
-  against Postgres.
+  against Postgres. This now includes the hand-written Phase 2 migration
+  (`20260702084133_phase2_master_data`), built without `prisma migrate dev`'s auto-generation since
+  no shadow database was available — cross-checked line-by-line against Phase 1's actual generated
+  SQL for convention consistency, but still unverified against a real database.
 - **Risk (open, tracked)**: if the DB-backed tests fail when finally run, the fix may touch files
   already committed — treat existing commits as a checkpoint to diff against, not untouchable
-  history. This risk is explicitly accepted by proceeding to Phase 2 under the conditional Phase 1
-  close.
-- **Resolved**: the Bank/AdjustmentType/CompanySettings scope question — see §3 above.
+  history. This risk is explicitly accepted by proceeding under the conditional close pattern.
+- **Resolved**: the Bank/AdjustmentType/CompanySettings scope question, the two Employee Registry
+  §26 items, the `ProjectSite.defaultBankId` removal, and the `StorageProvider` deferral timing
+  (confirmed: before Phase 5) — see `docs/PROJECT_PROGRESS.md` §3.
+- **New, unresolved**: the import-template redundant-column assumption (§3 item 5), Broom Services'
+  own disbursement source account modeling (§3 item 7), and whether `ProjectSite` needs `address`/
+  `client` fields (§3 item 8) — see `docs/PROJECT_PROGRESS.md` §3.
 - **Assumption**: no one has manually altered the database, `.env`, or any untracked local file
   outside of what's described here since the last commit.

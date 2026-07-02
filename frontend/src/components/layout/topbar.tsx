@@ -1,4 +1,5 @@
-import { LogOut, User as UserIcon } from 'lucide-react';
+import { LogOut, Settings, User as UserIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import {
@@ -26,6 +27,7 @@ export function Topbar({
   user: SessionUser;
 }) {
   const logout = useLogout();
+  const navigate = useNavigate();
 
   const initials = user.name
     .split(' ')
@@ -64,6 +66,10 @@ export function Topbar({
             </div>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => navigate('/settings')}>
+            <Settings className="h-3.5 w-3.5" aria-hidden />
+            Settings
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={handleLogout}>
             <LogOut className="h-3.5 w-3.5" aria-hidden />
             Log out

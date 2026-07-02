@@ -16,10 +16,11 @@ npm run prisma:generate --workspace backend
 npx prisma migrate deploy --schema backend/prisma/schema.prisma
 ```
 
-`prisma/migrations/` already contains two committed migrations: the initial schema, and a second
+`prisma/migrations/` already contains three committed migrations: the initial schema, a second
 migration adding the Audit Log immutability trigger (kept separate deliberately — see the comment
-at the top of that migration's SQL file for why). `migrate deploy` applies both; there's nothing
-to generate.
+at the top of that migration's SQL file for why), and a third (Phase 2) adding `Bank`, `Employee`,
+`AdjustmentType`, and `CompanySettings`. `migrate deploy` applies all three; there's nothing to
+generate.
 
 Seed the database (idempotent — safe to re-run):
 
@@ -27,9 +28,10 @@ Seed the database (idempotent — safe to re-run):
 npm run prisma:seed --workspace backend
 ```
 
-This creates the Master Admin account. Override the seeded email/password via
-`SEED_MASTER_ADMIN_EMAIL` / `SEED_MASTER_ADMIN_PASSWORD` env vars before seeding a real
-environment — the defaults are for local development only.
+This creates the Master Admin account, three banks, seven adjustment types, and the singleton
+company settings row. Override the seeded email/password via `SEED_MASTER_ADMIN_EMAIL` /
+`SEED_MASTER_ADMIN_PASSWORD`, and the placeholder company name via `SEED_COMPANY_NAME`, before
+seeding a real environment — the defaults are for local development only.
 
 ## Running
 
@@ -48,9 +50,10 @@ npm run test --workspace backend
 ```
 
 Requires the same `DATABASE_URL` as development (tests run against a real Postgres instance —
-migrations must already be applied). See `docs/IMPLEMENTATION_PLAN.md`'s Phase 1 testing strategy
-for what's covered: login/logout/session-expiry, RBAC middleware boundaries, and the Audit Log
-immutability trigger specifically.
+migrations must already be applied). Covers Phase 1 (login/logout/session-expiry, RBAC middleware
+boundaries, Audit Log immutability) and Phase 2 (Project Sites, Employee Registry incl. C11
+site-scoping boundaries, Employee Registry import/export, Settings, User Management) per
+`docs/IMPLEMENTATION_PLAN.md`'s testing strategy for each.
 
 ## Adding a new migration later
 
@@ -62,8 +65,12 @@ npx prisma migrate dev --name <description> --schema backend/prisma/schema.prism
 
 ## What's deliberately not here yet
 
-Per `docs/IMPLEMENTATION_PLAN.md`, this is Phase 1 only: authentication, RBAC/site-scoping
-infrastructure, and the audit log. `Employee`, `PayrollCycle`, `PayrollEntry`, `Advance`,
-`Correction`, `BalanceAdjustment`, `Bank`, `AdjustmentType`, `BackupPackage`, and `CompanySettings`
-are not in `schema.prisma` yet — they're added additively (Principle 8) in the migrations that
-accompany the phases that build those modules.
+Per `docs/IMPLEMENTATION_PLAN.md`, this covers Phase 1 (authentication, RBAC/site-scoping
+infrastructure, the audit log) and Phase 2 (Project Sites, Employee Registry, Settings, User
+Management, plus their `Bank`/`AdjustmentType`/`CompanySettings` master data). `PayrollCycle`,
+`PayrollEntry`, `Advance`, `Correction`, and `BalanceAdjustment` are not in `schema.prisma` yet —
+they're added additively (Principle 8) in the migrations that accompany the phases that build those
+modules. `BackupPackage` is deferred with them (Phase 5).
+
+File uploads (company logo, user avatar) are not available yet — the `StorageProvider` abstraction
+called for in Phase 0 was never actually built; see `docs/PROJECT_PROGRESS.md` §3 item 4.

@@ -4,6 +4,10 @@ import { useSession } from '@/hooks/use-session';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LoginPage } from '@/routes/login-page';
 import { HomePage } from '@/routes/home-page';
+import { ProjectSitesPage } from '@/routes/project-sites-page';
+import { EmployeesPage } from '@/routes/employees-page';
+import { SettingsPage } from '@/routes/settings-page';
+import { UsersPage } from '@/routes/users-page';
 import { NotFoundPage } from '@/routes/not-found-page';
 
 function FullScreenLoading() {
@@ -36,6 +40,30 @@ export function App() {
         path="/"
         element={
           <RequireSession>{(user) => <HomePage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/sites"
+        element={
+          <RequireSession>{(user) => <ProjectSitesPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/employees"
+        element={
+          <RequireSession>{(user) => <EmployeesPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireSession>{(user) => <SettingsPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/users"
+        element={
+          <RequireSession>{(user) => <UsersPage user={user} />}</RequireSession>
         }
       />
       <Route path="*" element={<NotFoundPage />} />

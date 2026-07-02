@@ -1,5 +1,6 @@
 import argon2 from 'argon2';
-import type { Response as SuperTestResponse } from 'supertest';
+import request, { type Response as SuperTestResponse } from 'supertest';
+import type { Express } from 'express';
 import { prisma } from '../src/lib/prisma';
 
 /**
@@ -11,11 +12,13 @@ import { prisma } from '../src/lib/prisma';
 export async function cleanTestData(): Promise<void> {
   await prisma.userSiteAssignment.deleteMany({ where: { user: { email: { endsWith: '@test.local' } } } });
   await prisma.auditLog.deleteMany({ where: { actor: { email: { endsWith: '@test.local' } } } });
+  await prisma.employee.deleteMany({ where: { site: { name: { startsWith: 'Test Site ' } } } });
   await prisma.user.deleteMany({ where: { email: { endsWith: '@test.local' } } });
   await prisma.rolePermission.deleteMany({ where: { role: { code: { startsWith: 'TEST_' } } } });
   await prisma.role.deleteMany({ where: { code: { startsWith: 'TEST_' } } });
   await prisma.permission.deleteMany({ where: { key: { startsWith: 'test:' } } });
   await prisma.projectSite.deleteMany({ where: { name: { startsWith: 'Test Site ' } } });
+  await prisma.bank.deleteMany({ where: { code: { startsWith: 'TB' } } });
 }
 
 export async function createTestUser(options: {
@@ -65,4 +68,43 @@ export function extractCookie(res: SuperTestResponse, name: string): string | un
   if (!match) return undefined;
   const value = match.split(';')[0]?.split('=')[1];
   return value ? decodeURIComponent(value) : undefined;
+}
+
+/**
+ * Creates a test user (optionally with site assignments), logs them in against a real running
+ * `app`, and returns a session-persistent supertest agent plus the CSRF token every state-changing
+ * request in the test must send back as the `x-csrf-token` header. This is the one login flow
+ * every module's integration tests need, so it lives here rather than being re-derived per file.
+ */
+export async function createAuthenticatedAgent(
+  app: Express,
+  options: {
+    email: string;
+    password: string;
+    roleCode: string;
+    permissionKeys?: string[];
+    siteIds?: string[];
+  },
+): Promise<{ agent: ReturnType<typeof request.agent>; csrfToken: string; userId: string }> {
+  const user = await createTestUser(options);
+
+  for (const siteId of options.siteIds ?? []) {
+    await prisma.userSiteAssignment.create({ data: { userId: user.id, siteId } });
+  }
+
+  const agent = request.agent(app);
+  const primeRes = await agent.get('/health');
+  const csrfToken = extractCookie(primeRes, 'csrf_token');
+  if (!csrfToken) throw new Error('Expected /health to issue a csrf_token cookie');
+
+  const loginRes = await agent
+    .post('/api/v1/auth/login')
+    .set('x-csrf-token', csrfToken)
+    .send({ email: options.email, password: options.password });
+
+  if (loginRes.status !== 200) {
+    throw new Error(`Test login failed with status ${loginRes.status}: ${JSON.stringify(loginRes.body)}`);
+  }
+
+  return { agent, csrfToken, userId: user.id };
 }

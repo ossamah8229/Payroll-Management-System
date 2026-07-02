@@ -3,9 +3,9 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 (auth, RBAC/audit infrastructure, app shell) is closed (conditional — see
-> below). Phase 2 (Project Sites, Employee Registry, Settings, User Management) is in progress. See
-> "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
+> **Status:** Phase 1 and Phase 2 are both code-complete (Phase 1 closed conditional; Phase 2 pending
+> the same closure). Phase 3 (Payroll Entry & Payroll Processing) has not started. See "Current
+> Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
 
@@ -32,14 +32,23 @@ npm run dev:frontend          # http://localhost:5173
   reachable in any session so far. The DB-backed test suite (`auth.test.ts`, `audit-log.test.ts`)
   remains a tracked open item to run for real before Phase 9. See `docs/PROJECT_PROGRESS.md` for the
   full checklist.
-- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** in progress.
+- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** code-complete —
+  full CRUD for Project Sites and the Employee Registry (with CNIC/employee-code uniqueness,
+  DOL-based soft "leaving," and site-scoped RBAC for Payroll Staff per the C11 decision), Employee
+  Registry CSV/Excel import/export against the official client template, the Settings module
+  (Company Details/My Profile/Theme), and User Management. Same DB-backed-verification caveat as
+  Phase 1 — see `docs/PROJECT_PROGRESS.md`. One flagged gap: file upload (company logo, user
+  avatar) is not yet available — it depends on the `StorageProvider` abstraction, which was never
+  actually built despite being called for in Phase 0 (see `docs/PROJECT_PROGRESS.md` §3 item 4).
 - **Database verification:** still outstanding, tracked (not a blocker) — run the DB-backed test
   suite against a real PostgreSQL instance (locally via Docker, or through CI) as soon as one is
-  available, and before Phase 9's hardening pass at the latest.
+  available, and before Phase 9's hardening pass at the latest. This now covers Phase 2's test suite
+  and its hand-written migration too, not just Phase 1's.
 - **Current git checkpoint:** see `docs/PROJECT_PROGRESS.md` for the latest commit hash.
-- A static, framework-free visual preview of the current UI (login page, sidebar, topbar,
-  dashboard placeholder) is available at `docs/prototypes/phase1-preview.html` — open it directly
-  in a browser.
+- Static, framework-free visual previews of the current UI are available under `docs/prototypes/`
+  (`phase1-preview.html`; `phase2-project-sites-preview.html`;
+  `phase2-employee-registry-preview.html`; `phase2-settings-users-preview.html`) — open any of them
+  directly in a browser.
 
 ## Project Structure
 

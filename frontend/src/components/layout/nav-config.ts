@@ -1,10 +1,13 @@
 import type { LucideIcon } from 'lucide-react';
-import { LayoutDashboard } from 'lucide-react';
+import { Building2, LayoutDashboard, UserCog, Users } from 'lucide-react';
+import type { PermissionKey } from '@payroll/shared';
 
 export interface NavItem {
   label: string;
   to: string;
   icon: LucideIcon;
+  /** Hidden from the sidebar (and, separately, still enforced server-side) unless present. */
+  requiredPermission?: PermissionKey;
 }
 
 export interface NavSection {
@@ -14,13 +17,27 @@ export interface NavSection {
 
 /**
  * The navigation shell's data (docs/design-system.md §2.1: sidebar "grouped into labeled sections
- * — Overview / Payroll / Employees / Admin"). Phase 1 seeds only the one route that actually
- * exists; each later phase appends its own items to the relevant section here as it's built,
- * rather than the shell being rebuilt per phase.
+ * — Overview / Payroll / Employees / Admin"). Each later phase appends its own items to the
+ * relevant section here as it's built, rather than the shell being rebuilt per phase. Hiding a nav
+ * item by `requiredPermission` is a UX convenience only — the same permission is independently
+ * enforced server-side on every route (Sidebar never being the actual access control).
  */
 export const navSections: NavSection[] = [
   {
     label: 'Overview',
     items: [{ label: 'Dashboard', to: '/', icon: LayoutDashboard }],
+  },
+  {
+    label: 'Employees',
+    items: [
+      { label: 'Employee Registry', to: '/employees', icon: Users, requiredPermission: 'employees:view' },
+    ],
+  },
+  {
+    label: 'Admin',
+    items: [
+      { label: 'Project Sites', to: '/sites', icon: Building2, requiredPermission: 'sites:manage' },
+      { label: 'Users', to: '/users', icon: UserCog, requiredPermission: 'users:manage' },
+    ],
   },
 ];

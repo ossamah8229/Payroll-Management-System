@@ -30,30 +30,38 @@ export function Sidebar({ user }: { user: SessionUser }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto py-3">
-        {navSections.map((section) => (
-          <div key={section.label}>
-            <div className="px-4 pb-1 pt-3.5 text-[10px] font-semibold uppercase tracking-wide text-white/35">
-              {section.label}
+        {navSections.map((section) => {
+          const visibleItems = section.items.filter(
+            (item) => !item.requiredPermission || user.permissions.includes(item.requiredPermission),
+          );
+
+          if (visibleItems.length === 0) return null;
+
+          return (
+            <div key={section.label}>
+              <div className="px-4 pb-1 pt-3.5 text-[10px] font-semibold uppercase tracking-wide text-white/35">
+                {section.label}
+              </div>
+              {visibleItems.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center gap-2.5 border-l-2 border-transparent px-4 py-2 text-[13px] text-white/70 transition-colors',
+                      'hover:bg-white/[0.08] hover:text-white',
+                      isActive && 'border-l-white/70 bg-white/[0.12] font-medium text-white',
+                    )
+                  }
+                >
+                  <item.icon className="h-4 w-4 shrink-0" aria-hidden />
+                  {item.label}
+                </NavLink>
+              ))}
             </div>
-            {section.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-2.5 border-l-2 border-transparent px-4 py-2 text-[13px] text-white/70 transition-colors',
-                    'hover:bg-white/[0.08] hover:text-white',
-                    isActive && 'border-l-white/70 bg-white/[0.12] font-medium text-white',
-                  )
-                }
-              >
-                <item.icon className="h-4 w-4 shrink-0" aria-hidden />
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
-        ))}
+          );
+        })}
       </nav>
 
       <div className="border-t border-white/10 px-4 py-3">
