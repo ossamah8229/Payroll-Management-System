@@ -3,9 +3,9 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 (auth, RBAC/audit infrastructure, app shell) is code-complete; database
-> verification and the Phase 1 review checkpoint are still pending. See "Current Status" below,
-> `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for the up-to-date details.
+> **Status:** Phase 1 (auth, RBAC/audit infrastructure, app shell) is closed (conditional — see
+> below). Phase 2 (Project Sites, Employee Registry, Settings, User Management) is in progress. See
+> "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
 
@@ -25,16 +25,18 @@ npm run dev:frontend          # http://localhost:5173
 
 - **Architecture:** frozen. `docs/PROJECT_PRINCIPLES.md` and `docs/architecture/*.md` are the
   binding design; implementation follows `docs/IMPLEMENTATION_PLAN.md`'s phase sequencing.
-- **Phase 1 (Auth, RBAC, Audit Log):** code-complete — schema/migrations, session auth, CSRF,
-  RBAC/site-scoping middleware, insert-only Audit Log with a DB-level immutability trigger, tests,
-  and the frontend login/session/app-shell all exist and pass `typecheck`/`lint`. **Not yet
-  confirmed** against a live database, and the plan's mandatory review checkpoint for Phase 1 has
-  not been signed off. See `docs/PROJECT_PROGRESS.md` for the full checklist.
-- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** not started.
-- **Database verification:** pending — the DB-backed test suite (`auth.test.ts`,
-  `audit-log.test.ts`) needs to be run against a real PostgreSQL instance before Phase 1 can be
-  considered done.
-- **Current git checkpoint:** commit `00517e3282c073d5c759233cece13a40f0091dc8` on `main`.
+- **Phase 1 (Auth, RBAC, Audit Log):** closed (conditional), 2026-07-02 — schema/migrations, session
+  auth, CSRF, RBAC/site-scoping middleware, insert-only Audit Log with a DB-level immutability
+  trigger, tests, and the frontend login/session/app-shell all exist and pass `typecheck`/`lint`.
+  Closed on that static evidence with explicit user sign-off, since no PostgreSQL instance has been
+  reachable in any session so far. The DB-backed test suite (`auth.test.ts`, `audit-log.test.ts`)
+  remains a tracked open item to run for real before Phase 9. See `docs/PROJECT_PROGRESS.md` for the
+  full checklist.
+- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** in progress.
+- **Database verification:** still outstanding, tracked (not a blocker) — run the DB-backed test
+  suite against a real PostgreSQL instance (locally via Docker, or through CI) as soon as one is
+  available, and before Phase 9's hardening pass at the latest.
+- **Current git checkpoint:** see `docs/PROJECT_PROGRESS.md` for the latest commit hash.
 - A static, framework-free visual preview of the current UI (login page, sidebar, topbar,
   dashboard placeholder) is available at `docs/prototypes/phase1-preview.html` — open it directly
   in a browser.

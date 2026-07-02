@@ -61,13 +61,18 @@ staging deploy.
 
 ### Phase 1 — Auth, RBAC, and the Audit Log (foundational)
 
-**Builds:** Full Prisma schema for all 18 application tables (`docs/architecture/database-schema.md`)
-in one initial migration; seed script (two roles + permissions, three banks, seven `AdjustmentType`
-rows, one Master Admin user, singleton `CompanySettings`); `express-session` + `connect-pg-simple` +
+**Builds:** Prisma schema for the auth/RBAC/audit subset of `docs/architecture/database-schema.md`
+in one initial migration — `Role`, `Permission`, `RolePermission`, `User`, `ProjectSite` (minimal:
+id/name/branchCode/isActive only, no `defaultBankId` yet), `UserSiteAssignment`, `AuditLog`; seed
+script (two roles + permissions, one Master Admin user); `express-session` + `connect-pg-simple` +
 Argon2 login/logout; CSRF token issuance/validation middleware; the permission-check middleware and
 the site-scoping middleware (independent layers, per `docs/architecture/authentication.md`); the
 Audit Log module's insert-only service function plus the database-level `UPDATE`/`DELETE` block
-(revoked privileges or a rejecting trigger).
+(revoked privileges or a rejecting trigger). `Bank`, `AdjustmentType`, and `CompanySettings` — along
+with the rest of the 18-table schema — are deferred to the phase that builds the module owning them
+(see Phase 2's `Builds` entry), added via new additive migrations, per Principle 8. *(Resolved
+2026-07-02: this deferral was implemented ahead of the plan text in a prior session and is now
+ratified as the correct scope — see `docs/PROJECT_PROGRESS.md` §3.1.)*
 
 **Depends on:** Phase 0.
 
@@ -99,12 +104,16 @@ every module built after it.
 
 ### Phase 2 — Master Data: Project Sites, Employee Registry, Settings, Users
 
-**Builds:** Project Sites CRUD (delete blocked while employees remain assigned); Employee Registry
-CRUD (CNIC/employee-code partial-unique handling, DOL-based soft "leaving," full site-scoped RBAC for
-Payroll Staff on view/edit/create per the C11 decision, generic audit logging on every
-create/update); Company Details / My Profile / Theme (Settings module); User Management (Master Admin
-creates Payroll Staff accounts with per-site assignment via `UserSiteAssignment`); Employee Registry
-CSV/Excel import/export against the official template headers.
+**Builds:** an additive migration bringing in `Bank`, `AdjustmentType`, and `CompanySettings` (plus
+`ProjectSite.defaultBankId` now that `Bank` exists), with seed rows (three banks, seven
+`AdjustmentType` rows, singleton `CompanySettings`) — this is the Phase 1 seed-scope item deferred
+here per the resolved scope note (`docs/PROJECT_PROGRESS.md` §3.1); Project Sites CRUD (delete
+blocked while employees remain assigned); Employee Registry CRUD (CNIC/employee-code partial-unique
+handling, DOL-based soft "leaving," full site-scoped RBAC for Payroll Staff on view/edit/create per
+the C11 decision, generic audit logging on every create/update); Company Details / My Profile / Theme
+(Settings module); User Management (Master Admin creates Payroll Staff accounts with per-site
+assignment via `UserSiteAssignment`); Employee Registry CSV/Excel import/export against the official
+template headers.
 
 **Depends on:** Phase 1 (auth, RBAC, audit).
 
