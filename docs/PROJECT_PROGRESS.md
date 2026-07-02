@@ -1,9 +1,13 @@
 # Project Progress — Payroll Management System
 
 **Date:** 2026-07-02
-**Latest git commit (at session start):** `2e804d4651affc0b4166824d53f83d2839038928` — "docs: close Phase 1 (conditional) and resolve Bank/AdjustmentType/CompanySettings scope"
+**Latest git commit:** `89ac6ff82895795e59a553d4841fc64e734a462a` — "feat(ui): Phase 2 UI polish and UX
+improvements" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive
+build → `89ac6ff` is the Phase 2 UI/UX polish pass + final visual consistency audit, below).
 **Branch:** `main`
-**Current implementation phase:** Phase 2 (Project Sites, Employee Registry, Settings, User Management) — **code-complete**, same DB-backed-verification caveat as Phase 1 (see §4). Phase 3 has not started.
+**Current implementation phase:** **Phase 2 — CLOSED (conditional), 2026-07-02.** Same
+DB-backed-verification caveat as Phase 1 (see §4) — not a re-opened blocker, tracked to close before
+Phase 9. Phase 3 has not started; do not begin it without explicit instruction.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -157,10 +161,51 @@ address`, §3 item 8) aside, no business logic or database schema changed.
   found against `docs/design-system.md` in this pass.
 - New shared component: `frontend/src/components/logo-placeholder.tsx` (`LogoPlaceholder`), reused by
   both Settings and the login page rather than duplicated.
-- `npm run typecheck`, `npm run lint`, and `npm run build` re-verified after this pass (see the
-  session's final quality-check output for the authoritative result).
-- A commit for this pass is pending explicit user approval, per the user's own instruction — nothing
-  was committed automatically.
+- `npm run typecheck`, `npm run lint`, and `npm run build` re-verified after this pass.
+- Not committed on its own — see the final audit below; the whole pass (this section plus the audit's
+  fixes) landed together in one commit, `89ac6ff` ("feat(ui): Phase 2 UI polish and UX improvements"),
+  after explicit user approval, on top of `674ab04` (Phase 2's substantive build).
+
+#### Final visual consistency audit (same day, before the commit above)
+
+The user requested one more pass — "a final visual consistency audit across every page for spacing,
+alignment, typography, padding, margins, table headers, button heights, card widths, modal spacing,
+and responsive behavior" — before Phase 3. This is the pass that established Playwright-driven visual
+verification as a real practice (now a permanent, mandatory Definition-of-Done item — see
+`docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria" and §3 item 14 below).
+
+Method: rendered every page and every modal in a real headless-Chromium browser (Playwright, with API
+responses mocked since no live Postgres/backend is reachable in this environment) at three viewport
+widths (1440/1280/1024), measured computed styles (button/input heights, card border-radius, table
+header padding/alignment, modal widths), and pixel-sampled specific regions rather than trusting
+screenshot thumbnails by eye.
+
+- **Fixed — label-casing inconsistency (real, and contradicted the written spec).**
+  `docs/design-system.md` §2.4 explicitly calls for uppercase filter-row micro-labels, and the shared
+  `Label` component is uppercase by default, but 8 call sites overrode it to `normal-case` with no
+  discernible rule (e.g. "Email"/"Role" labels were sentence-case while "Name" right next to them, same
+  form, was uppercase). Fixed all 8: Settings → My Profile (Email, Role), Settings → Theme (Custom),
+  Employee Registry filter row (Site, Search), Users create/edit modals (Assigned sites ×2). The
+  EOBI-applicable checkbox label was restructured to match the plain-text checkbox-caption pattern
+  already used everywhere else ("Active employees only", "Active"), rather than just removing its
+  override.
+- **Fixed — spacing-scale drift, self-introduced.** Two containers added earlier in this same pass
+  used `gap-8`/`gap-9` (32px/36px), outside `docs/design-system.md` §1.3's documented spacing scale
+  (max 28px). Changed both to `gap-7` (28px, the largest approved token).
+- **Investigated, ruled out as a false alarm.** Suspected a z-index stacking bug — a dropdown menu
+  (Edit/Delete/Mark as left/Reset password, used on every list page) appearing to render on top of a
+  modal opened from it. Pixel-sampling proved the dropdown was already correctly dimmed beneath the
+  modal overlay (RGB 149,149,148 vs. the modal card's true white 255,255,255) — a small-thumbnail
+  misread, not a real defect. Kept a defensive fix anyway (`Modal` is now explicitly `z-[60]`, above
+  `DropdownMenuContent`'s `z-50`, in `frontend/src/components/ui/modal.tsx`) since codifying
+  dialog-above-menu as an explicit rule is more robust than relying on implicit DOM append order, even
+  though it wasn't fixing a visible bug in this build.
+- **Confirmed consistent, no changes needed:** button heights (36px/32px uniformly across every page),
+  input/select heights (36px), card border-radius (12px everywhere), table header padding (10px 14px)
+  and alignment, modal widths (420/520/620px matching `docs/design-system.md` §3's stated ranges),
+  reflow at 1024px width (no overflow/breakage in any modal, form, or table), zero browser console
+  errors on any page at any of the three tested viewports.
+- Re-verified after the fixes: `typecheck`/`lint`/`build` clean, full audit re-run clean.
 
 ---
 
@@ -169,7 +214,7 @@ address`, §3 item 8) aside, no business logic or database schema changed.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed (conditional), 2026-07-02** — DB-backed test evidence still outstanding, tracked to close before Phase 9 |
-| 2 | Project Sites, Employee Registry, Settings, User Management | **Code-complete, 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
+| 2 | Project Sites, Employee Registry, Settings, User Management | **Closed (conditional), 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
 | 3 | Payroll Entry & Payroll Processing (`calcNet`, the 1,500-row grid) | Not started |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
@@ -281,6 +326,43 @@ address`, §3 item 8) aside, no business logic or database schema changed.
     virtualization approach should be applied to the Employee Registry list before it's relied on at
     5,000-employee scale, but this is a UI performance follow-up, not a schema or architecture
     change, and doesn't block Phase 2.
+11. **Phase 2 review checkpoint — CLOSED (conditional), 2026-07-02.** The user explicitly confirmed
+    "Phase 2 is now complete" and requested this formal checkpoint, on the same conditional basis as
+    Phase 1 (§4's DB-backed-verification caveat carried forward as a tracked open item, not a blocker).
+    This closes the item left open in §6/§7 of `docs/SESSION_HANDOFF.md` — the Phase 2 UI/UX polish
+    pass and its final visual consistency audit (above) are included in this closure, not a separate
+    unreviewed addendum.
+12. **Company name — RESOLVED 2026-07-02: "Broom Services Private Limited."** Standardized everywhere
+    the application displays or seeds the operating company's name (the seed script's
+    `CompanySettings.companyName` fallback), matching the client's real name exactly and consistently
+    — the reference prototype/spec material used several inconsistent variants ("Broom Services (Pvt)
+    Ltd", "Broom Services (Private) Limited", "Broom Services (Pvt) Limited"); this is now the single
+    canonical spelling for all application output. Distinct from the software's own product name
+    ("Payroll Management System," the sidebar/login branding), which is unaffected.
+13. **Deployment model — CONFIRMED 2026-07-02: single-company by design, but must remain portable to
+    any customer's own server/hosting.** The application continues to have no multi-tenancy
+    abstraction (`Tenant`/`Organization`/`Workspace`/`Company`) — one deployment serves exactly one
+    company, with that company's identity configurable through Company Settings
+    (`CompanySettings`, the fixed-UUID singleton), not hardcoded. **New this session**: the user
+    confirmed the deployment target is not fixed to any specific host — the system must be deployable
+    on whichever server/hosting a given customer provides, not assumed to run on one particular
+    platform. No code change follows from this today (nothing in the current codebase hardcodes a
+    specific hosting provider), but it is a real constraint on Phase 9's deployment work
+    (`docs/IMPLEMENTATION_PLAN.md`'s "Deployment Milestones"/production-readiness sections currently
+    describe Render specifically) and on `docs/architecture/data-and-storage.md`'s `StorageProvider`
+    design (§3 item 4/below) — both should be revisited for portability before Phase 9, not assumed
+    Render-specific by default.
+14. **Advance-only Bank Sheets — remains Phase 4 scope, consolidated here per explicit request.** No
+    new decision; cross-referencing `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section, which already
+    names this as a new, not-yet-designed artifact type (a dedicated bank-sheet-style document for
+    disbursing a *new* advance via bank transfer, separate from the salary Bank Sheet) — needs its own
+    design pass during Phase 4, including which Company Bank Account funds it (see item 7 above).
+15. **Playwright-driven visual verification — ADOPTED 2026-07-02 as a permanent, mandatory Definition
+    of Done item for every future phase**, alongside typecheck, lint, build, documentation update, and
+    git checkpoint. Established by the final visual consistency audit (above), which caught two real
+    defects (§ above) that static review and `typecheck`/`lint`/`build` alone did not. Full statement
+    now lives in `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria" section — that
+    is the canonical copy; this entry exists so the decision is discoverable from this file too.
 
 ---
 
@@ -297,7 +379,9 @@ address`, §3 item 8) aside, no business logic or database schema changed.
   (`20260702084133_phase2_master_data`) has likewise never been applied to a real database — it was
   built to mirror Prisma's generated-SQL conventions exactly (cross-checked against the Phase 1
   migration's actual output) and validated via `prisma validate`/`generate`/`format`, but that is
-  static confidence, not a `migrate deploy` run. **This must be closed out — either by running the
+  static confidence, not a `migrate deploy` run. The same applies to the smaller, later
+  `20260702165738_project_site_address` migration (the UI-polish-pass `address` column) — validated
+  statically, never run against a live database. **This must be closed out — either by running the
   full suite in a Postgres-capable environment or via a real CI run — before Phase 9's production
   hardening pass at the latest, and ideally as soon as Docker/Postgres is available.**
 - CI (`.github/workflows/ci.yml`) has never actually run — nothing has been pushed to a remote/PR
@@ -311,20 +395,24 @@ address`, §3 item 8) aside, no business logic or database schema changed.
 
 ## 5. Exact next action for the next development session
 
-Phase 1 and Phase 2 are both code-complete (Phase 1 conditionally closed, Phase 2 pending the same
-closure). Carry forward as background open items, not blockers, unless noted:
+**Phase 1 and Phase 2 are both closed (conditional), 2026-07-02.** Phase 3 has not started and must
+not begin without the user's explicit instruction, per their own standing preference this session.
+Carry forward as background open items, not blockers, unless noted:
 
 1. Close out the DB-backed verification gap (§4) — via a Docker/Postgres-capable environment or a
-   real CI push — before Phase 9 at the latest. This now covers both Phase 1's and Phase 2's test
-   suites and the hand-written Phase 2 migration.
+   real CI push — before Phase 9 at the latest. This now covers Phase 1's and Phase 2's test suites,
+   the hand-written Phase 2 migration, and the later `address`-column migration.
 2. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 3 or Phase 4. File uploads (logo/avatar)
-   stay unavailable until then.
+   stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to
+   whatever hosting a given customer provides, not assumed cloud-provider-specific.
 3. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    item 5 (calendar-month-only cycles) before Phase 3, item 3 (at-most-one-`ACTIVE`-`Advance`-per-type)
    before Phase 4.
 4. Optionally confirm the Employee Registry import template's redundant-column interpretation
    (§3 item 5) with the client — not blocking, but cheap to resolve early.
-5. Obtain explicit sign-off on Phase 2, then begin Phase 3 (Payroll Entry & Payroll Processing) per
-   `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan (`calcNet`, the 1,500-row
-   grid, optimistic locking).
+5. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
+6. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
+   `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan: `calcNet`, the 1,500-row
+   grid, optimistic locking), its Definition of Done now includes Playwright-driven visual
+   verification as a mandatory step (§3 item 15), not just typecheck/lint/build.

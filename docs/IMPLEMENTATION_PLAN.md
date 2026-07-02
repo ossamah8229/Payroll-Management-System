@@ -458,6 +458,17 @@ frontend is built against it (per the overall strategy above).
   resolved (documented as an architecture update) before the phase is marked complete, not worked
   around silently.
 - Audit Log entries are verified to appear for every mutation the phase introduces.
+- **Playwright-driven visual verification — added 2026-07-02, mandatory from this point forward.**
+  For any phase with frontend work: the actual pages/flows are rendered in a real (headless)
+  browser and screenshotted — not just typechecked/linted/built — before the phase is considered
+  done. This means: driving the affected routes and modals end to end, checking for console errors,
+  and, where a live backend/DB isn't available, mocking API responses so real rendering can still be
+  exercised. This was established during the Phase 2 UI/UX polish pass (see
+  `docs/PROJECT_PROGRESS.md`'s "Phase 2 checkpoint" section for the audit that motivated it — it
+  caught real defects, e.g. a table header/value alignment mismatch and a design-system-contradicting
+  label-casing inconsistency, that static review and `typecheck`/`lint`/`build` alone did not).
+  Standing checklist for every phase's Definition of Done, in order: **typecheck → lint → build →
+  Playwright visual verification → documentation update → git checkpoint.**
 
 ---
 

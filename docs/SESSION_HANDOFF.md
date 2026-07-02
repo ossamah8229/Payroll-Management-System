@@ -11,15 +11,21 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- Latest commit at this session's start: `79386593af49dcf58e61fdf81925f8a579e65878` — "docs: add
-  Phase 1 progress, session handoff, and prototype". Working tree was clean. A mid-session commit
-  (`2e804d4`, "docs: close Phase 1 (conditional) and resolve Bank/AdjustmentType/CompanySettings
-  scope") closed Phase 1 before Phase 2 implementation began.
+- **Latest commit as of this checkpoint: `89ac6ff82895795e59a553d4841fc64e734a462a`** — "feat(ui):
+  Phase 2 UI polish and UX improvements". Working tree clean. Full lineage from this session:
+  `79386593a` (session start) → `2e804d4` (closed Phase 1, conditional) → `674ab04` (Phase 2's
+  substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass + final visual consistency audit,
+  **this is the Phase 2 checkpoint commit**).
 - `npm run typecheck`, `npm run lint`, and `npm run build` (backend + frontend) all pass cleanly
-  across all three workspaces — verified repeatedly throughout this session, most recently after
-  the last Phase 2 module (Employee Registry import/export) was added.
+  across all three workspaces — verified repeatedly throughout this session, most recently as the
+  final verification step of this checkpoint.
+- **New this checkpoint**: Playwright-driven visual verification (real headless-browser rendering,
+  not just static checks) was performed and is now a permanent, mandatory Definition-of-Done item for
+  every future phase — see §2's final entry and `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done —
+  Generic Criteria".
 - Still no DB-backed test has been run in any session (no Postgres available in the working
-  environment — see §5/§7). This now applies to Phase 2's test suite too, not just Phase 1's.
+  environment — see §5/§7). This now applies to Phase 2's test suite, its two hand-written migrations,
+  and the UI polish pass's migration, not just Phase 1's.
 
 ## 2. What was completed today (2026-07-02)
 
@@ -96,8 +102,31 @@ to Settings and a matching logo slot on the login page (both UI-only, still bloc
 name to "Broom Services Private Limited", and standardized `Button` height to match `Input`. A new
 migration (`20260702165738_project_site_address`) was hand-written the same way as Phase 2's
 migration, for the same reason (no Postgres reachable in this environment to run `prisma migrate
-dev`) — validated via `prisma validate`/`format`, not yet applied to a live database. This pass's
-commit is pending explicit user approval, same as every other commit this project makes.
+dev`) — validated via `prisma validate`/`format`, not yet applied to a live database.
+
+**Still later same day: final visual consistency audit, then the Phase 2 checkpoint close.** The user
+asked for one more pass — a full audit of every page/modal for spacing, alignment, typography,
+padding, table headers, button heights, card widths, modal spacing, and responsive behavior — before
+Phase 3. This is where Playwright-driven visual verification (real headless-Chromium rendering with
+mocked API responses, screenshotted and measured, not just read as code) was actually used for the
+first time in this project, and it caught two real, previously-undetected defects: a design-system-
+contradicting label-casing inconsistency (8 call sites overriding the shared `Label` component to
+`normal-case` for no discernible reason, contradicting `docs/design-system.md` §2.4's explicit
+uppercase-filter-label rule) and a spacing value outside the documented scale (`gap-8`/`gap-9`,
+self-introduced earlier the same pass). Both fixed. A suspected z-index stacking bug (dropdown menu
+apparently rendering on top of a modal opened from it) was investigated with pixel-level sampling and
+found to be a false alarm — a defensive fix was kept anyway (`Modal` now explicitly outranks
+`DropdownMenuContent` in z-index) since it costs nothing and removes an implicit assumption. Full
+detail in `docs/PROJECT_PROGRESS.md`'s "Final visual consistency audit" subsection.
+
+The whole polish pass (layout fix, greeting, table alignment, Project Sites address, logo
+placeholders, Settings layout, company name, button/input heights, plus this audit's two fixes) was
+committed together as `89ac6ff` ("feat(ui): Phase 2 UI polish and UX improvements") after explicit
+user approval — the commit message the user asked for at the start of the pass. The user then
+explicitly stated **"Phase 2 is now complete"** and requested this formal checkpoint (this
+documentation update), on the same conditional basis as Phase 1's closure (§4's DB-backed-
+verification caveat carried forward as a tracked open item, not a blocker). **Phase 3 has not started
+and must not begin without the user's explicit instruction next session.**
 
 ## 3. What must not be changed without approval
 
@@ -115,9 +144,9 @@ commit is pending explicit user approval, same as every other commit this projec
   `audit-log.service.ts`, and the database trigger from the
   `20260701164509_audit_log_immutability` migration must never be dropped or worked around.
 - Existing migrations (`20260701164444_init`, `20260701164509_audit_log_immutability`,
-  `20260702084133_phase2_master_data`) should not be edited in place once applied anywhere beyond a
-  fresh local dev database — per Principle 8 (additive-first schema evolution), later changes are
-  new migrations, not edits to these.
+  `20260702084133_phase2_master_data`, `20260702165738_project_site_address`) should not be edited in
+  place once applied anywhere beyond a fresh local dev database — per Principle 8 (additive-first
+  schema evolution), later changes are new migrations, not edits to these.
 - The C11 decision (Payroll Staff fully site-scoped on Employee Registry view/edit/create, no
   exceptions) is enforced via `assertSiteAccess()` in
   `backend/src/modules/employees/employees.service.ts` on every read/write path, including the
@@ -127,7 +156,17 @@ commit is pending explicit user approval, same as every other commit this projec
   from the frozen Phase 0 plan — do not silently build an ad-hoc file-upload mechanism to route
   around it (e.g. a one-off multer-to-disk handler for the logo). **Confirmed 2026-07-02: deferred
   until before Phase 5**, not Phase 3 or Phase 4 — do not add file upload UI before then without
-  building `StorageProvider` first.
+  building `StorageProvider` first. **New consideration, confirmed 2026-07-02** (`docs/PROJECT_
+  PROGRESS.md` §3 item 13): design it for portability to whatever hosting a given customer provides —
+  the deployment model remains single-company-per-installation (no multi-tenancy), but is not assumed
+  to run on one specific hosting platform.
+- **New, permanent process rule, added 2026-07-02**: every future phase's Definition of Done includes
+  Playwright-driven visual verification (real headless-browser rendering + screenshots, mocked API
+  data where no live backend/DB is available) as a mandatory step, in this order: typecheck → lint →
+  build → Playwright visual verification → documentation update → git checkpoint. This is not optional
+  polish — it caught real defects in the Phase 2 UI polish pass that static checks alone missed (see
+  §2's final entry). Do not skip it for a future phase's frontend work on the assumption that
+  typecheck/lint/build passing is sufficient.
 
 ## 4. Current frozen architecture (reference index)
 
@@ -176,8 +215,9 @@ for Phase 2 work.
 
 ## 6. Phase 2 completion status
 
-Phase 2 is **code-complete but not yet Definition-of-Done verified**, for the identical reason as
-Phase 1 — no DB-backed evidence yet:
+**Phase 2 is CLOSED (conditional), 2026-07-02** — same conditional basis as Phase 1 (code-complete +
+statically verified + explicit user sign-off, with DB-backed evidence carried forward as a tracked
+open item, not a blocker):
 
 - [x] Master-data migration (`Bank`/`Employee`/`AdjustmentType`/`CompanySettings`) written and
       validated (`prisma validate`/`generate`/`format`); *not yet applied to a live database*.
@@ -196,19 +236,27 @@ Phase 1 — no DB-backed evidence yet:
 - [x] `npm run build` clean (backend + frontend production builds).
 - [ ] **Master Admin can create a Payroll Staff user, assign sites, and confirm that user's session
       genuinely cannot see or touch employees/sites outside that assignment** (the Phase 2
-      Definition of Done, `docs/IMPLEMENTATION_PLAN.md`) — logic is implemented and tested, but not
-      executed against a live database this session.
-- [ ] **🛑 Phase 2 review checkpoint sign-off** — not yet obtained (Phase 2 has no explicit 🛑 gate
-      in the plan, unlike Phase 1/3/5/6/9, but the user should still confirm before Phase 3 begins,
-      per this project's general practice this session).
+      Definition of Done, `docs/IMPLEMENTATION_PLAN.md`) — logic is implemented and tested, but still
+      not executed against a live database; this specific DB-backed check remains the one real gap
+      carried into Phase 9 (see §4/§8), same pattern as Phase 1's five unchecked items.
+- [x] Phase 2 UI/UX polish pass + final visual consistency audit (Playwright-verified) — see §2.
+- [x] **🛑 Phase 2 review checkpoint sign-off — CONDITIONAL, obtained 2026-07-02.** The user explicitly
+      stated "Phase 2 is now complete" and requested this checkpoint. Phase 2 has no explicit 🛑 gate
+      in `docs/IMPLEMENTATION_PLAN.md` (unlike Phase 1/3/5/6/9), but per this project's established
+      practice, an explicit sign-off was still obtained before Phase 3 — on the same conditional basis
+      as Phase 1's: the one DB-backed item directly above remains open, not re-litigated.
+
+**Bottom line: Phase 2 is closed (conditional), matching Phase 1's pattern exactly.** The one
+DB-backed item above is real, tracked debt — close it out the first time a Postgres-capable
+environment is available (see §7 item 2), before Phase 9's hardening pass at the latest.
 
 ## 7. Next steps, in order
 
-1. **Updated:** Phase 2 itself is committed (`674ab04`) and its sign-off basis is unchanged (§6/§8).
-   What's now pending is explicit user approval to commit the Phase 2 UI/UX polish pass described
-   above (§2, and `docs/PROJECT_PROGRESS.md`'s matching subsection) — do this before touching
-   anything else, including before starting item 7 below (Phase 3).
-2. The first time a Postgres-capable environment is available, run:
+**Both Phase 1 and Phase 2 are closed (conditional). Do not begin Phase 3 without the user's explicit
+instruction next session** — this is a standing instruction from this session's close-out, not an
+inference.
+
+1. The first time a Postgres-capable environment is available, run:
    ```bash
    cp backend/.env.example backend/.env
    npm run prisma:generate --workspace backend
@@ -217,18 +265,21 @@ Phase 1 — no DB-backed evidence yet:
    npm run test --workspace backend
    ```
    and confirm the full test suite (Phase 1's three files plus Phase 2's five) passes — or push the
-   branch to get a real CI-backed Postgres run.
-3. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
-   Phase 5, not scheduled into Phase 3 or Phase 4.
-4. Decide how Broom Services' own disbursement source bank account(s) should be modeled
+   branch to get a real CI-backed Postgres run. This now also applies the `20260702165738_project_
+   site_address` migration.
+2. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
+   Phase 5, not scheduled into Phase 3 or Phase 4. Design for hosting portability (§3 item 13).
+3. Decide how Broom Services' own disbursement source bank account(s) should be modeled
    (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins.
-5. Decide whether `ProjectSite` needs `address`/`client` fields (`docs/PROJECT_PROGRESS.md` §3
-   item 8) — not blocking, but cheap to resolve before Phase 2's Project Sites UI is relied on for
-   real data entry.
-6. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+4. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    calendar-month-only cycles before Phase 3, at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
-7. Begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet`, the 1,500-row grid, optimistic
-   locking — the largest single phase in the plan.
+5. Optionally confirm the Employee Registry import template's redundant-column interpretation with the
+   client (`docs/PROJECT_PROGRESS.md` §3 item 5) — not blocking.
+6. When explicitly instructed to begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet`, the
+   1,500-row grid, optimistic locking, the largest single phase in the plan — its Definition of Done
+   now includes Playwright-driven visual verification as a mandatory step (§3's new process rule,
+   `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria"), not just
+   typecheck/lint/build.
 
 ## 8. Risks and assumptions
 
@@ -242,10 +293,14 @@ Phase 1 — no DB-backed evidence yet:
   already committed — treat existing commits as a checkpoint to diff against, not untouchable
   history. This risk is explicitly accepted by proceeding under the conditional close pattern.
 - **Resolved**: the Bank/AdjustmentType/CompanySettings scope question, the two Employee Registry
-  §26 items, the `ProjectSite.defaultBankId` removal, and the `StorageProvider` deferral timing
-  (confirmed: before Phase 5) — see `docs/PROJECT_PROGRESS.md` §3.
-- **New, unresolved**: the import-template redundant-column assumption (§3 item 5), Broom Services'
-  own disbursement source account modeling (§3 item 7), and whether `ProjectSite` needs `address`/
-  `client` fields (§3 item 8) — see `docs/PROJECT_PROGRESS.md` §3.
+  §26 items, the `ProjectSite.defaultBankId` removal, the `StorageProvider` deferral timing (confirmed:
+  before Phase 5), `ProjectSite.address` (added, scoped exception), the company name ("Broom Services
+  Private Limited"), and the deployment-portability nuance (single-company, but not
+  hosting-provider-specific) — see `docs/PROJECT_PROGRESS.md` §3.
+- **Still unresolved, carried forward**: the import-template redundant-column assumption (§3 item 5),
+  Broom Services' own disbursement source account modeling (§3 item 7, including its two sub-questions
+  — needed before Phase 4 schema work), and the two open `database-schema.md` §26 design assumptions
+  (calendar-month-only cycles, at-most-one-`ACTIVE`-`Advance`-per-type) — see `docs/PROJECT_PROGRESS.md`
+  §3.
 - **Assumption**: no one has manually altered the database, `.env`, or any untracked local file
   outside of what's described here since the last commit.
