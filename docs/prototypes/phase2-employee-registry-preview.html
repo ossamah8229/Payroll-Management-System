@@ -30,11 +30,13 @@
   .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
   .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
   .card-title { font-size: 13px; font-weight: 600; margin: 0; }
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 6px 14px; font-size: 12px; }
-  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 36px; font-size: 12px; }
+  .btn-sm { padding: 0 10px; height: 32px; font-size: 11px; }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
-  .app-shell { min-height: calc(100vh - 37px); background: var(--color-bg); }
+  /* App shell never scrolls as a document — only .main-content does. Fixes a bug where document-
+     level scroll (rubber-band overscroll) revealed blank space above the fixed sidebar branding. */
+  .app-shell { display: flex; height: calc(100vh - 37px); overflow: hidden; background: var(--color-bg); }
   .sidebar { position: fixed; inset: 37px 0 0 0; width: 220px; display: flex; flex-direction: column; background: var(--accent); }
   .sidebar-brand { border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px 16px 16px; }
   .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
@@ -49,11 +51,11 @@
   .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
   .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
   .sidebar-footer .who-role { font-size: 10px; color: rgba(255,255,255,0.5); }
-  .main-area { margin-left: 220px; display: flex; flex-direction: column; min-height: calc(100vh - 37px); }
-  .topbar { position: sticky; top: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
+  .main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { flex-shrink: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
   .topbar .title { font-size: 15px; font-weight: 600; }
   .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
-  .main-content { flex: 1; padding: 28px; }
+  .main-content { flex: 1; overflow-y: auto; padding: 28px; }
   .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
   .badge-green { background: var(--color-green-light); color: var(--color-green); }
   .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
@@ -66,7 +68,8 @@
   table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
   table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); }
   table.data-table tr:last-child td { border-bottom: none; }
-  table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data-table td.num, table.data-table th.num { text-align: right; }
+  table.data-table td.num { font-variant-numeric: tabular-nums; }
   table.data-table td.actions { width: 40px; text-align: center; color: var(--color-text-muted); }
   .modal-standalone-wrap { padding: 40px 28px; display: flex; justify-content: center; }
   .modal { width: 92vw; max-width: 620px; max-height: 85vh; overflow-y: auto; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
@@ -146,7 +149,7 @@
             </div>
             <table class="data-table">
               <thead>
-                <tr><th>Code</th><th>Name</th><th>Designation</th><th>Site</th><th>Pay type</th><th>Gross pay</th><th>Status</th><th></th></tr>
+                <tr><th>Code</th><th>Name</th><th>Designation</th><th>Site</th><th>Pay type</th><th class="num">Gross pay</th><th>Status</th><th></th></tr>
               </thead>
               <tbody>
                 <tr>
@@ -226,6 +229,9 @@
     Sample data is illustrative, not seed data. Site-scoped RBAC (C11 decision) and CNIC/employee-code
     uniqueness are enforced server-side — see <code>backend/src/modules/employees/employees.service.ts</code>
     and <code>backend/tests/employees.test.ts</code>.
+    Updated 2026-07-02 for the Phase 2 UI/UX polish pass: the "Gross pay" column header is now
+    right-aligned to match its right-aligned tabular values, and the app-shell scroll behavior was
+    fixed so the sidebar never shows blank space above its branding.
   </footer>
 
   <script>

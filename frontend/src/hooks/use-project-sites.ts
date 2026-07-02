@@ -8,6 +8,7 @@ export interface ProjectSite {
   id: string;
   name: string;
   branchCode: string | null;
+  address: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

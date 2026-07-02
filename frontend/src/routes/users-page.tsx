@@ -111,7 +111,7 @@ function CreateUserModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
           </div>
           {roleCode === ROLE_CODES.PAYROLL_STAFF && (
             <div className="flex flex-col gap-1.5">
-              <Label className="normal-case">Assigned sites</Label>
+              <Label>Assigned sites</Label>
               <SiteCheckboxList selected={siteIds} onChange={setSiteIds} />
             </div>
           )}
@@ -179,7 +179,7 @@ function EditUserModal({
           </label>
           {!isMasterAdmin && (
             <div className="flex flex-col gap-1.5">
-              <Label className="normal-case">Assigned sites</Label>
+              <Label>Assigned sites</Label>
               <SiteCheckboxList selected={siteIds} onChange={setSiteIds} />
             </div>
           )}

@@ -24,10 +24,10 @@ function ModalContent({
 }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/40" />
       <DialogPrimitive.Content
         className={cn(
-          'fixed left-1/2 top-1/2 z-50 w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-surface-2 shadow-md',
+          'fixed left-1/2 top-1/2 z-[60] w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-surface-2 shadow-md',
           widthClassName,
           className,
         )}

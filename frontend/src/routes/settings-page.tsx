@@ -8,8 +8,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/cn';
 import { ApiError } from '@/lib/api-client';
+import { LogoPlaceholder } from '@/components/logo-placeholder';
 import { useCompanySettings, useUpdateCompanySettings } from '@/hooks/use-company-settings';
 import { useChangePassword, useUpdateProfile } from '@/hooks/use-session';
+
+function TabIntro({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <h2 className="text-[13px] font-semibold text-text">{title}</h2>
+      <p className="text-xs text-text-muted">{description}</p>
+    </div>
+  );
+}
 
 const ACCENT_PRESETS = [
   { label: 'Navy (default)', value: '#1B4F72' },
@@ -73,79 +83,111 @@ function CompanyDetailsTab({ user }: { user: SessionUser }) {
 
   if (!canManage) {
     return (
-      <div className="flex flex-col gap-3 text-xs">
-        <div className="rounded border border-border bg-bg px-3.5 py-3 text-text-muted">
+      <div className="flex max-w-[560px] flex-col gap-6">
+        <TabIntro
+          title="Company Details"
+          description="Used on payslips, bank sheets, and other printed documents."
+        />
+        <div className="rounded border border-border bg-bg px-3.5 py-3 text-xs text-text-muted">
           Only Master Admin can edit company details. Showing the current values.
         </div>
-        <dl className="flex flex-col gap-2">
-          <div className="flex justify-between border-b border-border pb-2">
+        <dl className="flex flex-col gap-2.5 text-xs">
+          <div className="flex justify-between border-b border-border pb-2.5">
             <dt className="text-text-muted">Company name</dt>
             <dd className="font-medium text-text">{settings?.companyName}</dd>
           </div>
-          <div className="flex justify-between border-b border-border pb-2">
+          <div className="flex justify-between border-b border-border pb-2.5">
             <dt className="text-text-muted">Address</dt>
             <dd className="text-text">{settings?.registeredAddress ?? '—'}</dd>
           </div>
-          <div className="flex justify-between border-b border-border pb-2">
+          <div className="flex justify-between border-b border-border pb-2.5">
             <dt className="text-text-muted">Phone</dt>
             <dd className="text-text">{settings?.phone ?? '—'}</dd>
           </div>
-          <div className="flex justify-between pb-2">
+          <div className="flex justify-between pb-2.5">
             <dt className="text-text-muted">Email</dt>
             <dd className="text-text">{settings?.email ?? '—'}</dd>
           </div>
         </dl>
+        <div className="flex items-center gap-4 border-t border-border pt-6">
+          <LogoPlaceholder size="lg" />
+          <div>
+            <p className="text-xs font-medium text-text">Company logo</p>
+            <p className="text-[11px] text-text-muted">No logo uploaded yet.</p>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex max-w-[420px] flex-col gap-3.5">
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="company-name">Company name</Label>
-        <Input
-          id="company-name"
-          required
-          maxLength={200}
-          value={form.companyName}
-          onChange={(e) => setForm((prev) => ({ ...prev, companyName: e.target.value }))}
+    <div className="flex max-w-[560px] flex-col gap-7">
+      <TabIntro
+        title="Company Details"
+        description="Used on payslips, bank sheets, and other printed documents."
+      />
+      <form onSubmit={handleSubmit} className="flex max-w-[420px] flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="company-name">Company name</Label>
+          <Input
+            id="company-name"
+            required
+            maxLength={200}
+            value={form.companyName}
+            onChange={(e) => setForm((prev) => ({ ...prev, companyName: e.target.value }))}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="company-address">Registered address</Label>
+          <Input
+            id="company-address"
+            maxLength={300}
+            value={form.registeredAddress}
+            onChange={(e) => setForm((prev) => ({ ...prev, registeredAddress: e.target.value }))}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="company-phone">Phone</Label>
+          <Input
+            id="company-phone"
+            maxLength={30}
+            value={form.phone}
+            onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="company-email">Email</Label>
+          <Input
+            id="company-email"
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+          />
+        </div>
+        <Button type="submit" className="self-start" disabled={updateSettings.isPending}>
+          Save changes
+        </Button>
+      </form>
+
+      <section className="flex flex-col gap-3.5 border-t border-border pt-7">
+        <TabIntro
+          title="Company Logo"
+          description="Shown on the login screen and printed documents once available."
         />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="company-address">Registered address</Label>
-        <Input
-          id="company-address"
-          maxLength={300}
-          value={form.registeredAddress}
-          onChange={(e) => setForm((prev) => ({ ...prev, registeredAddress: e.target.value }))}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="company-phone">Phone</Label>
-        <Input
-          id="company-phone"
-          maxLength={30}
-          value={form.phone}
-          onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="company-email">Email</Label>
-        <Input
-          id="company-email"
-          type="email"
-          value={form.email}
-          onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
-        />
-      </div>
-      <p className="text-[11px] text-text-faint">
-        Logo upload is not available yet — it depends on the file-storage abstraction, which is not
-        built as of Phase 2.
-      </p>
-      <Button type="submit" className="self-start" disabled={updateSettings.isPending}>
-        Save changes
-      </Button>
-    </form>
+        <div className="flex items-center gap-4">
+          <LogoPlaceholder size="lg" />
+          <div className="flex flex-col gap-1.5">
+            <Button type="button" variant="secondary" size="sm" disabled>
+              Upload Logo
+            </Button>
+            <p className="text-[11px] text-text-faint">Maximum file size: 2 MB (PNG, JPG, or SVG)</p>
+          </div>
+        </div>
+        <p className="text-[11px] text-text-faint">
+          Logo upload becomes available once Storage Provider is implemented.
+        </p>
+      </section>
+    </div>
   );
 }
 
@@ -180,22 +222,20 @@ function MyProfileTab({ user }: { user: SessionUser }) {
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <form onSubmit={handleNameSubmit} className="flex max-w-[380px] flex-col gap-3.5">
+    <div className="flex max-w-[560px] flex-col gap-7">
+      <TabIntro title="My Profile" description="Your name, account details, and login password." />
+
+      <form onSubmit={handleNameSubmit} className="flex max-w-[380px] flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="profile-name">Name</Label>
           <Input id="profile-name" required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="profile-email" className="normal-case">
-            Email (not editable)
-          </Label>
+          <Label htmlFor="profile-email">Email (not editable)</Label>
           <Input id="profile-email" value={user.email} disabled />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="profile-role" className="normal-case">
-            Role
-          </Label>
+          <Label htmlFor="profile-role">Role</Label>
           <Input id="profile-role" value={user.roleName} disabled />
         </div>
         <Button type="submit" className="self-start" disabled={updateProfile.isPending}>
@@ -203,7 +243,7 @@ function MyProfileTab({ user }: { user: SessionUser }) {
         </Button>
       </form>
 
-      <form onSubmit={handlePasswordSubmit} className="flex max-w-[380px] flex-col gap-3.5 border-t border-border pt-6">
+      <form onSubmit={handlePasswordSubmit} className="flex max-w-[380px] flex-col gap-4 border-t border-border pt-7">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Change password</p>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="current-password">Current password</Label>
@@ -249,10 +289,11 @@ function ThemeTab({ user }: { user: SessionUser }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-xs text-text-muted">
-        Choose an accent color for your own view — this doesn't affect other users.
-      </p>
+    <div className="flex max-w-[560px] flex-col gap-6">
+      <TabIntro
+        title="Theme"
+        description="Choose an accent color for your own view — this doesn't affect other users."
+      />
       <div className="flex flex-wrap gap-3">
         {ACCENT_PRESETS.map((preset) => (
           <button
@@ -272,9 +313,7 @@ function ThemeTab({ user }: { user: SessionUser }) {
         ))}
       </div>
       <div className="flex items-center gap-2.5">
-        <Label htmlFor="custom-color" className="normal-case">
-          Custom
-        </Label>
+        <Label htmlFor="custom-color">Custom</Label>
         <input
           id="custom-color"
           type="color"
@@ -293,26 +332,28 @@ export function SettingsPage({ user }: { user: SessionUser }) {
 
   return (
     <AppShell user={user} title="Settings" subtitle="Company details, your profile, and theme">
-      <Card>
-        <CardHeader className="border-b-0 pb-0">
-          <div className="flex gap-5">
-            <TabButton active={tab === 'company'} onClick={() => setTab('company')}>
-              Company Details
-            </TabButton>
-            <TabButton active={tab === 'profile'} onClick={() => setTab('profile')}>
-              My Profile
-            </TabButton>
-            <TabButton active={tab === 'theme'} onClick={() => setTab('theme')}>
-              Theme
-            </TabButton>
-          </div>
-        </CardHeader>
-        <CardContent className="border-t border-border">
-          {tab === 'company' && <CompanyDetailsTab user={user} />}
-          {tab === 'profile' && <MyProfileTab user={user} />}
-          {tab === 'theme' && <ThemeTab user={user} />}
-        </CardContent>
-      </Card>
+      <div className="mx-auto max-w-[880px]">
+        <Card>
+          <CardHeader className="border-b-0 px-7 pb-0 pt-6">
+            <div className="flex gap-6">
+              <TabButton active={tab === 'company'} onClick={() => setTab('company')}>
+                Company Details
+              </TabButton>
+              <TabButton active={tab === 'profile'} onClick={() => setTab('profile')}>
+                My Profile
+              </TabButton>
+              <TabButton active={tab === 'theme'} onClick={() => setTab('theme')}>
+                Theme
+              </TabButton>
+            </div>
+          </CardHeader>
+          <CardContent className="border-t border-border p-7">
+            {tab === 'company' && <CompanyDetailsTab user={user} />}
+            {tab === 'profile' && <MyProfileTab user={user} />}
+            {tab === 'theme' && <ThemeTab user={user} />}
+          </CardContent>
+        </Card>
+      </div>
     </AppShell>
   );
 }

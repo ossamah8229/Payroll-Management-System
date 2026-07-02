@@ -33,6 +33,7 @@ export async function createProjectSite(input: CreateProjectSiteInput) {
     data: {
       name: input.name,
       branchCode: input.branchCode ?? null,
+      address: input.address ?? null,
     },
   });
 }
@@ -45,6 +46,7 @@ export async function updateProjectSite(id: string, input: UpdateProjectSiteInpu
     data: {
       ...(input.name !== undefined && { name: input.name }),
       ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
+      ...(input.address !== undefined && { address: input.address }),
       ...(input.isActive !== undefined && { isActive: input.isActive }),
     },
   });

@@ -117,6 +117,51 @@ without approval, see `docs/SESSION_HANDOFF.md`.
 - Three static HTML prototypes added under `docs/prototypes/`: `phase2-project-sites-preview.html`,
   `phase2-employee-registry-preview.html`, `phase2-settings-users-preview.html`.
 
+### Phase 2 UI/UX polish pass (2026-07-02, no business logic/architecture change except §3 item 8)
+
+A UI-only pass, explicitly *not* Phase 3, requested after Phase 2 landed. Scope was layout,
+consistency, and documentation — one narrow, explicitly authorized schema exception (`ProjectSite.
+address`, §3 item 8) aside, no business logic or database schema changed.
+
+- **Global layout bug fixed:** `AppShell` previously let the whole document scroll, which on
+  trackpad/rubber-band overscroll revealed blank space above the fixed sidebar. Restructured to a
+  non-scrolling `h-screen overflow-hidden` shell where only `<main>` scrolls — the sidebar and topbar
+  now never move, on every page, structurally rather than via a browser-specific CSS workaround.
+- **Dynamic greeting:** new `frontend/src/components/greeting.tsx` (`Greeting` component,
+  `getTimeOfDayGreeting()`) replaces the static "Welcome, {name}" on the dashboard with a
+  Morning/Afternoon/Evening greeting derived from the browser's local clock only (no network call).
+- **Table alignment fixed:** Employee Registry's "Gross pay" column header was left-aligned while
+  its values were right-aligned/tabular-nums — header now matches. Reviewed every other table in the
+  app (Project Sites, Users) for the same class of bug; none found (no other numeric columns).
+- **Project Sites page:** added `address` (see §3 item 8) to the create/edit form and the list table.
+  Confirmed Default Bank and a "Tax Rate" field are both already absent from this module (the former
+  removed earlier this session, the latter never existed) — no action needed there.
+- **Settings — Company Logo placeholder:** added a dedicated section (disabled "Upload Logo" button,
+  `LogoPlaceholder` preview, a "Maximum file size" note, and the existing "available once Storage
+  Provider is implemented" note) — UI only, no upload wiring, consistent with the `StorageProvider`
+  deferral (§3 item 4, before Phase 5).
+- **Login page:** added the same `LogoPlaceholder` component above the login card title, so the
+  logo slot exists and is positioned correctly ahead of `StorageProvider` wiring it up for real.
+- **Settings page layout:** added a heading+description (`TabIntro`) to each of the three tabs,
+  widened the page to a centered `880px` container, and increased section/form spacing — addresses
+  the "feels compressed" feedback without changing the tab structure.
+- **Company name consistency:** the seed script's `CompanySettings.companyName` fallback (used only
+  when `SEED_COMPANY_NAME` isn't set) changed from a generic placeholder to "Broom Services Private
+  Limited" — the real, consistently-spelled client name. Confirmed no other hardcoded/inconsistent
+  company-name strings exist in `frontend/src` or `backend/src` (only in `reference/*`, which is
+  historical reference material, not app output).
+- **Design-system consistency:** `Button`'s default/`sm` sizes previously had no fixed height
+  (padding-only), while `Input` and the `<select>` elements used a fixed `h-9` — heights didn't quite
+  match. Standardized `Button` to `h-9` (default) / `h-8` (`sm`) so buttons, inputs, and selects share
+  a consistent height rhythm app-wide. No other systemic spacing/typography inconsistencies were
+  found against `docs/design-system.md` in this pass.
+- New shared component: `frontend/src/components/logo-placeholder.tsx` (`LogoPlaceholder`), reused by
+  both Settings and the login page rather than duplicated.
+- `npm run typecheck`, `npm run lint`, and `npm run build` re-verified after this pass (see the
+  session's final quality-check output for the authoritative result).
+- A commit for this pass is pending explicit user approval, per the user's own instruction — nothing
+  was committed automatically.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -202,20 +247,17 @@ without approval, see `docs/SESSION_HANDOFF.md`.
    per Bank Sheet generation event. See `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section for the full
    design note. **Needs an explicit decision before Phase 4 schema work begins** — not implemented in
    Phase 2.
-8. **`ProjectSite` may be missing an `address` and/or a distinct `client` field — recommendation
-   presented 2026-07-02, awaiting user decision.** The user's own description of the corrected model
-   was "Project Sites represent physical work locations only (name, address, branch code, client,
-   etc.)." The current schema has only `name`/`branchCode`/`isActive` — no `address`, and no field
-   distinct from `name` for the client. **Recommendation: do not add a dedicated `Client` entity or
-   `client` field now.** Site names already encode the client as free text (e.g. "ABL City Region
-   Lahore"), the app's scope is Broom Services' own payroll — not client-facing invoicing/reporting
-   — and a `ProjectSite.clientId` FK would be a low-risk, purely additive change if a real reporting
-   need for "all sites for client X" ever surfaces later; there's no reason to build it speculatively
-   ahead of that need (Principle 8's spirit — additive when needed, not ahead of time). `address` is
-   a smaller, independent question — genuinely useful for a printed-document header (payslips/bank
-   sheets already show `CompanySettings.registeredAddress`, but a per-site address could matter for
-   multi-site clients) — worth a quick user decision but not architecturally significant either way.
-   Not implementing either without explicit confirmation.
+8. **`ProjectSite` `address` field — RESOLVED 2026-07-02 (during the Phase 2 UI/UX polish pass).**
+   The user confirmed `address` is operationally required (site visits, deployment, documentation)
+   and explicitly authorized it as a scoped, single-column exception to that pass's own
+   no-schema-changes rule. Added: `ProjectSite.address` (nullable `varchar(300)`, migration
+   `20260702165738_project_site_address`), the shared Zod create/update schemas, the backend
+   service, and the Project Sites page form/table — see
+   `docs/architecture/database-schema.md` §8's matching revision note. **The `client`/`Client`-entity
+   half of this item remains un-implemented, deliberately** — the user's authorization was scoped
+   strictly to `address`; site names continue to encode the client as free text (e.g. "ABL City
+   Region Lahore"), unchanged from the reasoning already recorded in the removed-`defaultBankId`
+   note. Revisit only if a real "all sites for client X" reporting need surfaces later.
 9. **Automatic Payroll Recovery — CLARIFIED AND RESOLVED 2026-07-02.** The user confirmed the exact
    meaning: the system automatically *applies* a previously staff-approved repayment schedule each
    cycle; it must never calculate or decide the installment amount itself — Payroll Staff always

@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AppShell } from '@/components/layout/app-shell';
+import { Greeting } from '@/components/greeting';
 import type { SessionUser } from '@payroll/shared';
 
 /**
@@ -13,7 +14,9 @@ export function HomePage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Dashboard" subtitle="Payroll Management System">
       <Card>
         <CardHeader>
-          <CardTitle>Welcome, {user.name.split(' ')[0]}</CardTitle>
+          <CardTitle>
+            <Greeting name={user.name.split(' ')[0] ?? user.name} />
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-xs text-text-muted">

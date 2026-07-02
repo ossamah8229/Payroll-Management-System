@@ -215,12 +215,21 @@ this system — employees own their own receiving bank account (`Employee.bankId
 Services' own disbursement source account(s) are a separate, not-yet-modeled concept (see §7).
 Removed from the schema, the one Phase 2 migration that had added it (never applied to any live
 database), and every dependent layer, before the Phase 2 commit.
+**Revised 2026-07-02 — `address` added (Phase 2 UI/UX polish pass):** the open question in
+`docs/PROJECT_PROGRESS.md` §3 item 8 ("does `ProjectSite` need `address`?") was resolved by explicit
+user authorization during a UI-only polish pass, as a scoped exception to that pass's own
+no-schema-changes rule — physical work-location addresses are operationally required (site visits,
+deployment, documentation) and this is an additive, single-nullable-column change consistent with
+Principle 8. Deliberately narrow: no `client`/`Client` entity was introduced alongside it (site names
+already encode the client as free text, unchanged from the reasoning in the removed-`defaultBankId`
+note above).
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `name` | varchar(160) | no | — | |
 | `branchCode` | varchar(20) | yes | — | |
+| `address` | varchar(300) | yes | — | physical work-location address; added 2026-07-02 |
 | `isActive` | boolean | no | `true` | |
 | `createdAt` | timestamptz | no | `now()` | |
 | `updatedAt` | timestamptz | no | `now()` | |

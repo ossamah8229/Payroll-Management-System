@@ -119,7 +119,7 @@ async function main() {
     update: {},
     create: {
       id: COMPANY_SETTINGS_ID,
-      companyName: process.env.SEED_COMPANY_NAME ?? 'Company Name (update in Settings)',
+      companyName: process.env.SEED_COMPANY_NAME ?? 'Broom Services Private Limited',
     },
   });
 

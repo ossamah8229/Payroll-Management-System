@@ -295,17 +295,14 @@ function EmployeeFormModal({
                   placeholder="400.00"
                 />
               </div>
-              <div className="flex items-center gap-2 pt-5">
+              <label className="flex items-center gap-2 pt-5 text-xs text-text-muted">
                 <input
-                  id="emp-eobi-applicable"
                   type="checkbox"
                   checked={form.defaultEobiApplicable}
                   onChange={(e) => setField('defaultEobiApplicable', e.target.checked)}
                 />
-                <Label htmlFor="emp-eobi-applicable" className="normal-case">
-                  EOBI applicable
-                </Label>
-              </div>
+                EOBI applicable
+              </label>
             </div>
           </section>
 
@@ -486,9 +483,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
         <CardContent>
           <div className="mb-4 flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="filter-site" className="normal-case">
-                Site
-              </Label>
+              <Label htmlFor="filter-site">Site</Label>
               <select
                 id="filter-site"
                 className={`${selectClassName} w-48`}
@@ -504,9 +499,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
               </select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="filter-search" className="normal-case">
-                Search
-              </Label>
+              <Label htmlFor="filter-search">Search</Label>
               <Input
                 id="filter-search"
                 className="w-56"
@@ -546,7 +539,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                     <TableHead>Designation</TableHead>
                     <TableHead>Site</TableHead>
                     <TableHead>Pay type</TableHead>
-                    <TableHead>Gross pay</TableHead>
+                    <TableHead className="text-right">Gross pay</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-10" />
                   </TableRow>

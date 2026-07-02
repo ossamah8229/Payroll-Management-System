@@ -41,6 +41,7 @@ function SiteFormModal({
 
   const [name, setName] = useState(site?.name ?? '');
   const [branchCode, setBranchCode] = useState(site?.branchCode ?? '');
+  const [address, setAddress] = useState(site?.address ?? '');
 
   const isPending = createSite.isPending || updateSite.isPending;
 
@@ -54,6 +55,7 @@ function SiteFormModal({
     const input = {
       name,
       branchCode: branchCode.trim() || null,
+      address: address.trim() || null,
     };
 
     try {
@@ -99,6 +101,17 @@ function SiteFormModal({
               onChange={(event) => setBranchCode(event.target.value)}
               maxLength={20}
               placeholder="Optional"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-address">Address</Label>
+            <Input
+              id="site-address"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              maxLength={300}
+              placeholder="Street, area, city — optional"
             />
           </div>
 
@@ -201,6 +214,7 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Branch code</TableHead>
+                  <TableHead>Address</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="w-10" />
                 </TableRow>
@@ -210,6 +224,9 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
                   <TableRow key={site.id}>
                     <TableCell className="font-medium">{site.name}</TableCell>
                     <TableCell className="text-text-muted">{site.branchCode ?? '—'}</TableCell>
+                    <TableCell className="max-w-[260px] truncate text-text-muted" title={site.address ?? undefined}>
+                      {site.address ?? '—'}
+                    </TableCell>
                     <TableCell>
                       <Badge tone={site.isActive ? 'green' : 'gray'}>
                         {site.isActive ? 'Active' : 'Inactive'}

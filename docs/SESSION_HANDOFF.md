@@ -80,6 +80,24 @@ be enough to resume correctly without re-deriving context from scratch — per
 - Re-ran `typecheck`/`lint`/`build` after the correction; this file and `docs/PROJECT_PROGRESS.md`
   updated again to reflect the revised Phase 2 state. A commit is still pending explicit user
   approval, now for the corrected version of Phase 2.
+- **This Phase 2 work was subsequently committed as `674ab04`** ("Phase 2: Project Sites, Employee
+  Registry, Settings, User Management") — the commit approval referenced above was obtained and
+  acted on; `674ab04` is HEAD as of the polish pass below.
+
+**Later same day: Phase 2 UI/UX polish pass (explicitly not Phase 3)** — full detail in
+`docs/PROJECT_PROGRESS.md`'s "Phase 2 UI/UX polish pass" subsection. Summary: fixed a global
+`AppShell` scroll bug (blank space above the sidebar on overscroll), added a local-time-based
+dashboard greeting, fixed an Employee Registry table header/value alignment mismatch, added
+`ProjectSite.address` (a scoped, explicitly user-authorized exception to this pass's own
+no-schema-changes rule — see `docs/PROJECT_PROGRESS.md` §3 item 8 and
+`docs/architecture/database-schema.md` §8's revision note), added a Company Logo placeholder section
+to Settings and a matching logo slot on the login page (both UI-only, still blocked on
+`StorageProvider`), improved Settings page spacing/hierarchy, standardized the seed script's company
+name to "Broom Services Private Limited", and standardized `Button` height to match `Input`. A new
+migration (`20260702165738_project_site_address`) was hand-written the same way as Phase 2's
+migration, for the same reason (no Postgres reachable in this environment to run `prisma migrate
+dev`) — validated via `prisma validate`/`format`, not yet applied to a live database. This pass's
+commit is pending explicit user approval, same as every other commit this project makes.
 
 ## 3. What must not be changed without approval
 
@@ -186,8 +204,10 @@ Phase 1 — no DB-backed evidence yet:
 
 ## 7. Next steps, in order
 
-1. Obtain the user's sign-off on Phase 2 (conditional, on the same basis as Phase 1) and a commit
-   approval for this session's work.
+1. **Updated:** Phase 2 itself is committed (`674ab04`) and its sign-off basis is unchanged (§6/§8).
+   What's now pending is explicit user approval to commit the Phase 2 UI/UX polish pass described
+   above (§2, and `docs/PROJECT_PROGRESS.md`'s matching subsection) — do this before touching
+   anything else, including before starting item 7 below (Phase 3).
 2. The first time a Postgres-capable environment is available, run:
    ```bash
    cp backend/.env.example backend/.env

@@ -16,11 +16,11 @@ export function AppShell({
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-bg">
+    <div className="flex h-screen overflow-hidden bg-bg">
       <Sidebar user={user} />
-      <div className="ml-[220px] flex min-h-screen flex-col">
+      <div className="ml-[220px] flex flex-1 flex-col overflow-hidden">
         <Topbar title={title} subtitle={subtitle} user={user} />
-        <main className="flex-1 p-7">{children}</main>
+        <main className="flex-1 overflow-y-auto p-7">{children}</main>
       </div>
     </div>
   );

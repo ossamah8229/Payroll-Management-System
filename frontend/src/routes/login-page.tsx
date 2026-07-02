@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { LogoPlaceholder } from '@/components/logo-placeholder';
 import { useLogin, useSession } from '@/hooks/use-session';
 import { ApiError } from '@/lib/api-client';
 
@@ -37,9 +38,12 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <Card className="w-full max-w-[380px]">
-        <CardHeader className="flex-col items-start gap-0.5">
-          <CardTitle>Payroll Management System</CardTitle>
-          <span className="text-xs text-text-muted">Sign in to continue</span>
+        <CardHeader className="flex-col items-center gap-2 text-center">
+          <LogoPlaceholder size="md" />
+          <div className="flex flex-col items-center gap-0.5">
+            <CardTitle>Payroll Management System</CardTitle>
+            <span className="text-xs text-text-muted">Sign in to continue</span>
+          </div>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-3.5" onSubmit={handleSubmit(onSubmit)} noValidate>

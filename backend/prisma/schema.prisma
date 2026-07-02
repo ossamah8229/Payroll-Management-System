@@ -130,6 +130,8 @@ model ProjectSite {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String   @unique @db.VarChar(160)
   branchCode String?  @db.VarChar(20)
+  /// Physical work-location address (2026-07-02 addition — see database-schema.md §8 revision note).
+  address    String?  @db.VarChar(300)
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now()) @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @db.Timestamptz(6)
