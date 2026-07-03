@@ -33,8 +33,11 @@ backend/                     # Express + TypeScript API
                              # matching the 15 modules in docs/architecture/overview.md
       auth/                  # Authentication — login/logout, session management, CSRF
       employees/             # Employee Registry — identity/employment/bank fields
-      sites/                 # Project Sites
-      payroll-entry/         # Payroll Entry — the single editable data-capture surface (current Draft cycle)
+      sites/                 # Project Sites — pure client/location master data
+      project-units/         # Project Units (added 2026-07-03) — dedicated module, one level under
+                             # Project Sites; the operational Branch/Department/Section master data
+      payroll-entry/         # Payroll Entry — the single editable data-capture surface (current Draft
+                             # cycle); owns PayrollEntry and its PayrollEntryWorkLine attendance rows
       payroll-processing/    # Payroll Processing — PayrollCycle lifecycle (Draft/Released/Archived), calcNet
       release/               # Release Salary — release/hold, bulk release/hold
       corrections/           # Corrections — correction workflow, approval, standardized Adjustment Types

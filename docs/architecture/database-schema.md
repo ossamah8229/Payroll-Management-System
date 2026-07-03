@@ -17,6 +17,10 @@ It builds directly on the frozen architecture: `docs/PROJECT_PRINCIPLES.md`,
   whose schema is owned by `connect-pg-simple`, not this application.
 - **Timestamps**: `timestamptz` for every point-in-time value (`createdAt`, `releasedAt`, etc.);
   `date` for calendar dates with no time component (`dateOfBirth`, `dateOfJoining`, `dateGiven`).
+- **Dates are stored in ISO form internally, always** (native `date`/`timestamptz` columns, ISO
+  strings across the API) — this is unchanged by the 2026-07-03 UI display standard requiring every
+  user-facing date to render as `DD-MM-YYYY`. That's a presentation-layer convention only (see
+  `docs/design-system.md` §4); no column type or wire format changes because of it.
 - **Money**: `numeric(12,2)` for all currency amounts (PKR). Never `float`/`double` — financial
   values must not be subject to floating-point rounding error (Principle 5: deterministic and
   reproducible calculations).
@@ -198,14 +202,19 @@ model; see `docs/PROJECT_PROGRESS.md` for the open item tracking that gap.
 
 ## 8. `ProjectSite`
 
-**Purpose:** A physical client work location an employee is deputed to (e.g. "ABL City Region
+**Purpose:** A client relationship/location an employee is deputed to (e.g. "ABL City Region
 Lahore" — Broom Services is a payroll-outsourcing company deputing staff to *client* sites;
 `reference/PROJECT_SPEC.md` names banks as example clients, e.g. "banks like ABL/HBL/MCB, malls,
-retail outfitters"). Project Sites are physical work locations only — no financial/banking
-properties.
-**Why it exists:** Owns site master data; referenced by Employee (deputed site) and User (staff
-assignment).
-**Business rule tie-in:** "Delete is blocked if employees are still assigned" (`PROJECT_SPEC.md`).
+retail outfitters"). **Project Sites are pure client/location records — no financial/banking
+properties, and, as of 2026-07-03, no operational-unit properties either** (see the revision note
+below and the new §8a `ProjectUnit`).
+**Why it exists:** Owns site master data; referenced by Project Unit (operational sub-division),
+Employee (deputed site — still a direct FK, see §9's composite-FK note), and User (staff assignment —
+still site-level, unchanged).
+**Business rule tie-in:** "Delete is blocked if employees are still assigned" (`PROJECT_SPEC.md`) —
+now enforced at *two* levels: directly (any `Employee.siteId` reference, unchanged from before) and
+transitively (any `ProjectUnit.siteId` reference — so a site can't be deleted while it still has unit
+rows, even ones with no employees currently assigned).
 **Revised 2026-07-02 — `defaultBankId` removed (final decision, no longer open):** an earlier
 revision of this table added `defaultBankId` (a "site's typical bank" FK to `Bank`), reasoning that
 a new employee's bank could default from their site. This was incorrect: it conflated a site's
@@ -223,13 +232,25 @@ deployment, documentation) and this is an additive, single-nullable-column chang
 Principle 8. Deliberately narrow: no `client`/`Client` entity was introduced alongside it (site names
 already encode the client as free text, unchanged from the reasoning in the removed-`defaultBankId`
 note above).
+**Revised 2026-07-03 — `branchCode` removed; `unitLabel` added (final decision, pre-Phase-3
+architecture review):** a Project Site was never meant to own a single Branch Code — real client
+sites are internally subdivided into multiple Branches/Departments/Sections (terminology varies per
+client), each with its own code and name, and an employee is deputed to one specific subdivision, not
+"the site" as an undifferentiated whole. `branchCode` is removed from this table entirely and its
+concept moves down to the new child entity, `ProjectUnit` (§8a) — generic in the data model, but
+displayed using whichever term this specific site's business actually uses, via the new `unitLabel`
+field below. This also resolves the ambiguity in `reference/PROJECT_SPEC.md`'s "Official Data
+Template," whose `Branch Code`/`Area`/`Area/Location` columns conflated site- and unit-level concepts
+under one flat header row — those columns now map onto `ProjectUnit` fields, not `ProjectSite` ones,
+in the Employee Registry import/export (Phase 2's import/export code needs a corresponding update
+before this is usable operationally — see `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5 section).
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `name` | varchar(160) | no | — | |
-| `branchCode` | varchar(20) | yes | — | |
 | `address` | varchar(300) | yes | — | physical work-location address; added 2026-07-02 |
+| `unitLabel` | varchar(40) | no | `'Branch'` | the term this site's own business uses for its operational sub-divisions (e.g. "Branch", "Department", "Section", "Division") — drives every place the UI names a `ProjectUnit` for this site; free text, not an enum, so a client's own vocabulary is never blocked by a missing picklist value (Principle 8) — added 2026-07-03 |
 | `isActive` | boolean | no | `true` | |
 | `createdAt` | timestamptz | no | `now()` | |
 | `updatedAt` | timestamptz | no | `now()` | |
@@ -237,11 +258,61 @@ note above).
 - **Unique constraints:** `name`
 - **Indexes:** unique(`name`)
 - **Cascade / business rule enforcement:** deletion is blocked at the application layer while any
-  `Employee.siteId` references this row (checked before delete, per spec); the FK itself
-  (`Employee.siteId → ProjectSite.id`) is `ON DELETE RESTRICT` as a database-level backstop so this
-  can never be bypassed by a bug or a raw query.
+  `Employee.siteId` or `ProjectUnit.siteId` references this row (checked before delete); both FKs
+  (`Employee.siteId → ProjectSite.id`, `ProjectUnit.siteId → ProjectSite.id`) are `ON DELETE RESTRICT`
+  as a database-level backstop so this can never be bypassed by a bug or a raw query. A site must have
+  both its units and its employees cleared before it can be deleted.
 - **Module owner:** Project Sites
 - **Row count:** ~10–30
+
+## 8a. `ProjectUnit`
+
+**Purpose:** The operational sub-division of a `ProjectSite` that an employee is actually deputed
+to — a specific bank branch, mall department, retail section, etc. Internally a single generic model
+regardless of what a given client calls it; the UI always displays the owning site's `unitLabel`
+(§8) in place of the literal word "Unit".
+**Why it exists:** Added 2026-07-03, replacing the site-level `branchCode` this table's revision note
+(§8) describes. A real client site (e.g. one bank client) has several distinct branches, each staffed
+independently, each with its own code — modeling this as a single flat field on `ProjectSite` couldn't
+express "many branches under one client," and blocked the core Phase 3 requirement that an employee's
+attendance be attributable to a specific branch/department, potentially more than one within the same
+payroll cycle (see the new `PayrollEntryWorkLine`, §12a).
+**Business rule tie-in:** an `Employee`'s deputed site (`siteId`) and deputed unit (`unitId`) are both
+stored directly on the `Employee` row, kept consistent by a composite foreign key rather than by
+convention (§9); Payroll Work Lines reference Project Units the same way (§12a); delete is blocked
+while employees or work lines still reference a unit, same pattern as every other master-data delete
+in this schema.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `siteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` |
+| `name` | varchar(160) | no | — | e.g. "Model Town Branch", "Finance Department" |
+| `code` | varchar(20) | yes | — | the unit's own operational code — this is the direct successor to the removed `ProjectSite.branchCode`, now correctly scoped to the specific branch/department it identifies rather than an entire client site |
+| `isActive` | boolean | no | `true` | retire a unit without breaking historical `Employee`/`PayrollEntryWorkLine` references to it |
+| `createdAt` | timestamptz | no | `now()` | |
+| `updatedAt` | timestamptz | no | `now()` | |
+
+- **Unique constraints:** (`siteId`, `name`) — a unit name is unique *within* its site, not globally
+  (two different client sites may each have their own "Finance" unit); **also `(`id`, `siteId`)`,
+  which is not a business uniqueness rule but exists purely so downstream tables can declare a
+  composite foreign key against it** (see §9, §12a) — this is what makes it a database-level
+  guarantee, not just an application-layer check, that an `Employee` or `PayrollEntryWorkLine` can
+  never reference a unit belonging to a *different* site than the one already recorded on that same
+  row.
+- **Indexes:** unique(`siteId`, `name`); unique(`id`, `siteId`) (composite-FK-support index, above);
+  (`siteId`) for the "units under this site" listing query
+- **Cascade:** `siteId` is `RESTRICT` — a site with units cannot be deleted (§8)
+- **Module owner:** **Project Units — a dedicated master-data module**, owned/administered per Project
+  Site (not folded into the Project Sites module's own CRUD, per the 2026-07-03 architecture
+  decision), analogous to how `Bank`/`AdjustmentType` are their own lookup concepts even though they
+  feed other modules
+- **Business rule enforcement:** deletion blocked at the application layer while any
+  `Employee.unitId` or `PayrollEntryWorkLine.unitId` references this row, with the FK itself as a
+  database-level `RESTRICT` backstop — same pattern as every other referenced-master-data delete in
+  this schema
+- **Row count:** a handful to a few dozen per site (~50–300 total across all sites, comparable order
+  of magnitude to `ProjectSite` itself today, scaling with client count rather than employee count)
 
 ## 9. `Employee`
 
@@ -250,25 +321,33 @@ note above).
 figures (Principle 1: Payroll Entry owns the monthly figures; Employee owns identity).
 **Business rule tie-in:** CNIC as the cross-system identifier; historical preservation via
 `dateOfLeaving` instead of deletion (`PROJECT_SPEC.md`).
+**Revised 2026-07-03 — `unitId` added:** an employee is deputed to a specific Project Unit (Branch/
+Department/Section — terminology per `ProjectSite.unitLabel`, §8), not just "the site" as an
+undifferentiated whole. `unitId` records that employee's **current default unit** — the one they're
+ordinarily rostered to — and is changed only by an explicit, audited Employee edit (a "transfer"),
+exactly like a `siteId` change already works. It is never changed automatically by a payroll cycle's
+attendance breakdown: an employee occasionally working a different unit for part of a cycle
+(`PayrollEntryWorkLine`, §12a) leaves this default untouched.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `employeeCode` | varchar(30) | yes | — | e.g. `V001`; real client data is inconsistently formatted across sites — see §26 assumptions |
-| `cnic` | varchar(15) | yes | — | 13-digit Pakistani CNIC; nullable to accommodate an employee added before their CNIC is on file — see §26 |
+| `cnic` | varchar(15) | yes | — | 13-digit Pakistani CNIC, **stored digits-only** (any dashes/spaces the user enters are normalized away before validation/storage — see the new §26 item 6); nullable to accommodate an employee added before their CNIC is on file — see §26 |
 | `name` | varchar(160) | no | — | |
 | `fatherName` | varchar(160) | yes | — | |
 | `religion` | varchar(40) | yes | — | free text — see §26 (not an enum) |
 | `dateOfBirth` | date | yes | — | real client data frequently omits this |
 | `mobileNumber` | varchar(20) | yes | — | |
 | `designation` | varchar(80) | no | — | free text — sites use varied, evolving designation names |
-| `siteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` |
+| `siteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT`. Kept as a direct column (not just derivable via `unitId → ProjectUnit.siteId`) specifically so it can participate in the composite FK below — this is what turns "the unit must belong to this employee's own site" into a database guarantee instead of an application-layer check |
+| `unitId` | uuid | no | — | FK → `ProjectUnit.id`, paired with `siteId` above via a **composite foreign key** `(unitId, siteId) → ProjectUnit(id, siteId)` against `ProjectUnit`'s own `(id, siteId)` unique index (§8a) — Postgres itself rejects any row where the referenced unit doesn't belong to the referenced site; added 2026-07-03 |
 | `dateOfJoining` | date | yes | — | |
 | `dateOfLeaving` | date | yes | — | presence = employee has left; drives "active employee" filtering |
 | `payType` | `PayType` | no | `'DAILY_WAGE'` | |
-| `grossPay` | numeric(12,2) | no | — | current/base gross pay — **template value only**; each cycle's actual `PayrollEntry.grossPay` is what's authoritative for that month, see §12 |
+| `grossPay` | numeric(12,2) | no | — | current/base gross pay — **template value only**; each cycle's actual `PayrollEntry.grossPay` is what's authoritative for that month, see §12. **Verified 2026-07-03**: nothing in `reference/PROJECT_SPEC.md` or this schema suggests gross pay varies by which unit an employee works — only the day-rate *basis* (cycle days, OT rate, leave rate) is documented as location-varying, previously by site and now by unit (§12a). `grossPay` stays a single scalar here and on `PayrollEntry`. |
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT`; null = no bank on file |
-| `branchCode` | varchar(20) | yes | — | |
+| `branchCode` | varchar(20) | yes | — | **the employee's own bank branch code** — unrelated to `ProjectUnit.code` (§8a) or the removed `ProjectSite.branchCode` (§8); three different "branch code" concepts have existed across this schema's history, and this is the one that survives unchanged: an employee's bank account's branch code, nothing to do with where they're deputed |
 | `accountNumber` | varchar(40) | yes | — | null + null `bankId` ⇒ cash payment (derived rule, applied wherever bank-account presence is checked — e.g. Bank Sheet vs. Cash Receiving eligibility) |
 | `accountTitle` | varchar(160) | yes | — | |
 | `defaultEobiAmount` | numeric(10,2) | no | `400.00` | seeds a new `PayrollEntry.eobiAmount` when this employee is first added to a cycle |
@@ -277,27 +356,36 @@ figures (Principle 1: Payroll Entry owns the monthly figures; Employee owns iden
 | `updatedAt` | timestamptz | no | `now()` | |
 
 - **Unique constraints:** `employeeCode` (partial, `WHERE employeeCode IS NOT NULL`); `cnic` (partial,
-  `WHERE cnic IS NOT NULL`) — both nullable-but-unique-when-present, per §26
+  `WHERE cnic IS NOT NULL`) — both nullable-but-unique-when-present, per §26; `(unitId, siteId)`
+  composite FK target consumed from `ProjectUnit`, not a uniqueness rule on this table itself
 - **Check constraints:** `grossPay >= 0`; `defaultEobiAmount >= 0`; `cnic` matches a 13-digit numeric
   pattern when present
 - **Indexes:** partial unique(`cnic`) — this is also the primary lookup index for CNIC-based search;
-  partial unique(`employeeCode`); (`siteId`); partial index `WHERE dateOfLeaving IS NULL` (active
-  employees, the common-case filter); optional trigram index on `name` if free-text employee search
-  proves slow at scale (unlikely at ~1,500 rows, noted for completeness)
-- **Cascade:** `siteId` and `bankId` are `RESTRICT` — an employee record must never silently lose its
-  site/bank reference
-- **Module owner:** Employee Registry
+  partial unique(`employeeCode`); (`siteId`); (`unitId`) for the "employees at this unit" query;
+  partial index `WHERE dateOfLeaving IS NULL` (active employees, the common-case filter); optional
+  trigram index on `name` if free-text employee search proves slow at scale — worth reassessing
+  concretely now that Principle 10 sets a 10,000-employee design floor, rather than assuming it's
+  unlikely as previously noted here for the ~1,500-employee case
+- **Cascade:** `siteId`, `unitId`, and `bankId` are all `RESTRICT` — an employee record must never
+  silently lose its site/unit/bank reference
+- **Module owner:** Employee Registry (identity/employment/bank fields, including `unitId`); the
+  `ProjectUnit` master-data lookup itself is owned by the dedicated Project Units module (§8a)
 - **Immutability:** mutable while the employee is active; **never hard-deleted**
-- **RBAC:** Payroll Staff view/edit/create access is restricted to their assigned sites, with no
-  global access of any kind — enforced server-side on every route (`docs/architecture/authentication.md`).
-  A create request's `siteId` must be one of the requesting user's assigned sites. Master Admin is
+- **RBAC:** Payroll Staff view/edit/create access is restricted to their assigned **sites**, with no
+  global access of any kind, unchanged — enforced server-side on every route
+  (`docs/architecture/authentication.md`). A create request's `siteId` must be one of the requesting
+  user's assigned sites; `unitId` must belong to that same `siteId` (database-guaranteed, above). RBAC
+  is deliberately **not** unit-granular — since a `ProjectUnit` belongs to exactly one `ProjectSite`,
+  a Payroll Staff member with site access already has full access to every unit under it; there is no
+  separate unit-level assignment concept, and 2026-07-03's architecture review confirmed there should
+  never be a cross-site editing exception for a multi-unit employee (see §12a). Master Admin is
   unrestricted.
 - **Audit logging:** every create/update writes a generic `employee.updated` (or `.created`) entry
-  with a field-level diff in `metadata`; setting `dateOfLeaving` additionally writes a distinct
-  `employee.left` entry. A change to `siteId` here **never** cascades into any existing `PayrollEntry`
-  — see §12.
-- **Row count:** ~1,500 active, growing to several thousand over years given high turnover with
-  history retained
+  with a field-level diff in `metadata`, now including `unitId` changes; setting `dateOfLeaving`
+  additionally writes a distinct `employee.left` entry. A change to `siteId`/`unitId` here **never**
+  cascades into any existing `PayrollEntry` — see §12.
+- **Row count:** ~1,500 active today; the system's design floor is 10,000+ (Principle 10), growing to
+  several thousand over years given high turnover with history retained
 
 ## 10. `PayrollCycle`
 
@@ -369,26 +457,33 @@ the system's single source of truth (Principle 1).
 is a read-only derivation of this table; nothing else stores an independently-editable copy of a
 payroll figure.
 **Business rule tie-in:** Principles 1, 2, 5, 6, 9.
+**Revised 2026-07-03 — attendance fields moved to `PayrollEntryWorkLine` (§12a):** `days`, `otHours`,
+`otRate`, and `cycleDays` are **removed from this table** and now live exclusively on the new
+`PayrollEntryWorkLine` child table — every `PayrollEntry` has **at least one** work line, always
+(never zero, never optional), created transactionally in the same operation that creates the entry
+itself. This is what lets an employee's attendance be attributed to more than one `ProjectUnit`
+within a single cycle (an occasional but explicitly supported workflow — see §12a) without
+special-casing "split" vs. "ordinary" entries anywhere: `calcNet` always sums across an entry's work
+lines, and an ordinary single-unit entry is simply the case where that sum has one term. `grossPay`,
+`allowance`, `leaveDays`, `leaveRate`, EOBI, advance/eid deduction, and `fine` all stay here, unchanged
+— none of them are attendance-location data (gross pay in particular was verified 2026-07-03 to be
+documented nowhere as unit-varying, see §9's matching note).
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
 | `employeeId` | uuid | no | — | FK → `Employee.id`, `ON DELETE RESTRICT` |
-| `siteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` — copied from `Employee` at entry creation, then ordinarily Draft-editable, see note below |
+| `siteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` — copied from `Employee` at entry creation, then ordinarily Draft-editable, see note below. Every work line under this entry (§12a) must belong to a `ProjectUnit` under this same site — database-guaranteed via a composite FK, same mechanism as `Employee.unitId` (§9) |
 | `designation` | varchar(80) | no | — | copied from `Employee.designation` at entry creation, then ordinarily Draft-editable |
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT` — copied from `Employee` at entry creation, then ordinarily Draft-editable |
-| `branchCode` | varchar(20) | yes | — | copied from `Employee` at entry creation, then ordinarily Draft-editable |
+| `branchCode` | varchar(20) | yes | — | the employee's own bank branch code, copied from `Employee` at entry creation, then ordinarily Draft-editable — unrelated to `ProjectUnit.code` (§8a), same distinction noted in §9 |
 | `accountNumber` | varchar(40) | yes | — | copied from `Employee` at entry creation, then ordinarily Draft-editable |
 | `accountTitle` | varchar(160) | yes | — | copied from `Employee` at entry creation, then ordinarily Draft-editable |
-| `grossPay` | numeric(12,2) | no | — | this cycle's gross pay — editable in Draft |
-| `days` | numeric(5,2) | no | `0` | working days |
-| `otHours` | numeric(6,2) | no | `0` | |
-| `otRate` | numeric(10,2) | yes | — | null ⇒ derive from `grossPay/cycleDays/8` at read time |
+| `grossPay` | numeric(12,2) | no | — | this cycle's gross pay — editable in Draft; a single scalar regardless of how many units this cycle's work lines cover, see the 2026-07-03 revision note above |
 | `allowance` | numeric(12,2) | no | `0` | |
-| `leaveDays` | numeric(5,2) | no | `0` | claimed leave |
-| `leaveRate` | numeric(10,2) | yes | — | null ⇒ derive from `grossPay/cycleDays` |
-| `cycleDays` | smallint | no | `30` | denominator for daily rate; site-typical but per-employee editable |
+| `leaveDays` | numeric(5,2) | no | `0` | claimed leave — stays employee-level, not attributed to a specific unit: leave is absence from work entirely, not location-specific attendance |
+| `leaveRate` | numeric(10,2) | yes | — | null ⇒ derive from `grossPay / cycleDays` using the entry's **primary work line's** `cycleDays` (its lowest `sortOrder`, §12a) as the basis when more than one line exists |
 | `eobiAmount` | numeric(10,2) | no | `400.00` | |
 | `eobiApplicable` | boolean | no | `true` | |
 | `advanceDeduction` | numeric(12,2) | no | `0` | this cycle's loan installment |
@@ -423,9 +518,10 @@ current and historical cycles, one consistent rule, with no time-based special c
 row disappearing from a Payroll Staff user's view mid-session because of an unrelated `Employee` edit.
 
 - **Unique constraints:** (`cycleId`, `employeeId`) — exactly one entry per employee per cycle
-- **Check constraints:** `grossPay >= 0`; `days >= 0`; `otHours >= 0`; `allowance >= 0`;
-  `leaveDays >= 0`; `cycleDays BETWEEN 1 AND 31`; `eobiAmount >= 0`; `advanceDeduction >= 0`;
-  `eidAdvanceDeduction >= 0`; `fine >= 0`; `released = true ⇒ releasedAt IS NOT NULL AND releasedBy IS NOT NULL`
+- **Check constraints:** `grossPay >= 0`; `allowance >= 0`; `leaveDays >= 0`; `eobiAmount >= 0`;
+  `advanceDeduction >= 0`; `eidAdvanceDeduction >= 0`; `fine >= 0`;
+  `released = true ⇒ releasedAt IS NOT NULL AND releasedBy IS NOT NULL` (the `days`/`otHours`/
+  `cycleDays` range checks moved to `PayrollEntryWorkLine`, §12a)
 - **Indexes:** unique(`cycleId`, `employeeId`); (`cycleId`); (`employeeId`); composite
   (`cycleId`, `hold`, `released`) — the exact filter combination used by Release Salary, Bank Sheets,
   and Cash Receiving, and by the Payroll Cycle finalization precondition check (§10); (`cycleId`, `siteId`)
@@ -448,25 +544,132 @@ row disappearing from a Payroll Staff user's view mid-session because of an unre
 - **Optimistic locking required:** yes — this is the primary candidate. Multiple Payroll Staff (or
   multiple tabs, or an autosave retry after a network hiccup) may edit different rows concurrently;
   `version` prevents a lost update on the same row
-- **Transactions required:** yes — an update to a `PayrollEntry` on release must, in the same
-  transaction, update any `PENDING` `BalanceAdjustment` rows for that employee to `SETTLED` and write
-  an `AuditLog` entry (§16); recording a non-zero `advanceDeduction`/`eidAdvanceDeduction` must, in
-  the same transaction, decrement the linked `Advance.outstandingBalance` (§15)
+- **Transactions required:** yes — creating a `PayrollEntry` always creates its first
+  `PayrollEntryWorkLine` in the same transaction (§12a, never a two-step process that could leave an
+  entry with zero lines); an update to a `PayrollEntry` on release must, in the same transaction,
+  update any `PENDING` `BalanceAdjustment` rows for that employee to `SETTLED` and write an `AuditLog`
+  entry (§16); recording a non-zero `advanceDeduction`/`eidAdvanceDeduction` must, in the same
+  transaction, decrement the linked `Advance.outstandingBalance` (§15)
 - **Calculated, not stored** (computed identically wherever displayed or exported — Principle 5, 6):
-  `dailyRate = grossPay / cycleDays`; `earnedAmount = dailyRate × days`;
-  `effectiveOtRate = otRate ?? dailyRate / 8`; `otEarned = otHours × effectiveOtRate`;
-  `effectiveLeaveRate = leaveRate ?? dailyRate`; `leaveEarned = leaveDays × effectiveLeaveRate`;
+  for each work line *i* under this entry (§12a), `dailyRate_i = grossPay / line_i.cycleDays`;
+  `earnedAmount_i = dailyRate_i × line_i.days`;
+  `effectiveOtRate_i = line_i.otRate ?? dailyRate_i / 8`; `otEarned_i = line_i.otHours × effectiveOtRate_i`.
+  Then, summed across all of the entry's lines: `earnedAmount = Σ earnedAmount_i`;
+  `otEarned = Σ otEarned_i`. `effectiveLeaveRate = leaveRate ?? (grossPay / primaryLine.cycleDays)`
+  (the primary line is the one with the lowest `sortOrder`); `leaveEarned = leaveDays × effectiveLeaveRate`;
   `totalEarning = earnedAmount + otEarned + allowance + leaveEarned`;
   `eobiDeduction = eobiApplicable ? eobiAmount : 0`;
   `totalDeduction = eobiDeduction + advanceDeduction + eidAdvanceDeduction + fine`;
-  `netSalary = totalEarning − totalDeduction`. For an entry with one or more approved `Correction`
-  rows, the *current effective* value of each corrected field (and therefore the current effective
-  `netSalary`) is likewise always calculated on read — by replaying the latest approved correction per
-  field over these stored values — never cached on this row; see
-  `docs/architecture/post-release-corrections.md` ("Baseline Reconstruction for Sequential
-  Corrections").
-- **Row count:** ~1,500/cycle × 12/year ⇒ ~18,000/year, accumulating — still small for Postgres after
-  a decade (~180,000 rows)
+  `netSalary = totalEarning − totalDeduction`. **This is a single calculation path, not a
+  split/non-split branch**: an ordinary entry with exactly one work line reduces to exactly the
+  original flat formula (the sum over one term), so there is no separate "simple case" implementation
+  to keep in sync with the general one. For an entry with one or more approved `Correction` rows, the
+  *current effective* value of each corrected field (and therefore the current effective `netSalary`)
+  is likewise always calculated on read — by replaying the latest approved correction per field over
+  these stored values — never cached on this row; see `docs/architecture/post-release-corrections.md`
+  ("Baseline Reconstruction for Sequential Corrections"). Corrections continue to target this entry's
+  aggregate fields only (`CorrectionField`, §1) — there is no line-level correction path; a locked
+  entry's work-line breakdown is preserved as a frozen historical attendance record, and any
+  post-release adjustment is expressed as an aggregate delta exactly as already documented, never as a
+  correction to one specific line.
+- **Row count:** ~1,500/cycle × 12/year ⇒ ~18,000/year today; Principle 10's 10,000-employee design
+  floor means this should be read as ~10,000+/cycle going forward — still small for Postgres after a
+  decade even at that scale (~1.2M rows/decade at 10,000/cycle × 12/year), with correct indexing, not
+  partitioning, remaining sufficient (§23)
+
+## 12a. `PayrollEntryWorkLine`
+
+**Purpose:** One employee's attendance at one specific `ProjectUnit`, for one `PayrollEntry`. The
+attendance-data half of what used to be flat scalar columns directly on `PayrollEntry` (§12) — added
+2026-07-03 specifically to support an employee working across more than one Branch/Department within
+the same payroll cycle, without treating that as a special case.
+**Why it exists:** Physical attendance registers exist per branch/department, not per employee — an
+employee who genuinely worked two units in one month has two separate attendance records before this
+system is ever touched. This table models that directly instead of forcing a single flattened
+days/hours figure, while keeping the *payment* side (net salary, release, correction) entirely at the
+employee-entry level, unaffected by how many places they physically worked (see §12's revision note).
+**Business rule tie-in:** occasional but explicitly supported (2026-07-03 architecture decision) —
+this is not a rare-edge-case bolt-on, it is the ordinary shape of attendance data; a single-unit
+employee is simply the common case of exactly one line.
+
+> **Business rule (2026-07-03, explicit — not merely a consequence of the schema): a
+> `PayrollEntryWorkLine` may only reference a `ProjectUnit` belonging to the same `ProjectSite` as its
+> parent `PayrollEntry`. An employee's Work Lines within a single Payroll Entry can never span more
+> than one Project Site.** A Project Unit is the actual operational attendance location — relief
+> staff, temporary deputations, and shared attendance across multiple branches/departments are all
+> expected and supported, but always *within* the one client relationship/location that
+> `PayrollEntry.siteId` represents, never across two different ones in the same cycle. This is
+> enforced at **two** independent layers, deliberately redundant, matching this schema's existing
+> defense-in-depth pattern (e.g. Audit Log immutability, §16): **(1) a database-level composite
+> foreign key** — `(unitId, siteId) → ProjectUnit(id, siteId)`, below — so Postgres itself rejects the
+> row, not just a service-layer check; **(2) application-layer validation** at the point a Work Line
+> is created or edited, so the operator gets a clean validation error rather than a raw constraint
+> violation. Neither layer is optional or a stand-in for the other.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `payrollEntryId` | uuid | no | — | FK → `PayrollEntry.id`, `ON DELETE CASCADE` — a work line has no meaning without its parent entry, and a `PayrollEntry` row is never deleted in practice (Principle 2), so this is one of the few relationships in this schema where cascade delete is appropriate, alongside `RolePermission` (§4) |
+| `siteId` | uuid | no | — | denormalized copy of the parent `PayrollEntry.siteId` at line-creation time, present specifically so `unitId` below can be composite-FK'd against it |
+| `unitId` | uuid | no | — | FK → `ProjectUnit.id`, paired with `siteId` above via a composite FK `(unitId, siteId) → ProjectUnit(id, siteId)` (§8a) — Postgres itself rejects a line whose unit doesn't belong to the parent entry's own site, which is what makes "multi-unit splitting is always intra-site" (the 2026-07-03 decision, see below) a database guarantee, not just a UI restriction |
+| `days` | numeric(5,2) | no | `0` | working days attributable to this unit |
+| `otHours` | numeric(6,2) | no | `0` | OT hours attributable to this unit |
+| `otRate` | numeric(10,2) | yes | — | null ⇒ derive from `grossPay / this-line's cycleDays / 8` at read time (§12) |
+| `cycleDays` | smallint | no | `30` | denominator for daily rate at this unit; site/unit-typical but per-line editable, same variability rule the original spec applied at the site level (`reference/PROJECT_SPEC.md`) |
+| `sortOrder` | integer | no | (sequence) | display order within the entry; the line with the lowest `sortOrder` is the entry's "primary" line for leave-rate-basis purposes (§12) |
+| `createdAt` | timestamptz | no | `now()` | |
+| `updatedAt` | timestamptz | no | `now()` | |
+
+**RBAC consequence of the same-site business rule above:** a Project Unit belongs to exactly one
+Project Site (§8a), and Payroll Staff are assigned at the site level (unchanged,
+`docs/architecture/authentication.md`). A Payroll Staff member with access to a site therefore already
+has full access to every unit under it — so an employee working across multiple units within one
+cycle never requires cross-site access, and the 2026-07-03 architecture review confirmed there is
+**no cross-site editing exception** of any kind (Principle 7). `assertSiteAccess()` against the
+parent `PayrollEntry.siteId` remains the entire RBAC check; nothing unit-level is needed.
+
+**On every entry always having at least one line (no optional/split branch):** a `PayrollEntry` is
+created together with its first `PayrollEntryWorkLine` in the same transaction — whether at new-cycle
+bulk creation (seeded from the employee's *current default* `unitId`, §9) or when an individual entry
+is created mid-cycle. Adding a second (or further) line — the "Split by {unitLabel}" action — is an
+explicit operator action, not a different creation path; removing a line back down to the last
+remaining one is allowed, but a line can never be deleted if it would leave its parent entry with
+zero lines, enforced transactionally the same way the system already enforces "a `Correction` always
+has exactly one `BalanceAdjustment`" (§13/§14) rather than relying on application code discipline
+alone.
+
+**On new-cycle carry-forward:** a continuing employee's new cycle always starts with exactly one
+fresh work line, seeded from their **current** default `unitId` — it does not inherit whatever
+split structure existed in the source cycle. Splitting is a fresh attendance decision made each
+cycle by whoever enters that month's data, consistent with attendance itself resetting every cycle
+(`reference/PROJECT_SPEC.md`: "carrying forward employee/bank data but resetting attendance").
+
+- **Unique constraints:** (`payrollEntryId`, `unitId`) — an employee's attendance at one unit within
+  one entry is a single line, never split across two rows for the same unit
+- **Check constraints:** `days >= 0`; `otHours >= 0`; `cycleDays BETWEEN 1 AND 31` (the same range
+  rules previously on `PayrollEntry` directly, §12)
+- **Indexes:** unique(`payrollEntryId`, `unitId`); (`payrollEntryId`) — the primary "lines for this
+  entry" lookup, always hit when rendering or computing an entry; (`unitId`) for unit-level reporting
+  ("who worked at this unit this cycle," a new reporting dimension this table enables); composite
+  unique(`unitId`, `siteId`) is not declared here — it's declared on the referenced side, `ProjectUnit`
+  (§8a)
+- **Cascade:** `payrollEntryId` is `CASCADE` (see column notes above); `unitId`/`siteId` (composite) is
+  `RESTRICT` via the referenced `ProjectUnit`
+- **Module owner:** Payroll Entry (same module that owns `PayrollEntry` itself — this is not a
+  separate module, it's the attendance-detail half of the same editable surface)
+- **Immutability:** mutable under exactly the same condition as its parent `PayrollEntry` — while
+  `released = false` **and** the parent `PayrollCycle.status = 'DRAFT'`. Once the parent entry locks,
+  every line under it freezes too, preserved as a historical attendance record; there is no
+  line-level Correction path (§12's revision note)
+- **Transactions required:** yes — entry creation + first line creation (always together); any line
+  add/edit/remove while the entry's aggregate figures are recalculated for display (recalculation
+  itself is computed on read, per §12, not written back to a cached column, so this is a read
+  concern, not a write-transaction one, beyond the line mutation itself + its `AuditLog` entry as part
+  of the parent entry's ordinary field-edit audit trail)
+- **Row count:** the common case is exactly one line per `PayrollEntry` (so, roughly the same order of
+  magnitude as `PayrollEntry` itself, §12); occasional multi-unit employees add a small number of
+  additional lines on top — not expected to meaningfully change the table's overall scale even at
+  Principle 10's 10,000-employee floor
 
 ## 13. `Correction`
 
@@ -735,11 +938,16 @@ User (many) ──< UserSiteAssignment >── (many) ProjectSite
 Bank (1) ───< Employee (many)         [bankId, optional] — Bank has no relationship to ProjectSite,
                                         see §8's revision note
 
-ProjectSite (1) ───< Employee (many)
+ProjectSite (1) ───< ProjectUnit (many)
+ProjectSite (1) ───< Employee (many)                 [siteId, direct]
+ProjectUnit (1) ───< Employee (many)                 [unitId, composite FK with siteId — §9]
 
 Employee (1) ───< PayrollEntry (many)
 PayrollCycle (1) ───< PayrollEntry (many)
 PayrollCycle (1) ───< PayrollCycle (many)     [sourceCycleId, self-referencing]
+
+PayrollEntry (1) ───< PayrollEntryWorkLine (many)    [always ≥1, enforced transactionally — §12a]
+ProjectUnit (1) ───< PayrollEntryWorkLine (many)     [unitId, composite FK with siteId — §12a]
 
 PayrollEntry (1) ───< Correction (many)
 AdjustmentType (1) ───< Correction (many)
@@ -786,14 +994,17 @@ own** — they are query modules over the tables above, per Principle 1 and the 
 `Correction`, `AuditLog`, `BackupPackage`, `BackupPackageFile`, `AdjustmentType` rows (retired via
 `isActive`, never edited in meaning), `PayrollEntry` rows once `released = true` or once the parent
 cycle leaves `DRAFT` (`hold` does **not** gate this — it's an ordinary field until the row locks, at
-which point it freezes along with every other column; see §12). `BalanceAdjustment` is immutable
-except for its single permitted `PENDING → SETTLED` transition (a `NONE`-type row is created already
-in its final state and never transitions at all).
+which point it freezes along with every other column; see §12), and every `PayrollEntryWorkLine`
+under such a row, which locks in lockstep with its parent entry (§12a). `BalanceAdjustment` is
+immutable except for its single permitted `PENDING → SETTLED` transition (a `NONE`-type row is created
+already in its final state and never transitions at all).
 
 ### Append-only tables
 `Correction`, `AuditLog`, `BackupPackage`, `BackupPackageFile`.
 
 ### Tables requiring multi-statement transactions
+- `PayrollEntry` insert + its first `PayrollEntryWorkLine` insert, always together, never a two-step
+  process that could leave an entry with zero lines (§12a)
 - `PayrollEntry` update (release) + settlement of any `PENDING` `BalanceAdjustment` for that employee
   (merged into this release's Bank Sheet/Cash Sheet payment amount, §14) + `AuditLog` insert
 - `Correction` insert + `BalanceAdjustment` insert (always — including a `NONE`-type, zero-amount,
@@ -809,25 +1020,30 @@ in its final state and never transitions at all).
   row pointing at a file that doesn't exist)
 - `Advance.outstandingBalance` decrement + the `PayrollEntry` save that recorded the linked deduction
 - New cycle creation: previous cycle's archive transition (above) + `PayrollCycle` insert + bulk
-  `PayrollEntry` insert for every active employee plus any employee (active or departed) with a
-  `PENDING` `BalanceAdjustment` (`docs/architecture/data-and-storage.md` §4) + `AuditLog` insert — all
-  one transaction
+  `PayrollEntry` insert (each with its own single, freshly-seeded `PayrollEntryWorkLine`, per §12a's
+  carry-forward rule — never inheriting a prior cycle's split structure) for every active employee
+  plus any employee (active or departed) with a `PENDING` `BalanceAdjustment`
+  (`docs/architecture/data-and-storage.md` §4) + `AuditLog` insert — all one transaction
 - `Employee` create/update + `AuditLog` insert (generic diff, or a distinct `employee.left` entry when
   `dateOfLeaving` is set)
 
 ### Tables requiring optimistic locking
 `PayrollEntry` (`version` column) — the only table with realistic concurrent-edit exposure (multiple
 staff/tabs, autosave retries). No other table has a plausible concurrent-write conflict at this
-system's scale and access pattern.
+system's scale and access pattern. `PayrollEntryWorkLine` rows don't carry their own `version` — they
+mutate only as part of their parent `PayrollEntry`'s edit surface, so the parent's optimistic lock
+already covers them.
 
 ### Tables requiring audit logging on every mutation
-`PayrollEntry` (release/hold/field edits while Draft), `Correction` (every creation, including a
+`PayrollEntry` (release/hold/field edits while Draft, including work-line attendance changes — §12a —
+captured in the same field-level diff), `Correction` (every creation, including a
 zero-net-difference/`NONE` correction), `BalanceAdjustment` (creation and settlement),
 `PayrollCycle` (every status transition, including a finalization attempt blocked by the precondition),
 `Advance` (creation and both balance-changing events — original deduction and correction-triggered
-reconciliation), `Employee` (every create/update, including site transfers and bank-detail changes —
-see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation, role/site reassignment),
-`ProjectSite` (creation, edit, deletion attempt), `CompanySettings` (every update).
+reconciliation), `Employee` (every create/update, including site/unit transfers and bank-detail
+changes — see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation, role/site reassignment),
+`ProjectSite` (creation, edit, deletion attempt), `ProjectUnit` (creation, edit, deletion attempt —
+same pattern as `ProjectSite`, §8a), `CompanySettings` (every update).
 
 ### Values that must never be duplicated (single source of truth)
 - Net salary and every `calcNet` intermediate — always computed from `PayrollEntry` (and, for a
@@ -852,19 +1068,30 @@ see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation, role/site 
 
 ## 23. Performance Considerations
 
+**Governing principle: Principle 10 (`docs/PROJECT_PRINCIPLES.md`) — design for at least 10,000
+employees, not just today's ~1,500.** Every point below is sized against that floor, not against
+current headcount.
+
 - The Payroll Entry grid load is a single indexed query
   (`WHERE cycleId = ? ORDER BY sortOrder`, using the `(cycleId, hold, released)` and `(cycleId, siteId)`
-  composite indexes for filtered views) joined to `Employee` for name/CNIC — not 1,500 individual
-  queries. This is the query the spec explicitly flags as the most likely real-world performance
-  risk if done naively; the schema's indexing is designed around it directly.
+  composite indexes for filtered views) joined to `Employee` for name/CNIC and to
+  `PayrollEntryWorkLine` for the attendance breakdown — not one query per row, and not one query per
+  work line either (a single `JOIN` naturally returns every entry's line(s) in one round trip
+  regardless of whether a given entry has one line or several). This is the query the spec explicitly
+  flags as the most likely real-world performance risk if done naively; the schema's indexing is
+  designed around it directly, and remains a single query shape at 10,000 rows, not just 1,500.
 - Dashboard aggregates (per-site totals, release progress) are `GROUP BY` queries over `PayrollEntry`
   keyed by `(cycleId, siteId)` — indexed, and a candidate for the short-TTL cache described in
   `docs/architecture/deployment.md`.
 - `AuditLog` is write-heavy, read-light — indexes favor the few real read patterns (entity lookup,
   actor lookup, time-range paging) rather than being over-indexed for hypothetical queries.
-- No table in this schema is expected to individually exceed a few hundred thousand rows within a
-  decade of operation; at that scale, correct indexing (not partitioning, not read replicas) is
-  sufficient, consistent with Principle 4 (don't add complexity performance doesn't require yet).
+- No table in this schema is expected to individually exceed a few million rows within a decade of
+  operation even at the 10,000-employee floor (§12's row-count note); at that scale, correct indexing
+  (not partitioning, not read replicas) remains sufficient, consistent with Principle 4 (don't add
+  complexity performance doesn't require yet) — but every future phase should still actively apply
+  Principle 10's concrete techniques (virtualization, server-side pagination, background processing
+  for long-running operations, bulk writes over row-by-row loops) rather than relying on indexing
+  alone to carry a 10,000-employee dataset through, say, an unvirtualized full-table render.
 
 ## 24. Future Extensibility
 
@@ -884,11 +1111,18 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
 
 - Prisma migrations, additive-first (Principle 8): new tables/columns/lookup rows are the default
   path for any new requirement; destructive changes (dropping/renaming a column in use) require
-  explicit sign-off given the historical-integrity stakes (Principle 2).
+  explicit sign-off given the historical-integrity stakes (Principle 2). **The 2026-07-03
+  `ProjectSite.branchCode` removal (§8) is this project's first genuinely destructive migration** —
+  low practical risk only because it has never been applied to a live database (it shipped in Phase
+  1's initial migration but no Postgres instance has run it yet), and it carries the explicit sign-off
+  this bullet requires, recorded in `docs/PROJECT_PROGRESS.md`.
 - Initial migration creates tables in dependency order: `Role`, `Permission`, `RolePermission`,
-  `Bank`, `AdjustmentType` → `User`, `ProjectSite` → `UserSiteAssignment`, `Employee` →
-  `PayrollCycle` → `PayrollEntry` → `Correction` → `BalanceAdjustment`, `Advance` → `AuditLog` →
-  `BackupPackage` → `BackupPackageFile` → `CompanySettings`.
+  `Bank`, `AdjustmentType` → `User`, `ProjectSite` → `ProjectUnit` → `UserSiteAssignment`, `Employee` →
+  `PayrollCycle` → `PayrollEntry` → `PayrollEntryWorkLine` → `Correction` → `BalanceAdjustment`,
+  `Advance` → `AuditLog` → `BackupPackage` → `BackupPackageFile` → `CompanySettings`. (In practice,
+  Phase 1 and Phase 2 already split this into separate additive migrations rather than one initial
+  migration — `ProjectUnit` and `PayrollEntryWorkLine` will be new migrations layered on top of what's
+  already built, per `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5 section, not edits to existing ones.)
 - Seed data required at initial migration: the two roles and their permissions, the three banks
   (ABL/HBL/MCB), the seven initial `AdjustmentType` rows, one Master Admin `User`, and the singleton
   `CompanySettings` row. `BalanceAdjustmentType.NONE` needs no seed data — it's an enum value, not a
@@ -905,7 +1139,9 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
 Items 1, 2, and 4 below are now **resolved** (final decisions, no longer open) and are kept only as a
 record of what was decided and why. Item 5 remains genuinely open (Phase 3's concern, not Phase 2's)
 and is unaffected by this round of changes. Item 3 is updated to reflect the explicit-linkage schema
-addition, but the underlying business assumption it flags is still worth confirming.
+addition, but the underlying business assumption it flags is still worth confirming. **Item 6 is new
+(2026-07-03): a recommendation has been given, but the user has explicitly reserved final sign-off
+before any constraint change is implemented — do not treat it as resolved.**
 
 1. ~~`PayrollCycle` Draft → Released trigger~~ — **Resolved.** Draft → Released is an explicit
    Master Admin "Finalize Cycle" action, gated by a precondition (no non-held unreleased entries) with
@@ -929,6 +1165,35 @@ addition, but the underlying business assumption it flags is still worth confirm
 5. **A `PayrollCycle` is exactly one calendar month.** Nothing in the spec suggests non-monthly or
    custom-length pay periods; `year`+`month` is the whole cycle identity. If that ever changes, it's
    a schema change to this table specifically. Not yet confirmed — revisit before Phase 3.
+6. **CNIC duplicate detection and the recommended approach — recommendation given 2026-07-03, final
+   decision reserved by the user.** The requirement: validate CNIC format, normalize before comparison
+   and storage, check for a duplicate immediately while an operator is entering an employee record
+   (not just on submit), surface exactly which existing employee already holds that CNIC when one is
+   found, and never silently accept a duplicate. Recommendation: **keep `cnic` database-unique
+   (partial, `WHERE cnic IS NOT NULL` — already true today, §9) and add no override mechanism.**
+   Reasoning: a CNIC is a real-world unique identifier (Pakistan's national ID); two distinct active
+   people can never legitimately share one, so an apparent duplicate is always either a data-entry
+   mistake or the same person already existing in the system. An override would reopen exactly the
+   risk the user explicitly said they want closed ("I do not want duplicate CNICs silently
+   accepted") and would fragment one person's history across two `Employee` rows, undermining the
+   CNIC-based lookup requirement that a single search surface an employee's *full* history
+   (`reference/PROJECT_SPEC.md` #13). The one legitimate scenario that might tempt an override — a
+   former employee (`dateOfLeaving` set) being **rehired** — should be handled by **reactivating the
+   existing row** (clearing `dateOfLeaving`, updating employment fields) rather than creating a second
+   row with the same CNIC; this preserves Principle 2 (historical `PayrollEntry` rows still reference
+   the original, untouched `Employee.id`) while keeping one identity, one CNIC, one row. **This
+   surfaces a real, previously-unflagged gap**: the Employee Registry (Phase 2) built a "Mark as Left"
+   action (`POST /:id/leave`) but no symmetric "Reactivate" action — needed to make the recommendation
+   above actually usable, tracked in `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5 section. Two concrete,
+   additive (non-constraint-changing) improvements should ship alongside whatever final decision is
+   made here: (a) **normalize before validating**, not just before storing — today's Zod pattern
+   (`/^\d{13}$/`) requires digits-only input with no dashes, so a user typing a CNIC in the
+   commonly-written `#####-#######-#` form currently fails validation outright rather than being
+   normalized; the input should strip non-digit characters before validation, both in the form and the
+   CSV import path; (b) a debounced pre-submit **duplicate-check** lookup (e.g.
+   `GET /employees/check-cnic?cnic=...`) so an operator learns about a collision — and which existing
+   employee owns it — before hitting a raw 409 on submit, prompting them toward reactivation instead
+   of a blocked create.
 
 ---
 

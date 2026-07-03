@@ -36,13 +36,19 @@ audit trail that can have gaps isn't an audit trail.
 
 ### 4. Never sacrifice correctness for performance
 
-At ~1,500 employees this system will never be under real load pressure. When a choice arises between
-a faster-but-riskier path and a slower-but-provably-correct one, take the correct one. Optimize only
-after correctness is established and only where a real bottleneck is measured (e.g. the
-1,500-row Payroll Entry grid render, which is a legitimate, spec-called-out exception).
+When a choice arises between a faster-but-riskier path and a slower-but-provably-correct one, take
+the correct one. Optimize only after correctness is established and only where a real bottleneck is
+measured (e.g. the Payroll Entry grid render, which is a legitimate, spec-called-out exception).
 
 **Why:** the client's own words were "cannot have any crashes or lapses" — for a payroll system,
 "fast but occasionally wrong" is a worse failure mode than "correct but a little slower."
+
+**Note (2026-07-03):** this is not in tension with Principle 10, below. Virtualization,
+pagination, and indexing are correctness-neutral performance work — they change *how* a correct
+answer is produced, never *what* answer is produced — so building for scale from the start doesn't
+mean cutting a correctness corner. The client's real headcount (~1,500) was originally cited here as
+evidence load isn't a pressure driving *correctness* shortcuts; it is no longer the ceiling the system
+is designed against — see Principle 10.
 
 ### 5. All financial calculations must be deterministic and reproducible
 
@@ -72,6 +78,13 @@ internal tool, admin script, or one-off fix.
 approve corrections. That boundary is a business control, not a UI nicety, and must hold even if the
 UI is bypassed entirely (direct API calls, scripts, etc.).
 
+**Concrete instance (added 2026-07-03):** a `PayrollEntryWorkLine` may only reference a `ProjectUnit`
+under the same `ProjectSite` as its parent `PayrollEntry` — an employee's Work Lines can never span
+more than one Project Site within a single cycle (`docs/architecture/database-schema.md` §12a). This
+is what lets multi-unit attendance splitting (relief staff, temporary deputations) work without ever
+requiring a cross-site access exception — the rule is enforced both by a database-level composite
+foreign key and by application validation, not by convention alone.
+
 ### 8. Prefer additive schema evolution over destructive schema changes
 
 New requirements are met by adding tables/columns, not by repurposing or dropping existing ones.
@@ -94,6 +107,30 @@ mean the system's record of what was paid no longer matches what was actually pa
 most damaging kind of inconsistency a payroll system can have. This principle is what the
 `Released` and `Archived` payroll cycle states (`docs/architecture/data-and-storage.md`) and the
 balance-based correction model (`docs/architecture/post-release-corrections.md`) exist to enforce.
+
+### 10. The system must comfortably scale well beyond current headcount
+
+The application must comfortably support **at least 10,000 employees** without noticeable slowdown or
+instability, even though the client's actual headcount today is ~1,500. This is a design floor for
+every module, not just the Payroll Entry grid — prefer virtualized tables over rendering a full result
+set, server-side pagination/filtering over client-side, indexed queries and efficient joins over ad
+hoc scans, background processing for long-running operations (bulk import/export, PDF/Excel
+generation, backup packages) over blocking the request thread, bulk database operations over
+row-by-row loops, and algorithms whose cost doesn't degrade disproportionately as employee count
+grows. Performance is a design input reviewed at every phase, not a hardening pass reserved for
+Phase 9.
+
+**Why:** the client's explicit motivation for commissioning this system was replacing an Excel-based
+process whose performance and stability were already breaking down under real headcount and history.
+A payroll system that eventually hits the same wall would fail at the one job it exists to do — this
+is a stronger, forward-looking restatement of the client's original "cannot have any crashes or
+lapses" concern (Principle 4), sized against where the business could grow, not just where it is
+today.
+
+**Added 2026-07-03** — see `docs/PROJECT_PROGRESS.md` for the decision record. Every occurrence of
+"~1,500 employees" elsewhere in `docs/architecture/*.md` describes today's actual scale (still useful
+as the realistic test-fixture size) and should be read alongside this principle's 10,000-employee
+design floor, not in place of it.
 
 ---
 

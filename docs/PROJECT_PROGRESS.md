@@ -1,13 +1,18 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-02
-**Latest git commit:** `89ac6ff82895795e59a553d4841fc64e734a462a` — "feat(ui): Phase 2 UI polish and UX
-improvements" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive
-build → `89ac6ff` is the Phase 2 UI/UX polish pass + final visual consistency audit, below).
+**Date:** 2026-07-03
+**Latest git commit:** `11cdc9d62728c15e35884512f1dda127777cd10e` — "docs: close Phase 2 checkpoint
+(conditional) and record decisions" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed
+Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit →
+`11cdc9d` Phase 2 checkpoint documentation). **2026-07-03's session (this entry) is a documentation-
+and-architecture-only pass — no commit yet** — see §3 items 16–21 below for the full decision record.
 **Branch:** `main`
-**Current implementation phase:** **Phase 2 — CLOSED (conditional), 2026-07-02.** Same
-DB-backed-verification caveat as Phase 1 (see §4) — not a re-opened blocker, tracked to close before
-Phase 9. Phase 3 has not started; do not begin it without explicit instruction.
+**Current implementation phase:** **Phase 2 — CLOSED (conditional).** A new **Phase 2.5** has been
+inserted into `docs/IMPLEMENTATION_PLAN.md` ahead of Phase 3 — Project Unit model, Payroll Work Lines
+prerequisite, and Employee Registry refinements (§3 items 16–20) — discovered necessary during a
+pre-Phase-3 architecture review. **Neither Phase 2.5 nor Phase 3 has started; this session was
+documentation and architecture only, per explicit instruction.** Do not begin schema, migration,
+backend, or frontend work without explicit instruction next session.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -215,7 +220,8 @@ screenshot thumbnails by eye.
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed (conditional), 2026-07-02** — DB-backed test evidence still outstanding, tracked to close before Phase 9 |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed (conditional), 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
-| 3 | Payroll Entry & Payroll Processing (`calcNet`, the 1,500-row grid) | Not started |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **New 2026-07-03 — not started.** Architecture designed and documented this session; no code yet |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Not started |
@@ -363,6 +369,105 @@ screenshot thumbnails by eye.
     defects (§ above) that static review and `typecheck`/`lint`/`build` alone did not. Full statement
     now lives in `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria" section — that
     is the canonical copy; this entry exists so the decision is discoverable from this file too.
+16. **Project Unit model — RESOLVED 2026-07-03, pre-Phase-3 architecture review.** A `ProjectSite` no
+    longer owns a Branch Code or Department — it's a pure client/location record. A new, dedicated
+    `ProjectUnit` module sits one level under it: the actual operational sub-division (a specific bank
+    branch, mall department, retail section) an employee is deputed to, owning its own code and name.
+    Internally one generic model regardless of what a client calls it; the UI always displays that
+    site's own configured term (`ProjectSite.unitLabel`, e.g. "Branch"/"Department"/"Section") in its
+    place. `Employee.unitId` and (Phase 3) `PayrollEntryWorkLine.unitId` both reference it, each paired
+    with the corresponding `siteId` via a composite foreign key so a unit belonging to the *wrong* site
+    is a database-level impossibility, not just an application check. Full spec:
+    `docs/architecture/database-schema.md` §8/§8a/§9. This directly replaces the flat
+    `ProjectSite.branchCode` shipped in Phase 1/2 — the project's first genuinely destructive schema
+    change, low-risk only because it's never been applied to a live database, tracked as
+    `docs/IMPLEMENTATION_PLAN.md`'s new Phase 2.5.
+17. **Payroll Entry Work Lines model — RESOLVED 2026-07-03, arrived at through an explicit
+    business-workflow-first design conversation (not schema-first).** An employee's attendance can be
+    attributed to more than one Project Unit within a single payroll cycle — an occasional but
+    natively-supported workflow, motivated by the real-world fact that physical attendance registers
+    exist per branch/department, not per employee. The design, and why it landed here rather than at
+    two other candidate shapes considered and rejected along the way:
+    - **`PayrollEntry` keeps its exact existing identity and behavior** — one row per employee per
+      cycle, the sole release/hold/Correction target, the sole thing Bank Sheets/Payslips/net-salary
+      read. Nothing about release, Corrections, or payment changes because of this decision.
+    - **Attendance (`days`, `otHours`, `otRate`, `cycleDays`) moves entirely onto a new child table,
+      `PayrollEntryWorkLine`** — one row per unit worked, and **every `PayrollEntry` always has at
+      least one**, created transactionally with the entry itself, never optional/zero. This was a
+      deliberate simplification over an earlier "optional split, plain scalars otherwise" design: with
+      lines always present, `calcNet` has exactly one calculation path (sum across lines; an ordinary
+      single-unit entry is a sum of one term) instead of two branches to keep in sync.
+    - **Explicit business rule (2026-07-03), not merely a schema implication: a
+      `PayrollEntryWorkLine` may only reference a `ProjectUnit` belonging to the same `ProjectSite` as
+      its parent `PayrollEntry` — an employee's Work Lines can never span more than one Project Site
+      within a single cycle.** Enforced at two independent layers: a database-level composite foreign
+      key (`(unitId, siteId) → ProjectUnit(id, siteId)`) and application-layer validation — neither
+      is a substitute for the other. This is what makes multi-unit splitting always intra-site with
+      no cross-site editing exception: since a `ProjectUnit` belongs to exactly one `ProjectSite` and
+      Payroll Staff are assigned at the site level (unchanged), a Payroll Staff member with site
+      access already has every unit under it, resolving what had looked like the hardest open
+      question going in without any new RBAC concept.
+    - **`Employee.unitId` is the *current default* unit only** — a payroll cycle's attendance
+      breakdown never writes back to it; changing the default is a distinct, audited Employee edit
+      (a "transfer"), same as `siteId` already works. A new cycle's carry-forward always resets a
+      continuing employee to one fresh line seeded from their current default unit, never inheriting
+      the source cycle's split structure.
+    - **Gross pay was verified, not assumed, to be unit-invariant.** Checked against
+      `reference/PROJECT_SPEC.md` and the schema doc before finalizing: gross pay is documented
+      everywhere as a single per-employee scalar; only the day-rate *basis* (cycle days, OT rate,
+      leave rate) is documented as location-varying — previously by site, now by unit. If real-world
+      practice differs (a department legitimately paying a different rate for the same person), this
+      finding needs revisiting before Phase 3 schema work — flagged, not yet contradicted by anything
+      on record.
+    - Leave days/leave rate stay at the employee level, not per-line — leave is absence from work
+      entirely, not attributable to a specific unit. This is the one place a judgment call was made
+      without an explicit business rule behind it; noted as such at decision time.
+    - Full spec: `docs/architecture/database-schema.md` §12/§12a.
+18. **Date display standard — RESOLVED 2026-07-03: every user-facing date renders as `DD-MM-YYYY`,
+    everywhere, no exception.** Internal storage/API remain ISO, unchanged — this is a
+    presentation-layer convention only, documented in `docs/design-system.md` §4 alongside the
+    existing Numbers convention. A real, previously-unflagged gap was found while scoping this: no
+    date-formatting convention or shared utility exists anywhere in the codebase today — Employee
+    Registry's DOB/DOJ/DOL fields currently use raw ISO-string slicing and native `<input type="date">`
+    elements, which render in the browser's OS locale and can't be forced to `DD-MM-YYYY` by a
+    formatting function alone. A shared `formatDate()` utility and (likely) a custom masked date input
+    component are needed — tracked into Phase 2.5 for the Employee Registry's existing date fields, so
+    later phases inherit a working pattern instead of building one under their own time pressure.
+19. **Performance target raised to a 10,000-employee design floor — RESOLVED 2026-07-03, now
+    `docs/PROJECT_PRINCIPLES.md` Principle 10.** The client's explicit motivation for this project is
+    eliminating the performance/stability collapse of their prior Excel-based process under real
+    headcount and history — so "the system works fine at today's ~1,500 employees" was reframed as
+    the wrong bar. The system must comfortably support at least 10,000 without noticeable slowdown or
+    instability, applied as a standing design input for every phase (virtualized tables, server-side
+    pagination, indexed queries/efficient joins, background processing for long operations, bulk DB
+    operations, avoiding load-unbounded-data-into-memory patterns and non-scaling algorithms) rather
+    than a Phase 9 hardening concern. `docs/PROJECT_PRINCIPLES.md` Principle 4 (never sacrifice
+    correctness for performance) is explicitly not in tension with this — the listed techniques are
+    correctness-neutral. Every "~1,500 employees" reference remaining in `docs/architecture/*.md`
+    describes today's actual/test-fixture scale and should be read alongside this floor, not in place
+    of it.
+20. **CNIC duplicate detection — recommendation given 2026-07-03, final decision explicitly reserved
+    by the user before any constraint change is implemented.** Requirement: validate format, normalize
+    before comparison/storage, live duplicate-check while entering a record (surfacing which existing
+    employee already holds that CNIC), never silently accept a duplicate. Recommendation: **keep
+    `cnic` database-unique (already true today, partial index) and add no override** — a CNIC is a
+    real-world unique identifier, so an apparent duplicate is always a data-entry mistake or the same
+    person already existing; the legitimate case that might tempt an override (a rehire) should be
+    handled by **reactivating the existing record**, not creating a second row with the same CNIC. This
+    surfaced a real gap: Phase 2 built "Mark as Left" but no symmetric "Reactivate" action — needed to
+    make the recommendation practically usable, tracked into Phase 2.5. Also tracked into Phase 2.5,
+    independent of the constraint decision: normalizing CNIC input (stripping dashes/spaces) *before*
+    validation, not just before storage — today's Zod pattern requires digits-only input and rejects
+    the commonly-written dashed form outright, rather than normalizing it. Full write-up, including
+    why the two rejected alternatives (silent accept, or a gated override) were rejected:
+    `docs/architecture/database-schema.md` §26 item 6.
+21. **Deployment/portability model — REAFFIRMED 2026-07-03, no change.** Re-confirmed as part of this
+    session's scope: single-company-per-installation (one database per company, the `CompanySettings`
+    singleton, no `Tenant`/`Organization`/`Workspace` abstraction), deployable on whichever
+    server/hosting a given customer provides — same conclusion already recorded 2026-07-02 (§3 item
+    13), restated here because the user's instructions this session explicitly asked for it to be
+    re-verified against the new Project Unit/Work Line changes. Nothing about either change touches
+    the deployment/tenancy model.
 
 ---
 
@@ -390,29 +495,43 @@ screenshot thumbnails by eye.
   upload UI was deliberately left out of Phase 2's Settings module for this reason.
 - `README.md` previously stated "Phase 1 complete" without this verification caveat; corrected in a
   prior session's documentation pass, and now updated again for Phase 2.
+- **New 2026-07-03**: Phase 2.5 (Project Units, Payroll Work Lines prerequisite, Employee Registry
+  refinements — §3 items 16–20) is architecture/documentation only as of this session — no migration,
+  module, or frontend code exists for it yet. Do not assume `ProjectUnit`/`Employee.unitId` are queryable
+  anywhere in the current codebase.
 
 ---
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are both closed (conditional), 2026-07-02.** Phase 3 has not started and must
-not begin without the user's explicit instruction, per their own standing preference this session.
-Carry forward as background open items, not blockers, unless noted:
+**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5's architecture was designed and
+documented 2026-07-03 (§3 items 16–20) but has zero code written for it yet.** Neither Phase 2.5 nor
+Phase 3 has started, and neither should begin without the user's explicit instruction, per their own
+standing preference. Carry forward as background open items, not blockers, unless noted:
 
-1. Close out the DB-backed verification gap (§4) — via a Docker/Postgres-capable environment or a
+1. **When explicitly instructed to begin implementation**, start with Phase 2.5
+   (`docs/IMPLEMENTATION_PLAN.md`) — the `ProjectUnit` migration (including the destructive
+   `ProjectSite.branchCode` drop), the dedicated Project Units module, `Employee.unitId`, the
+   Employee Registry import/export template update, CNIC normalization + duplicate-check + Reactivate
+   action, and the shared `formatDate()`/DD-MM-YYYY convention — all before Phase 3's Payroll Entry
+   Work Lines build, which depends on `ProjectUnit` existing.
+2. Close out the DB-backed verification gap (§4) — via a Docker/Postgres-capable environment or a
    real CI push — before Phase 9 at the latest. This now covers Phase 1's and Phase 2's test suites,
    the hand-written Phase 2 migration, and the later `address`-column migration.
-2. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
-   generation hard-requires it). Not scheduled into Phase 3 or Phase 4. File uploads (logo/avatar)
+3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
+   generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to
    whatever hosting a given customer provides, not assumed cloud-provider-specific.
-3. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+4. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    item 5 (calendar-month-only cycles) before Phase 3, item 3 (at-most-one-`ACTIVE`-`Advance`-per-type)
    before Phase 4.
-4. Optionally confirm the Employee Registry import template's redundant-column interpretation
-   (§3 item 5) with the client — not blocking, but cheap to resolve early.
-5. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
-6. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
-   `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan: `calcNet`, the 1,500-row
-   grid, optimistic locking), its Definition of Done now includes Playwright-driven visual
-   verification as a mandatory step (§3 item 15), not just typecheck/lint/build.
+5. **CNIC duplicate-handling final decision (§3 item 20 / §26 item 6)** — a recommendation has been
+   given (keep the database-unique constraint, no override, add a Reactivate action) but the user has
+   explicitly reserved final sign-off; get that decision before Phase 2.5 implements anything
+   constraint-related.
+6. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
+7. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
+   `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan: `calcNet` over Work Lines,
+   the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic locking), its
+   Definition of Done now includes Playwright-driven visual verification (§3 item 15) and a
+   Principle-10 performance review, not just typecheck/lint/build.

@@ -155,6 +155,21 @@ inputs.
   multiple times during the original design conversation with the client — treat it as a strict,
   tested requirement (a unit test asserting the formatting output belongs in the test suite), not a
   style nicety.
+- **Dates (added 2026-07-03): every user-facing date is displayed as `DD-MM-YYYY`, everywhere, with
+  no exception.** This applies to every table cell, form field, PDF/Excel export, and future
+  Payslip/Statement of Account — the database and API continue to use ISO (`date`/`timestamptz`,
+  `YYYY-MM-DD` strings) internally, unchanged; this is purely a presentation convention, exactly like
+  the Numbers rule above, and should get the same treatment: one shared `formatDate()` utility (in
+  `shared/src`, alongside the number-format utility already called for in
+  `docs/architecture/folder-structure.md`) used everywhere a date is rendered, never a one-off
+  `.slice(0, 10)` or ad hoc formatting per page. **Implementation note, not yet resolved**: a native
+  `<input type="date">` renders its own calendar/text in the browser's OS locale, which the app cannot
+  override — so relying on native date inputs cannot *guarantee* a user actually sees `DD-MM-YYYY`
+  while typing/picking a date, only when it's displayed back in a table or export. Reliably enforcing
+  `DD-MM-YYYY` end-to-end, including inside the input control itself, likely requires a custom
+  masked/formatted date input component rather than a bare native input — this should be built once,
+  shared, and reused everywhere a date is entered (Employee Registry today; Payroll Entry, Advances,
+  and Corrections in later phases), the same way Modal/Table/Badge already are.
 - **Confirmation weight matches stakes**: routine saves/edits → toast. Bulk or destructive actions
   (Release All, Hold All, deleting a site) → toast is acceptable only when the action is easily
   reversible; anything touching a released/locked salary → modal with explicit reason/approval,

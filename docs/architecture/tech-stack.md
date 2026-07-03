@@ -1,9 +1,13 @@
 # Technology Stack
 
 Final, approved stack for the Payroll Management System, with the reasoning behind each choice.
-This is a single-tenant, moderate-scale (~1,500 employees, a handful of internal users) but
-high-trust financial system — the stack favors correctness, maintainability, and operational
-simplicity over raw scale, since scale was never the hard problem here.
+This is a single-tenant, high-trust financial system with a small internal user base — today's actual
+headcount is ~1,500 employees, but per Principle 10 (`docs/PROJECT_PRINCIPLES.md`, added 2026-07-03)
+the system is designed to comfortably handle at least 10,000 without noticeable slowdown or
+instability, since eliminating exactly that kind of degradation (the client's prior Excel-based
+process breaking down under real headcount) is one of this project's core reasons for existing. The
+stack favors correctness and maintainability, using the specific techniques below (indexing,
+virtualization, pagination) to buy headroom rather than treating scale as someone else's problem.
 
 ## Backend
 
@@ -25,15 +29,17 @@ pattern to enforce, and its migration history gives the additive-schema-evolutio
 **PostgreSQL**
 The data here is inherently relational — employees, payroll cycles, entries, corrections, advances,
 audit log all reference each other, and referential integrity plus transactions matter for financial
-correctness in a way a document store doesn't naturally provide. At ~1,500 employees, performance is
-a non-issue as long as the known-necessary indexes (CNIC, employee id, site id, cycle id) exist.
+correctness in a way a document store doesn't naturally provide. Performance stays a non-issue up to
+the 10,000-employee design floor (Principle 10) as long as the known-necessary indexes (CNIC,
+employee id, site id, unit id, cycle id) exist — `docs/architecture/database-schema.md` §23 details
+the specific query shapes this is designed around.
 
 ## Frontend
 
 **React + Vite**
 Vite for a fast local dev loop and simple, modern build tooling. React chosen primarily because the
 supporting libraries below (TanStack ecosystem) are the most mature fit for this system's specific,
-named performance risk: rendering a 1,500-row, per-cell-editable Payroll Entry table without it
+named performance risk: rendering a large, per-cell-editable Payroll Entry table without it
 becoming sluggish.
 
 **Tailwind CSS**
@@ -43,9 +49,9 @@ consistent across ~15 pages and a dozen-plus reusable components.
 
 **TanStack Table + (paired with virtualization)**
 Handles the Payroll Entry grid: sorting/filtering hooks, per-cell editing, and — critically —
-integrates with row virtualization so 1,500 editable rows don't all exist in the DOM at once. This
-was explicitly flagged in the original requirements as the most likely real-world source of a "slow"
-complaint if done naively.
+integrates with row virtualization so editable rows don't all exist in the DOM at once, whether that's
+today's ~1,500 or Principle 10's 10,000-employee design floor. This was explicitly flagged in the
+original requirements as the most likely real-world source of a "slow" complaint if done naively.
 
 **TanStack Query**
 Server-state management: caching, invalidation, and refetching for all API-backed data (employee

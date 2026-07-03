@@ -138,17 +138,85 @@ user's session genuinely cannot see or touch employees/sites outside that assign
 
 ---
 
+### Phase 2.5 — Project Unit Model, Payroll Work Lines Prerequisite, and Employee Registry Refinements
+
+**Added 2026-07-03, after a full pre-Phase-3 architecture review.** Phase 2 as actually built
+(`docs/PROJECT_PROGRESS.md`) shipped `ProjectSite` with a flat `branchCode` and no Project Unit
+concept — a business-model gap discovered only after Phase 2's conditional close, the same way
+`ProjectSite.defaultBankId` was discovered and corrected within Phase 2 itself. Unlike that earlier
+correction, this one lands *after* Phase 2 shipped, so it's sequenced here as its own explicit
+prerequisite phase rather than silently rewriting Phase 2's own history. **Nothing below is Phase 3
+work** — it's what Phase 3 needs already in place before its own Payroll Entry/Work Line build starts.
+
+**Builds:**
+- An additive migration introducing `ProjectUnit` (`docs/architecture/database-schema.md` §8a) and
+  removing `ProjectSite.branchCode` (§8's revision note — this project's first genuinely destructive
+  migration, low-risk only because it's never been applied to a live database).
+- The dedicated **Project Units** module (`backend/src/modules/project-units/`) — CRUD nested under a
+  Project Site, delete blocked while employees (or, once Phase 3 lands, work lines) reference a unit.
+- `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (§9) — the Employee Registry
+  create/edit forms gain a Unit field cascading off the selected Site, labeled with that site's own
+  `unitLabel`.
+- The Employee Registry import/export template updated so `Area`/`Area/Location`/`Branch Code`
+  columns map onto `ProjectUnit` fields instead of being ignored as redundant
+  (`docs/PROJECT_PROGRESS.md` §3 item 5 — this may resolve that old open item as a side effect).
+- CNIC normalization (strip non-digit characters before *validating*, not just before storing) and a
+  pre-submit duplicate-check lookup (`docs/architecture/database-schema.md` §26 item 6). **The
+  underlying constraint/override question is explicitly not decided by this phase** — the user has
+  reserved that sign-off — but the normalization and live-check UX are additive either way and don't
+  depend on that outcome.
+- A **Reactivate Employee** action, symmetric to the existing "Mark as Left," so a rehired former
+  employee updates their existing record instead of requiring — or tempting — a duplicate CNIC (§26
+  item 6's recommended resolution for the one legitimate case that might otherwise want an override).
+- The shared `formatDate()` utility and the `DD-MM-YYYY` display convention
+  (`docs/design-system.md` §4) applied to the Employee Registry's existing date fields (DOB/DOJ/DOL) —
+  the first module to adopt it, so Phase 3 has a working, reusable pattern rather than inventing one
+  under its own time pressure.
+
+**Depends on:** Phase 2 (extends its already-shipped Project Sites/Employee Registry modules).
+
+**Effort estimate:** 2–3 days — small in scope, but touches already-shipped Phase 2 code and its one
+destructive migration, so it gets a full typecheck/lint/build/Playwright pass, not an in-place patch
+assumed safe.
+
+**Testing strategy:**
+- `ProjectUnit` CRUD and delete-blocked-while-referenced tests, mirroring `ProjectSite`'s existing
+  pattern exactly.
+- Composite-FK test: assigning an `Employee` a `unitId` belonging to a *different* site than the
+  request's `siteId` is rejected at the database level, not merely the application layer.
+- CNIC normalization test: a CNIC entered with dashes/spaces is normalized identically on create,
+  update, and CSV import before comparison.
+- Reactivate-employee test: reactivating a departed employee clears `dateOfLeaving` and never creates
+  a second row for the same CNIC.
+
+**Definition of Done:** a Project Site can have multiple Project Units, each employee has a default
+unit belonging to the same site (database-enforced), deleting a unit or site with dependents is
+blocked exactly like every other master-data delete in this schema, and Phase 3 can begin against a
+schema that already has `ProjectUnit` in place.
+
+---
+
 ### Phase 3 — Payroll Entry & Payroll Processing (the core)
 
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
-well-tested function (Principle 5); the Payroll Entry grid backend (paginated/filterable query keyed
-by `(cycleId, siteId)`) and frontend (TanStack Table + TanStack Virtual for the 1,500-row grid,
-inline-editable cells matching `docs/design-system.md`); optimistic locking via `version` with an
+well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always
+at least one, so there is one calculation path, not a split/non-split branch
+(`docs/architecture/database-schema.md` §12/§12a); the Payroll Entry grid backend (paginated/filterable
+query keyed by `(cycleId, siteId)`, joined to each entry's work line(s)) and frontend (TanStack Table +
+TanStack Virtual for the grid, inline-editable cells matching `docs/design-system.md`); the
+**"Split by {unitLabel}"** action (labeled per the entry's site's own terminology) for the occasional
+employee working across more than one Project Unit within a cycle, including the transactional
+invariant that an entry can never be left with zero work lines; optimistic locking via `version` on
+`PayrollEntry` (its work lines mutate under the same lock, they don't carry their own) with an
 autosave pattern that surfaces a conflict rather than silently overwriting; the multi-select site
-filter component; the "Copy to All" bulk-apply toolbar; Payroll Entry CSV/Excel import/export
-(rejecting rows for already-released employees, per the original spec, with a per-row skip report).
+filter component; the "Copy to All" bulk-apply toolbar (applies to `PayrollEntry`-level fields; a
+work line's `cycleDays`/`otRate` are copied per-line since they can legitimately differ by unit);
+Payroll Entry CSV/Excel import/export (rejecting rows for already-released employees, per the original
+spec, with a per-row skip report; the export format needs a column scheme for the occasional
+multi-line employee — e.g. one row per work line — not just one row per employee).
 
-**Depends on:** Phase 2 (Employee Registry, Sites).
+**Depends on:** Phase 2 (Employee Registry, Sites) and **Phase 2.5** (Project Units, `Employee.unitId`
+— `PayrollEntryWorkLine.unitId` cannot be built without it).
 
 **Effort estimate:** 7–10 days — the largest single phase, and the one the original spec explicitly
 flags as the most likely source of a real-world performance complaint if done naively.
@@ -156,25 +224,36 @@ flags as the most likely source of a real-world performance complaint if done na
 **Testing strategy:**
 - `calcNet` unit tests covering every edge case named in the spec and the schema doc: null
   `otRate`/`leaveRate` falling back to derived rates, `cycleDays` at its boundary values (1 and 31),
-  zero `days`/`grossPay`, and a fixed set of golden-output cases carried over from the prototype's
-  sample data to catch any regression against the original formula.
+  zero `days`/`grossPay`, a fixed set of golden-output cases carried over from the prototype's sample
+  data to catch any regression against the original formula, **and multi-line cases specifically**: an
+  entry with 2–3 work lines across different units with different `cycleDays`/`otRate` values sums to
+  the correct `netSalary`, and the single-line case is verified to produce byte-identical results to
+  the pre-Phase-2.5 flat formula (no silent regression from the model change).
+- Work-line invariant tests: a `PayrollEntry` is always created with exactly one line; a line can
+  never be deleted if it would leave its parent with zero lines; a line's `unitId` must belong to the
+  entry's own `siteId` (rejected at the database level if not); a new cycle's carry-forward always
+  resets a continuing employee to one fresh line seeded from their *current* default unit, never
+  inheriting the prior cycle's split structure.
 - Concurrency test: two simulated concurrent edits to the same `PayrollEntry` — the second write must
   fail on stale `version`, not silently overwrite the first.
-- Performance test with ~1,500 synthetic rows: grid renders and scrolls without all rows mounting to
-  the DOM at once; this is validated here, not deferred to Phase 9, because it's cheapest to fix while
-  the grid is freshly built.
+- Performance test with synthetic data at both today's realistic scale (~1,500 rows) **and Principle
+  10's 10,000-employee design floor**: grid renders and scrolls without all rows mounting to the DOM
+  at once at either scale; this is validated here, not deferred to Phase 9, because it's cheapest to
+  fix while the grid is freshly built.
 - Import/export tests mirroring Phase 2's, plus the "skip already-released rows, report the skip
-  count" behavior specifically.
+  count" behavior specifically, and a multi-line-employee import/export round trip.
 
-**Definition of Done:** a full synthetic 1,500-employee Draft cycle can be created, edited across
-multiple simulated concurrent sessions without data loss, filtered by site, and bulk-edited via Copy
-to All — all within a response time that doesn't require the client to wait more than a second or two
-per interaction on realistic hardware.
+**Definition of Done:** a full synthetic Draft cycle at both ~1,500 and 10,000 employees can be
+created, edited across multiple simulated concurrent sessions without data loss, filtered by site,
+and bulk-edited via Copy to All — all within a response time that doesn't require the client to wait
+more than a second or two per interaction on realistic hardware — and at least one employee in the
+test dataset is split across multiple Project Units within one cycle, exercised end to end (entry,
+review, release, net salary) without special-case handling anywhere in the flow.
 
 **🛑 Review checkpoint.** Stop here. This is the single source of truth for the entire system
 (Principle 1) — everything in Phases 4–7 reads from what this phase produces. Verify `calcNet`
-correctness and the locking/autosave behavior before building Release, Bank Sheets, or Corrections on
-top of it.
+correctness (including the multi-line case) and the locking/autosave behavior before building
+Release, Bank Sheets, or Corrections on top of it.
 
 ---
 
@@ -415,7 +494,8 @@ deployment step specifically (staging deployment does not require this gate).
 |---|---|---|
 | 1 | Authentication, Audit Log | 1 |
 | 2 | Project Sites, Employee Registry, Settings, User Management | 2 |
-| 3 | Payroll Entry, Payroll Processing | 3 |
+| 2.5 | Project Units (new), Employee Registry refinements | 2.5 |
+| 3 | Payroll Entry (with Payroll Work Lines), Payroll Processing | 3 |
 | 4 | Release Salary, Bank Sheets, Cash Receiving, Advances | 4 |
 | 5 | (Payroll Processing continued: Finalize/Archive/Backup) | 5 |
 | 6 | Corrections, Balance Adjustments | 6 |
@@ -432,13 +512,14 @@ Balance Adjustments deliberately sequenced after the trunk they branch from is p
 Phase 0 (scaffolding)
    └─▶ Phase 1 (auth, RBAC, audit)                         🛑 checkpoint
           └─▶ Phase 2 (sites, employees, settings, users)
-                 └─▶ Phase 3 (payroll entry, calcNet)        🛑 checkpoint
-                        └─▶ Phase 4 (release, sheets, advances)
-                               └─▶ Phase 5 (finalize, archive, backup)  🛑 checkpoint
-                                      └─▶ Phase 6 (corrections, balance adjustments)  🛑 checkpoint
-                                             └─▶ Phase 7 (statements, reports, dashboard)
-                                                    └─▶ Phase 8 (supporting features)
-                                                           └─▶ Phase 9 (hardening, deployment)  🛑 checkpoint
+                 └─▶ Phase 2.5 (project units, work-line prerequisite, Employee Registry refinements)
+                        └─▶ Phase 3 (payroll entry + work lines, calcNet)        🛑 checkpoint
+                               └─▶ Phase 4 (release, sheets, advances)
+                                      └─▶ Phase 5 (finalize, archive, backup)  🛑 checkpoint
+                                             └─▶ Phase 6 (corrections, balance adjustments)  🛑 checkpoint
+                                                    └─▶ Phase 7 (statements, reports, dashboard)
+                                                           └─▶ Phase 8 (supporting features)
+                                                                  └─▶ Phase 9 (hardening, deployment)  🛑 checkpoint
 ```
 
 Each arrow is a hard dependency (the later phase reads or builds on tables/logic the earlier phase
@@ -458,6 +539,12 @@ frontend is built against it (per the overall strategy above).
   resolved (documented as an architecture update) before the phase is marked complete, not worked
   around silently.
 - Audit Log entries are verified to appear for every mutation the phase introduces.
+- **Performance reviewed against Principle 10 — added 2026-07-03, mandatory from this point
+  forward.** Any new list/table view, report, or bulk operation the phase introduces is checked
+  against the 10,000-employee design floor specifically, not just today's ~1,500: is it paginated or
+  virtualized rather than loading a full result set, is the query indexed, does a long-running
+  operation run in the background rather than blocking the request. This is a review question asked
+  during the phase, not a retrofit — see `docs/PROJECT_PRINCIPLES.md` Principle 10.
 - **Playwright-driven visual verification — added 2026-07-02, mandatory from this point forward.**
   For any phase with frontend work: the actual pages/flows are rendered in a real (headless)
   browser and screenshotted — not just typechecked/linted/built — before the phase is considered
@@ -478,7 +565,7 @@ frontend is built against it (per the overall strategy above).
 |---|---|---|
 | Correction baseline-replay algorithm implemented incorrectly | Wrong financial balances, discovered late | Property-style randomized test suite (Phase 6), dedicated review checkpoint before proceeding to Phase 7 |
 | RBAC/site-scoping bypass via a missed route or a raw query | A Payroll Staff user sees/edits data outside their sites — a real security incident | Boundary tests introduced in Phase 2 and re-run in full in Phase 9; middleware applied at the router level, not per-handler, to minimize the chance a route is missed |
-| 1,500-row Payroll Entry grid performs poorly | The client's explicitly named top concern ("cannot have any crashes or lapses") | Virtualization built in from the start of Phase 3, performance-tested within that same phase rather than deferred |
+| Payroll Entry grid performs poorly at scale (today's ~1,500 rows, or Principle 10's 10,000-employee design floor) | The client's explicitly named top concern ("cannot have any crashes or lapses") | Virtualization built in from the start of Phase 3, performance-tested at both scales within that same phase rather than deferred |
 | Cycle archiving/backup failure blocks month-end close | A real business deadline (bank sheets/cheques go out on schedule) is missed | Phase 5 tests the all-or-nothing transaction explicitly; per `docs/architecture/database-schema.md` §22, cycle archiving is not coupled to backup file success in a way that can stall the transition — this needs to be re-verified during Phase 5, not assumed |
 | Open design assumptions (`docs/architecture/database-schema.md` §26 items 2, 4, 5 — CNIC/employeeCode nullability, free-text designation/religion, calendar-month-only cycles) surface a real mismatch with client expectations | Rework of Employee Registry (Phase 2) or Payroll Processing (Phase 3) | Confirm these specific open items with the client before Phase 2 and Phase 3 begin, respectively — not discovered mid-build |
 | Scope creep on Team Collaboration or cosmetic polish before the core payroll path is solid | Delays the client's actual priority | Enforced by phase ordering — Phase 8 cannot start before Phase 7 is done, and the spec's own prioritization is the justification if this is ever challenged |
@@ -508,8 +595,12 @@ frontend is built against it (per the overall strategy above).
 
 ## Final Production Readiness Checklist
 
-- [ ] All 18 tables migrated on production Postgres; seed data (roles, permissions, banks, adjustment
-      types, Master Admin account, company settings) applied and verified.
+- [ ] All 20 tables migrated on production Postgres (18 in the original design +
+      `ProjectUnit`/`PayrollEntryWorkLine`, added 2026-07-03); seed data (roles, permissions, banks,
+      adjustment types, Master Admin account, company settings) applied and verified.
+- [ ] A load/performance test at Principle 10's 10,000-employee design floor — not just the client's
+      current ~1,500 — run against the production build, covering at minimum the Payroll Entry grid
+      and Employee Registry list.
 - [ ] `BalanceAdjustmentType.NONE`, `PayrollEntry.advanceId`/`.eidAdvanceId`,
       `BalanceAdjustment.adjustmentTypeId` present and exercised by at least one passing test each.
 - [ ] Audit Log immutability re-verified directly against the production database role's privileges
