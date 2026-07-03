@@ -26,8 +26,17 @@ describe('Employee Registry import/export', () => {
     await prisma.$disconnect();
   });
 
+  /** Every test site gets exactly one Project Unit, matching the interim "single-unit resolves
+   * automatically" import behavior (Phase 2.5 Checkpoint 2) — see employees-import-export.service.ts. */
   async function makeSite(name: string) {
-    return prisma.projectSite.create({ data: { name } });
+    const site = await prisma.projectSite.create({ data: { name } });
+    await prisma.projectUnit.create({ data: { siteId: site.id, name: `${name} Unit` } });
+    return site;
+  }
+
+  async function unitIdForSite(siteId: string): Promise<string> {
+    const unit = await prisma.projectUnit.findFirstOrThrow({ where: { siteId } });
+    return unit.id;
   }
 
   async function masterAdminAgent(email: string) {
@@ -75,7 +84,13 @@ describe('Employee Registry import/export', () => {
   it('exports employees with the exact official template header row', async () => {
     const site = await makeSite('Test Site Export Headers');
     await prisma.employee.create({
-      data: { name: 'Export Test Employee', designation: 'Guard', siteId: site.id, grossPay: '25000' },
+      data: {
+        name: 'Export Test Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '25000',
+      },
     });
 
     const { agent } = await masterAdminAgent('import-export-headers@test.local');
@@ -93,7 +108,14 @@ describe('Employee Registry import/export', () => {
     const createRes = await agent
       .post('/api/v1/employees')
       .set('x-csrf-token', csrfToken)
-      .send({ name: 'Roundtrip Employee', designation: 'Guard', siteId: site.id, grossPay: '25000.00', cnic: '1112223334445' });
+      .send({
+        name: 'Roundtrip Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '25000.00',
+        cnic: '1112223334445',
+      });
     expect(createRes.status).toBe(201);
 
     const exportRes = await agent.get('/api/v1/employees/export?format=csv');
@@ -187,5 +209,46 @@ describe('Employee Registry import/export', () => {
 
     const created = await prisma.employee.findFirst({ where: { name: 'Xlsx Employee' } });
     expect(created).not.toBeNull();
+  });
+
+  it('skips a row for a site with no Project Units yet, with a clear reason', async () => {
+    // Deliberately bypasses the makeSite() helper (which always creates one unit) to exercise the
+    // zero-units case.
+    const site = await prisma.projectSite.create({ data: { name: 'Test Site No Units' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-no-units@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Name: 'No Unit Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.created).toBe(0);
+    expect(importRes.body.skipped).toHaveLength(1);
+    expect(importRes.body.skipped[0].reason).toMatch(/has no branches/i);
+  });
+
+  it('skips a row for a site with multiple Project Units, with a clear reason (Checkpoint 3 resolves this)', async () => {
+    const site = await makeSite('Test Site Multi Unit'); // one unit already, from the helper
+    await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Second Unit' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-multi-unit@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Name: 'Multi Unit Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.created).toBe(0);
+    expect(importRes.body.skipped).toHaveLength(1);
+    expect(importRes.body.skipped[0].reason).toMatch(/multiple/i);
   });
 });

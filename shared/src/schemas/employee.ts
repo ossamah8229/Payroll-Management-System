@@ -35,6 +35,7 @@ export const createEmployeeSchema = z.object({
   mobileNumber: optionalTrimmedString(20),
   designation: z.string().trim().min(1, 'Designation is required').max(80),
   siteId: z.string().uuid('A project site is required'),
+  unitId: z.string().uuid('A project unit is required'),
   dateOfJoining: optionalDate,
   payType: z.enum(['DAILY_WAGE', 'MONTHLY']).optional(),
   grossPay: decimalString,
@@ -48,7 +49,19 @@ export const createEmployeeSchema = z.object({
 
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
 
-export const updateEmployeeSchema = createEmployeeSchema.partial();
+/**
+ * The three `transfer*` fields only apply when this update also changes `siteId`/`unitId` (a
+ * transfer, docs/architecture/database-schema.md §8b) — they're accepted here rather than via a
+ * separate endpoint because a transfer is detected implicitly by comparing the employee's current
+ * site/unit against the submitted one, the same way an ordinary field edit is. Ignored by the
+ * service layer when no transfer is actually happening.
+ */
+export const updateEmployeeSchema = createEmployeeSchema.partial().extend({
+  /** Defaults to today (server-side) if a transfer occurs and this isn't provided. */
+  transferEffectiveDate: z.preprocess(emptyToNull, z.string().date().nullable().optional()),
+  transferReason: optionalTrimmedString(500),
+  transferRemarks: optionalTrimmedString(500),
+});
 
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 

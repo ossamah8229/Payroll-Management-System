@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Phase 2 Visual Preview — Project Sites — Payroll Management System</title>
+<title>Phase 2.5 Visual Preview — Project Sites &amp; Project Units — Payroll Management System</title>
 <style>
   /* ===== Design tokens — copied verbatim from frontend/src/index.css ===== */
   :root {
@@ -228,10 +228,11 @@
 <body>
 
   <div class="meta-banner">
-    <span><strong>Static visual preview</strong> — reproduces the Phase 2 Project Sites UI as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <span><strong>Static visual preview</strong> — reproduces the current Project Sites &amp; Project Units UI (through Phase 2.5 Checkpoint 2) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
     <div class="meta-tabs">
       <button type="button" class="is-active" data-target="screen-list">Sites list</button>
       <button type="button" data-target="screen-create">New Site modal</button>
+      <button type="button" data-target="screen-units">Manage Units panel</button>
       <button type="button" data-target="screen-delete">Delete confirm modal</button>
     </div>
   </div>
@@ -279,7 +280,7 @@
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Branch code</th>
+                    <th>Unit label</th>
                     <th>Address</th>
                     <th>Status</th>
                     <th></th>
@@ -288,28 +289,28 @@
                 <tbody>
                   <tr>
                     <td style="font-weight:500;">ABL City Region Lahore</td>
-                    <td class="muted">LHR-014</td>
+                    <td class="muted">Branch</td>
                     <td class="muted">45-A Gulberg III, Lahore</td>
                     <td><span class="badge badge-green">Active</span></td>
                     <td class="actions">⋯</td>
                   </tr>
                   <tr>
                     <td style="font-weight:500;">HBL Corporate Karachi</td>
-                    <td class="muted">KHI-002</td>
+                    <td class="muted">Branch</td>
                     <td class="muted">I.I. Chundrigar Road, Karachi</td>
                     <td><span class="badge badge-green">Active</span></td>
                     <td class="actions">⋯</td>
                   </tr>
                   <tr>
-                    <td style="font-weight:500;">MCB Gulberg Region</td>
-                    <td class="muted">—</td>
+                    <td style="font-weight:500;">Metro Mall Karachi</td>
+                    <td class="muted">Department</td>
                     <td class="muted">—</td>
                     <td><span class="badge badge-green">Active</span></td>
                     <td class="actions">⋯</td>
                   </tr>
                   <tr>
                     <td style="font-weight:500;">Islamabad Regional Office</td>
-                    <td class="muted">ISB-001</td>
+                    <td class="muted">Section</td>
                     <td class="muted">Blue Area, Islamabad</td>
                     <td><span class="badge badge-gray">Inactive</span></td>
                     <td class="actions">⋯</td>
@@ -338,8 +339,12 @@
               <input id="site-name" type="text" placeholder="e.g. ABL City Region Lahore" />
             </div>
             <div class="field">
-              <label for="site-branch">Branch code</label>
-              <input id="site-branch" type="text" placeholder="Optional" />
+              <label for="site-unit-label">Unit label</label>
+              <input id="site-unit-label" type="text" value="Branch" placeholder="e.g. Branch, Department, Section" />
+              <p class="muted" style="font-size:11px; margin:4px 0 0;">
+                The term this site uses for its own sub-divisions — drives labels everywhere a unit is
+                shown for this site.
+              </p>
             </div>
             <div class="field">
               <label for="site-address">Address</label>
@@ -351,6 +356,53 @@
             <button class="btn btn-primary">Create site</button>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= MANAGE UNITS PANEL SCREEN ================= -->
+  <section id="screen-units" class="screen">
+    <div class="app-shell" style="background: var(--color-bg); flex-direction: column; align-items: center; overflow-y: auto;">
+      <div class="modal-standalone-wrap" style="flex-direction: column; align-items: center; gap: 16px;">
+        <div class="modal" style="max-width:560px; max-height:80vh; overflow-y:auto;">
+          <div class="modal-header">
+            <h3>Branches — ABL City Region Lahore</h3>
+            <button class="modal-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+              <p class="muted" style="margin:0;">Every branch employees at this site can be deputed to.</p>
+              <button class="btn btn-primary btn-sm">+ New Branch</button>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr><th>Name</th><th>Code</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-weight:500;">Model Town Branch</td>
+                  <td class="muted">MT-01</td>
+                  <td><span class="badge badge-green">Active</span></td>
+                  <td class="actions">⋯</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:500;">Gulberg Branch</td>
+                  <td class="muted">GB-02</td>
+                  <td><span class="badge badge-green">Active</span></td>
+                  <td class="actions">⋯</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary">Close</button>
+          </div>
+        </div>
+        <p class="muted" style="max-width:560px; text-align:center; font-size:11px; margin:0;">
+          Nested under a Project Site's row menu ("Manage Branches" / "Manage Departments" / etc. —
+          the action label itself is driven by that site's <code>unitLabel</code>, never hardcoded).
+          A site with zero units yet shows "No branches yet — create the first branch for this site."
+        </p>
       </div>
     </div>
   </section>
@@ -367,7 +419,7 @@
           <div class="modal-body">
             <p class="muted" style="margin:0;">
               Delete <strong style="color:var(--color-text);">Islamabad Regional Office</strong>? This
-              cannot be undone. Sites with employees still assigned cannot be deleted.
+              cannot be undone. Sites with employees or sections still assigned cannot be deleted.
             </p>
           </div>
           <div class="modal-footer">
@@ -388,6 +440,18 @@
     Updated 2026-07-02 for the Phase 2 UI/UX polish pass: added the <code>address</code> field
     (authorized schema exception, see <code>docs/architecture/database-schema.md</code> §8) and fixed
     the app-shell scroll behavior so the sidebar never shows blank space above its branding.
+    <br /><br />
+    <strong>Updated 2026-07-04 for Phase 2.5 Checkpoints 1–2</strong>: `Branch Code` removed from
+    `ProjectSite` entirely — replaced by the `Unit label` field/column (`ProjectSite.unitLabel`,
+    e.g. "Branch"/"Department"/"Section", free text so it fits banking, retail, and industrial
+    clients alike) and the new, dedicated <strong>Project Units</strong> module. Added the
+    "Manage Units panel" screen — nested under each site's row menu ("Manage Branches"/"Manage
+    Departments"/etc., the label itself driven by `unitLabel`), reproducing
+    <code>frontend/src/routes/project-sites-page.tsx</code>'s `ManageUnitsModal` — list/create/edit/
+    delete for that site's own `ProjectUnit` rows. Delete-blocked copy on both Sites and Units now
+    covers the unit relationship too (a site cannot be deleted while units still belong to it; a
+    unit cannot be deleted while employees are still assigned to it) — see
+    <code>backend/src/modules/project-units/project-units.service.ts</code>.
   </footer>
 
   <script>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Phase 2 Visual Preview — Employee Registry — Payroll Management System</title>
+<title>Phase 2.5 Visual Preview — Employee Registry — Payroll Management System</title>
 <style>
   :root {
     --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
@@ -91,7 +91,7 @@
 <body>
 
   <div class="meta-banner">
-    <span><strong>Static visual preview</strong> — reproduces the Phase 2 Employee Registry UI as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <span><strong>Static visual preview</strong> — reproduces the current Employee Registry UI (through Phase 2.5 Checkpoint 2) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
     <div class="meta-tabs">
       <button type="button" class="is-active" data-target="screen-list">Employee list</button>
       <button type="button" data-target="screen-form">New/Edit Employee modal</button>
@@ -189,7 +189,7 @@
                 <div class="field"><label>CNIC</label><input type="text" placeholder="13 digits, optional" /></div>
                 <div class="field"><label>Father's name</label><input type="text" /></div>
                 <div class="field"><label>Religion</label><input type="text" /></div>
-                <div class="field"><label>Date of birth</label><input type="text" placeholder="YYYY-MM-DD" /></div>
+                <div class="field"><label>Date of birth</label><input type="text" placeholder="DD-MM-YYYY" /></div>
                 <div class="field"><label>Mobile number</label><input type="text" /></div>
               </div>
             </div>
@@ -197,8 +197,9 @@
               <p class="section-label">Employment</p>
               <div class="form-grid">
                 <div class="field"><label>Designation</label><input type="text" /></div>
-                <div class="field"><label>Project site</label><select><option>Select a site</option></select></div>
-                <div class="field"><label>Date of joining</label><input type="text" placeholder="YYYY-MM-DD" /></div>
+                <div class="field"><label>Project site</label><select><option>ABL City Region Lahore</option><option>Metro Mall Karachi</option></select></div>
+                <div class="field"><label>Branch</label><select><option>Model Town Branch</option><option>Gulberg Branch</option></select></div>
+                <div class="field"><label>Date of joining</label><input type="text" placeholder="DD-MM-YYYY" /></div>
                 <div class="field"><label>Pay type</label><select><option>Daily wage</option><option>Monthly</option></select></div>
                 <div class="field"><label>Gross pay (template)</label><input type="text" placeholder="0.00" /></div>
               </div>
@@ -232,6 +233,24 @@
     Updated 2026-07-02 for the Phase 2 UI/UX polish pass: the "Gross pay" column header is now
     right-aligned to match its right-aligned tabular values, and the app-shell scroll behavior was
     fixed so the sidebar never shows blank space above its branding.
+    <br /><br />
+    <strong>Updated 2026-07-04 for Phase 2.5 Checkpoints 0–2</strong>: every date field (Date of
+    birth, Date of joining) now reads <code>DD-MM-YYYY</code>, backed by the shared
+    <code>formatDate()</code>/<code>DateInput</code> component
+    (<code>frontend/src/components/ui/date-input.tsx</code>) — never a native
+    <code>&lt;input type="date"&gt;</code>, which can't be forced out of the browser's OS locale.
+    The Employment section gained a second, dependent select next to "Project site": choosing a site
+    filters the picker to that site's own Project Units and relabels itself using the site's own
+    <code>unitLabel</code> ("Branch" shown here for ABL City Region Lahore; "Department" for Metro
+    Mall Karachi) — reproducing the new reusable
+    <code>frontend/src/components/ui/site-unit-select.tsx</code>. Selecting `Employee.unitId` is now
+    required, composite-FK'd to the chosen site so a unit from a different site can never be
+    submitted — see <code>backend/src/modules/employees/employees.service.ts</code>. Editing an
+    existing employee's site/unit is a *transfer*: it writes a dedicated, append-only
+    `EmployeeTransferHistory` row and an `employee.transferred` audit entry (not the generic
+    `employee.updated` entry) — see <code>docs/architecture/database-schema.md</code> §8b. No
+    dedicated "record a transfer" screen exists yet (reason/effective-date fields are accepted by
+    the API but not yet surfaced in this form).
   </footer>
 
   <script>

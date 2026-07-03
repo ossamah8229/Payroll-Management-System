@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
-import { createEmployeeSchema, formatDate, toIsoDateOnly } from '@payroll/shared';
+import { createEmployeeSchema, formatDate, pluralize, toIsoDateOnly } from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
@@ -76,12 +76,11 @@ async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
     employee.mobileNumber ?? '',
     employee.designation,
     employee.site.name, // "Area" — documented assumption: aliases Project, see header comment above
-    // "Branch Code" — ProjectSite no longer owns a single branch code (removed 2026-07-03, see
-    // database-schema.md §8's revision note); the operational unit an employee is deputed to is
-    // now ProjectUnit, referenced via Employee.unitId (Phase 2.5 Checkpoint 2) and not yet
-    // available at this checkpoint. Left blank here; Checkpoint 3 remaps this column to
-    // ProjectUnit.code once that field exists on Employee.
-    '',
+    // "Branch Code" — now the employee's own ProjectUnit.code (Phase 2.5 Checkpoint 2;
+    // ProjectSite itself no longer owns a single branch code, see database-schema.md §8's revision
+    // note). Full column remap (a dedicated Unit name/code export scheme) is Checkpoint 3 — this is
+    // an interim, additive improvement using data Checkpoint 2 makes available on Employee.
+    employee.unit.code ?? '',
     employee.site.name, // "Area/Location" — documented assumption: aliases Project, see above
     employee.bank?.name ?? '',
     employee.branchCode ?? '', // "Bank Branch Code" — the employee's own bank branch code
@@ -183,12 +182,24 @@ export interface ImportResult {
  * A single summary audit log entry is written for the whole operation rather than one per row, to
  * keep the audit log readable for a bulk action instead of spammed with hundreds of near-identical
  * entries.
+ *
+ * **Interim Project Unit resolution (Phase 2.5 Checkpoint 2)**: the official template has no
+ * dedicated Unit column yet — mapping `Area`/`Branch Code` onto `ProjectUnit` is Checkpoint 3's
+ * job. Until then, a row's unit is resolved from its site alone: if the site has exactly one
+ * `ProjectUnit`, that unit is used; if it has zero or more than one, the row is skipped with a
+ * clear reason rather than guessing. This means re-importing an existing multi-unit employee
+ * cannot yet target a specific unit — a known, narrow limitation Checkpoint 3 resolves.
  */
 export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[]): Promise<ImportResult> {
   const sites = await prisma.projectSite.findMany();
   const banks = await prisma.bank.findMany();
+  const units = await prisma.projectUnit.findMany();
   const siteByName = new Map(sites.map((site) => [site.name.trim().toLowerCase(), site]));
   const bankByName = new Map(banks.map((bank) => [bank.name.trim().toLowerCase(), bank]));
+  const unitsBySiteId = new Map<string, typeof units>();
+  for (const unit of units) {
+    unitsBySiteId.set(unit.siteId, [...(unitsBySiteId.get(unit.siteId) ?? []), unit]);
+  }
 
   let created = 0;
   let updated = 0;
@@ -203,6 +214,20 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
       }
 
       assertSiteAccess(currentUser, site.id);
+
+      const siteUnits = unitsBySiteId.get(site.id) ?? [];
+      const unitLabelPlural = pluralize(site.unitLabel).toLowerCase();
+      if (siteUnits.length === 0) {
+        throw new Error(
+          `Site "${site.name}" has no ${unitLabelPlural} — create one before importing employees for it`,
+        );
+      }
+      if (siteUnits.length > 1) {
+        throw new Error(
+          `Site "${site.name}" has multiple ${unitLabelPlural} — column-based unit mapping is not yet available in this import (Phase 2.5 Checkpoint 3); assign a unit manually via the Employee Registry instead`,
+        );
+      }
+      const unit = siteUnits[0]!;
 
       const bankName = row.cells['Project Bank'];
       const bank = bankName ? bankByName.get(bankName.toLowerCase()) : undefined;
@@ -220,6 +245,7 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
         mobileNumber: row.cells['Mobile Number'] || null,
         designation: row.cells['Designation'],
         siteId: site.id,
+        unitId: unit.id,
         dateOfJoining: parseImportDate(row.cells['DOJ']!),
         grossPay: row.cells['Basic/Gross Pay'],
         bankId: bank?.id ?? null,

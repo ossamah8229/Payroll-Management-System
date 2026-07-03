@@ -21,6 +21,7 @@ import {
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
+import { SiteUnitSelect } from '@/components/ui/site-unit-select';
 import {
   downloadEmployeeExport,
   useCreateEmployee,
@@ -46,7 +47,6 @@ function EmployeeFormModal({
   employee?: Employee;
   defaultSiteId?: string;
 }) {
-  const sites = useProjectSites();
   const banks = useBanks();
   const createEmployee = useCreateEmployee();
   const updateEmployee = useUpdateEmployee();
@@ -63,6 +63,7 @@ function EmployeeFormModal({
     mobileNumber: employee?.mobileNumber ?? '',
     designation: employee?.designation ?? '',
     siteId: employee?.siteId ?? defaultSiteId ?? '',
+    unitId: employee?.unitId ?? '',
     dateOfJoining: toIsoDateOnly(employee?.dateOfJoining),
     payType: employee?.payType ?? 'DAILY_WAGE',
     grossPay: employee?.grossPay ?? '',
@@ -91,6 +92,7 @@ function EmployeeFormModal({
       mobileNumber: form.mobileNumber || null,
       designation: form.designation,
       siteId: form.siteId,
+      unitId: form.unitId,
       dateOfJoining: form.dateOfJoining || null,
       payType: form.payType,
       grossPay: form.grossPay,
@@ -192,25 +194,12 @@ function EmployeeFormModal({
                   onChange={(e) => setField('designation', e.target.value)}
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="emp-site">Project site</Label>
-                <select
-                  id="emp-site"
-                  required
-                  className={selectClassName}
-                  value={form.siteId}
-                  onChange={(e) => setField('siteId', e.target.value)}
-                >
-                  <option value="" disabled>
-                    Select a site
-                  </option>
-                  {(sites.data ?? []).map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <SiteUnitSelect
+                siteId={form.siteId}
+                unitId={form.unitId}
+                onSiteChange={(siteId) => setField('siteId', siteId)}
+                onUnitChange={(unitId) => setField('unitId', unitId)}
+              />
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="emp-doj">Date of joining</Label>
                 <DateInput

@@ -5,9 +5,10 @@ import type {
   SessionUser,
   UpdateEmployeeInput,
 } from '@payroll/shared';
-import { ROLE_CODES } from '@payroll/shared';
-import { prisma } from '../../lib/prisma';
+import { ROLE_CODES, toIsoDateOnly } from '@payroll/shared';
+import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { badRequest, forbidden, notFound } from '../../common/http-error';
+import { recordAuditLog } from '../audit-log/audit-log.service';
 
 export const isMasterAdmin = (user: SessionUser) => user.roleCode === ROLE_CODES.MASTER_ADMIN;
 
@@ -20,6 +21,27 @@ export function assertSiteAccess(user: SessionUser, siteId: string): void {
   if (isMasterAdmin(user)) return;
   if (!user.siteIds.includes(siteId)) {
     throw forbidden('You do not have access to this project site');
+  }
+}
+
+/**
+ * Application-layer half of the composite-FK guarantee (docs/architecture/database-schema.md §9):
+ * a clean 400 here for a mismatched unit/site pair, rather than surfacing a raw Postgres foreign
+ * key violation to the operator. The database's own `(unitId, siteId) -> ProjectUnit(id, siteId)`
+ * constraint remains the real backstop — this check is a defense-in-depth companion to it, not a
+ * substitute (same pattern already established for the Work Line same-site rule).
+ */
+async function assertUnitBelongsToSite(
+  unitId: string,
+  siteId: string,
+  client: PrismaTransactionClient = prisma,
+): Promise<void> {
+  const unit = await client.projectUnit.findUnique({ where: { id: unitId } });
+  if (!unit) {
+    throw badRequest('Selected unit does not exist');
+  }
+  if (unit.siteId !== siteId) {
+    throw badRequest('Selected unit does not belong to the selected site');
   }
 }
 
@@ -52,7 +74,7 @@ export async function listEmployees(currentUser: SessionUser, filters: ListEmplo
         ],
       }),
     },
-    include: { site: true, bank: true },
+    include: { site: true, unit: true, bank: true },
     orderBy: { name: 'asc' },
   });
 }
@@ -60,7 +82,7 @@ export async function listEmployees(currentUser: SessionUser, filters: ListEmplo
 export async function getEmployee(currentUser: SessionUser, id: string) {
   const employee = await prisma.employee.findUnique({
     where: { id },
-    include: { site: true, bank: true },
+    include: { site: true, unit: true, bank: true },
   });
 
   if (!employee) {
@@ -74,6 +96,7 @@ export async function getEmployee(currentUser: SessionUser, id: string) {
 
 export async function createEmployee(currentUser: SessionUser, input: CreateEmployeeInput) {
   assertSiteAccess(currentUser, input.siteId);
+  await assertUnitBelongsToSite(input.unitId, input.siteId);
 
   return prisma.employee.create({
     data: {
@@ -86,6 +109,7 @@ export async function createEmployee(currentUser: SessionUser, input: CreateEmpl
       mobileNumber: input.mobileNumber ?? null,
       designation: input.designation,
       siteId: input.siteId,
+      unitId: input.unitId,
       dateOfJoining: input.dateOfJoining ?? null,
       payType: input.payType ?? undefined,
       grossPay: input.grossPay,
@@ -96,7 +120,7 @@ export async function createEmployee(currentUser: SessionUser, input: CreateEmpl
       ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount ?? undefined }),
       ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
     },
-    include: { site: true, bank: true },
+    include: { site: true, unit: true, bank: true },
   });
 }
 
@@ -125,18 +149,51 @@ function diffFields(
   return changes;
 }
 
+function omitKeys<V>(obj: Record<string, V>, keys: string[]): Record<string, V> {
+  const result: Record<string, V> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (!keys.includes(key)) result[key] = value;
+  }
+  return result;
+}
+
+export interface RequestMeta {
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
+/**
+ * Whenever this update changes `siteId` and/or `unitId`, that is a *transfer*
+ * (docs/architecture/database-schema.md §9/§8b) — detected implicitly by comparing the employee's
+ * current site/unit against the submitted one, not via a separate endpoint. A transfer writes the
+ * `Employee` update, an `EmployeeTransferHistory` row, and a dedicated `employee.transferred`
+ * `AuditLog` entry (never the generic `employee.updated` entry for those two fields specifically)
+ * all in one transaction — Principle 3, and the explicit 2026-07-03 Checkpoint 2 requirement that
+ * these three writes are atomic. Any *other* fields changed in the same request still produce the
+ * ordinary `employee.updated` entry, unaffected.
+ */
 export async function updateEmployee(
   currentUser: SessionUser,
   id: string,
   input: UpdateEmployeeInput,
+  requestMeta: RequestMeta,
 ): Promise<{
   employee: Awaited<ReturnType<typeof getEmployee>>;
   changes: Record<string, { from: JsonPrimitive; to: JsonPrimitive }>;
+  transferred: boolean;
 }> {
   const existing = await getEmployee(currentUser, id);
 
   if (input.siteId !== undefined) {
     assertSiteAccess(currentUser, input.siteId);
+  }
+
+  const nextSiteId = input.siteId ?? existing.siteId;
+  const nextUnitId = input.unitId ?? existing.unitId;
+  const isTransfer = nextSiteId !== existing.siteId || nextUnitId !== existing.unitId;
+
+  if (isTransfer) {
+    await assertUnitBelongsToSite(nextUnitId, nextSiteId);
   }
 
   const data: Prisma.EmployeeUncheckedUpdateInput = {
@@ -149,6 +206,7 @@ export async function updateEmployee(
     ...(input.mobileNumber !== undefined && { mobileNumber: input.mobileNumber }),
     ...(input.designation !== undefined && { designation: input.designation }),
     ...(input.siteId !== undefined && { siteId: input.siteId }),
+    ...(input.unitId !== undefined && { unitId: input.unitId }),
     ...(input.dateOfJoining !== undefined && { dateOfJoining: input.dateOfJoining }),
     ...(input.payType !== undefined && { payType: input.payType }),
     ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
@@ -160,18 +218,81 @@ export async function updateEmployee(
     ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
   };
 
-  const updated = await prisma.employee.update({
-    where: { id },
-    data,
-    include: { site: true, bank: true },
-  });
-
-  const changes = diffFields(
+  const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,
     data as unknown as Record<string, unknown>,
   );
 
-  return { employee: updated, changes };
+  const employee = await prisma.$transaction(async (tx) => {
+    const updated = await tx.employee.update({
+      where: { id },
+      data,
+      include: { site: true, unit: true, bank: true },
+    });
+
+    if (isTransfer) {
+      const effectiveDate = input.transferEffectiveDate ?? toIsoDateOnly(new Date());
+      const reason = input.transferReason ?? null;
+      const remarks = input.transferRemarks ?? null;
+
+      await tx.employeeTransferHistory.create({
+        data: {
+          employeeId: id,
+          fromSiteId: existing.siteId,
+          toSiteId: nextSiteId,
+          fromUnitId: existing.unitId,
+          toUnitId: nextUnitId,
+          effectiveDate,
+          transferredByUserId: currentUser.id,
+          reason,
+          remarks,
+        },
+      });
+
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'employee.transferred',
+          entityType: 'Employee',
+          entityId: id,
+          metadata: {
+            fromSiteId: existing.siteId,
+            toSiteId: nextSiteId,
+            fromUnitId: existing.unitId,
+            toUnitId: nextUnitId,
+            effectiveDate,
+            reason,
+            remarks,
+          },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    }
+
+    // siteId/unitId already have their own dedicated employee.transferred entry above when
+    // they're the reason for this update — never double-logged into the generic entry too.
+    const genericChanges = omitKeys(allChanges, ['siteId', 'unitId']);
+    if (Object.keys(genericChanges).length > 0) {
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'employee.updated',
+          entityType: 'Employee',
+          entityId: id,
+          metadata: { changes: genericChanges },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    }
+
+    return updated;
+  });
+
+  return { employee, changes: allChanges, transferred: isTransfer };
 }
 
 export async function markEmployeeLeft(currentUser: SessionUser, id: string, input: MarkEmployeeLeftInput) {
@@ -184,6 +305,6 @@ export async function markEmployeeLeft(currentUser: SessionUser, id: string, inp
   return prisma.employee.update({
     where: { id },
     data: { dateOfLeaving: input.dateOfLeaving },
-    include: { site: true, bank: true },
+    include: { site: true, unit: true, bank: true },
   });
 }

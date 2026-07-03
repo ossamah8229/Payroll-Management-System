@@ -134,14 +134,11 @@ employeesRouter.patch('/:id', requirePermission(PERMISSIONS.EMPLOYEES_EDIT), asy
   try {
     const id = requireIdParam(req.params.id);
     const input = updateEmployeeSchema.parse(req.body);
-    const { employee, changes } = await updateEmployee(req.currentUser!, id, input);
-
-    await recordAuditLog({
-      actorUserId: req.currentUser!.id,
-      action: 'employee.updated',
-      entityType: 'Employee',
-      entityId: employee.id,
-      metadata: { changes },
+    // Audit logging (both the transfer-specific and generic-update entries) happens inside
+    // updateEmployee itself, in the same transaction as the Employee row update and, when a
+    // transfer occurs, the EmployeeTransferHistory insert — not here, so the route never needs to
+    // (and must not) log a second, redundant employee.updated entry after the fact.
+    const { employee } = await updateEmployee(req.currentUser!, id, input, {
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });

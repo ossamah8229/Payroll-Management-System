@@ -114,11 +114,13 @@ describe('Project Sites', () => {
       .send({ name: 'Test Site Epsilon' });
     const siteId = createRes.body.site.id;
 
+    const unit = await prisma.projectUnit.create({ data: { siteId, name: 'Deletion Block Unit' } });
     await prisma.employee.create({
       data: {
         name: 'Test Employee For Deletion Block',
         designation: 'Guard',
         siteId,
+        unitId: unit.id,
         grossPay: '30000.00',
       },
     });

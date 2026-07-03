@@ -3,12 +3,14 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 and Phase 2 are both **closed (conditional)**. A pre-Phase-3 architecture review
-> (Project Units, Payroll Entry Work Lines, DD-MM-YYYY dates, a 10,000-employee scale floor) is
-> **complete and committed** as of 2026-07-03. **The next implementation phase is Phase 2.5**
-> (Project Units module + prerequisites), not Phase 3 — Phase 2.5 is fully designed but not yet
-> implemented, and neither it nor Phase 3 will begin without explicit instruction. See "Current
-> Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
+> **Status:** Phase 1 and Phase 2 are both **closed (conditional)**. Phase 2.5 (Project Units,
+> Payroll Work Lines prerequisite, Employee Registry refinements) is **in progress**: Checkpoints
+> 0–2 are **complete and committed** as of 2026-07-04 (shared date formatting, the Project Unit
+> module, and the Employee → Project Unit relationship with transfer history). Checkpoints 3–4
+> (import/export column remap, CNIC normalization/Reactivate) have not started, and neither they
+> nor Phase 3 will begin without explicit instruction. **Database verification against a real
+> PostgreSQL instance is the first task of the next session**, before any further implementation.
+> See "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
 
@@ -58,13 +60,30 @@ npm run dev:frontend          # http://localhost:5173
   least one, supporting an employee working across multiple Project Units within one cycle, always
   within a single Project Site — enforced at both the database and application layers); all
   user-facing dates now display as `DD-MM-YYYY` (ISO internally, unchanged); a new architectural
-  principle sets a 10,000-employee performance/scale design floor; a CNIC duplicate-detection
-  recommendation is written up pending the user's final sign-off. Full record:
-  `docs/PROJECT_PROGRESS.md` §3 items 16–21. **A new Phase 2.5 is inserted ahead of Phase 3 to build
-  this — fully designed, not yet implemented.**
-- **Current git checkpoint:** `b7ba9cf` — "docs: pre-Phase-3 architecture review — Project Units,
-  Payroll Work Lines, dates, scale". See `docs/PROJECT_PROGRESS.md` for full lineage and the latest
-  commit hash.
+  principle sets a 10,000-employee performance/scale design floor. Full record:
+  `docs/PROJECT_PROGRESS.md` §3 items 16–21.
+- **Phase 2.5 — in progress, 2026-07-03/04.** Broken into five checkpoints
+  (`docs/IMPLEMENTATION_PLAN.md`):
+  - **Checkpoint 0 (committed `0d9ea33`):** shared `formatDate()`/`parseDateInput()`/`toIsoDateOnly()`
+    utilities and a reusable `DateInput` component — the single source of truth for the `DD-MM-YYYY`
+    convention, applied to the Employee Registry's date fields.
+  - **Checkpoint 1 (committed `c60094c`):** `ProjectUnit` as a dedicated master-data module nested
+    under Project Sites, replacing `ProjectSite.branchCode` with `ProjectSite.unitLabel`-driven
+    terminology; a "Manage Units" panel in the Project Sites UI.
+  - **Checkpoint 2 (committed — see the commit hash below):** `Employee.unitId` (composite-FK'd to
+    `ProjectUnit`), the new append-only `EmployeeTransferHistory` table, a dedicated
+    `employee.transferred` audit entry (written atomically with the Employee update and history row),
+    and a reusable Site → Unit cascading selector wired into the Employee Registry's forms.
+  - **Checkpoints 3–4 (not started):** Employee Registry import/export template remap to
+    `ProjectUnit` columns with three-layer Site/Unit validation; CNIC normalization, duplicate-check,
+    and a Reactivate Employee action (policy finalized — see `docs/PROJECT_PROGRESS.md` §3 item 22 —
+    but the concrete implementation still needs a design-approval gate before it's built).
+  - The CNIC duplicate-handling decision itself is **finalized, no longer pending**: CNIC stays
+    globally unique with no override; rehires go through a Reactivate action that updates the
+    existing record in place.
+- **Current git checkpoint:** see `docs/PROJECT_PROGRESS.md`'s header for the exact latest commit
+  hash and full lineage — kept there rather than duplicated here to avoid drift between two copies
+  of the same fact.
 - Static, framework-free visual previews of the current UI are available under `docs/prototypes/`
   (`phase1-preview.html`; `phase2-project-sites-preview.html`;
   `phase2-employee-registry-preview.html`; `phase2-settings-users-preview.html`) — open any of them
@@ -119,7 +138,11 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-**The next implementation phase is Phase 2.5** (Project Units module, Payroll Work Lines
-prerequisite, Employee Registry refinements — `docs/IMPLEMENTATION_PLAN.md`), not Phase 3. See
+**Before any further implementation**, the next session's first task is closing out the long-standing
+database verification debt: provision or connect to a real PostgreSQL instance, apply every Prisma
+migration to a completely fresh database, and run the full DB-backed integration test suite (auth,
+RBAC, CRUD, the composite foreign keys, transfer history) — see `docs/SESSION_HANDOFF.md` for the
+exact commands. Only once that passes does **Phase 2.5 Checkpoint 3** (Employee Registry
+import/export remap, three-layer Site/Unit validation — `docs/IMPLEMENTATION_PLAN.md`) begin. See
 `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
 handoff to the next development session.

@@ -1,6 +1,6 @@
 import type { CreateProjectUnitInput, UpdateProjectUnitInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
-import { notFound } from '../../common/http-error';
+import { badRequest, notFound } from '../../common/http-error';
 import { getProjectSite } from '../project-sites/project-sites.service';
 
 /**
@@ -59,17 +59,19 @@ export async function updateProjectUnit(id: string, input: UpdateProjectUnitInpu
  * Delete is blocked while any Employee or PayrollEntryWorkLine still references this unit
  * (docs/architecture/database-schema.md §8a) — same defense-in-depth pattern as every other
  * referenced-master-data delete in this schema (app-layer check here, `ON DELETE RESTRICT` as the
- * database-level backstop once those FKs exist).
- *
- * **Sequencing note**: `Employee.unitId` does not exist yet as of this checkpoint (Phase 2.5,
- * Checkpoint 1) — it lands in Checkpoint 2, and `PayrollEntryWorkLine.unitId` in Phase 3. Until
- * then this function has no real dependent to check against, so deletion is unconditional; the
- * moment Checkpoint 2 lands, an `Employee.count({ where: { unitId: id } })` guard belongs here,
- * mirroring `deleteProjectSite`'s employee-count check exactly. Flagged explicitly so this isn't
- * mistaken for a finished guard.
+ * database-level backstop). The `Employee.unitId` half of this guard is now live (Phase 2.5,
+ * Checkpoint 2); the `PayrollEntryWorkLine.unitId` half lands in Phase 3 and belongs here too once
+ * that table exists.
  */
 export async function deleteProjectUnit(id: string): Promise<void> {
   await getProjectUnit(id);
+
+  const employeeCount = await prisma.employee.count({ where: { unitId: id } });
+  if (employeeCount > 0) {
+    throw badRequest(
+      `Cannot delete this unit while ${employeeCount} employee(s) are still assigned to it`,
+    );
+  }
 
   await prisma.projectUnit.delete({ where: { id } });
 }

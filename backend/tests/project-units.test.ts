@@ -149,6 +149,34 @@ describe('Project Units', () => {
     expect(found).toBeNull();
   });
 
+  it('blocks deleting a unit while an employee is still assigned to it (Phase 2.5 Checkpoint 2)', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('units-delete-blocked-employee@test.local');
+    const site = await createTestSite('Test Site Unit Theta');
+
+    const createRes = await agent
+      .post(`/api/v1/sites/${site.id}/units`)
+      .set('x-csrf-token', csrfToken)
+      .send({ name: 'Occupied Unit' });
+    const unitId = createRes.body.unit.id;
+
+    await prisma.employee.create({
+      data: {
+        name: 'Test Employee For Unit Deletion Block',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId,
+        grossPay: '30000.00',
+      },
+    });
+
+    const deleteRes = await agent.delete(`/api/v1/units/${unitId}`).set('x-csrf-token', csrfToken);
+
+    expect(deleteRes.status).toBe(400);
+
+    const stillThere = await prisma.projectUnit.findUnique({ where: { id: unitId } });
+    expect(stillThere).not.toBeNull();
+  });
+
   it("scopes the unit list to a Payroll Staff user's assigned site", async () => {
     const masterAdmin = await masterAdminAgent('units-scope-admin@test.local');
     const assignedSite = await createTestSite('Test Site Unit Assigned');

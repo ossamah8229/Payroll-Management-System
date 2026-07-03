@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreateEmployeeInput, MarkEmployeeLeftInput, UpdateEmployeeInput } from '@payroll/shared';
 import { apiRequest, ApiError } from '@/lib/api-client';
 import type { ProjectSite } from '@/hooks/use-project-sites';
+import type { ProjectUnit } from '@/hooks/use-project-units';
 import type { Bank } from '@/hooks/use-banks';
 
 export interface Employee {
@@ -16,6 +17,8 @@ export interface Employee {
   designation: string;
   siteId: string;
   site: ProjectSite;
+  unitId: string;
+  unit: ProjectUnit;
   dateOfJoining: string | null;
   dateOfLeaving: string | null;
   payType: 'DAILY_WAGE' | 'MONTHLY';

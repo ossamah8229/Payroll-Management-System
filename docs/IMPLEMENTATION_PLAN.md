@@ -225,11 +225,20 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   persistent bug (not a transition-timing artifact) before fixing. Full reasoning in
   `docs/PROJECT_PROGRESS.md`'s Checkpoint 1 entry and `docs/SESSION_HANDOFF.md` §3.
 
-**Checkpoint 2 — `Employee.unitId`, composite FK, transfer audit trail, `EmployeeTransferHistory`**
-- `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (§9) — the Employee Registry
-  create/edit forms gain a Unit field (a new Site → Unit cascading select, deferred here from
-  Checkpoint 0/1 since this is the first place one is actually needed), cascading off the selected
-  Site.
+**Checkpoint 2 — `Employee.unitId`, composite FK, transfer audit trail, `EmployeeTransferHistory` — COMPLETE, 2026-07-04**
+- `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (§9) — added NOT NULL with no
+  default (same convention as `siteId`), safe only because no live database has ever applied a
+  migration in this environment. A new reusable `SiteUnitSelect` component
+  (`frontend/src/components/ui/site-unit-select.tsx`) gives the Employee Registry create/edit forms
+  the Site → Unit cascading select deferred here from Checkpoint 0/1 — selecting a site filters the
+  unit picker to that site's own units and resets any stale unit selection; the unit field's label
+  and placeholder are driven entirely by the selected site's `unitLabel` (e.g. "Branch"/
+  "Department"), built once for reuse by Phase 3's Payroll Entry work.
+- **RBAC**: `assertUnitBelongsToSite()` validates the composite relationship at the application
+  layer (a clean 400 rather than a raw Postgres FK violation) on both create and any transfer;
+  existing `assertSiteAccess()` site-scoping is unchanged — no new unit-level RBAC concept was
+  introduced, consistent with the 2026-07-03 architecture decision that a Project Unit belongs to
+  exactly one Project Site, so site-level access already covers it.
 - A new, lightweight, append-only **`EmployeeTransferHistory`** table
   (`docs/architecture/database-schema.md` §8b — new): `id`, `employeeId` FK → `Employee`, `fromSiteId`/
   `toSiteId` FK → `ProjectSite`, `fromUnitId`/`toUnitId` FK → `ProjectUnit`, `effectiveDate` (the date
@@ -253,7 +262,26 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   this specific change. An edit that changes *only* other fields (designation, bank details, etc.)
   continues to produce the existing generic `employee.updated` entry, unchanged.
 - All three writes happen in one database transaction, per this schema's established
-  multi-statement-transaction convention (§22).
+  multi-statement-transaction convention (§22): `updateEmployee()` now takes a `RequestMeta`
+  (ip/user-agent) parameter and performs its own audit logging inside `prisma.$transaction(...)`,
+  rather than the route handler logging a separate, non-atomic `employee.updated` entry after the
+  fact (the pre-Checkpoint-2 pattern) — this closes a real atomicity gap the explicit "atomic in a
+  single transaction" requirement surfaced, not just for the new transfer case.
+- `transferEffectiveDate`/`transferReason`/`transferRemarks` are accepted as optional fields on the
+  ordinary Employee update payload (`shared/src/schemas/employee.ts`) rather than a separate
+  endpoint — a transfer is detected implicitly by comparing the submitted `siteId`/`unitId` against
+  the employee's current values, the same way any other field edit is. `effectiveDate` defaults to
+  the server's current date if not supplied. **Scope note**: no dedicated "record a transfer" UI
+  (with its own reason/effective-date fields) was built this checkpoint — only the cascading
+  selector was explicitly requested; the backend fully supports richer transfer metadata whenever a
+  future UI wants to surface it.
+- **Interim import/export unit handling** (the explicit "respects the Site/Unit relationship where
+  applicable" requirement): the official template has no dedicated Unit column yet — that full
+  remap is Checkpoint 3. Until then, export populates the existing "Branch Code" column with the
+  employee's real `ProjectUnit.code` (previously blank, added in Checkpoint 1); import resolves a
+  row's unit from its site alone, using that site's unit if exactly one exists, and skipping the row
+  with a clear, per-row reason if the site has zero or multiple units (an ambiguous case Checkpoint
+  3's column mapping resolves properly).
 
 **Checkpoint 3 — Employee Registry import/export template remap and three-layer Site/Unit validation**
 - The import/export template updated so `Area`/`Area/Location`/`Branch Code` columns map onto

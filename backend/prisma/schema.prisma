@@ -100,10 +100,11 @@ model User {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  role                   Role                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  role                   Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
   siteAssignments        UserSiteAssignment[]
   auditLogEntries        AuditLog[]
   companySettingsUpdates CompanySettings[]
+  employeeTransfers      EmployeeTransferHistory[]
 
   @@index([roleId])
 }
@@ -146,6 +147,8 @@ model ProjectSite {
   userAssignments UserSiteAssignment[]
   employees       Employee[]
   units           ProjectUnit[]
+  transfersFrom   EmployeeTransferHistory[] @relation("EmployeeTransferFromSite")
+  transfersTo     EmployeeTransferHistory[] @relation("EmployeeTransferToSite")
 }
 
 /// The operational sub-division of a ProjectSite that an employee is actually deputed to — a
@@ -167,12 +170,16 @@ model ProjectUnit {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
-  site ProjectSite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  site          ProjectSite               @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  employees     Employee[]
+  transfersFrom EmployeeTransferHistory[] @relation("EmployeeTransferFromUnit")
+  transfersTo   EmployeeTransferHistory[] @relation("EmployeeTransferToUnit")
 
-  // `@@unique([id, siteId])` exists purely so downstream tables (Employee.unitId in Checkpoint 2,
-  // PayrollEntryWorkLine in Phase 3) can declare a composite foreign key against it — this is what
-  // makes "the unit must belong to the same site as the referencing row" a database-level
-  // guarantee rather than an application-layer check alone (database-schema.md §8a/§9/§12a).
+  // `@@unique([id, siteId])` exists purely so downstream tables (Employee.unitId, added here in
+  // Checkpoint 2, and PayrollEntryWorkLine in Phase 3) can declare a composite foreign key against
+  // it — this is what makes "the unit must belong to the same site as the referencing row" a
+  // database-level guarantee rather than an application-layer check alone
+  // (database-schema.md §8a/§9/§12a).
   @@unique([siteId, name])
   @@unique([id, siteId])
   @@index([siteId])
@@ -182,6 +189,13 @@ model ProjectUnit {
 /// (docs/architecture/database-schema.md §9). Master record of *who* someone is, independent of
 /// any single month's payroll figures (Principle 1: PayrollEntry owns the monthly figures).
 /// Never hard-deleted — `dateOfLeaving` presence marks an employee as having left.
+/// **`unitId` added 2026-07-03 (Phase 2.5, Checkpoint 2)**: an employee's *current default* Project
+/// Unit — the Branch/Department/Section they're ordinarily rostered to (terminology per
+/// `ProjectSite.unitLabel`). Paired with `siteId` via a composite foreign key
+/// `(unitId, siteId) -> ProjectUnit(id, siteId)` so Postgres itself rejects any row where the
+/// referenced unit doesn't belong to the referenced site — a database-level guarantee, not just an
+/// application-layer check. Changing `siteId` and/or `unitId` on an existing Employee is a
+/// *transfer* (see `EmployeeTransferHistory`, below), never an incidental field edit.
 model Employee {
   id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   employeeCode          String?   @db.VarChar(30)
@@ -193,6 +207,7 @@ model Employee {
   mobileNumber          String?   @db.VarChar(20)
   designation           String    @db.VarChar(80)
   siteId                String    @db.Uuid
+  unitId                String    @db.Uuid
   dateOfJoining         DateTime? @db.Date
   dateOfLeaving         DateTime? @db.Date
   payType               PayType   @default(DAILY_WAGE)
@@ -207,13 +222,55 @@ model Employee {
   updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
 
   site ProjectSite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  unit ProjectUnit @relation(fields: [unitId, siteId], references: [id, siteId], onDelete: Restrict)
   bank Bank?       @relation(fields: [bankId], references: [id], onDelete: Restrict)
+
+  transferHistory EmployeeTransferHistory[]
 
   // Partial unique indexes (WHERE ... IS NOT NULL) and the CNIC numeric-pattern check constraint
   // are not expressible via Prisma's schema DSL — both are added by raw SQL in the migration
   // (docs/architecture/database-schema.md §9).
   @@index([siteId])
+  @@index([unitId])
   @@index([bankId])
+}
+
+/// Dedicated, append-only record of every Employee site/unit transfer
+/// (docs/architecture/database-schema.md §8b) — added 2026-07-03 (Phase 2.5, Checkpoint 2),
+/// alongside the finalized CNIC/Reactivate decision. Mirrors the existing `BalanceAdjustment`-vs-
+/// `AuditLog` pattern: the generic `AuditLog` already captures a `employee.transferred` action for
+/// the cross-entity audit trail, but a future Transfer History screen needs typed, directly
+/// queryable columns rather than parsing `AuditLog.metadata` JSON. No UI consumes this table yet.
+/// Immutable except by direct database intervention — no application code path updates or deletes
+/// a row (same convention as `Correction`/`BackupPackage`, application-layer only, no DB trigger
+/// unlike `AuditLog`'s stronger guarantee).
+model EmployeeTransferHistory {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId          String   @db.Uuid
+  fromSiteId          String   @db.Uuid
+  toSiteId            String   @db.Uuid
+  fromUnitId          String   @db.Uuid
+  toUnitId            String   @db.Uuid
+  /// The date the transfer actually took effect in the business — deliberately distinct from
+  /// `createdAt`, since HR may enter a transfer into the system days or weeks after it happened.
+  effectiveDate       DateTime @db.Date
+  transferredByUserId String   @db.Uuid
+  reason              String?
+  remarks             String?
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+
+  employee      Employee    @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  fromSite      ProjectSite @relation("EmployeeTransferFromSite", fields: [fromSiteId], references: [id], onDelete: Restrict)
+  toSite        ProjectSite @relation("EmployeeTransferToSite", fields: [toSiteId], references: [id], onDelete: Restrict)
+  fromUnit      ProjectUnit @relation("EmployeeTransferFromUnit", fields: [fromUnitId], references: [id], onDelete: Restrict)
+  toUnit        ProjectUnit @relation("EmployeeTransferToUnit", fields: [toUnitId], references: [id], onDelete: Restrict)
+  transferredBy User        @relation(fields: [transferredByUserId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, effectiveDate(sort: Desc)])
+  @@index([toUnitId, effectiveDate])
+  @@index([fromSiteId])
+  @@index([toSiteId])
+  @@index([fromUnitId])
 }
 
 /// Which project sites a Payroll Staff user may access (docs/architecture/authentication.md).

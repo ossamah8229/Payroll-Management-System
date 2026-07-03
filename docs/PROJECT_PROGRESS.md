@@ -1,25 +1,28 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-03
-**Latest git commit:** `0d9ea33` — "Phase 2.5 Checkpoint 0: shared date formatting and DateInput
-component" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build
-→ `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
+**Date:** 2026-07-04
+**Latest git commit:** see the commit trailer note at the end of this file for the exact hash — this
+header is updated in the same commit as every checkpoint close, so it always names the commit it
+ships in (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
+`89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
 documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
-**`0d9ea33` Phase 2.5 Checkpoint 0, committed and closed out** — see §3 items 16–22 below for the full
-decision record).
+`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → **Phase 2.5 Checkpoint 2,
+committed alongside this documentation update and the refreshed HTML prototypes** — see §3 items
+16–22 below for the full decision record).
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED (conditional) and committed. The pre-Phase-3
 architecture review is complete and committed.** Phase 2.5 (`docs/IMPLEMENTATION_PLAN.md` — Project
 Unit model, Payroll Work Lines prerequisite, Employee Registry refinements, §3 items 16–20, amended
-with five refinements in §3 item 22) is now **in progress**: **Checkpoint 0 is committed (`0d9ea33`).
-Checkpoint 1 (`ProjectUnit` schema, migration, dedicated backend module, Manage Units frontend panel)
-is code-complete** — typecheck/lint/build clean, new/updated backend tests confirmed to compile and
-run correctly (blocked only by the environment's standing no-Postgres constraint), Playwright-verified
-(including a real, previously-latent `DropdownMenuContent`/`Modal` z-index bug found and fixed via
-that verification) — **not yet committed** (awaiting explicit approval before Checkpoint 2).
-Checkpoints 2–4 (`Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap/three-layer
-validation, CNIC/Reactivate) have not started. **Do not begin Checkpoint 2 without explicit
-instruction.**
+with five refinements in §3 item 22) is now **in progress**: **Checkpoints 0, 1, and 2 are all
+committed.** Checkpoint 2 (Employee → Project Unit relationship: `Employee.unitId` + composite FK,
+`EmployeeTransferHistory`, transfer audit trail, Site → Unit cascading selector on the Employee
+Registry) is code-complete, typecheck/lint/build clean, new/updated backend tests confirmed to
+compile and run correctly (blocked only by the environment's standing no-Postgres constraint),
+Playwright-verified, and approved. **The session closed after Checkpoint 2 — Checkpoint 3 has not
+started, and per the session's closing instruction, the very next task (before any further
+implementation) is closing out the database-verification debt against a real PostgreSQL instance —
+see §4/§5 below.** Checkpoints 3–4 (import remap/three-layer validation, CNIC/Reactivate) have not
+started. **Do not begin Checkpoint 3 without explicit instruction.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -262,7 +265,7 @@ screenshot thumbnails by eye.
   built or tested here; building an unused, half-wired component now would contradict this project's
   own anti-premature-abstraction discipline. Flagged explicitly rather than silently dropped.
 
-### Phase 2.5, Checkpoint 1 — `ProjectUnit` schema, migration, dedicated module (2026-07-03, code-complete, not yet committed)
+### Phase 2.5, Checkpoint 1 — `ProjectUnit` schema, migration, dedicated module (2026-07-03, COMMITTED as `c60094c`)
 
 - **Schema/migration**: `ProjectUnit` model added to `backend/prisma/schema.prisma`
   (`docs/architecture/database-schema.md` §8a — id, siteId, name, code, isActive, timestamps;
@@ -346,6 +349,87 @@ screenshot thumbnails by eye.
   Departments" correctly per site (not hardcoded); the Manage Units panel's create/edit/delete flow
   and empty state all render and function correctly; zero console errors throughout.
 
+### Phase 2.5, Checkpoint 2 — Employee → Project Unit relationship (2026-07-04, COMMITTED)
+
+- **Schema/migration**: `Employee.unitId` added, composite-FK'd against `ProjectUnit(id, siteId)`
+  (`docs/architecture/database-schema.md` §9) — NOT NULL, no default, matching how `siteId` has
+  always been required; safe only because no live database has ever applied a migration in this
+  environment (same precedent as Checkpoint 1's `branchCode` drop). New, append-only
+  `EmployeeTransferHistory` table (§8b) exactly as speced in the amended Phase 2.5 plan:
+  `fromSiteId`/`toSiteId`/`fromUnitId`/`toUnitId`, `effectiveDate` (date the transfer actually took
+  effect, distinct from `createdAt`), `transferredByUserId`, optional `reason`/`remarks`. Migration
+  `20260703140000_employee_unit_and_transfer_history`, generated via `prisma migrate diff` against
+  the schema files (no live DB needed), following the same convention as every prior hand-placed
+  migration this session.
+- **Backend (`employees.service.ts`)**: `assertUnitBelongsToSite()` — the composite-FK's
+  application-layer companion, giving a clean 400 instead of a raw Postgres constraint violation,
+  called on create and whenever a transfer occurs. `createEmployee` now validates and stores
+  `unitId`. `updateEmployee` was substantially rewritten: it detects a transfer by comparing the
+  submitted `siteId`/`unitId` against the employee's current values, and — **the explicit
+  atomicity requirement** — performs the `Employee` update, the `EmployeeTransferHistory` insert,
+  and the `employee.transferred` `AuditLog` entry all inside one `prisma.$transaction(...)`. Any
+  *other* fields changed in the same request still produce the ordinary `employee.updated` entry
+  (excluding `siteId`/`unitId`, which own the dedicated transfer entry instead) — also written
+  inside the same transaction. **This closes a real, pre-existing atomicity gap**: before this
+  checkpoint, the generic `employee.updated` audit entry was written by the route handler *after*
+  the service call returned, not in the same database transaction as the Employee row update — a
+  Principle 3 violation that predated Checkpoint 2 but was only surfaced by implementing the
+  transfer case's explicit "atomic in a single transaction" requirement properly. Fixed for both
+  paths, not just the new one. `updateEmployee`'s signature now takes a `RequestMeta`
+  (ip/user-agent) parameter so audit entries written inside the transaction still carry that
+  information, matching every other audited action in this codebase.
+- **Frontend**: a new reusable `SiteUnitSelect` component
+  (`frontend/src/components/ui/site-unit-select.tsx`) — the Site → Unit cascading selector deferred
+  from Checkpoint 0 (then Checkpoint 1) to here, the first place one is actually needed. Selecting a
+  site filters the unit picker to that site's own units and resets any unit selection that belonged
+  to a different site; the unit field's label and empty-state placeholder are driven by the
+  selected site's `unitLabel`, not hardcoded. Wired into the Employee Registry's create/edit form in
+  place of the old plain Site-only select.
+- **Interim import/export unit handling** (Checkpoint 2's "respects the Site/Unit relationship where
+  applicable" objective — the full column remap is Checkpoint 3): export's "Branch Code" column
+  (blank since Checkpoint 1, when `ProjectSite.branchCode` was removed) now populates with the
+  employee's real `ProjectUnit.code`. Import resolves a row's unit from its site alone: if the site
+  has exactly one `ProjectUnit`, it's used automatically; if the site has zero or more than one, the
+  row is skipped with a clear, specific reason (distinct messages for each case) rather than
+  guessing — an explicit, honest interim limitation until Checkpoint 3's real column mapping lands.
+- **`deleteProjectUnit`'s delete guard, a documented no-op since Checkpoint 1, is now wired up**:
+  Checkpoint 1's `project-units.service.ts` left an explicit forward-reference comment saying an
+  `Employee.count({ where: { unitId } })` guard belonged there "the moment Checkpoint 2 lands" — done
+  now, honoring that comment rather than leaving it stale. Mirrors `deleteProjectSite`'s existing
+  employee-count check exactly. The `PayrollEntryWorkLine` half of this guard still belongs here once
+  Phase 3 adds that table.
+- **RBAC unchanged, as required**: no new unit-level permission or scoping concept was introduced.
+  `assertSiteAccess()` continues to be the entire site-scoping check; a Payroll Staff user's access
+  to a unit is still entirely governed by their access to that unit's site, per the 2026-07-03
+  architecture decision that this needs no separate unit-granular RBAC.
+- **New/updated backend tests**: `employees.test.ts` gained a transfer test (asserts exactly one
+  `EmployeeTransferHistory` row, an `employee.transferred` entry, and *no* `employee.updated` entry
+  for that same edit) and a composite-FK-boundary test (assigning a unit from a different site is
+  rejected with 400). Every existing test fixture that directly created an `Employee` via Prisma or
+  the API was updated to also create/reference a `ProjectUnit` (`unitId` is now required) —
+  `employees.test.ts`, `employees-import-export.test.ts` (plus two new tests for the zero-units and
+  multiple-units import-skip cases), `project-sites.test.ts`. All confirmed to compile and execute
+  correctly through `ts-jest`, failing only on the expected "no Postgres reachable" constraint.
+- **A grep-caught bug, fixed during this checkpoint, not after**: the initial "site has no {unit
+  label}s" import-skip message was built with naive string concatenation (`unitLabel + 's'`),
+  producing "branchs" instead of "branches" for the default label — inconsistent with the
+  `pluralize()` utility Checkpoint 1 already built for exactly this. Fixed to reuse `pluralize()`,
+  per the standing "no duplicated utilities" rule.
+- `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing warnings), and `npm run build`
+  all clean across all three workspaces. **A stale `tsc -b` incremental cache masked a real type
+  error the first time typecheck ran this checkpoint** (frontend's `dist-types-app/*.tsbuildinfo`
+  didn't pick up `@payroll/shared`'s rebuilt `unitId`-required type) — caught by suspicion that a
+  clean pass looked too easy given `employees-page.tsx` hadn't been touched yet; clearing the cache
+  surfaced the real, expected missing-`unitId` error, which was then fixed by building the
+  `SiteUnitSelect` integration. Worth remembering: **whenever `@payroll/shared` changes, clear
+  frontend's `.tsbuildinfo` before trusting a clean typecheck.**
+- Playwright verification (headless Chromium, API responses mocked via route interception): the New
+  Employee form's Unit field is disabled with no site selected, then filters to the selected site's
+  units and relabels itself (Branch/Department) correctly on site change, resetting any stale unit
+  selection; the submitted create payload includes both `siteId`/`unitId`; the Edit form correctly
+  pre-populates from an existing employee's site/unit; changing only the unit (a same-site transfer)
+  submits the new `unitId` in the update payload. Zero console errors throughout.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -354,7 +438,7 @@ screenshot thumbnails by eye.
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed (conditional), 2026-07-02** — DB-backed test evidence still outstanding, tracked to close before Phase 9 |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed (conditional), 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoint 0 (shared date formatting/`DateInput`) COMMITTED (`0d9ea33`). Checkpoint 1 (`ProjectUnit` schema/migration/module/UI) code-complete 2026-07-03, not yet committed. Checkpoints 2–4 (`Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap/validation, CNIC/Reactivate) not started |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoints 0, 1, and 2 COMMITTED (shared dates, Project Units, Employee↔Unit relationship/transfer history). Checkpoints 3–4 (import remap/validation, CNIC/Reactivate) not started — session closed after Checkpoint 2 pending database verification (see §4/§5) |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
@@ -652,52 +736,63 @@ screenshot thumbnails by eye.
 
 ## 4. Known limitations
 
-- **Database verification is still outstanding for both Phase 1 and Phase 2 — tracked, not
-  blocking.** No Docker, Docker Compose, Podman, Homebrew, native `psql`/`pg_ctl`, or Postgres.app
-  has been available in any sandboxed session so far. None of the DB-backed integration tests
-  (`auth.test.ts`, `audit-log.test.ts`, `project-sites.test.ts`, `employees.test.ts`,
-  `employees-import-export.test.ts`, `settings.test.ts`, `users.test.ts`) have been confirmed
-  passing anywhere — not in this session, and no CI run or completion report from any prior session
-  shows evidence they were run before either. `rbac.test.ts` is a pure unit test (no DB) and its
-  logic has been read-reviewed but not executed. The hand-written migration SQL
-  (`20260702084133_phase2_master_data`) has likewise never been applied to a real database — it was
-  built to mirror Prisma's generated-SQL conventions exactly (cross-checked against the Phase 1
-  migration's actual output) and validated via `prisma validate`/`generate`/`format`, but that is
-  static confidence, not a `migrate deploy` run. The same applies to the smaller, later
-  `20260702165738_project_site_address` migration (the UI-polish-pass `address` column) — validated
-  statically, never run against a live database. **This must be closed out — either by running the
-  full suite in a Postgres-capable environment or via a real CI run — before Phase 9's production
-  hardening pass at the latest, and ideally as soon as Docker/Postgres is available.**
+- **Database verification is outstanding for Phase 1, Phase 2, and now Phase 2.5 Checkpoints 0–2 —
+  no longer a background item; it is the explicit, mandatory next task before Checkpoint 3, per the
+  2026-07-04 session-closing instruction.** No Docker, Docker Compose, Podman, Homebrew, native
+  `psql`/`pg_ctl`, or Postgres.app has been available in any sandboxed session so far. None of the
+  DB-backed integration tests — `auth.test.ts`, `audit-log.test.ts`, `project-sites.test.ts`,
+  `employees.test.ts`, `employees-import-export.test.ts`, `settings.test.ts`, `users.test.ts`,
+  `project-units.test.ts` — have been confirmed passing anywhere; no CI run or completion report from
+  any prior session shows evidence they were run. `rbac.test.ts` and `date-utils.test.ts` are pure
+  unit tests (no DB) and have been executed directly and pass. None of this project's five
+  hand-written/hand-placed migrations (`20260701164444_init`, `20260701164509_audit_log_immutability`,
+  `20260702084133_phase2_master_data`, `20260702165738_project_site_address`,
+  `20260703100000_project_units`, `20260703140000_employee_unit_and_transfer_history` — six, not
+  five) have ever been applied to a real database; all were validated only via `prisma
+  validate`/`generate`/`format` and, for the latter two, `prisma migrate diff` against the schema
+  files — static confidence, not a `migrate deploy` run. **The next session's first task, before any
+  new implementation, is closing this out completely**: apply every migration to a fresh database,
+  confirm each applies without modification, and run the full DB-backed suite — see §5 item 1 for the
+  exact scope.
 - CI (`.github/workflows/ci.yml`) has never actually run — nothing has been pushed to a remote/PR
-  yet. Pushing to get a real CI-backed Postgres run remains the fastest way to close the item above.
+  yet. Pushing to get a real CI-backed Postgres run remains an alternative way to close the item
+  above, though a local Postgres-capable environment accomplishes the same thing.
 - `StorageProvider` does not exist despite being called for in Phase 0 — see §3 item 4. Logo/avatar
   upload UI was deliberately left out of Phase 2's Settings module for this reason.
 - `README.md` previously stated "Phase 1 complete" without this verification caveat; corrected in a
-  prior session's documentation pass, and now updated again for Phase 2.
-- **New 2026-07-03**: Phase 2.5 (Project Units, Payroll Work Lines prerequisite, Employee Registry
-  refinements — §3 items 16–20) is architecture/documentation only as of this session — no migration,
-  module, or frontend code exists for it yet. Do not assume `ProjectUnit`/`Employee.unitId` are queryable
-  anywhere in the current codebase.
+  prior session's documentation pass, and kept current at the end of every checkpoint since.
 
 ---
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5 is in progress: Checkpoint 0 is
-committed (`0d9ea33`); Checkpoint 1 (`ProjectUnit` schema, migration, dedicated module, Manage Units
-UI) is code-complete as of 2026-07-03 but not yet committed — awaiting explicit approval before
-Checkpoint 2 begins.** Carry forward as background open items, not blockers, unless noted:
+**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5 Checkpoints 0, 1, and 2 are all
+committed. The session closed deliberately after Checkpoint 2** — per explicit instruction, the next
+session's **first task, before any new implementation**, is closing out the long-standing
+database-verification debt (item 1 below), which is no longer a "before Phase 9" background item —
+it's now the explicit gate in front of Checkpoint 3. Carry the rest forward as background open items,
+not blockers, unless noted:
 
-1. **Awaiting explicit approval to commit Checkpoint 1 and begin Checkpoint 2** —
-   `Employee.unitId` + composite FK, the dedicated transfer-audit trail
-   (`employee.transferred` `AuditLog` entries), and the new `EmployeeTransferHistory` table. Then
-   Checkpoint 3 (import/export remap + three-layer Site/Unit validation), and Checkpoint 4 (CNIC
-   normalization + duplicate-check + Reactivate, gated on a separate concrete-implementation approval
-   per standing instruction) — all before Phase 3's Payroll Entry Work Lines build, which depends on
-   `Employee.unitId` existing (Checkpoint 2).
-2. Close out the DB-backed verification gap (§4) — via a Docker/Postgres-capable environment or a
-   real CI push — before Phase 9 at the latest. This now covers Phase 1's and Phase 2's test suites,
-   the hand-written Phase 2 migration, and the later `address`-column migration.
+1. **Database verification — now the immediate next task, not a background item.** Provision or
+   connect to a real PostgreSQL instance; apply every Prisma migration (all five, from
+   `20260701164444_init` through `20260703140000_employee_unit_and_transfer_history`) to a
+   completely fresh database and confirm every one applies without modification; run the full
+   DB-backed integration test suite (`auth.test.ts`, `audit-log.test.ts`, `project-sites.test.ts`,
+   `employees.test.ts`, `employees-import-export.test.ts`, `project-units.test.ts`, plus
+   `rbac.test.ts`/`date-utils.test.ts`, which don't need a DB but should still pass in the same run);
+   specifically confirm seeding, authentication, RBAC, CRUD, the `(unitId, siteId) ->
+   ProjectUnit(id, siteId)` composite foreign key (including that a cross-site assignment is
+   rejected), and `EmployeeTransferHistory` writes all behave correctly against a live database, not
+   just statically-reviewed code. Update this file and `docs/SESSION_HANDOFF.md` to record the debt
+   as closed once it passes. **Only after this passes does Checkpoint 3 begin.**
+2. **Then, Checkpoint 3**: Employee Registry import/export template remap (mapping `Area`/`Branch
+   Code` columns onto `ProjectUnit` fields for real, replacing Checkpoint 2's interim
+   single-unit-resolves-automatically fallback) with three-layer Site/Unit validation (import layer,
+   service layer, database composite FK). Then **Checkpoint 4** (CNIC normalization + duplicate-check
+   + Reactivate — the policy itself is finalized, §3 item 22, but the concrete implementation still
+   needs a separate design-approval gate per standing instruction) — both before Phase 3's Payroll
+   Entry Work Lines build, which depends on `PayrollEntryWorkLine.unitId` composite-FKing against
+   `ProjectUnit` the same way `Employee.unitId` now does.
 3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to
@@ -705,12 +800,8 @@ Checkpoint 2 begins.** Carry forward as background open items, not blockers, unl
 4. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    item 5 (calendar-month-only cycles) before Phase 3, item 3 (at-most-one-`ACTIVE`-`Advance`-per-type)
    before Phase 4.
-5. **CNIC duplicate-handling final decision (§3 item 20 / §26 item 6)** — a recommendation has been
-   given (keep the database-unique constraint, no override, add a Reactivate action) but the user has
-   explicitly reserved final sign-off; get that decision before Phase 2.5 implements anything
-   constraint-related.
-6. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
-7. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
+5. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
+6. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
    `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan: `calcNet` over Work Lines,
    the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic locking), its
    Definition of Done now includes Playwright-driven visual verification (§3 item 15) and a
