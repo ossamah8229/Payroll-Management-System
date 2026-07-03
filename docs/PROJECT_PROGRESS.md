@@ -9,12 +9,14 @@ architecture review, committed and closed out** — see §3 items 16–21 below 
 record).
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED (conditional) and committed. The pre-Phase-3
-architecture review is complete and committed (`b7ba9cf`).** A new **Phase 2.5** has been inserted
-into `docs/IMPLEMENTATION_PLAN.md` ahead of Phase 3 — Project Unit model, Payroll Work Lines
-prerequisite, and Employee Registry refinements (§3 items 16–20). **Phase 2.5 is fully designed but
-has zero implementation — no schema, migration, backend, or frontend code exists for it.** Neither
-Phase 2.5 nor Phase 3 has started. **The next implementation phase is Phase 2.5, not Phase 3** — do
-not begin any schema, migration, backend, or frontend work without explicit instruction next session.
+architecture review is complete and committed (`b7ba9cf`).** Phase 2.5 (`docs/IMPLEMENTATION_PLAN.md`
+— Project Unit model, Payroll Work Lines prerequisite, Employee Registry refinements, §3 items 16–20,
+amended with five refinements in §3 item 22) is now **in progress**: **Checkpoint 0 (shared date
+formatting and reusable UI primitives) is code-complete** — typecheck/lint/build clean, pure unit
+tests passing, Playwright-verified, **not yet committed** (awaiting explicit approval before
+Checkpoint 1). Checkpoints 1–4 (Project Units, `Employee.unitId`/transfer audit/`EmployeeTransferHistory`,
+import remap/three-layer validation, CNIC/Reactivate) have not started. **Do not begin Checkpoint 1
+without explicit instruction.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -214,6 +216,49 @@ screenshot thumbnails by eye.
   errors on any page at any of the three tested viewports.
 - Re-verified after the fixes: `typecheck`/`lint`/`build` clean, full audit re-run clean.
 
+### Phase 2.5, Checkpoint 0 — Foundation: shared date formatting and reusable UI primitives (2026-07-03, code-complete, not yet committed)
+
+- `shared/src/lib/date.ts`: `formatDate()` (ISO → `DD-MM-YYYY`), `parseDateInput()` (`DD-MM-YYYY` →
+  ISO, validating month range and days-in-month including leap years), `toIsoDateOnly()`
+  (ISO-datetime/`Date` → pure `YYYY-MM-DD`) — exported from `@payroll/shared`.
+- `frontend/src/components/ui/date-input.tsx`: a new `DateInput` component — masks digits into
+  `DD-MM-YYYY` as the user types, emits ISO via `onChange` once a complete valid date is entered or
+  cleared, reverts an incomplete typed value on blur, and syncs its display when the external `value`
+  changes (e.g. loading a different employee's record).
+- Applied in `frontend/src/routes/employees-page.tsx`: the three former native
+  `<input type="date">` fields (DOB, DOJ in the create/edit form; Date of Leaving in the Mark-as-Left
+  modal) now use `DateInput`; the ad-hoc `.slice(0, 10)`/`.toISOString().slice(0, 10)` calls that
+  previously normalized these fields are replaced with `toIsoDateOnly()`.
+- **Grepped the full codebase** (`backend/src`, `frontend/src`, `shared/src`, both test directories)
+  for `toLocaleDateString`, `toISOString().slice`, bare `.slice(0, 10)`, `DateTimeFormat`, and native
+  `type="date"` inputs. Found and fixed two pre-existing call sites in
+  `backend/src/modules/employees/employees-import-export.service.ts` that predated this checkpoint:
+  a locally-defined `formatDate()` helper that exported DOB/DOJ/DOL as ISO rather than `DD-MM-YYYY`
+  (directly contradicting `docs/design-system.md` §4's "every table cell, form field, PDF/Excel
+  export" clause), and a `.toISOString().slice(0, 10)` call converting an Excel `Date` cell during
+  import parsing. Both replaced with the shared utilities; the local duplicate `formatDate()` was
+  deleted rather than kept alongside the shared one, to avoid a same-name, different-behavior
+  collision. The import parser already tolerated `DD-MM-YYYY` input, so the export format fix doesn't
+  break re-import round-tripping, and no existing test asserted the old ISO export format.
+  Re-grepped after the fix: zero remaining ad-hoc call sites anywhere outside the one intentional doc
+  comment inside `shared/src/lib/date.ts` itself.
+- New pure unit tests, `backend/tests/date-utils.test.ts` (no database required, same category as
+  `rbac.test.ts`): `formatDate`, `toIsoDateOnly`, `parseDateInput`, including a leap-year-boundary
+  case (29 Feb 2028 accepted, 29 Feb 2026 rejected) and a round-trip check. All 23 assertions pass.
+- `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing `react-refresh` warnings), and
+  `npm run build` all clean across all three workspaces.
+- **Playwright visual verification** (headless Chromium, API responses mocked via route
+  interception — no live backend/DB in this environment, same method as the Phase 2 UI/UX polish
+  pass): confirmed an existing employee's DOB/DOJ render correctly as `15-03-1990`/`01-06-2020` in the
+  edit form; the placeholder text reads `DD-MM-YYYY`; typing `05032026` into a blank field
+  progressively masks to `05-03-2026`; an incomplete typed value (`991`) reverts to empty on blur; the
+  Mark-as-Left modal defaults to today's date correctly formatted. Zero browser console errors
+  observed across all three scenarios.
+- **Scope note**: the Site → Unit cascading select originally scoped into this checkpoint is deferred
+  to Checkpoint 1 — `ProjectUnit` and its API don't exist yet, so the control couldn't be meaningfully
+  built or tested here; building an unused, half-wired component now would contradict this project's
+  own anti-premature-abstraction discipline. Flagged explicitly rather than silently dropped.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -222,7 +267,7 @@ screenshot thumbnails by eye.
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed (conditional), 2026-07-02** — DB-backed test evidence still outstanding, tracked to close before Phase 9 |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed (conditional), 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **New 2026-07-03 — not started.** Architecture designed and documented this session; no code yet |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoint 0 (shared date formatting/`DateInput`) code-complete 2026-07-03, not yet committed. Checkpoints 1–4 (Project Units, `Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap/validation, CNIC/Reactivate) not started |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
@@ -463,7 +508,52 @@ screenshot thumbnails by eye.
     the commonly-written dashed form outright, rather than normalizing it. Full write-up, including
     why the two rejected alternatives (silent accept, or a gated override) were rejected:
     `docs/architecture/database-schema.md` §26 item 6.
-21. **Deployment/portability model — REAFFIRMED 2026-07-03, no change.** Re-confirmed as part of this
+22. **Phase 2.5 amendments — RESOLVED 2026-07-03 (session 2), plan approved with five changes before
+    any code was written.** The user approved the Phase 2.5 plan (§ above, items 16–21) on the
+    condition of these amendments, now written into `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5 section
+    and `docs/architecture/database-schema.md` (§8b, §9, §21, §22, §25, §26 item 6):
+    - A new **Checkpoint 0 (Foundation)** precedes Project Units: the shared `formatDate()`/parse
+      utilities, the `DD-MM-YYYY` display convention, a reusable `DateInput` component, and a reusable
+      Site → Unit cascading select — built once, ahead of the checkpoints that all need it, rather than
+      duplicated.
+    - **Import-time Site/Unit validation is now a three-layer requirement**: import-layer per-row
+      check, backend/service-layer assertion, and the database composite FK — the same defense-in-depth
+      pattern already used for the Work Line same-site rule (§12a), now explicitly required for the
+      Employee import path too.
+    - **Employee transfers (site and/or unit change) now write a dedicated `employee.transferred`
+      `AuditLog` entry** (old unit, new unit, old site, new site, actor, timestamp) **instead of** the
+      generic `employee.updated` entry for that specific edit — not merely a diff buried in a generic
+      update's metadata.
+    - **CNIC duplicate handling is now a final decision, not a recommendation**: CNIC stays globally
+      unique, no duplicate `Employee` rows are ever permitted, and rehires go exclusively through a new
+      Reactivate Employee action that preserves the existing row (and its historical `PayrollEntry`
+      links) while updating current details. See §26 item 6's rewritten resolution.
+    - **A new `EmployeeTransferHistory` table** (§8b) — lightweight, append-only, one row per transfer
+      (from/to site, from/to unit, `effectiveDate`, `transferredByUserId`, optional `reason`, optional
+      `remarks`, `createdAt`) — is added alongside the `AuditLog` entry above, mirroring the existing
+      `BalanceAdjustment`-vs-`AuditLog` pattern (a generic log plus a purpose-built typed table). No UI
+      consumes it in Phase 2.5; it's designed so a Transfer History screen can be built later without a
+      schema change.
+    Per standing instruction, the CNIC/Reactivate checkpoint's concrete implementation (exact endpoint
+    shapes, exact fields touched, exact audit contents) still gets presented for explicit approval
+    before that checkpoint's code is written, even though the underlying policy is now final — this is
+    a design-review gate, not a re-opening of the decision itself.
+    **Refined further, same day, before any code was written:** (a) `EmployeeTransferHistory` gained
+    `effectiveDate` (the date the transfer actually took effect in the business, distinct from
+    `createdAt` — HR may enter a transfer after the fact) and `remarks` (distinct from `reason`), and
+    its acting-user column is named `transferredByUserId`; it remains append-only with no
+    update/delete path except direct database intervention (an application-layer convention, not a DB
+    trigger — see §8b's note on how this differs from `AuditLog`'s stronger guarantee). (b) Checkpoint
+    0's single-source-of-truth requirement was made explicit and enforced, not just built: no component
+    may call `toLocaleDateString()` or format/parse a date independently — every displayed date goes
+    through `formatDate()`, every editable date through `DateInput` — verified by grepping the codebase
+    for ad-hoc date formatting before the checkpoint is considered complete. **Noted for the future
+    roadmap, no action required now**: once `EmployeeTransferHistory` exists, it will support
+    point-in-time and aggregate queries ("where did this employee work on 15 March," "how many
+    transfers has this employee had," "which employees transferred into a given unit this year") —
+    this is why its column design (typed `effectiveDate`, not a JSON blob) was worth getting right in
+    Phase 2.5 even though no reporting UI is built until later.
+23. **Deployment/portability model — REAFFIRMED 2026-07-03, no change.** Re-confirmed as part of this
     session's scope: single-company-per-installation (one database per company, the `CompanySettings`
     singleton, no `Tenant`/`Organization`/`Workspace` abstraction), deployable on whichever
     server/hosting a given customer provides — same conclusion already recorded 2026-07-02 (§3 item
@@ -506,17 +596,18 @@ screenshot thumbnails by eye.
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5's architecture was designed and
-documented 2026-07-03 (§3 items 16–20) but has zero code written for it yet.** Neither Phase 2.5 nor
-Phase 3 has started, and neither should begin without the user's explicit instruction, per their own
-standing preference. Carry forward as background open items, not blockers, unless noted:
+**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5 is in progress: Checkpoint 0 (shared
+`formatDate()`/`DateInput`/`DD-MM-YYYY` convention) is code-complete as of 2026-07-03 but not yet
+committed — awaiting explicit approval before Checkpoint 1 begins.** Carry forward as background open
+items, not blockers, unless noted:
 
-1. **When explicitly instructed to begin implementation**, start with Phase 2.5
-   (`docs/IMPLEMENTATION_PLAN.md`) — the `ProjectUnit` migration (including the destructive
-   `ProjectSite.branchCode` drop), the dedicated Project Units module, `Employee.unitId`, the
-   Employee Registry import/export template update, CNIC normalization + duplicate-check + Reactivate
-   action, and the shared `formatDate()`/DD-MM-YYYY convention — all before Phase 3's Payroll Entry
-   Work Lines build, which depends on `ProjectUnit` existing.
+1. **Awaiting explicit approval to commit Checkpoint 0 and begin Checkpoint 1** — the `ProjectUnit`
+   migration (including the destructive `ProjectSite.branchCode` drop), the dedicated Project Units
+   module, then Checkpoint 2 (`Employee.unitId`, transfer audit trail, `EmployeeTransferHistory`),
+   Checkpoint 3 (import/export remap + three-layer Site/Unit validation), and Checkpoint 4 (CNIC
+   normalization + duplicate-check + Reactivate, gated on a separate concrete-implementation approval
+   per standing instruction) — all before Phase 3's Payroll Entry Work Lines build, which depends on
+   `ProjectUnit` existing.
 2. Close out the DB-backed verification gap (§4) — via a Docker/Postgres-capable environment or a
    real CI push — before Phase 9 at the latest. This now covers Phase 1's and Phase 2's test suites,
    the hand-written Phase 2 migration, and the later `address`-column migration.

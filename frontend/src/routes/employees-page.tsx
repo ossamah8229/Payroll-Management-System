@@ -1,12 +1,13 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { Download, MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import type { SessionUser } from '@payroll/shared';
+import { toIsoDateOnly, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
@@ -58,11 +59,11 @@ function EmployeeFormModal({
     cnic: employee?.cnic ?? '',
     fatherName: employee?.fatherName ?? '',
     religion: employee?.religion ?? '',
-    dateOfBirth: employee?.dateOfBirth?.slice(0, 10) ?? '',
+    dateOfBirth: toIsoDateOnly(employee?.dateOfBirth),
     mobileNumber: employee?.mobileNumber ?? '',
     designation: employee?.designation ?? '',
     siteId: employee?.siteId ?? defaultSiteId ?? '',
-    dateOfJoining: employee?.dateOfJoining?.slice(0, 10) ?? '',
+    dateOfJoining: toIsoDateOnly(employee?.dateOfJoining),
     payType: employee?.payType ?? 'DAILY_WAGE',
     grossPay: employee?.grossPay ?? '',
     bankId: employee?.bankId ?? '',
@@ -165,11 +166,10 @@ function EmployeeFormModal({
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="emp-dob">Date of birth</Label>
-                <Input
+                <DateInput
                   id="emp-dob"
-                  type="date"
                   value={form.dateOfBirth}
-                  onChange={(e) => setField('dateOfBirth', e.target.value)}
+                  onChange={(iso) => setField('dateOfBirth', iso)}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -213,11 +213,10 @@ function EmployeeFormModal({
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="emp-doj">Date of joining</Label>
-                <Input
+                <DateInput
                   id="emp-doj"
-                  type="date"
                   value={form.dateOfJoining}
-                  onChange={(e) => setField('dateOfJoining', e.target.value)}
+                  onChange={(iso) => setField('dateOfJoining', iso)}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -330,7 +329,7 @@ function MarkLeftModal({
   employee: Employee;
 }) {
   const markLeft = useMarkEmployeeLeft();
-  const [dateOfLeaving, setDateOfLeaving] = useState(new Date().toISOString().slice(0, 10));
+  const [dateOfLeaving, setDateOfLeaving] = useState(() => toIsoDateOnly(new Date()));
 
   async function handleSubmit() {
     try {
@@ -351,12 +350,7 @@ function MarkLeftModal({
         </p>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="leave-date">Date of leaving</Label>
-          <Input
-            id="leave-date"
-            type="date"
-            value={dateOfLeaving}
-            onChange={(e) => setDateOfLeaving(e.target.value)}
-          />
+          <DateInput id="leave-date" value={dateOfLeaving} onChange={setDateOfLeaving} />
         </div>
         <ModalFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={markLeft.isPending}>

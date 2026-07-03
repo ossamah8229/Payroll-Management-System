@@ -11,27 +11,40 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest commit: `b7ba9cf0e31443ec999e9372e3a086c6de986b01`** — "docs: pre-Phase-3 architecture
-  review — Project Units, Payroll Work Lines, dates, scale". **Working tree fully clean as of this
-  commit** (re-verified at this checkpoint). Full lineage: `7938659` (session start) → `2e804d4`
-  (closed Phase 1, conditional) → `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX
-  polish pass + final visual consistency audit) → `11cdc9d` (Phase 2 checkpoint documentation) →
-  **`b7ba9cf` (the pre-Phase-3 architecture review — Project Units, Payroll Work Lines, date/scale
-  standards — documentation and architecture only, now committed and closed out)**.
+- **Latest committed commit: `74c124e0820a99f5586a1c1713679887e43c46e2`** — "docs: update project
+  status after architecture checkpoint" (one commit after `b7ba9cf`'s pre-Phase-3 architecture
+  review, itself doc-only). Full lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2
+  UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3
+  architecture review) → `74c124e` (further doc status update).
+- **Working tree is currently NOT clean** — this session (2026-07-03, session 2) has uncommitted
+  changes: Phase 2.5's checkpoint breakdown and its five amendments written into
+  `docs/IMPLEMENTATION_PLAN.md`/`docs/architecture/database-schema.md`/`docs/PROJECT_PROGRESS.md`
+  (see `docs/PROJECT_PROGRESS.md` §3 item 22), plus **Checkpoint 0's code**, now complete: the shared
+  date utilities (`shared/src/lib/date.ts`), the `DateInput` component
+  (`frontend/src/components/ui/date-input.tsx`), their application to the Employee Registry's
+  DOB/DOJ/DOL and Mark-as-Left date fields, a fix to two pre-existing ad-hoc date-formatting call
+  sites in the backend's CSV/Excel export/import (`employees-import-export.service.ts`), and a new
+  pure-unit-test file (`backend/tests/date-utils.test.ts`). **None of this is committed yet** — awaiting
+  explicit approval before Checkpoint 1 begins, per standing instruction.
 - **Phase 2 is complete and committed. The pre-Phase-3 architecture review is complete and
   committed.** A full pre-Phase-3 architecture review produced six new business decisions (Project
   Unit model, Payroll Entry Work Lines, date display standard, a 10,000-employee performance floor, a
-  CNIC duplicate-detection recommendation pending final sign-off, and a deployment-model
-  reaffirmation), all written into `docs/architecture/database-schema.md`,
-  `docs/architecture/overview.md`, `docs/architecture/folder-structure.md`,
-  `docs/architecture/tech-stack.md`, `docs/design-system.md`, `docs/PROJECT_PRINCIPLES.md` (new
-  Principle 10), and `docs/IMPLEMENTATION_PLAN.md` (new Phase 2.5). Full decision record:
-  `docs/PROJECT_PROGRESS.md` §3 items 16–21.
-- **Phase 2.5 is fully designed but has zero implementation** — no schema, migration, backend, or
-  frontend code exists for it yet. **The next implementation phase is Phase 2.5, not Phase 3.**
-- `npm run typecheck`/`lint`/`build` were **not** re-run for this checkpoint since no code changed —
-  they remain green as of `11cdc9d`/`674ab04`, per the prior checkpoint; this session touched
-  documentation only, confirmed by `git status` showing a fully clean tree at `b7ba9cf`.
+  CNIC duplicate-detection recommendation, and a deployment-model reaffirmation), all written into
+  `docs/architecture/database-schema.md`, `docs/architecture/overview.md`,
+  `docs/architecture/folder-structure.md`, `docs/architecture/tech-stack.md`, `docs/design-system.md`,
+  `docs/PROJECT_PRINCIPLES.md` (new Principle 10), and `docs/IMPLEMENTATION_PLAN.md` (new Phase 2.5).
+  **The CNIC recommendation is now a finalized decision, not pending** — see §3 below and
+  `docs/PROJECT_PROGRESS.md` §3 item 22. Full decision record: `docs/PROJECT_PROGRESS.md` §3 items
+  16–22.
+- **Phase 2.5 is in progress.** Checkpoint 0 (shared date formatting/`DateInput`) is code-complete,
+  statically verified, and Playwright-verified, but **not yet committed**. Checkpoints 1–4 (Project
+  Units, `Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap + three-layer
+  validation, CNIC/Reactivate) have not started. **Do not begin Checkpoint 1 without explicit
+  approval of Checkpoint 0's commit.**
+- `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing `react-refresh` warnings), and
+  `npm run build` were all re-run this session after Checkpoint 0's code changes and are clean across
+  all three workspaces. A new pure-unit-test file (`backend/tests/date-utils.test.ts`, no DB required)
+  was also run directly and passes (23/23 assertions).
 - Still no DB-backed test has been run in any session (no Postgres available in the working
   environment — see §5/§7). This now applies to Phase 2's test suite, its two hand-written migrations,
   and the UI polish pass's migration, not just Phase 1's — unchanged by this session, and still the
@@ -201,15 +214,23 @@ and must not begin without the user's explicit instruction next session.**
   - `docs/PROJECT_PRINCIPLES.md` Principle 10: the system must comfortably support **at least 10,000
     employees**. This is a design floor to weigh in every future phase, not a Phase 9 concern —
     Principle 4 (never sacrifice correctness for performance) is explicitly not in tension with it.
-  - **CNIC duplicate handling is NOT yet decided.** A recommendation (keep the database-unique
-    constraint, no override, add a Reactivate-employee action) is written into
-    `docs/architecture/database-schema.md` §26 item 6 and `docs/PROJECT_PROGRESS.md` §3 item 20, but
-    the user has explicitly reserved final sign-off before any constraint-related implementation.
-    **Do not implement this as if it were already decided.**
-  - A new **Phase 2.5** (`docs/IMPLEMENTATION_PLAN.md`) sits between Phase 2 and Phase 3, covering
-    everything above plus CNIC normalization/reactivation and the `formatDate()` utility. **It has not
-    been implemented — architecture and documentation only.** Phase 3 depends on it (specifically,
-    `PayrollEntryWorkLine.unitId` cannot exist without `ProjectUnit`).
+  - **CNIC duplicate handling is now finalized (2026-07-03, session 2) — no longer pending.** CNIC
+    stays globally unique with no override mechanism; duplicate `Employee` records are never
+    permitted; rehires go exclusively through a new Reactivate Employee action that updates the
+    existing row in place. See `docs/architecture/database-schema.md` §26 item 6 (rewritten as a final
+    decision) and `docs/PROJECT_PROGRESS.md` §3 item 22. **Per standing instruction, the concrete
+    implementation (exact endpoint shapes, fields touched, audit contents) still gets presented for
+    approval before Checkpoint 4's code is written** — the policy is settled, the implementation still
+    gets a design-review gate.
+  - **`EmployeeTransferHistory`** (new table, `docs/architecture/database-schema.md` §8b) — one row
+    per Employee site/unit transfer (`effectiveDate`, `transferredByUserId`, optional `reason`/
+    `remarks`, `createdAt`), append-only except by direct database intervention, no UI in Phase 2.5.
+    Employee transfers also write a dedicated `employee.transferred` `AuditLog` entry, not the generic
+    `employee.updated` entry. Do not fold these into a generic update path.
+  - A new **Phase 2.5** (`docs/IMPLEMENTATION_PLAN.md`) sits between Phase 2 and Phase 3, now broken
+    into five explicit, individually-gated checkpoints (0–4). **Checkpoint 0 is code-complete but not
+    yet committed; Checkpoints 1–4 have not started.** Phase 3 depends on it (specifically,
+    `PayrollEntryWorkLine.unitId` cannot exist without `ProjectUnit`, built in Checkpoint 1).
 
 ## 4. Current frozen architecture (reference index)
 
@@ -301,24 +322,20 @@ environment is available (see §7 item 2), before Phase 9's hardening pass at th
 
 ## 7. Next steps, in order
 
-**Phase 1 and Phase 2 are closed (conditional). Phase 2.5's architecture (Project Units, Payroll
-Entry Work Lines prerequisite, Employee Registry refinements) was designed and documented 2026-07-03
-but has no code yet. Do not begin Phase 2.5 or Phase 3 implementation without the user's explicit
-instruction next session** — this is a standing instruction from this session's close-out, not an
-inference.
+**Phase 1 and Phase 2 are closed (conditional). Phase 2.5 is in progress: Checkpoint 0 is
+code-complete but uncommitted, awaiting explicit approval before Checkpoint 1. Do not begin
+Checkpoint 1 (or any later checkpoint) without the user's explicit instruction** — this is a standing
+instruction, not an inference.
 
-1. **Get the CNIC duplicate-handling final decision** (`docs/architecture/database-schema.md` §26
-   item 6 / `docs/PROJECT_PROGRESS.md` §3 item 20) — a recommendation is written up, but the user
-   explicitly reserved final sign-off before any constraint-related work. Needed before Phase 2.5's
-   CNIC-related items are implemented (the normalization/duplicate-check UX itself doesn't depend on
-   this, but shouldn't be built as if the constraint question were already settled).
-2. **When explicitly instructed to begin implementation, start with Phase 2.5**
-   (`docs/IMPLEMENTATION_PLAN.md`) — the `ProjectUnit` migration (including the destructive
-   `ProjectSite.branchCode` drop, this project's first), the dedicated Project Units module,
-   `Employee.unitId`, the Employee Registry import/export template remap, CNIC
-   normalization/duplicate-check/Reactivate action, and the shared `formatDate()`/`DD-MM-YYYY`
-   convention. Phase 3 cannot build `PayrollEntryWorkLine.unitId` without this landing first.
-3. The first time a Postgres-capable environment is available, run:
+1. **Get explicit approval to commit Checkpoint 0**, then proceed to **Checkpoint 1**
+   (`docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5) — the `ProjectUnit` migration (including the
+   destructive `ProjectSite.branchCode` drop, this project's first) and the dedicated Project Units
+   module. Checkpoint 2 (`Employee.unitId`, transfer audit trail, `EmployeeTransferHistory`),
+   Checkpoint 3 (import/export remap + three-layer Site/Unit validation), and Checkpoint 4 (CNIC
+   normalization/duplicate-check/Reactivate — policy now finalized, but implementation still needs a
+   separate design-approval gate per standing instruction) follow in order. Phase 3 cannot build
+   `PayrollEntryWorkLine.unitId` without Checkpoint 1 landing first.
+2. The first time a Postgres-capable environment is available, run:
    ```bash
    cp backend/.env.example backend/.env
    npm run prisma:generate --workspace backend
@@ -326,19 +343,20 @@ inference.
    npm run prisma:seed --workspace backend
    npm run test --workspace backend
    ```
-   and confirm the full test suite (Phase 1's three files plus Phase 2's five) passes — or push the
-   branch to get a real CI-backed Postgres run. This now also applies the `20260702165738_project_
-   site_address` migration, and will need to apply Phase 2.5's migrations once they exist.
-4. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
+   and confirm the full test suite (Phase 1's three files plus Phase 2's five, plus the new
+   DB-independent `date-utils.test.ts`) passes — or push the branch to get a real CI-backed Postgres
+   run. This now also applies the `20260702165738_project_site_address` migration, and will need to
+   apply Phase 2.5's migrations once they exist.
+3. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
    Phase 5, not scheduled into Phase 2.5, 3, or 4. Design for hosting portability (§3 item 13).
-5. Decide how Broom Services' own disbursement source bank account(s) should be modeled
+4. Decide how Broom Services' own disbursement source bank account(s) should be modeled
    (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins.
-6. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+5. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    calendar-month-only cycles before Phase 3, at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
-7. Optionally confirm the Employee Registry import template's redundant-column interpretation with the
+6. Optionally confirm the Employee Registry import template's redundant-column interpretation with the
    client (`docs/PROJECT_PROGRESS.md` §3 item 5) — likely resolved as a side effect of Phase 2.5's
    `ProjectUnit` remap, but worth an explicit client confirmation once that lands.
-8. When explicitly instructed to begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet` over
+7. When explicitly instructed to begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet` over
    Work Lines, the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic
    locking, the largest single phase in the plan — its Definition of Done now includes Playwright-
    driven visual verification and a Principle-10 performance review as mandatory steps (§3's new

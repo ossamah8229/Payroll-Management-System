@@ -140,59 +140,166 @@ user's session genuinely cannot see or touch employees/sites outside that assign
 
 ### Phase 2.5 — Project Unit Model, Payroll Work Lines Prerequisite, and Employee Registry Refinements
 
-**Added 2026-07-03, after a full pre-Phase-3 architecture review.** Phase 2 as actually built
-(`docs/PROJECT_PROGRESS.md`) shipped `ProjectSite` with a flat `branchCode` and no Project Unit
-concept — a business-model gap discovered only after Phase 2's conditional close, the same way
-`ProjectSite.defaultBankId` was discovered and corrected within Phase 2 itself. Unlike that earlier
-correction, this one lands *after* Phase 2 shipped, so it's sequenced here as its own explicit
-prerequisite phase rather than silently rewriting Phase 2's own history. **Nothing below is Phase 3
-work** — it's what Phase 3 needs already in place before its own Payroll Entry/Work Line build starts.
+**Added 2026-07-03, after a full pre-Phase-3 architecture review. Checkpoint breakdown and three
+amendments added 2026-07-03 (session 2) after explicit user approval of the phase plan** — Checkpoint
+0 (shared date/UI foundation), three-layer Site/Unit import validation, dedicated transfer audit
+entries, the finalized CNIC decision, and the new `EmployeeTransferHistory` table
+(`docs/architecture/database-schema.md` §8b). Phase 2 as actually built (`docs/PROJECT_PROGRESS.md`)
+shipped `ProjectSite` with a flat `branchCode` and no Project Unit concept — a business-model gap
+discovered only after Phase 2's conditional close, the same way `ProjectSite.defaultBankId` was
+discovered and corrected within Phase 2 itself. Unlike that earlier correction, this one lands *after*
+Phase 2 shipped, so it's sequenced here as its own explicit prerequisite phase rather than silently
+rewriting Phase 2's own history. **Nothing below is Phase 3 work** — it's what Phase 3 needs already
+in place before its own Payroll Entry/Work Line build starts.
 
-**Builds:**
+This phase is executed as five explicit, individually-gated checkpoints (not a single build), per the
+user's requirement — each ends with typecheck → lint → build → Playwright visual verification →
+documentation update → **ask before committing**, exactly like every phase's Definition of Done, but
+enforced at checkpoint granularity here rather than only at the end of the whole phase.
+
+**Checkpoint 0 — Foundation: shared date formatting and reusable UI primitives — COMPLETE, 2026-07-03**
+- Shared `formatDate()`/`parseDateInput()`/`toIsoDateOnly()` (`shared/src/lib/date.ts`) — ISO ↔
+  `DD-MM-YYYY` for display, `DD-MM-YYYY` → ISO for parsing typed input, and ISO-datetime → pure
+  ISO-date normalization (replacing every ad-hoc `.slice(0, 10)`/`.toISOString().slice(0, 10)` call),
+  living in `shared/` per `docs/architecture/folder-structure.md` so both ends use one implementation.
+- A reusable, masked `DateInput` component (`frontend/src/components/ui/date-input.tsx`) replacing the
+  native `<input type="date">` previously used for DOB/DOJ/DOL — native date inputs render in the
+  browser's OS locale and cannot be forced to `DD-MM-YYYY` by a formatting function alone (the gap
+  identified during the pre-Phase-3 review, see `docs/PROJECT_PROGRESS.md` §3 item 18).
+- Applied to the Employee Registry's DOB/DOJ/DOL fields (create/edit form) and the Mark-as-Left
+  modal's date-of-leaving field — the first adopter, establishing a working pattern before Phase 3
+  needs the same convention under its own time pressure.
+- **Single source of truth, enforced, not just documented**: every displayed date goes through
+  `formatDate()`, every editable date goes through `DateInput`. The codebase-wide grep specified below
+  also caught two ad-hoc call sites in the backend's CSV/Excel export
+  (`employees-import-export.service.ts`) that predated this checkpoint — a local, differently-behaved
+  `formatDate()` helper producing ISO instead of `DD-MM-YYYY` (contradicting `docs/design-system.md`
+  §4's explicit "PDF/Excel export" clause), and an `.toISOString().slice(0, 10)` call converting an
+  Excel `Date` cell during import parsing. Both replaced with the shared utilities (the local duplicate
+  removed entirely); the import path's date-format tolerance already accepted `DD-MM-YYYY`, so this is
+  a pure fix, not a breaking change to the import contract.
+- **Grep verification performed** (`toLocaleDateString`, `toISOString().slice`, bare `.slice(0, 10)`,
+  `DateTimeFormat`, native `type="date"`) across `backend/src`, `frontend/src`, `shared/src`, and both
+  test directories — zero remaining ad-hoc date-formatting call sites outside `shared/src/lib/date.ts`
+  itself (the one place the pattern is intentionally named in a doc comment).
+- Pure unit tests added (`backend/tests/date-utils.test.ts`, no DB required) covering `formatDate`,
+  `toIsoDateOnly`, and `parseDateInput`, including leap-year and out-of-range edge cases.
+- **Scope note**: the Site → Unit cascading select originally planned for this checkpoint is deferred
+  to Checkpoint 1 — it cannot be meaningfully built (or tested) before `ProjectUnit` and its API exist;
+  building it now would be an unused, half-wired component. Flagged here rather than silently dropped.
+- No schema or migration changes in this checkpoint — shared package and frontend component work only.
+
+**Checkpoint 1 — `ProjectUnit` schema, migration, and dedicated module**
 - An additive migration introducing `ProjectUnit` (`docs/architecture/database-schema.md` §8a) and
   removing `ProjectSite.branchCode` (§8's revision note — this project's first genuinely destructive
   migration, low-risk only because it's never been applied to a live database).
 - The dedicated **Project Units** module (`backend/src/modules/project-units/`) — CRUD nested under a
   Project Site, delete blocked while employees (or, once Phase 3 lands, work lines) reference a unit.
+
+**Checkpoint 2 — `Employee.unitId`, composite FK, transfer audit trail, `EmployeeTransferHistory`**
 - `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (§9) — the Employee Registry
-  create/edit forms gain a Unit field cascading off the selected Site, labeled with that site's own
-  `unitLabel`.
-- The Employee Registry import/export template updated so `Area`/`Area/Location`/`Branch Code`
-  columns map onto `ProjectUnit` fields instead of being ignored as redundant
-  (`docs/PROJECT_PROGRESS.md` §3 item 5 — this may resolve that old open item as a side effect).
-- CNIC normalization (strip non-digit characters before *validating*, not just before storing) and a
-  pre-submit duplicate-check lookup (`docs/architecture/database-schema.md` §26 item 6). **The
-  underlying constraint/override question is explicitly not decided by this phase** — the user has
-  reserved that sign-off — but the normalization and live-check UX are additive either way and don't
-  depend on that outcome.
-- A **Reactivate Employee** action, symmetric to the existing "Mark as Left," so a rehired former
-  employee updates their existing record instead of requiring — or tempting — a duplicate CNIC (§26
-  item 6's recommended resolution for the one legitimate case that might otherwise want an override).
-- The shared `formatDate()` utility and the `DD-MM-YYYY` display convention
-  (`docs/design-system.md` §4) applied to the Employee Registry's existing date fields (DOB/DOJ/DOL) —
-  the first module to adopt it, so Phase 3 has a working, reusable pattern rather than inventing one
-  under its own time pressure.
+  create/edit forms gain a Unit field (the Checkpoint 0 cascading select), cascading off the selected
+  Site.
+- A new, lightweight, append-only **`EmployeeTransferHistory`** table
+  (`docs/architecture/database-schema.md` §8b — new): `id`, `employeeId` FK → `Employee`, `fromSiteId`/
+  `toSiteId` FK → `ProjectSite`, `fromUnitId`/`toUnitId` FK → `ProjectUnit`, `effectiveDate` (the date
+  the transfer actually took effect in the business — deliberately distinct from `createdAt`, since HR
+  may enter a transfer days or weeks after it happened), `transferredByUserId` FK → `User`, `reason`
+  (nullable text), `remarks` (nullable text), `createdAt` (when the record was entered into the
+  system). One row per transfer event, never edited or deleted except by direct database intervention
+  — same immutability convention as `AuditLog`/`Correction`, application-layer only (no DB trigger, per
+  §8b's note). **No UI in this phase**, but the schema is deliberately structured (typed FK/date
+  columns, not a JSON blob) so a future Transfer History screen — or point-in-time queries like "where
+  did this employee work on 15 March," "how many transfers has this employee had," "which employees
+  transferred into unit X this year" — can query it directly without parsing `AuditLog.metadata`. This
+  mirrors the existing `BalanceAdjustment`-vs-`AuditLog` pattern in this schema: a generic append-only
+  log for the audit trail, plus a purpose-built, typed table for the one entity that needs its own
+  queryable history.
+- **Dedicated transfer audit entries, replacing the generic update event for this case**: whenever an
+  Employee edit changes `siteId` and/or `unitId`, the transaction writes (a) the `Employee` row update,
+  (b) an `EmployeeTransferHistory` row, and (c) a distinct `AuditLog` action —
+  `employee.transferred` — carrying old unit, new unit, old site, new site, the acting user, and the
+  timestamp in its `metadata`, instead of (not in addition to) the generic `employee.updated` entry for
+  this specific change. An edit that changes *only* other fields (designation, bank details, etc.)
+  continues to produce the existing generic `employee.updated` entry, unchanged.
+- All three writes happen in one database transaction, per this schema's established
+  multi-statement-transaction convention (§22).
+
+**Checkpoint 3 — Employee Registry import/export template remap and three-layer Site/Unit validation**
+- The import/export template updated so `Area`/`Area/Location`/`Branch Code` columns map onto
+  `ProjectUnit` fields instead of being ignored as redundant (`docs/PROJECT_PROGRESS.md` §3 item 5 —
+  this may resolve that old open item as a side effect).
+- **Every imported row's Project Unit must belong to the row's selected Project Site, enforced at three
+  independent layers** (defense in depth, matching this schema's established pattern for the Work Line
+  same-site rule, §12a):
+  1. **Import layer** — a row-level pre-check during CSV/Excel parsing resolves the named Site and
+     Unit and rejects the row with a clear per-row error (not a whole-file failure) if the resolved
+     Unit does not belong to the resolved Site.
+  2. **Backend/service layer** — the same assertion is repeated at the service call the import path
+     shares with the ordinary create/update path, so the check holds even if a future caller bypasses
+     the import layer.
+  3. **Database layer** — the `(unitId, siteId) → ProjectUnit(id, siteId)` composite foreign key
+     (Checkpoint 2) rejects the row outright as the final backstop, exactly as it already does for the
+     ordinary Employee create/edit path.
+
+**Checkpoint 4 — CNIC: finalized policy, normalization, duplicate-check, Reactivate workflow**
+- **The duplicate-handling policy is now finalized** (this session): CNIC remains globally unique
+  (`docs/architecture/database-schema.md` §9's existing partial-unique constraint — no change to the
+  constraint itself); duplicate `Employee` records are never permitted, with no override mechanism of
+  any kind; a rehire is handled exclusively through a new **Reactivate Employee** action, symmetric to
+  the existing "Mark as Left" (`POST /:id/leave`), that clears `dateOfLeaving` and updates the
+  employee's current employment details (site, unit, designation, bank details, etc.) on their
+  **existing** `Employee` row — never creating a second row for the same CNIC, so every historical
+  `PayrollEntry` continues to reference the one, unchanged `employeeId` (Principle 2). This resolves
+  `docs/architecture/database-schema.md` §26 item 6 as a final decision, no longer a recommendation
+  pending sign-off.
+- If a reactivation also changes the employee's site and/or unit relative to what they had when they
+  left, that edit **also** goes through Checkpoint 2's transfer path (`EmployeeTransferHistory` row +
+  `employee.transferred` audit entry) in the same transaction as a distinct `employee.reactivated`
+  audit entry — reactivation and transfer are independent facts that can co-occur, and both must be
+  individually traceable.
+- CNIC normalization (strip non-digit characters before *validating*, not just before storing), in
+  both the form and the CSV import path.
+  - A debounced pre-submit duplicate-check lookup (e.g. `GET /employees/check-cnic?cnic=...`) surfacing
+  which existing employee already holds a CNIC before a raw 409 on submit, prompting the operator
+  toward Reactivate instead of a blocked create.
+- **Per standing instruction, the concrete implementation (exact endpoint shapes, exact fields touched
+  by Reactivate, exact audit entry contents) is presented for explicit approval before this
+  checkpoint's code is written** — the policy decision above is final, but the implementation still
+  gets a design read before it's built, same as every other checkpoint's code does.
 
 **Depends on:** Phase 2 (extends its already-shipped Project Sites/Employee Registry modules).
 
-**Effort estimate:** 2–3 days — small in scope, but touches already-shipped Phase 2 code and its one
-destructive migration, so it gets a full typecheck/lint/build/Playwright pass, not an in-place patch
-assumed safe.
+**Effort estimate:** 3–4 days across the five checkpoints — small in scope per checkpoint, but touches
+already-shipped Phase 2 code and its one destructive migration, so it gets a full
+typecheck/lint/build/Playwright pass at every checkpoint, not one pass at the end.
 
 **Testing strategy:**
 - `ProjectUnit` CRUD and delete-blocked-while-referenced tests, mirroring `ProjectSite`'s existing
   pattern exactly.
 - Composite-FK test: assigning an `Employee` a `unitId` belonging to a *different* site than the
   request's `siteId` is rejected at the database level, not merely the application layer.
+- Transfer-audit test: an Employee edit changing `siteId`/`unitId` produces exactly one
+  `EmployeeTransferHistory` row and one `employee.transferred` `AuditLog` entry (with old/new
+  site/unit, actor, timestamp) and **not** a generic `employee.updated` entry for that same edit; an
+  edit to unrelated fields still produces the generic entry, unchanged.
+- Import three-layer validation test: a crafted import row whose Unit belongs to a different Site than
+  the row's Site is rejected with a per-row error at the import layer; a direct service call bypassing
+  the import layer is independently rejected by the service-layer assertion; a raw write bypassing both
+  is rejected by the database composite FK — each layer tested as capable of catching it alone.
 - CNIC normalization test: a CNIC entered with dashes/spaces is normalized identically on create,
   update, and CSV import before comparison.
-- Reactivate-employee test: reactivating a departed employee clears `dateOfLeaving` and never creates
-  a second row for the same CNIC.
+- Reactivate-employee test: reactivating a departed employee clears `dateOfLeaving`, updates current
+  employment fields, never creates a second row for the same CNIC, and — when site/unit also changed —
+  produces both an `employee.reactivated` entry and an `employee.transferred` entry plus
+  `EmployeeTransferHistory` row in the same transaction.
 
 **Definition of Done:** a Project Site can have multiple Project Units, each employee has a default
 unit belonging to the same site (database-enforced), deleting a unit or site with dependents is
-blocked exactly like every other master-data delete in this schema, and Phase 3 can begin against a
-schema that already has `ProjectUnit` in place.
+blocked exactly like every other master-data delete in this schema, every employee transfer is
+independently traceable via both `AuditLog` and `EmployeeTransferHistory`, imported rows can never
+attach a mismatched Site/Unit pair at any of the three enforcement layers, the Reactivate workflow is
+live, and Phase 3 can begin against a schema that already has `ProjectUnit` in place.
 
 ---
 

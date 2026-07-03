@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
-import { createEmployeeSchema } from '@payroll/shared';
+import { createEmployeeSchema, formatDate, toIsoDateOnly } from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
@@ -37,10 +37,6 @@ export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Account Number',
   'Basic/Gross Pay',
 ] as const;
-
-function formatDate(value: Date | null): string {
-  return value ? value.toISOString().slice(0, 10) : '';
-}
 
 /**
  * Parses common date representations from real-world spreadsheets (`YYYY-MM-DD`, `DD/MM/YYYY`,
@@ -154,7 +150,7 @@ export async function parseEmployeeImportFile(buffer: Buffer, filename: string):
     row.eachCell({ includeEmpty: true }, (cell) => {
       const value = cell.value;
       if (value === null || value === undefined) cells.push('');
-      else if (value instanceof Date) cells.push(value.toISOString().slice(0, 10));
+      else if (value instanceof Date) cells.push(toIsoDateOnly(value));
       else if (typeof value === 'object' && 'text' in value) cells.push(String((value as { text: unknown }).text));
       else cells.push(String(value));
     });

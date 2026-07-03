@@ -314,6 +314,60 @@ in this schema.
 - **Row count:** a handful to a few dozen per site (~50–300 total across all sites, comparable order
   of magnitude to `ProjectSite` itself today, scaling with client count rather than employee count)
 
+## 8b. `EmployeeTransferHistory`
+
+**Purpose:** A dedicated, append-only record of every Employee site/unit transfer — added 2026-07-03
+(session 2), alongside the finalized CNIC/Reactivate decision (§26 item 6).
+**Why it exists:** Mirrors this schema's existing `BalanceAdjustment`-vs-`AuditLog` pattern (§14): the
+generic `AuditLog` already captures a `employee.transferred` action (§9, below) for the cross-entity
+audit trail, but a future Transfer History screen needs typed, directly queryable columns rather than
+parsing `AuditLog.metadata` JSON — the same reasoning that gave `BalanceAdjustment` its own table
+instead of relying on `AuditLog` alone. **No UI consumes this table in Phase 2.5** — it is designed so
+a Transfer History screen can be added later without a schema change.
+**Business rule tie-in:** every Employee transfer (a change to `siteId` and/or `unitId` on an existing
+Employee) must be independently traceable, per the 2026-07-03 (session 2) requirement — this table is
+one of the two places that traceability lives, the other being the `AuditLog` entry described in §9.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `employeeId` | uuid | no | — | FK → `Employee.id`, `ON DELETE RESTRICT` |
+| `fromSiteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` — the site before this transfer |
+| `toSiteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` — the site after this transfer |
+| `fromUnitId` | uuid | no | — | FK → `ProjectUnit.id`, `ON DELETE RESTRICT` — the unit before this transfer |
+| `toUnitId` | uuid | no | — | FK → `ProjectUnit.id`, `ON DELETE RESTRICT` — the unit after this transfer |
+| `effectiveDate` | date | no | — | the calendar date the transfer actually took effect in the business, **deliberately distinct from `createdAt`** — HR may enter a transfer into the system days or weeks after it actually happened; this is the date every reporting/query use case (§ below) reasons about |
+| `transferredByUserId` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — the user who entered this transfer record |
+| `reason` | text | yes | — | optional free-text explanation of *why* the transfer happened |
+| `remarks` | text | yes | — | optional free-text notes, distinct from `reason` (e.g. handover details, temporary-vs-permanent context) |
+| `createdAt` | timestamptz | no | `now()` | when this record was entered into the system — not necessarily the same moment as `effectiveDate` |
+
+- **Unique constraints:** none — an employee may transfer any number of times
+- **Indexes:** (`employeeId`, `effectiveDate` desc) — the primary "this employee's transfer history, in
+  business-effective order" lookup, which is what "where did this employee work on 15 March"-style
+  point-in-time queries need (querying `createdAt` order would give the wrong answer whenever a
+  transfer is entered late); (`toUnitId`, `effectiveDate`) for "which employees transferred into unit X
+  in period Y" reporting; (`fromSiteId`), (`toSiteId`), (`fromUnitId`) for the remaining unit/site-level
+  reporting directions. This table's column shape (typed `effectiveDate`, not just a timestamp) is
+  deliberately designed now for the future/no-UI-yet reporting this enables — "how many transfers has
+  this employee had," "where did this employee work on a given date," "who transferred into Warehouse
+  this year" — even though no screen consumes it in Phase 2.5.
+- **Cascade:** all FKs `RESTRICT` — a transfer record is never orphaned by deleting the employee, a
+  site, a unit, or the acting user; this also means a `ProjectSite`/`ProjectUnit` cannot be deleted
+  while any historical transfer still references it, on top of the existing active-reference checks
+  (§8/§8a) — consistent with Principle 2 (historical data is never silently orphaned)
+- **Module owner:** Employee Registry (same module that owns `Employee` and its transfer logic)
+- **Immutable, append-only:** yes — a transfer record, once written, is never edited or deleted except
+  by direct database intervention; no application code path exists to update or remove a row, matching
+  this schema's existing append-only convention (§22) for `Correction`/`AuditLog`/`BackupPackage`. Unlike
+  `AuditLog` (§3, §16), this is an application-layer-only guarantee — no database trigger is proposed
+  here, consistent with how `Correction`/`BackupPackage` are also append-only by convention without a
+  DB-level trigger; only the Audit Log itself carries that extra enforcement layer, per Principle 3.
+- **Transactions required:** yes — written in the same transaction as the `Employee` row update and
+  the corresponding `AuditLog` `employee.transferred` entry (§9) whenever a transfer occurs
+- **Row count:** small — one row per actual site/unit transfer event, a rare action relative to
+  ordinary Employee edits
+
 ## 9. `Employee`
 
 **Purpose:** Identity, employment, and bank details for a person on payroll — the Employee Registry.
@@ -381,9 +435,17 @@ attendance breakdown: an employee occasionally working a different unit for part
   never be a cross-site editing exception for a multi-unit employee (see §12a). Master Admin is
   unrestricted.
 - **Audit logging:** every create/update writes a generic `employee.updated` (or `.created`) entry
-  with a field-level diff in `metadata`, now including `unitId` changes; setting `dateOfLeaving`
-  additionally writes a distinct `employee.left` entry. A change to `siteId`/`unitId` here **never**
-  cascades into any existing `PayrollEntry` — see §12.
+  with a field-level diff in `metadata`. **Revised 2026-07-03 (session 2):** an edit that changes
+  `siteId` and/or `unitId` writes a distinct **`employee.transferred`** entry instead of the generic
+  `employee.updated` entry for that edit — carrying old site/unit, new site/unit, the acting user, and
+  the timestamp — and, in the same transaction, a row in the new `EmployeeTransferHistory` table
+  (§8b); an edit to any other field continues to produce the ordinary `employee.updated` entry,
+  unchanged. Setting `dateOfLeaving` writes a distinct `employee.left` entry; clearing it via the new
+  **Reactivate** action (§26 item 6, now finalized) writes a distinct `employee.reactivated` entry —
+  and if that same reactivation also changes site/unit, the `employee.transferred` entry and
+  `EmployeeTransferHistory` row fire alongside it, since reactivation and transfer are independent
+  facts that can co-occur. A change to `siteId`/`unitId` here **never** cascades into any existing
+  `PayrollEntry` — see §12.
 - **Row count:** ~1,500 active today; the system's design floor is 10,000+ (Principle 10), growing to
   several thousand over years given high turnover with history retained
 
@@ -942,6 +1004,11 @@ ProjectSite (1) ───< ProjectUnit (many)
 ProjectSite (1) ───< Employee (many)                 [siteId, direct]
 ProjectUnit (1) ───< Employee (many)                 [unitId, composite FK with siteId — §9]
 
+Employee (1) ───< EmployeeTransferHistory (many)             [employeeId — §8b]
+ProjectSite (1) ───< EmployeeTransferHistory (many)          [fromSiteId, toSiteId — §8b]
+ProjectUnit (1) ───< EmployeeTransferHistory (many)          [fromUnitId, toUnitId — §8b]
+User (1) ───< EmployeeTransferHistory (many)                 [transferredById — §8b]
+
 Employee (1) ───< PayrollEntry (many)
 PayrollCycle (1) ───< PayrollEntry (many)
 PayrollCycle (1) ───< PayrollCycle (many)     [sourceCycleId, self-referencing]
@@ -1000,7 +1067,8 @@ immutable except for its single permitted `PENDING → SETTLED` transition (a `N
 already in its final state and never transitions at all).
 
 ### Append-only tables
-`Correction`, `AuditLog`, `BackupPackage`, `BackupPackageFile`.
+`Correction`, `AuditLog`, `BackupPackage`, `BackupPackageFile`, `EmployeeTransferHistory` (added
+2026-07-03, session 2 — §8b).
 
 ### Tables requiring multi-statement transactions
 - `PayrollEntry` insert + its first `PayrollEntryWorkLine` insert, always together, never a two-step
@@ -1040,8 +1108,10 @@ captured in the same field-level diff), `Correction` (every creation, including 
 zero-net-difference/`NONE` correction), `BalanceAdjustment` (creation and settlement),
 `PayrollCycle` (every status transition, including a finalization attempt blocked by the precondition),
 `Advance` (creation and both balance-changing events — original deduction and correction-triggered
-reconciliation), `Employee` (every create/update, including site/unit transfers and bank-detail
-changes — see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation, role/site reassignment),
+reconciliation), `Employee` (every create/update — a site/unit-changing edit writes a dedicated
+`employee.transferred` entry, not the generic `employee.updated` entry, plus an `EmployeeTransferHistory`
+row (§8b); leaving/reactivating write their own dedicated `employee.left`/`employee.reactivated`
+entries — see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation, role/site reassignment),
 `ProjectSite` (creation, edit, deletion attempt), `ProjectUnit` (creation, edit, deletion attempt —
 same pattern as `ProjectSite`, §8a), `CompanySettings` (every update).
 
@@ -1118,11 +1188,12 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
   this bullet requires, recorded in `docs/PROJECT_PROGRESS.md`.
 - Initial migration creates tables in dependency order: `Role`, `Permission`, `RolePermission`,
   `Bank`, `AdjustmentType` → `User`, `ProjectSite` → `ProjectUnit` → `UserSiteAssignment`, `Employee` →
-  `PayrollCycle` → `PayrollEntry` → `PayrollEntryWorkLine` → `Correction` → `BalanceAdjustment`,
-  `Advance` → `AuditLog` → `BackupPackage` → `BackupPackageFile` → `CompanySettings`. (In practice,
-  Phase 1 and Phase 2 already split this into separate additive migrations rather than one initial
-  migration — `ProjectUnit` and `PayrollEntryWorkLine` will be new migrations layered on top of what's
-  already built, per `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5 section, not edits to existing ones.)
+  `EmployeeTransferHistory` → `PayrollCycle` → `PayrollEntry` → `PayrollEntryWorkLine` → `Correction` →
+  `BalanceAdjustment`, `Advance` → `AuditLog` → `BackupPackage` → `BackupPackageFile` →
+  `CompanySettings`. (In practice, Phase 1 and Phase 2 already split this into separate additive
+  migrations rather than one initial migration — `ProjectUnit`, `Employee.unitId`, and
+  `EmployeeTransferHistory` land in Phase 2.5's migrations, `PayrollEntryWorkLine` in Phase 3's, per
+  `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5/3 sections, not edits to existing ones.)
 - Seed data required at initial migration: the two roles and their permissions, the three banks
   (ABL/HBL/MCB), the seven initial `AdjustmentType` rows, one Master Admin `User`, and the singleton
   `CompanySettings` row. `BalanceAdjustmentType.NONE` needs no seed data — it's an enum value, not a
@@ -1136,12 +1207,11 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
 
 ## 26. Design Assumptions Requiring Confirmation
 
-Items 1, 2, and 4 below are now **resolved** (final decisions, no longer open) and are kept only as a
-record of what was decided and why. Item 5 remains genuinely open (Phase 3's concern, not Phase 2's)
-and is unaffected by this round of changes. Item 3 is updated to reflect the explicit-linkage schema
-addition, but the underlying business assumption it flags is still worth confirming. **Item 6 is new
-(2026-07-03): a recommendation has been given, but the user has explicitly reserved final sign-off
-before any constraint change is implemented — do not treat it as resolved.**
+Items 1, 2, 4, and (as of session 2) 6 below are now **resolved** (final decisions, no longer open)
+and are kept only as a record of what was decided and why. Item 5 remains genuinely open (Phase 3's
+concern, not Phase 2's) and is unaffected by this round of changes. Item 3 is updated to reflect the
+explicit-linkage schema addition, but the underlying business assumption it flags is still worth
+confirming.
 
 1. ~~`PayrollCycle` Draft → Released trigger~~ — **Resolved.** Draft → Released is an explicit
    Master Admin "Finalize Cycle" action, gated by a precondition (no non-held unreleased entries) with
@@ -1165,35 +1235,33 @@ before any constraint change is implemented — do not treat it as resolved.**
 5. **A `PayrollCycle` is exactly one calendar month.** Nothing in the spec suggests non-monthly or
    custom-length pay periods; `year`+`month` is the whole cycle identity. If that ever changes, it's
    a schema change to this table specifically. Not yet confirmed — revisit before Phase 3.
-6. **CNIC duplicate detection and the recommended approach — recommendation given 2026-07-03, final
-   decision reserved by the user.** The requirement: validate CNIC format, normalize before comparison
-   and storage, check for a duplicate immediately while an operator is entering an employee record
-   (not just on submit), surface exactly which existing employee already holds that CNIC when one is
-   found, and never silently accept a duplicate. Recommendation: **keep `cnic` database-unique
-   (partial, `WHERE cnic IS NOT NULL` — already true today, §9) and add no override mechanism.**
-   Reasoning: a CNIC is a real-world unique identifier (Pakistan's national ID); two distinct active
-   people can never legitimately share one, so an apparent duplicate is always either a data-entry
-   mistake or the same person already existing in the system. An override would reopen exactly the
-   risk the user explicitly said they want closed ("I do not want duplicate CNICs silently
-   accepted") and would fragment one person's history across two `Employee` rows, undermining the
-   CNIC-based lookup requirement that a single search surface an employee's *full* history
-   (`reference/PROJECT_SPEC.md` #13). The one legitimate scenario that might tempt an override — a
-   former employee (`dateOfLeaving` set) being **rehired** — should be handled by **reactivating the
-   existing row** (clearing `dateOfLeaving`, updating employment fields) rather than creating a second
-   row with the same CNIC; this preserves Principle 2 (historical `PayrollEntry` rows still reference
-   the original, untouched `Employee.id`) while keeping one identity, one CNIC, one row. **This
-   surfaces a real, previously-unflagged gap**: the Employee Registry (Phase 2) built a "Mark as Left"
-   action (`POST /:id/leave`) but no symmetric "Reactivate" action — needed to make the recommendation
-   above actually usable, tracked in `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5 section. Two concrete,
-   additive (non-constraint-changing) improvements should ship alongside whatever final decision is
-   made here: (a) **normalize before validating**, not just before storing — today's Zod pattern
-   (`/^\d{13}$/`) requires digits-only input with no dashes, so a user typing a CNIC in the
-   commonly-written `#####-#######-#` form currently fails validation outright rather than being
-   normalized; the input should strip non-digit characters before validation, both in the form and the
-   CSV import path; (b) a debounced pre-submit **duplicate-check** lookup (e.g.
-   `GET /employees/check-cnic?cnic=...`) so an operator learns about a collision — and which existing
-   employee owns it — before hitting a raw 409 on submit, prompting them toward reactivation instead
-   of a blocked create.
+6. ~~CNIC duplicate detection and the recommended approach~~ — **Resolved 2026-07-03 (session 2),
+   final decision.** CNIC remains globally unique: `cnic` stays database-unique (partial,
+   `WHERE cnic IS NOT NULL` — already true today, §9), with **no override mechanism of any kind**.
+   Duplicate `Employee` records are never permitted. Reasoning: a CNIC is a real-world unique
+   identifier (Pakistan's national ID); two distinct active people can never legitimately share one,
+   so an apparent duplicate is always either a data-entry mistake or the same person already existing
+   in the system. An override would reopen exactly the risk the user said they want closed and would
+   fragment one person's history across two `Employee` rows, undermining the CNIC-based lookup
+   requirement that a single search surface an employee's *full* history (`reference/PROJECT_SPEC.md`
+   #13). The one legitimate scenario an override might otherwise tempt — a former employee
+   (`dateOfLeaving` set) being **rehired** — is handled exclusively by a new **Reactivate Employee**
+   action (`docs/IMPLEMENTATION_PLAN.MD`'s Phase 2.5, Checkpoint 4): reactivating clears
+   `dateOfLeaving` and updates the employee's current employment details on their **existing** row,
+   never creating a second row with the same CNIC — preserving Principle 2 (historical `PayrollEntry`
+   rows still reference the original, untouched `Employee.id`) while keeping one identity, one CNIC,
+   one row. This is the direct successor to the Phase 2 "Mark as Left" action (`POST /:id/leave`),
+   which had no symmetric counterpart until now. If a reactivation also changes the employee's site/
+   unit relative to when they left, the transfer-audit path (§8b/§9) fires alongside a distinct
+   `employee.reactivated` entry, since reactivation and transfer are independent, co-occurring facts.
+   Two concrete, additive improvements ship alongside the Reactivate action: (a) **normalize before
+   validating**, not just before storing — today's Zod pattern (`/^\d{13}$/`) requires digits-only
+   input with no dashes, so a user typing a CNIC in the commonly-written `#####-#######-#` form
+   currently fails validation outright rather than being normalized; the input strips non-digit
+   characters before validation, both in the form and the CSV import path; (b) a debounced pre-submit
+   **duplicate-check** lookup (e.g. `GET /employees/check-cnic?cnic=...`) so an operator learns about a
+   collision — and which existing employee owns it — before hitting a raw 409 on submit, prompting them
+   toward reactivation instead of a blocked create.
 
 ---
 
