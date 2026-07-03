@@ -11,25 +11,31 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest commit: `11cdc9d62728c15e35884512f1dda127777cd10e`** — "docs: close Phase 2 checkpoint
-  (conditional) and record decisions". Working tree clean as of that commit. Full lineage:
-  `7938659` (session start) → `2e804d4` (closed Phase 1, conditional) → `674ab04` (Phase 2's
-  substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass + final visual consistency audit) →
-  `11cdc9d` (Phase 2 checkpoint documentation).
-- **2026-07-03 session (this entry): documentation and architecture only, per explicit instruction —
-  no commit made yet, no schema/migration/backend/frontend code touched.** A full pre-Phase-3
-  architecture review produced six new business decisions (Project Unit model, Payroll Entry Work
-  Lines, date display standard, a 10,000-employee performance floor, a CNIC duplicate-detection
-  recommendation pending final sign-off, and a deployment-model reaffirmation), all written into
-  `docs/architecture/database-schema.md`, `docs/architecture/overview.md`,
-  `docs/architecture/folder-structure.md`, `docs/architecture/tech-stack.md`, `docs/design-system.md`,
-  `docs/PROJECT_PRINCIPLES.md` (new Principle 10), and `docs/IMPLEMENTATION_PLAN.md` (new Phase 2.5).
-  Full decision record: `docs/PROJECT_PROGRESS.md` §3 items 16–21.
-- `npm run typecheck`/`lint`/`build` were **not** re-run this session since no code changed — they
-  remain green as of `11cdc9d`, per the prior checkpoint.
+- **Latest commit: `b7ba9cf0e31443ec999e9372e3a086c6de986b01`** — "docs: pre-Phase-3 architecture
+  review — Project Units, Payroll Work Lines, dates, scale". **Working tree fully clean as of this
+  commit** (re-verified at this checkpoint). Full lineage: `7938659` (session start) → `2e804d4`
+  (closed Phase 1, conditional) → `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX
+  polish pass + final visual consistency audit) → `11cdc9d` (Phase 2 checkpoint documentation) →
+  **`b7ba9cf` (the pre-Phase-3 architecture review — Project Units, Payroll Work Lines, date/scale
+  standards — documentation and architecture only, now committed and closed out)**.
+- **Phase 2 is complete and committed. The pre-Phase-3 architecture review is complete and
+  committed.** A full pre-Phase-3 architecture review produced six new business decisions (Project
+  Unit model, Payroll Entry Work Lines, date display standard, a 10,000-employee performance floor, a
+  CNIC duplicate-detection recommendation pending final sign-off, and a deployment-model
+  reaffirmation), all written into `docs/architecture/database-schema.md`,
+  `docs/architecture/overview.md`, `docs/architecture/folder-structure.md`,
+  `docs/architecture/tech-stack.md`, `docs/design-system.md`, `docs/PROJECT_PRINCIPLES.md` (new
+  Principle 10), and `docs/IMPLEMENTATION_PLAN.md` (new Phase 2.5). Full decision record:
+  `docs/PROJECT_PROGRESS.md` §3 items 16–21.
+- **Phase 2.5 is fully designed but has zero implementation** — no schema, migration, backend, or
+  frontend code exists for it yet. **The next implementation phase is Phase 2.5, not Phase 3.**
+- `npm run typecheck`/`lint`/`build` were **not** re-run for this checkpoint since no code changed —
+  they remain green as of `11cdc9d`/`674ab04`, per the prior checkpoint; this session touched
+  documentation only, confirmed by `git status` showing a fully clean tree at `b7ba9cf`.
 - Still no DB-backed test has been run in any session (no Postgres available in the working
   environment — see §5/§7). This now applies to Phase 2's test suite, its two hand-written migrations,
-  and the UI polish pass's migration, not just Phase 1's — unchanged by this session.
+  and the UI polish pass's migration, not just Phase 1's — unchanged by this session, and still the
+  one real gap tracked to close before Phase 9 production sign-off.
 
 ## 2. What was completed today (2026-07-02)
 

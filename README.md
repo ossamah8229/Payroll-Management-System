@@ -3,9 +3,12 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 and Phase 2 are both **closed (conditional)** as of 2026-07-02. Phase 3 (Payroll
-> Entry & Payroll Processing) has not started and will not begin without explicit instruction. See
-> "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
+> **Status:** Phase 1 and Phase 2 are both **closed (conditional)**. A pre-Phase-3 architecture review
+> (Project Units, Payroll Entry Work Lines, DD-MM-YYYY dates, a 10,000-employee scale floor) is
+> **complete and committed** as of 2026-07-03. **The next implementation phase is Phase 2.5**
+> (Project Units module + prerequisites), not Phase 3 — Phase 2.5 is fully designed but not yet
+> implemented, and neither it nor Phase 3 will begin without explicit instruction. See "Current
+> Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
 
@@ -44,13 +47,24 @@ npm run dev:frontend          # http://localhost:5173
   (see `docs/PROJECT_PROGRESS.md` §3 item 4), and remains deferred until before Phase 5.
 - **Database verification:** still outstanding, tracked (not a blocker) — run the DB-backed test
   suite against a real PostgreSQL instance (locally via Docker, or through CI) as soon as one is
-  available, and before Phase 9's hardening pass at the latest. This now covers Phase 1's and Phase
-  2's test suites and all three hand-written migrations, not just Phase 1's.
+  available, and **before Phase 9's production sign-off** at the latest. This covers Phase 1's and
+  Phase 2's test suites and all three hand-written migrations, not just Phase 1's.
 - **Process note:** starting with Phase 2's close-out, every future phase's Definition of Done
   includes Playwright-driven visual verification (real browser rendering, not just
   typecheck/lint/build) — see `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria".
-- **Current git checkpoint:** `89ac6ff` — "feat(ui): Phase 2 UI polish and UX improvements" (the Phase
-  2 closing commit). See `docs/PROJECT_PROGRESS.md` for full lineage and the latest commit hash.
+- **Pre-Phase-3 architecture review — closed and committed, 2026-07-03:** Project Sites no longer own
+  Branch Codes; a new, dedicated Project Units module models the operational Branch/Department/Section
+  an employee is deputed to; Payroll Entry gains `PayrollEntryWorkLine` (every entry always has at
+  least one, supporting an employee working across multiple Project Units within one cycle, always
+  within a single Project Site — enforced at both the database and application layers); all
+  user-facing dates now display as `DD-MM-YYYY` (ISO internally, unchanged); a new architectural
+  principle sets a 10,000-employee performance/scale design floor; a CNIC duplicate-detection
+  recommendation is written up pending the user's final sign-off. Full record:
+  `docs/PROJECT_PROGRESS.md` §3 items 16–21. **A new Phase 2.5 is inserted ahead of Phase 3 to build
+  this — fully designed, not yet implemented.**
+- **Current git checkpoint:** `b7ba9cf` — "docs: pre-Phase-3 architecture review — Project Units,
+  Payroll Work Lines, dates, scale". See `docs/PROJECT_PROGRESS.md` for full lineage and the latest
+  commit hash.
 - Static, framework-free visual previews of the current UI are available under `docs/prototypes/`
   (`phase1-preview.html`; `phase2-project-sites-preview.html`;
   `phase2-employee-registry-preview.html`; `phase2-settings-users-preview.html`) — open any of them
@@ -105,5 +119,7 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-See `docs/PROJECT_PROGRESS.md` §5 for the exact next action (Postgres-backed test verification),
-and `docs/SESSION_HANDOFF.md` for the full handoff to the next development session.
+**The next implementation phase is Phase 2.5** (Project Units module, Payroll Work Lines
+prerequisite, Employee Registry refinements — `docs/IMPLEMENTATION_PLAN.md`), not Phase 3. See
+`docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
+handoff to the next development session.

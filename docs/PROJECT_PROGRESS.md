@@ -1,18 +1,20 @@
 # Project Progress — Payroll Management System
 
 **Date:** 2026-07-03
-**Latest git commit:** `11cdc9d62728c15e35884512f1dda127777cd10e` — "docs: close Phase 2 checkpoint
-(conditional) and record decisions" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed
-Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit →
-`11cdc9d` Phase 2 checkpoint documentation). **2026-07-03's session (this entry) is a documentation-
-and-architecture-only pass — no commit yet** — see §3 items 16–21 below for the full decision record.
+**Latest git commit:** `b7ba9cf0e31443ec999e9372e3a086c6de986b01` — "docs: pre-Phase-3 architecture
+review — Project Units, Payroll Work Lines, dates, scale" (session lineage: `2e804d4` closed Phase 1
+→ `674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual
+consistency audit → `11cdc9d` Phase 2 checkpoint documentation → **`b7ba9cf` the pre-Phase-3
+architecture review, committed and closed out** — see §3 items 16–21 below for the full decision
+record).
 **Branch:** `main`
-**Current implementation phase:** **Phase 2 — CLOSED (conditional).** A new **Phase 2.5** has been
-inserted into `docs/IMPLEMENTATION_PLAN.md` ahead of Phase 3 — Project Unit model, Payroll Work Lines
-prerequisite, and Employee Registry refinements (§3 items 16–20) — discovered necessary during a
-pre-Phase-3 architecture review. **Neither Phase 2.5 nor Phase 3 has started; this session was
-documentation and architecture only, per explicit instruction.** Do not begin schema, migration,
-backend, or frontend work without explicit instruction next session.
+**Current implementation phase:** **Phase 2 — CLOSED (conditional) and committed. The pre-Phase-3
+architecture review is complete and committed (`b7ba9cf`).** A new **Phase 2.5** has been inserted
+into `docs/IMPLEMENTATION_PLAN.md` ahead of Phase 3 — Project Unit model, Payroll Work Lines
+prerequisite, and Employee Registry refinements (§3 items 16–20). **Phase 2.5 is fully designed but
+has zero implementation — no schema, migration, backend, or frontend code exists for it.** Neither
+Phase 2.5 nor Phase 3 has started. **The next implementation phase is Phase 2.5, not Phase 3** — do
+not begin any schema, migration, backend, or frontend work without explicit instruction next session.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
