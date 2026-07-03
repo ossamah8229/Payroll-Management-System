@@ -1,14 +1,15 @@
 # Project Progress — Payroll Management System
 
 **Date:** 2026-07-04
-**Latest git commit:** see the commit trailer note at the end of this file for the exact hash — this
-header is updated in the same commit as every checkpoint close, so it always names the commit it
-ships in (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
+**Latest git commit:** `70a45ad` — "Phase 2.5 Checkpoint 2: Employee to Project Unit relationship"
+(session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
 `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
 documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
-`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → **Phase 2.5 Checkpoint 2,
-committed alongside this documentation update and the refreshed HTML prototypes** — see §3 items
-16–22 below for the full decision record).
+`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → **`70a45ad` Phase 2.5
+Checkpoint 2, committed alongside this documentation update and the refreshed HTML prototypes** —
+see §3 items 16–22 below for the full decision record). This line is itself updated by the small
+follow-up commit that always closes a checkpoint session, so it lags the actual `HEAD` by at most
+one trivial doc-only commit — check `git log -1` if in doubt.
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED (conditional) and committed. The pre-Phase-3
 architecture review is complete and committed.** Phase 2.5 (`docs/IMPLEMENTATION_PLAN.md` — Project
@@ -349,7 +350,7 @@ screenshot thumbnails by eye.
   Departments" correctly per site (not hardcoded); the Manage Units panel's create/edit/delete flow
   and empty state all render and function correctly; zero console errors throughout.
 
-### Phase 2.5, Checkpoint 2 — Employee → Project Unit relationship (2026-07-04, COMMITTED)
+### Phase 2.5, Checkpoint 2 — Employee → Project Unit relationship (2026-07-04, COMMITTED as `70a45ad`)
 
 - **Schema/migration**: `Employee.unitId` added, composite-FK'd against `ProjectUnit(id, siteId)`
   (`docs/architecture/database-schema.md` §9) — NOT NULL, no default, matching how `siteId` has

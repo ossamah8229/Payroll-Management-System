@@ -11,13 +11,14 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: see `docs/PROJECT_PROGRESS.md`'s header for the exact hash** — this
-  commit bundles Phase 2.5 Checkpoint 2's code together with this documentation update and the
-  refreshed HTML prototypes, per the session-closing instruction to commit all three together. Full
-  lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) →
-  `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) →
-  `74c124e` (further doc status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) →
-  **Checkpoint 2 (this session's final commit)**.
+- **Latest committed commit: `70a45ad`** — "Phase 2.5 Checkpoint 2: Employee to Project Unit
+  relationship" — bundles Checkpoint 2's code together with the documentation update and refreshed
+  HTML prototypes, per the session-closing instruction to commit all three together. Full lineage:
+  `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2
+  checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
+  status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → **`70a45ad` (Checkpoint 2,
+  this session's final substantive commit — a small follow-up doc-only commit closing this exact
+  hash into the record may follow it; check `git log -1` if in doubt).**
 - **Working tree is clean — the session ended immediately after this commit, by explicit
   instruction.** Checkpoint 2 shipped: `Employee.unitId` + composite FK against
   `ProjectUnit(id, siteId)`, the new append-only `EmployeeTransferHistory` table, migration
