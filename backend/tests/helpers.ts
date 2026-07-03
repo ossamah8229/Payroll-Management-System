@@ -17,6 +17,7 @@ export async function cleanTestData(): Promise<void> {
   await prisma.rolePermission.deleteMany({ where: { role: { code: { startsWith: 'TEST_' } } } });
   await prisma.role.deleteMany({ where: { code: { startsWith: 'TEST_' } } });
   await prisma.permission.deleteMany({ where: { key: { startsWith: 'test:' } } });
+  await prisma.projectUnit.deleteMany({ where: { site: { name: { startsWith: 'Test Site ' } } } });
   await prisma.projectSite.deleteMany({ where: { name: { startsWith: 'Test Site ' } } });
   await prisma.bank.deleteMany({ where: { code: { startsWith: 'TB' } } });
 }

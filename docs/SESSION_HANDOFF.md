@@ -11,21 +11,24 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `74c124e0820a99f5586a1c1713679887e43c46e2`** — "docs: update project
-  status after architecture checkpoint" (one commit after `b7ba9cf`'s pre-Phase-3 architecture
-  review, itself doc-only). Full lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2
-  UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3
-  architecture review) → `74c124e` (further doc status update).
-- **Working tree is currently NOT clean** — this session (2026-07-03, session 2) has uncommitted
-  changes: Phase 2.5's checkpoint breakdown and its five amendments written into
-  `docs/IMPLEMENTATION_PLAN.md`/`docs/architecture/database-schema.md`/`docs/PROJECT_PROGRESS.md`
-  (see `docs/PROJECT_PROGRESS.md` §3 item 22), plus **Checkpoint 0's code**, now complete: the shared
-  date utilities (`shared/src/lib/date.ts`), the `DateInput` component
-  (`frontend/src/components/ui/date-input.tsx`), their application to the Employee Registry's
-  DOB/DOJ/DOL and Mark-as-Left date fields, a fix to two pre-existing ad-hoc date-formatting call
-  sites in the backend's CSV/Excel export/import (`employees-import-export.service.ts`), and a new
-  pure-unit-test file (`backend/tests/date-utils.test.ts`). **None of this is committed yet** — awaiting
-  explicit approval before Checkpoint 1 begins, per standing instruction.
+- **Latest committed commit: `0d9ea33`** — "Phase 2.5 Checkpoint 0: shared date formatting and
+  DateInput component" (approved and committed this session, 2026-07-03 session 2). Full lineage:
+  `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2
+  checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
+  status update) → `0d9ea33` (Checkpoint 0, this session).
+- **Working tree is currently NOT clean** — **Checkpoint 1 (Project Unit foundation) is code-complete
+  this session but not yet committed**, awaiting explicit approval: the `ProjectUnit` Prisma model +
+  hand-written migration (`20260703100000_project_units`, dropping `ProjectSite.branchCode` and
+  adding `unitLabel`), the dedicated `project-units` backend module (service + routes, mounted in
+  `app.ts`), `ProjectSite`'s service/schema updated (`unitLabel` replacing `branchCode`, delete guard
+  now also blocks on referencing `ProjectUnit` rows), the frontend Project Units management UI (a
+  "Manage {unitLabel}s" panel nested under each Project Site, entirely `unitLabel`-driven, no
+  hardcoded "Branch" text), new shared `pluralize()` utility, new backend tests
+  (`project-units.test.ts`, plus additions to `project-sites.test.ts`), and — an unplanned but
+  necessary fix discovered via this checkpoint's own Playwright verification — `DropdownMenuContent`'s
+  z-index raised above `Modal`'s (see §3 below and `docs/PROJECT_PROGRESS.md`'s Checkpoint 1 entry for
+  the full reasoning). **Do not begin Checkpoint 2 without explicit approval of Checkpoint 1's
+  commit.**
 - **Phase 2 is complete and committed. The pre-Phase-3 architecture review is complete and
   committed.** A full pre-Phase-3 architecture review produced six new business decisions (Project
   Unit model, Payroll Entry Work Lines, date display standard, a 10,000-employee performance floor, a
@@ -36,15 +39,17 @@ be enough to resume correctly without re-deriving context from scratch — per
   **The CNIC recommendation is now a finalized decision, not pending** — see §3 below and
   `docs/PROJECT_PROGRESS.md` §3 item 22. Full decision record: `docs/PROJECT_PROGRESS.md` §3 items
   16–22.
-- **Phase 2.5 is in progress.** Checkpoint 0 (shared date formatting/`DateInput`) is code-complete,
-  statically verified, and Playwright-verified, but **not yet committed**. Checkpoints 1–4 (Project
-  Units, `Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap + three-layer
-  validation, CNIC/Reactivate) have not started. **Do not begin Checkpoint 1 without explicit
-  approval of Checkpoint 0's commit.**
+- **Phase 2.5 is in progress.** Checkpoint 0 (shared date formatting/`DateInput`) is committed
+  (`0d9ea33`). **Checkpoint 1 (Project Unit foundation) is code-complete but not yet committed.**
+  Checkpoints 2–4 (`Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap +
+  three-layer validation, CNIC/Reactivate) have not started.
 - `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing `react-refresh` warnings), and
-  `npm run build` were all re-run this session after Checkpoint 0's code changes and are clean across
-  all three workspaces. A new pure-unit-test file (`backend/tests/date-utils.test.ts`, no DB required)
-  was also run directly and passes (23/23 assertions).
+  `npm run build` were all re-run this session after Checkpoint 1's code changes and are clean across
+  all three workspaces. `backend/tests/date-utils.test.ts` and `rbac.test.ts` (no DB required) were run
+  directly and pass (23/23 assertions); the new DB-backed `project-units.test.ts` and the updated
+  `project-sites.test.ts` were confirmed to compile and execute correctly through `ts-jest` (failing
+  only on the expected "no Postgres reachable" environment constraint, same as every other DB-backed
+  test in this project — not a code defect).
 - Still no DB-backed test has been run in any session (no Postgres available in the working
   environment — see §5/§7). This now applies to Phase 2's test suite, its two hand-written migrations,
   and the UI polish pass's migration, not just Phase 1's — unchanged by this session, and still the
@@ -142,6 +147,14 @@ found to be a false alarm — a defensive fix was kept anyway (`Modal` now expli
 `DropdownMenuContent` in z-index) since it costs nothing and removes an implicit assumption. Full
 detail in `docs/PROJECT_PROGRESS.md`'s "Final visual consistency audit" subsection.
 
+**This ordering was revised 2026-07-03 (Phase 2.5, Checkpoint 1) — `DropdownMenuContent` now
+outranks `Modal`, not the other way around.** Checkpoint 1's Manage Units panel was the first place
+in the app a `DropdownMenu` opens *from inside* an already-open `Modal`, and at the old ordering
+this was a confirmed, reproducible bug (not a false alarm this time): the open Modal's own overlay
+permanently intercepted every click on the nested dropdown's menu items. See
+`docs/PROJECT_PROGRESS.md`'s Checkpoint 1 entry for the full reasoning and the trade-off this
+re-opens (a still-unconfirmed, purely cosmetic transition-overlap risk in the original direction).
+
 The whole polish pass (layout fix, greeting, table alignment, Project Sites address, logo
 placeholders, Settings layout, company name, button/input heights, plus this audit's two fixes) was
 committed together as `89ac6ff` ("feat(ui): Phase 2 UI polish and UX improvements") after explicit
@@ -228,9 +241,32 @@ and must not begin without the user's explicit instruction next session.**
     Employee transfers also write a dedicated `employee.transferred` `AuditLog` entry, not the generic
     `employee.updated` entry. Do not fold these into a generic update path.
   - A new **Phase 2.5** (`docs/IMPLEMENTATION_PLAN.md`) sits between Phase 2 and Phase 3, now broken
-    into five explicit, individually-gated checkpoints (0–4). **Checkpoint 0 is code-complete but not
-    yet committed; Checkpoints 1–4 have not started.** Phase 3 depends on it (specifically,
+    into five explicit, individually-gated checkpoints (0–4). **Checkpoint 0 is committed (`0d9ea33`);
+    Checkpoint 1 (Project Unit foundation) is code-complete this session but not yet committed;
+    Checkpoints 2–4 have not started.** Phase 3 depends on it (specifically,
     `PayrollEntryWorkLine.unitId` cannot exist without `ProjectUnit`, built in Checkpoint 1).
+  - **`ProjectUnit` now exists in the schema and is queryable** (Checkpoint 1,
+    `backend/prisma/schema.prisma`, migration `20260703100000_project_units`) — nested under a
+    Project Site, CRUD via the dedicated `project-units` module
+    (`backend/src/modules/project-units/`), mounted at `/api/v1/sites/:siteId/units` (list/create,
+    `requireSiteAccess`-gated) and `/api/v1/units/:id` (update/delete, `sites:manage`-gated).
+    `ProjectSite.branchCode` no longer exists anywhere in the codebase — it is `unitLabel` now.
+    `deleteProjectSite` blocks on referencing `ProjectUnit` rows in addition to `Employee` rows.
+    **`Employee.unitId` still does not exist** (Checkpoint 2) — `deleteProjectUnit`'s guard is
+    therefore currently a no-op in practice (nothing references a unit yet) and is explicitly flagged
+    as such in its own code comment; do not mistake this for a finished guard.
+  - **`DropdownMenuContent`'s z-index was raised above `Modal`'s (`z-[70]` vs. `z-[60]`), reversing
+    the 2026-07-02 Phase 2 polish-audit ordering** (`frontend/src/components/ui/dropdown-menu.tsx`,
+    `modal.tsx`). Checkpoint 1's Manage Units panel was the first place in the app a `DropdownMenu`
+    opens *from inside* an already-open `Modal`; at the old ordering this was a **confirmed,
+    reproducible bug** (not the "false alarm" the 2026-07-02 audit found in the other direction) — the
+    open Modal's own overlay permanently intercepted every click on the nested dropdown, verified via
+    Playwright to persist indefinitely, not just during a transition. This re-opens a still-unconfirmed,
+    purely cosmetic risk in the original direction (a dropdown closing at the same moment a new Modal
+    opens from it could theoretically render above that new Modal during the fade transition) — judged
+    an acceptable trade-off since that risk was never confirmed as a real bug, while the one just fixed
+    was. Do not revert this ordering without re-verifying the Manage Units panel (or any future
+    dropdown-inside-modal usage) still works.
 
 ## 4. Current frozen architecture (reference index)
 
@@ -322,19 +358,19 @@ environment is available (see §7 item 2), before Phase 9's hardening pass at th
 
 ## 7. Next steps, in order
 
-**Phase 1 and Phase 2 are closed (conditional). Phase 2.5 is in progress: Checkpoint 0 is
-code-complete but uncommitted, awaiting explicit approval before Checkpoint 1. Do not begin
-Checkpoint 1 (or any later checkpoint) without the user's explicit instruction** — this is a standing
-instruction, not an inference.
+**Phase 1 and Phase 2 are closed (conditional). Phase 2.5 is in progress: Checkpoint 0 is committed
+(`0d9ea33`); Checkpoint 1 is code-complete but uncommitted, awaiting explicit approval before
+Checkpoint 2. Do not begin Checkpoint 2 (or any later checkpoint) without the user's explicit
+instruction** — this is a standing instruction, not an inference.
 
-1. **Get explicit approval to commit Checkpoint 0**, then proceed to **Checkpoint 1**
-   (`docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5) — the `ProjectUnit` migration (including the
-   destructive `ProjectSite.branchCode` drop, this project's first) and the dedicated Project Units
-   module. Checkpoint 2 (`Employee.unitId`, transfer audit trail, `EmployeeTransferHistory`),
-   Checkpoint 3 (import/export remap + three-layer Site/Unit validation), and Checkpoint 4 (CNIC
-   normalization/duplicate-check/Reactivate — policy now finalized, but implementation still needs a
-   separate design-approval gate per standing instruction) follow in order. Phase 3 cannot build
-   `PayrollEntryWorkLine.unitId` without Checkpoint 1 landing first.
+1. **Get explicit approval to commit Checkpoint 1**, then proceed to **Checkpoint 2**
+   (`docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5) — `Employee.unitId` + composite FK, the dedicated
+   transfer-audit trail (`employee.transferred` `AuditLog` entries, distinct from `employee.updated`),
+   and the new `EmployeeTransferHistory` table. Checkpoint 3 (import/export remap + three-layer
+   Site/Unit validation) and Checkpoint 4 (CNIC normalization/duplicate-check/Reactivate — policy now
+   finalized, but implementation still needs a separate design-approval gate per standing instruction)
+   follow in order. Phase 3 cannot build `PayrollEntryWorkLine.unitId` without Checkpoint 2 landing
+   first (it composite-FKs against `ProjectUnit`, which Checkpoint 1 already built).
 2. The first time a Postgres-capable environment is available, run:
    ```bash
    cp backend/.env.example backend/.env

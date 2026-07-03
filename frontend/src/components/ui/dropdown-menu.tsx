@@ -14,7 +14,15 @@ const DropdownMenuContent = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        'z-50 min-w-[180px] overflow-hidden rounded-lg border border-border bg-surface-2 p-1 shadow-md',
+        // z-[70], above Modal's z-[60] (see modal.tsx) — discovered via Phase 2.5 Checkpoint 1's
+        // Manage Units panel, the first place in the app a DropdownMenu opens *inside* an
+        // already-open Modal: at z-50 it rendered behind that modal's own overlay, silently
+        // swallowing every click on the menu. A dropdown is always the most recently opened,
+        // currently-interactive layer relative to whatever Modal it's triggered from — whether
+        // that Modal is the page's base content or, as here, another Modal already on screen —
+        // so it must render above Modal in all cases, not just the base-page case the z-[60] rule
+        // was originally written for.
+        'z-[70] min-w-[180px] overflow-hidden rounded-lg border border-border bg-surface-2 p-1 shadow-md',
         'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         className,
       )}

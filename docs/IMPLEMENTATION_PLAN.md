@@ -189,16 +189,46 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   building it now would be an unused, half-wired component. Flagged here rather than silently dropped.
 - No schema or migration changes in this checkpoint — shared package and frontend component work only.
 
-**Checkpoint 1 — `ProjectUnit` schema, migration, and dedicated module**
+**Checkpoint 1 — `ProjectUnit` schema, migration, and dedicated module — COMPLETE, 2026-07-03**
 - An additive migration introducing `ProjectUnit` (`docs/architecture/database-schema.md` §8a) and
   removing `ProjectSite.branchCode` (§8's revision note — this project's first genuinely destructive
-  migration, low-risk only because it's never been applied to a live database).
+  migration, low-risk only because it's never been applied to a live database). Generated via
+  `prisma migrate diff` against the schema files directly (no live database needed for this), then
+  hand-placed into a timestamped migration folder following the exact convention of every prior
+  hand-written migration in this project.
+- `ProjectSite.unitLabel` (already speced in §8, added here alongside the `branchCode` removal since
+  both land in the same migration) — the Project Sites create/edit form and list column now use it in
+  place of the removed Branch Code field.
 - The dedicated **Project Units** module (`backend/src/modules/project-units/`) — CRUD nested under a
-  Project Site, delete blocked while employees (or, once Phase 3 lands, work lines) reference a unit.
+  Project Site (`GET`/`POST /api/v1/sites/:siteId/units`, `PATCH`/`DELETE /api/v1/units/:id`), the
+  list/create routes gated by `requireSiteAccess` (this middleware's first real consumer — it existed
+  since Phase 1 but had no site-scoped route to guard until now), update/delete gated by
+  `sites:manage` alone (Master Admin only, matching `ProjectSite`'s own mutation gating).
+  `deleteProjectSite` now also blocks while any `ProjectUnit` still belongs to the site, per §8's
+  revision note. `deleteProjectUnit`'s own guard against `Employee`/`PayrollEntryWorkLine` references
+  is written but is a no-op until Checkpoint 2 adds `Employee.unitId` — explicitly flagged in its code
+  comment, not silently left incomplete.
+- Frontend: a "Manage {unitLabel}s" panel nested under each Project Site (opened from that site's row
+  action menu), entirely driven by the site's own `unitLabel` — no hardcoded "Branch" text anywhere,
+  verified by grep. New shared `pluralize()` utility (`shared/src/lib/text.ts`) for composing headings
+  like "Manage Branches"/"Manage Departments" from the singular `unitLabel`.
+- **Scope note**: the Site → Unit cascading select originally planned for Checkpoint 0 (then deferred)
+  is deferred again, to **Checkpoint 2** — Checkpoint 1's own UI (managing units *within* one already-
+  known site) never needed to *select* a unit from a list scoped by site; that need only arises once
+  the Employee Registry form has to pick a unit (Checkpoint 2). Building it now would still have been
+  premature.
+- **Unplanned fix, discovered via this checkpoint's own Playwright verification, not scope creep**:
+  `DropdownMenuContent`'s z-index raised above `Modal`'s (`z-[70]` vs. `z-[60]`) — the Manage Units
+  panel is the first place in the app a `DropdownMenu` opens from *inside* an already-open `Modal`,
+  and the previous ordering (set during the Phase 2 UI polish pass) caused the open Modal's own
+  overlay to permanently intercept clicks on the nested dropdown. Confirmed via Playwright as a real,
+  persistent bug (not a transition-timing artifact) before fixing. Full reasoning in
+  `docs/PROJECT_PROGRESS.md`'s Checkpoint 1 entry and `docs/SESSION_HANDOFF.md` §3.
 
 **Checkpoint 2 — `Employee.unitId`, composite FK, transfer audit trail, `EmployeeTransferHistory`**
 - `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (§9) — the Employee Registry
-  create/edit forms gain a Unit field (the Checkpoint 0 cascading select), cascading off the selected
+  create/edit forms gain a Unit field (a new Site → Unit cascading select, deferred here from
+  Checkpoint 0/1 since this is the first place one is actually needed), cascading off the selected
   Site.
 - A new, lightweight, append-only **`EmployeeTransferHistory`** table
   (`docs/architecture/database-schema.md` §8b — new): `id`, `employeeId` FK → `Employee`, `fromSiteId`/

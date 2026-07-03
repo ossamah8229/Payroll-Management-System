@@ -81,10 +81,10 @@ describe('Project Sites', () => {
     const updateRes = await agent
       .patch(`/api/v1/sites/${createRes.body.site.id}`)
       .set('x-csrf-token', csrfToken)
-      .send({ branchCode: 'BR-01' });
+      .send({ unitLabel: 'Department' });
 
     expect(updateRes.status).toBe(200);
-    expect(updateRes.body.site.branchCode).toBe('BR-01');
+    expect(updateRes.body.site.unitLabel).toBe('Department');
   });
 
   it('deletes a site with no employees assigned', async () => {
@@ -122,6 +122,25 @@ describe('Project Sites', () => {
         grossPay: '30000.00',
       },
     });
+
+    const deleteRes = await agent.delete(`/api/v1/sites/${siteId}`).set('x-csrf-token', csrfToken);
+
+    expect(deleteRes.status).toBe(400);
+
+    const stillThere = await prisma.projectSite.findUnique({ where: { id: siteId } });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('blocks deleting a site while a Project Unit still belongs to it', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('sites-delete-blocked-unit@test.local');
+
+    const createRes = await agent
+      .post('/api/v1/sites')
+      .set('x-csrf-token', csrfToken)
+      .send({ name: 'Test Site Zeta' });
+    const siteId = createRes.body.site.id;
+
+    await prisma.projectUnit.create({ data: { siteId, name: 'Test Unit For Deletion Block' } });
 
     const deleteRes = await agent.delete(`/api/v1/sites/${siteId}`).set('x-csrf-token', csrfToken);
 

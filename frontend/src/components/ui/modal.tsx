@@ -8,6 +8,10 @@ import { cn } from '@/lib/cn';
  * right-aligned footer actions). Width varies by use — 420px for small confirmations, 520-580px
  * default, 620px for forms — passed per-instance via `widthClassName` rather than baked in, since
  * every later phase's modals (Correction approval, Advance creation, etc.) reuse this shell.
+ *
+ * z-[60] here, deliberately below DropdownMenuContent's z-[70] (see dropdown-menu.tsx) — a
+ * DropdownMenu opened from *inside* an open Modal (e.g. Phase 2.5's Manage Units panel) must
+ * render above this Modal's own overlay, not behind it.
  */
 const Modal = DialogPrimitive.Root;
 const ModalTrigger = DialogPrimitive.Trigger;

@@ -76,7 +76,12 @@ async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
     employee.mobileNumber ?? '',
     employee.designation,
     employee.site.name, // "Area" — documented assumption: aliases Project, see header comment above
-    employee.site.branchCode ?? '', // "Branch Code" — the project site's own branch code
+    // "Branch Code" — ProjectSite no longer owns a single branch code (removed 2026-07-03, see
+    // database-schema.md §8's revision note); the operational unit an employee is deputed to is
+    // now ProjectUnit, referenced via Employee.unitId (Phase 2.5 Checkpoint 2) and not yet
+    // available at this checkpoint. Left blank here; Checkpoint 3 remaps this column to
+    // ProjectUnit.code once that field exists on Employee.
+    '',
     employee.site.name, // "Area/Location" — documented assumption: aliases Project, see above
     employee.bank?.name ?? '',
     employee.branchCode ?? '', // "Bank Branch Code" — the employee's own bank branch code

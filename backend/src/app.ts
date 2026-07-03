@@ -13,6 +13,7 @@ import { csrfProtection, issueCsrfCookie } from './common/middleware/csrf';
 import { errorHandler } from './common/middleware/error-handler';
 import { authRouter } from './modules/auth/auth.routes';
 import { projectSitesRouter } from './modules/project-sites/project-sites.routes';
+import { projectUnitsRouter } from './modules/project-units/project-units.routes';
 import { banksRouter } from './modules/banks/banks.routes';
 import { employeesRouter } from './modules/employees/employees.routes';
 import { settingsRouter } from './modules/settings/settings.routes';
@@ -85,6 +86,10 @@ export function createApp(): Express {
   });
 
   app.use('/api/v1/auth', authRouter);
+  // Mounted before projectSitesRouter: its routes (/sites/:siteId/units, /units/:id) are more
+  // specific than anything projectSitesRouter matches, so there's no ambiguity either way, but
+  // registering the more specific paths first keeps the intent obvious.
+  app.use('/api/v1', projectUnitsRouter);
   app.use('/api/v1/sites', projectSitesRouter);
   app.use('/api/v1/banks', banksRouter);
   app.use('/api/v1/employees', employeesRouter);

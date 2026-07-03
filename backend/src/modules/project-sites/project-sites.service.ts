@@ -32,8 +32,8 @@ export async function createProjectSite(input: CreateProjectSiteInput) {
   return prisma.projectSite.create({
     data: {
       name: input.name,
-      branchCode: input.branchCode ?? null,
       address: input.address ?? null,
+      ...(input.unitLabel !== undefined && { unitLabel: input.unitLabel }),
     },
   });
 }
@@ -45,18 +45,20 @@ export async function updateProjectSite(id: string, input: UpdateProjectSiteInpu
     where: { id },
     data: {
       ...(input.name !== undefined && { name: input.name }),
-      ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
       ...(input.address !== undefined && { address: input.address }),
+      ...(input.unitLabel !== undefined && { unitLabel: input.unitLabel }),
       ...(input.isActive !== undefined && { isActive: input.isActive }),
     },
   });
 }
 
 /**
- * Delete is blocked while any employee is still assigned to this site (`PROJECT_SPEC.md`,
- * docs/architecture/database-schema.md §8) — checked here at the application layer for a clean
- * error message, backed by `Employee.siteId`'s `ON DELETE RESTRICT` as a database-level backstop
- * that holds even if this check is ever bypassed by a bug or a raw query.
+ * Delete is blocked while any employee is still assigned to this site, or any `ProjectUnit` still
+ * belongs to it (`PROJECT_SPEC.md`, docs/architecture/database-schema.md §8's 2026-07-03 revision
+ * note) — checked here at the application layer for a clean error message, backed by
+ * `Employee.siteId`'s and `ProjectUnit.siteId`'s `ON DELETE RESTRICT` as database-level backstops
+ * that hold even if this check is ever bypassed by a bug or a raw query. A site must have both its
+ * units and its employees cleared before it can be deleted.
  */
 export async function deleteProjectSite(id: string): Promise<void> {
   await getProjectSite(id);
@@ -65,6 +67,13 @@ export async function deleteProjectSite(id: string): Promise<void> {
   if (employeeCount > 0) {
     throw badRequest(
       `Cannot delete this site while ${employeeCount} employee(s) are still assigned to it`,
+    );
+  }
+
+  const unitCount = await prisma.projectUnit.count({ where: { siteId: id } });
+  if (unitCount > 0) {
+    throw badRequest(
+      `Cannot delete this site while ${unitCount} unit(s) still belong to it`,
     );
   }
 

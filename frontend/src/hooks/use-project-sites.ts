@@ -2,13 +2,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreateProjectSiteInput, UpdateProjectSiteInput } from '@payroll/shared';
 import { apiRequest } from '@/lib/api-client';
 
-/** A physical client work location — no banking properties (see the schema-level note in
- * backend/prisma/schema.prisma for why ProjectSite has no relationship to Bank). */
+/** A pure client/location record — no banking properties, no operational-unit properties of its
+ * own (see the schema-level note in backend/prisma/schema.prisma). `unitLabel` is the term this
+ * site's own business uses for its `ProjectUnit`s (e.g. "Branch", "Department", "Section") —
+ * drives every place the UI names a unit for this site. */
 export interface ProjectSite {
   id: string;
   name: string;
-  branchCode: string | null;
   address: string | null;
+  unitLabel: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

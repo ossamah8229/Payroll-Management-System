@@ -122,22 +122,60 @@ model Bank {
   employees Employee[]
 }
 
-/// Project site master data — a physical client work location an employee is deputed to (name,
-/// branch code; no banking properties — see the file-level note above). Delete is blocked at the
-/// application layer while any Employee still references it (checked before delete), with the
-/// Employee.siteId FK as an ON DELETE RESTRICT database-level backstop.
+/// Project site master data — a pure client/location record (name, address; no banking
+/// properties, no operational-unit properties of its own — see the file-level note above and
+/// database-schema.md §8's 2026-07-03 revision note). `branchCode` removed 2026-07-03: a site's
+/// operational sub-divisions are no longer a single flat field here — see `ProjectUnit` below.
+/// Delete is blocked at the application layer while any Employee or ProjectUnit still references
+/// it (checked before delete), with `Employee.siteId`/`ProjectUnit.siteId` as ON DELETE RESTRICT
+/// database-level backstops.
 model ProjectSite {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name       String   @unique @db.VarChar(160)
-  branchCode String?  @db.VarChar(20)
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @unique @db.VarChar(160)
   /// Physical work-location address (2026-07-02 addition — see database-schema.md §8 revision note).
-  address    String?  @db.VarChar(300)
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+  address   String?  @db.VarChar(300)
+  /// The term this site's own business uses for its operational sub-divisions (e.g. "Branch",
+  /// "Department", "Section") — drives every place the UI names a ProjectUnit for this site; free
+  /// text, not an enum, so a client's own vocabulary is never blocked by a missing picklist value
+  /// (Principle 8). Added 2026-07-03 — see database-schema.md §8.
+  unitLabel String   @default("Branch") @db.VarChar(40)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
   userAssignments UserSiteAssignment[]
   employees       Employee[]
+  units           ProjectUnit[]
+}
+
+/// The operational sub-division of a ProjectSite that an employee is actually deputed to — a
+/// specific bank branch, mall department, retail section, etc. (docs/architecture/database-schema.md
+/// §8a). Internally a single generic model regardless of what a given client calls it; the UI
+/// always displays the owning site's own `unitLabel` in place of the literal word "Unit". Added
+/// 2026-07-03 (Phase 2.5, Checkpoint 1), replacing the removed `ProjectSite.branchCode`. Delete is
+/// blocked at the application layer while any Employee or PayrollEntryWorkLine (Phase 3) still
+/// references it, with an ON DELETE RESTRICT database-level backstop on those future FKs.
+model ProjectUnit {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  siteId    String   @db.Uuid
+  name      String   @db.VarChar(160)
+  /// The unit's own operational code — the direct successor to the removed
+  /// `ProjectSite.branchCode`, now correctly scoped to the specific branch/department it
+  /// identifies rather than an entire client site.
+  code      String?  @db.VarChar(20)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  site ProjectSite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  // `@@unique([id, siteId])` exists purely so downstream tables (Employee.unitId in Checkpoint 2,
+  // PayrollEntryWorkLine in Phase 3) can declare a composite foreign key against it — this is what
+  // makes "the unit must belong to the same site as the referencing row" a database-level
+  // guarantee rather than an application-layer check alone (database-schema.md §8a/§9/§12a).
+  @@unique([siteId, name])
+  @@unique([id, siteId])
+  @@index([siteId])
 }
 
 /// Identity, employment, and bank details for a person on payroll — the Employee Registry

@@ -1,22 +1,25 @@
 # Project Progress — Payroll Management System
 
 **Date:** 2026-07-03
-**Latest git commit:** `b7ba9cf0e31443ec999e9372e3a086c6de986b01` — "docs: pre-Phase-3 architecture
-review — Project Units, Payroll Work Lines, dates, scale" (session lineage: `2e804d4` closed Phase 1
-→ `674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual
-consistency audit → `11cdc9d` Phase 2 checkpoint documentation → **`b7ba9cf` the pre-Phase-3
-architecture review, committed and closed out** — see §3 items 16–21 below for the full decision
-record).
+**Latest git commit:** `0d9ea33` — "Phase 2.5 Checkpoint 0: shared date formatting and DateInput
+component" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build
+→ `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
+documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
+**`0d9ea33` Phase 2.5 Checkpoint 0, committed and closed out** — see §3 items 16–22 below for the full
+decision record).
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED (conditional) and committed. The pre-Phase-3
-architecture review is complete and committed (`b7ba9cf`).** Phase 2.5 (`docs/IMPLEMENTATION_PLAN.md`
-— Project Unit model, Payroll Work Lines prerequisite, Employee Registry refinements, §3 items 16–20,
-amended with five refinements in §3 item 22) is now **in progress**: **Checkpoint 0 (shared date
-formatting and reusable UI primitives) is code-complete** — typecheck/lint/build clean, pure unit
-tests passing, Playwright-verified, **not yet committed** (awaiting explicit approval before
-Checkpoint 1). Checkpoints 1–4 (Project Units, `Employee.unitId`/transfer audit/`EmployeeTransferHistory`,
-import remap/three-layer validation, CNIC/Reactivate) have not started. **Do not begin Checkpoint 1
-without explicit instruction.**
+architecture review is complete and committed.** Phase 2.5 (`docs/IMPLEMENTATION_PLAN.md` — Project
+Unit model, Payroll Work Lines prerequisite, Employee Registry refinements, §3 items 16–20, amended
+with five refinements in §3 item 22) is now **in progress**: **Checkpoint 0 is committed (`0d9ea33`).
+Checkpoint 1 (`ProjectUnit` schema, migration, dedicated backend module, Manage Units frontend panel)
+is code-complete** — typecheck/lint/build clean, new/updated backend tests confirmed to compile and
+run correctly (blocked only by the environment's standing no-Postgres constraint), Playwright-verified
+(including a real, previously-latent `DropdownMenuContent`/`Modal` z-index bug found and fixed via
+that verification) — **not yet committed** (awaiting explicit approval before Checkpoint 2).
+Checkpoints 2–4 (`Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap/three-layer
+validation, CNIC/Reactivate) have not started. **Do not begin Checkpoint 2 without explicit
+instruction.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -216,7 +219,7 @@ screenshot thumbnails by eye.
   errors on any page at any of the three tested viewports.
 - Re-verified after the fixes: `typecheck`/`lint`/`build` clean, full audit re-run clean.
 
-### Phase 2.5, Checkpoint 0 — Foundation: shared date formatting and reusable UI primitives (2026-07-03, code-complete, not yet committed)
+### Phase 2.5, Checkpoint 0 — Foundation: shared date formatting and reusable UI primitives (2026-07-03, COMMITTED as `0d9ea33`)
 
 - `shared/src/lib/date.ts`: `formatDate()` (ISO → `DD-MM-YYYY`), `parseDateInput()` (`DD-MM-YYYY` →
   ISO, validating month range and days-in-month including leap years), `toIsoDateOnly()`
@@ -259,6 +262,90 @@ screenshot thumbnails by eye.
   built or tested here; building an unused, half-wired component now would contradict this project's
   own anti-premature-abstraction discipline. Flagged explicitly rather than silently dropped.
 
+### Phase 2.5, Checkpoint 1 — `ProjectUnit` schema, migration, dedicated module (2026-07-03, code-complete, not yet committed)
+
+- **Schema/migration**: `ProjectUnit` model added to `backend/prisma/schema.prisma`
+  (`docs/architecture/database-schema.md` §8a — id, siteId, name, code, isActive, timestamps;
+  unique `(siteId, name)`; unique `(id, siteId)` for the composite-FK support Checkpoint 2/Phase 3
+  need); `ProjectSite.branchCode` removed, `ProjectSite.unitLabel` added (default `'Branch'`). New
+  migration `20260703100000_project_units`, generated via `prisma migrate diff` against the schema
+  files directly (no live database connection required for this — Prisma's schema-engine can diff
+  two `.prisma` files purely statically) rather than hand-transcribed from scratch, then placed into
+  a timestamped folder matching every prior migration's convention. Validated via `prisma
+  validate`/`format`/`generate`; not yet applied to a live database (same constraint as every
+  migration in this project so far — no Postgres reachable in this environment).
+- **Dedicated Project Units module** (`backend/src/modules/project-units/`): `project-units.service.ts`
+  (list/create/update/delete, `getProjectSite` reused to 404 a bad `siteId` cleanly) and
+  `project-units.routes.ts`, mounted in `app.ts` at `/api/v1` (its `/sites/:siteId/units` and
+  `/units/:id` paths don't overlap with `projectSitesRouter`'s own routes, verified by tracing Express's
+  path-matching directly). List/create are gated by `requireSiteAccess` — **this middleware's first
+  real consumer**: it was built in Phase 1 as foundational RBAC infrastructure ahead of any
+  site-scoped resource needing it, and Employee Registry (Phase 2) ended up using a service-layer
+  `assertSiteAccess()` check instead, so this middleware sat unused until now. Update/delete are gated
+  by `sites:manage` alone (Master Admin only), matching `ProjectSite`'s own mutation gating — no
+  additional site-scoping needed since Master Admin already bypasses it everywhere.
+- **`ProjectSite` updates**: `unitLabel` replaces `branchCode` throughout the service, shared Zod
+  schema, and frontend (create/edit form field + list column). `deleteProjectSite` now also blocks
+  while any `ProjectUnit` still belongs to the site (§8's revision note: "a site must have both its
+  units and its employees cleared before it can be deleted"), in addition to its existing
+  employee-count check.
+- **`deleteProjectUnit`'s own delete guard is a documented no-op for now**: it's written to match every
+  other referenced-master-data delete in this schema (app-layer count check), but nothing references
+  a `ProjectUnit` yet — `Employee.unitId` doesn't exist until Checkpoint 2, `PayrollEntryWorkLine`
+  until Phase 3. The function's own code comment says so explicitly, so this isn't mistaken for
+  finished protection later.
+- **Frontend**: a "Manage {unitLabel}s" panel (`frontend/src/routes/project-sites-page.tsx`'s
+  `ManageUnitsModal`) opened from each site's row action menu, listing/creating/editing/deleting that
+  site's units — every visible label (modal title, button text, empty state, field labels, delete
+  confirmation copy) is driven by `site.unitLabel`, with no hardcoded "Branch" text anywhere (verified
+  by grep both before writing the UI and after, per the standing "grep for hardcoded terminology"
+  discipline this project already applies to dates). New shared `pluralize()` utility
+  (`shared/src/lib/text.ts`) — a small heuristic (not a grammar engine) tuned for the documented
+  unitLabel examples (Branch→Branches, Department→Departments, Section→Sections,
+  Division→Divisions), used to compose headings like "Manage Branches."
+- **A real, unplanned bug found and fixed via this checkpoint's own Playwright verification** (not
+  scope creep — this is exactly what the mandatory Playwright step exists to catch): the Manage Units
+  panel is the first place in the app a `DropdownMenu` (for a unit row's Edit/Delete actions) opens
+  from *inside* an already-open `Modal`. At the ordering set during the 2026-07-02 Phase 2 polish
+  audit (`Modal` z-[60] above `DropdownMenuContent`'s z-50, deliberately, to guard against a
+  *suspected* — and at the time unconfirmed — stacking bug in the opposite direction), the open
+  Modal's own overlay permanently intercepted every click on the nested dropdown's menu items.
+  Confirmed via Playwright polling the DOM every 300ms for 3 seconds after closing a nested form — the
+  stuck, click-intercepting overlay never resolved on its own, ruling out a transition-timing
+  coincidence. **Fix**: raised `DropdownMenuContent` to `z-[70]`, above `Modal`'s `z-[60]`
+  (`frontend/src/components/ui/dropdown-menu.tsx`, with a matching explanatory comment added to
+  `modal.tsx`). This reverses the 2026-07-02 ordering decision — flagged here explicitly, per the
+  standing instruction to never silently change an architecture/design-system decision, rather than
+  quietly overwritten. **Trade-off accepted knowingly**: this re-opens the original, still-unconfirmed
+  cosmetic risk the 2026-07-02 audit was defending against (a closing dropdown briefly rendering above
+  a *new* Modal it just opened, during the fade transition) — accepted because that risk was
+  investigated at the time and found to be a false alarm, whereas the bug just fixed was reproduced and
+  confirmed. A regression check (dropdown-on-base-page opening a modal, the original Employees-page
+  scenario) was re-run via Playwright after the fix and still passes cleanly.
+- Two initial attempts at the Manage Units panel's own architecture were tried and rejected before
+  landing on the single-Dialog, internal-view-state design actually shipped: nesting a second,
+  independent `Modal` (Radix `Dialog.Root`) for the create/edit/delete flows inside the list modal was
+  tried first, and found to have its own, separate real bug — Radix's aria-hiding of background
+  content leaves the *outer* dialog's overlay permanently `aria-hidden`/click-intercepting once the
+  *inner* one closes (confirmed the same way, via DOM polling over several seconds with no recovery).
+  Rebuilding the panel as one `Modal` with a `list | form | delete` view-state field sidesteps that
+  entire class of bug rather than patching around it.
+- New backend tests: `backend/tests/project-units.test.ts` (create, permission rejection, per-site
+  duplicate-name 409, same name allowed across two different sites, nonexistent-site 404, update,
+  delete, Payroll-Staff site-scoping via `requireSiteAccess`) and additions to
+  `project-sites.test.ts` (the `branchCode` update assertion replaced with `unitLabel`; a new test
+  confirming site deletion is blocked while a `ProjectUnit` still belongs to it).
+  `backend/tests/helpers.ts`'s `cleanTestData()` extended to also clear `ProjectUnit` rows. All new/
+  updated test files confirmed to compile and execute correctly through `ts-jest` — they fail only on
+  the expected "no Postgres reachable" constraint (a Prisma connection error), not a code or type
+  defect, the same evidence standard every other DB-backed test in this project has been held to.
+- `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing warnings), and `npm run build` all
+  clean across all three workspaces. Playwright verification (headless Chromium, API responses mocked
+  via route interception): sites list shows the "Unit label" column with correct per-site values;
+  Edit Site form shows the renamed field; the row dropdown shows "Manage Branches"/"Manage
+  Departments" correctly per site (not hardcoded); the Manage Units panel's create/edit/delete flow
+  and empty state all render and function correctly; zero console errors throughout.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -267,7 +354,7 @@ screenshot thumbnails by eye.
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed (conditional), 2026-07-02** — DB-backed test evidence still outstanding, tracked to close before Phase 9 |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed (conditional), 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoint 0 (shared date formatting/`DateInput`) code-complete 2026-07-03, not yet committed. Checkpoints 1–4 (Project Units, `Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap/validation, CNIC/Reactivate) not started |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoint 0 (shared date formatting/`DateInput`) COMMITTED (`0d9ea33`). Checkpoint 1 (`ProjectUnit` schema/migration/module/UI) code-complete 2026-07-03, not yet committed. Checkpoints 2–4 (`Employee.unitId`/transfer audit/`EmployeeTransferHistory`, import remap/validation, CNIC/Reactivate) not started |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
@@ -596,18 +683,18 @@ screenshot thumbnails by eye.
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5 is in progress: Checkpoint 0 (shared
-`formatDate()`/`DateInput`/`DD-MM-YYYY` convention) is code-complete as of 2026-07-03 but not yet
-committed — awaiting explicit approval before Checkpoint 1 begins.** Carry forward as background open
-items, not blockers, unless noted:
+**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5 is in progress: Checkpoint 0 is
+committed (`0d9ea33`); Checkpoint 1 (`ProjectUnit` schema, migration, dedicated module, Manage Units
+UI) is code-complete as of 2026-07-03 but not yet committed — awaiting explicit approval before
+Checkpoint 2 begins.** Carry forward as background open items, not blockers, unless noted:
 
-1. **Awaiting explicit approval to commit Checkpoint 0 and begin Checkpoint 1** — the `ProjectUnit`
-   migration (including the destructive `ProjectSite.branchCode` drop), the dedicated Project Units
-   module, then Checkpoint 2 (`Employee.unitId`, transfer audit trail, `EmployeeTransferHistory`),
+1. **Awaiting explicit approval to commit Checkpoint 1 and begin Checkpoint 2** —
+   `Employee.unitId` + composite FK, the dedicated transfer-audit trail
+   (`employee.transferred` `AuditLog` entries), and the new `EmployeeTransferHistory` table. Then
    Checkpoint 3 (import/export remap + three-layer Site/Unit validation), and Checkpoint 4 (CNIC
    normalization + duplicate-check + Reactivate, gated on a separate concrete-implementation approval
    per standing instruction) — all before Phase 3's Payroll Entry Work Lines build, which depends on
-   `ProjectUnit` existing.
+   `Employee.unitId` existing (Checkpoint 2).
 2. Close out the DB-backed verification gap (§4) — via a Docker/Postgres-capable environment or a
    real CI push — before Phase 9 at the latest. This now covers Phase 1's and Phase 2's test suites,
    the hand-written Phase 2 migration, and the later `address`-column migration.
