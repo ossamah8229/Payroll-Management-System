@@ -1,15 +1,15 @@
 # Project Progress — Payroll Management System
 
 **Date:** 2026-07-04
-**Latest git commit:** `70a45ad` — "Phase 2.5 Checkpoint 2: Employee to Project Unit relationship"
+**Latest git commit:** `33f2b18` — "Phase 2.5 Checkpoint 3: import/export remap to Project Units"
 (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
 `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
 documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
-`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → **`70a45ad` Phase 2.5
-Checkpoint 2, committed alongside this documentation update and the refreshed HTML prototypes** —
-see §3 items 16–22 below for the full decision record). This line is itself updated by the small
-follow-up commit that always closes a checkpoint session, so it lags the actual `HEAD` by at most
-one trivial doc-only commit — check `git log -1` if in doubt.
+`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5
+Checkpoint 2 → `b27f559` Checkpoint 2 doc close → **`ed4ed1f` database-verification debt closed
+(2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase 2.5 Checkpoint 3**). This line is
+itself updated by the small follow-up commit that always closes a checkpoint session, so it lags
+the actual `HEAD` by at most one trivial doc-only commit — check `git log -1` if in doubt.
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED and committed. The pre-Phase-3
 architecture review is complete and committed.** Phase 2.5 is **in progress**: **Checkpoints 0, 1,

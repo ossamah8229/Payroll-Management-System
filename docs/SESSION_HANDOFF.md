@@ -11,16 +11,16 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `70a45ad`** — "Phase 2.5 Checkpoint 2: Employee to Project Unit
-  relationship" — bundles Checkpoint 2's code together with the documentation update and refreshed
-  HTML prototypes, per the session-closing instruction to commit all three together. Full lineage:
-  `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2
-  checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
-  status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → **`70a45ad` (Checkpoint 2,
-  this session's final substantive commit — a small follow-up doc-only commit closing this exact
-  hash into the record may follow it; check `git log -1` if in doubt).**
-- **Working tree is clean — the session ended immediately after this commit, by explicit
-  instruction.** Checkpoint 2 shipped: `Employee.unitId` + composite FK against
+- **Latest committed commit: `33f2b18`** — "Phase 2.5 Checkpoint 3: import/export remap to Project
+  Units". Full lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish
+  pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture
+  review) → `74c124e` (further doc status update) → `0d9ea33` (Checkpoint 0) → `c60094c`
+  (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc close) → `ed4ed1f`
+  (**database-verification debt closed**, 2026-07-04) → **`33f2b18` (Checkpoint 3, this session's
+  final substantive commit — a small follow-up doc-only commit closing this exact hash into the
+  record may follow it; check `git log -1` if in doubt).**
+- **Working tree is clean — the session ended after Checkpoint 3, by explicit instruction not to
+  proceed to Checkpoint 4 without approval.** Checkpoint 2 shipped: `Employee.unitId` + composite FK against
   `ProjectUnit(id, siteId)`, the new append-only `EmployeeTransferHistory` table, migration
   `20260703140000_employee_unit_and_transfer_history`, `assertUnitBelongsToSite()`, `updateEmployee()`
   rewritten to detect a transfer and write the Employee update + `EmployeeTransferHistory` row +
