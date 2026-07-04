@@ -41,9 +41,11 @@ be enough to resume correctly without re-deriving context from scratch — per
   **The CNIC recommendation is now a finalized decision, not pending** — see §3 below and
   `docs/PROJECT_PROGRESS.md` §3 item 22. Full decision record: `docs/PROJECT_PROGRESS.md` §3 items
   16–22.
-- **Phase 2.5 is in progress.** Checkpoints 0, 1, and 2 are all committed. Checkpoints 3–4 (import
-  remap + three-layer validation, CNIC/Reactivate) have not started, and won't until the database
-  verification below closes out.
+- **Phase 2.5 is in progress.** Checkpoints 0–3 are complete (0–2 committed in prior sessions; the
+  database-verification close and Checkpoint 3 — import/export remap to Project Units with
+  three-layer Site/Unit validation — were both completed 2026-07-04, see §2's entries for that
+  date). Checkpoint 4 (CNIC/Reactivate) remains, and its concrete implementation requires a
+  design-approval gate before any code is written.
 - `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing `react-refresh` warnings), and
   `npm run build` were all re-run at the end of this session after Checkpoint 2's code changes and
   are clean across all three workspaces. `backend/tests/date-utils.test.ts` and `rbac.test.ts` (no DB
@@ -247,6 +249,35 @@ round-tripping as `15-03-1990`, same-site transfer writing its `EmployeeTransfer
 `employee.transferred` audit entry — zero console errors. E2E fixtures were cleaned from the dev DB
 afterward (audit rows remain, by design). **Phase 1's five open DB-backed checklist items and
 Phase 2's one are now genuinely closed — see §5/§6.**
+
+### What was completed this session (2026-07-04, evening, continued): Checkpoint 3
+
+Built immediately after the database verification closed, per the session plan — the first
+checkpoint in this project developed with its DB-backed tests actually running. Full detail:
+`docs/PROJECT_PROGRESS.md` §1's Checkpoint 3 subsection; plan text updated in
+`docs/IMPLEMENTATION_PLAN.md` (Checkpoint 3 marked COMPLETE with the as-built mapping).
+
+- **Export**: `Area`/`Area/Location` → the employee's `ProjectUnit.name` (documented aliases);
+  `Branch Code` → `ProjectUnit.code`. The template's mapping comment is now a finalized decision,
+  resolving `docs/PROJECT_PROGRESS.md` §3 item 5 (subject to one client sanity-check).
+- **Import**: `resolveRowUnit()` resolves a row's unit within its named site by code, then name,
+  case-insensitively; all provided columns must agree; a row naming no unit is a per-row error —
+  Checkpoint 2's interim single-unit auto-resolution is gone. Error messages use the site's own
+  `unitLabel` via `pluralize()`.
+- **Three-layer validation**: (1) `resolveRowUnit()` explicitly rejects a unit that exists under a
+  *different* site, naming the mismatch; (2) `assertUnitBelongsToSite()` — now exported — is
+  re-asserted before every import write; (3) the composite FK backstops, now with its own raw-write
+  test. Each layer has a test proving it catches the violation alone.
+- **Import-driven transfers are real transfers**: `updateEmployee()`'s transfer block was extracted
+  into a shared `recordEmployeeTransfer()` (single implementation of the history-row +
+  `employee.transferred`-entry invariant); the import path calls it atomically with the row update
+  whenever a row changes an existing employee's site/unit (reason: "Employee Registry import").
+  `importEmployees()` now takes `RequestMeta`. The one-summary-`employee.import`-entry design is
+  unchanged for non-transfer rows.
+- **88/88 tests against live PostgreSQL**; typecheck/lint/build clean; real-stack Playwright pass
+  drove an actual CSV upload through the UI (2 created, 1 cross-site row skipped with the exact
+  per-row reason shown in the Import Results modal; units verified via the edit form; zero console
+  errors). Prototypes reviewed — none depict import contents, none changed.
 
 ## 3. What must not be changed without approval
 
@@ -486,13 +517,12 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
    `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed, test. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Database
    verification" subsection.
-2. **Then, Checkpoint 3** (`docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5) — the Employee Registry
-   import/export template remap (mapping `Area`/`Branch Code` columns onto real `ProjectUnit` fields,
-   replacing Checkpoint 2's interim single-unit-resolves-automatically fallback) with three-layer
-   Site/Unit validation (import layer, service layer, database composite FK). Then **Checkpoint 4**
-   (CNIC normalization/duplicate-check/Reactivate — policy finalized, but the concrete implementation
-   still needs a separate design-approval gate per standing instruction). Phase 3 cannot build
-   `PayrollEntryWorkLine.unitId` without Checkpoint 3/4 landing first.
+2. **Then, Checkpoint 4** (Checkpoint 3 was completed 2026-07-04 — see §2) — CNIC
+   normalization/duplicate-check/Reactivate. The policy is finalized, but **the concrete
+   implementation (exact endpoint shapes, exact fields touched by Reactivate, exact audit entry
+   contents) must be presented for explicit approval before any code is written**, per standing
+   instruction. Phase 3 cannot build `PayrollEntryWorkLine.unitId` without Checkpoint 4 landing
+   first.
 3. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
    Phase 5, not scheduled into Phase 2.5, 3, or 4. Design for hosting portability (§3 item 13).
 4. Decide how Broom Services' own disbursement source bank account(s) should be modeled

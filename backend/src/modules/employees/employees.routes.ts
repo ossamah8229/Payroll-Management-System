@@ -65,7 +65,10 @@ employeesRouter.post(
       }
 
       const rows = await parseEmployeeImportFile(req.file.buffer, req.file.originalname);
-      const result = await importEmployees(req.currentUser!, rows);
+      const result = await importEmployees(req.currentUser!, rows, {
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
 
       await recordAuditLog({
         actorUserId: req.currentUser!.id,

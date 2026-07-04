@@ -26,11 +26,12 @@ describe('Employee Registry import/export', () => {
     await prisma.$disconnect();
   });
 
-  /** Every test site gets exactly one Project Unit, matching the interim "single-unit resolves
-   * automatically" import behavior (Phase 2.5 Checkpoint 2) — see employees-import-export.service.ts. */
+  /** Every test site gets one named Project Unit (`"<site name> Unit"`, code `U-1`). Since
+   * Checkpoint 3, an import row must identify its unit via the `Area`/`Area/Location` (name)
+   * and/or `Branch Code` (code) columns — see employees-import-export.service.ts. */
   async function makeSite(name: string) {
     const site = await prisma.projectSite.create({ data: { name } });
-    await prisma.projectUnit.create({ data: { siteId: site.id, name: `${name} Unit` } });
+    await prisma.projectUnit.create({ data: { siteId: site.id, name: `${name} Unit`, code: 'U-1' } });
     return site;
   }
 
@@ -141,7 +142,7 @@ describe('Employee Registry import/export', () => {
 
     const csv = toCsv([
       templateRow({ Project: 'Nonexistent Site', Name: 'Bad Row Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
-      templateRow({ Project: site.name, Name: 'Good Row Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Good Row Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
     ]);
 
     const importRes = await agent
@@ -194,7 +195,7 @@ describe('Employee Registry import/export', () => {
     sheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
     sheet.addRow(
       Object.values(
-        templateRow({ Project: site.name, Name: 'Xlsx Employee', Designation: 'Guard', 'Basic/Gross Pay': '18000' }),
+        templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Xlsx Employee', Designation: 'Guard', 'Basic/Gross Pay': '18000' }),
       ),
     );
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
@@ -211,11 +212,52 @@ describe('Employee Registry import/export', () => {
     expect(created).not.toBeNull();
   });
 
-  it('skips a row for a site with no Project Units yet, with a clear reason', async () => {
-    // Deliberately bypasses the makeSite() helper (which always creates one unit) to exercise the
-    // zero-units case.
-    const site = await prisma.projectSite.create({ data: { name: 'Test Site No Units' } });
-    const { agent, csrfToken } = await masterAdminAgent('import-export-no-units@test.local');
+  it('imports rows into a multi-unit site, resolving each row\'s unit by Area name or by Branch Code (Checkpoint 3)', async () => {
+    const site = await makeSite('Test Site Multi Unit'); // "Test Site Multi Unit Unit", code U-1
+    const second = await prisma.projectUnit.create({
+      data: { siteId: site.id, name: 'Second Unit', code: 'U-2' },
+    });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-multi-unit@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Area: 'Second Unit', Name: 'By Name Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+      templateRow({ Project: site.name, 'Branch Code': 'u-2', Name: 'By Code Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.created).toBe(2);
+    expect(importRes.body.skipped).toHaveLength(0);
+
+    const byName = await prisma.employee.findFirst({ where: { name: 'By Name Employee' } });
+    const byCode = await prisma.employee.findFirst({ where: { name: 'By Code Employee' } });
+    expect(byName?.unitId).toBe(second.id);
+    expect(byCode?.unitId).toBe(second.id); // matched case-insensitively ("u-2")
+  });
+
+  it('exports the employee\'s unit name/code in the Area, Branch Code, and Area/Location columns (Checkpoint 3 remap)', async () => {
+    const site = await makeSite('Test Site Export Unit Columns');
+    const unitId = await unitIdForSite(site.id);
+    await prisma.employee.create({
+      data: { name: 'Unit Columns Employee', designation: 'Guard', siteId: site.id, unitId, grossPay: '25000' },
+    });
+
+    const { agent } = await masterAdminAgent('import-export-unit-cols@test.local');
+    const res = await agent.get('/api/v1/employees/export?format=csv');
+
+    expect(res.status).toBe(200);
+    const dataLine = res.text.split('\n')[1]!;
+    expect(dataLine).toContain(`${site.name} Unit`); // Area + Area/Location = unit name
+    expect(dataLine).toContain('U-1'); // Branch Code = unit code
+  });
+
+  it('skips a row that names no unit at all, with a clear reason (interim auto-resolution removed)', async () => {
+    const site = await makeSite('Test Site No Unit Given');
+    const { agent, csrfToken } = await masterAdminAgent('import-export-no-unit-given@test.local');
 
     const csv = toCsv([
       templateRow({ Project: site.name, Name: 'No Unit Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
@@ -229,16 +271,18 @@ describe('Employee Registry import/export', () => {
     expect(importRes.status).toBe(200);
     expect(importRes.body.created).toBe(0);
     expect(importRes.body.skipped).toHaveLength(1);
-    expect(importRes.body.skipped[0].reason).toMatch(/has no branches/i);
+    expect(importRes.body.skipped[0].reason).toMatch(/does not specify a branch/i);
   });
 
-  it('skips a row for a site with multiple Project Units, with a clear reason (Checkpoint 3 resolves this)', async () => {
-    const site = await makeSite('Test Site Multi Unit'); // one unit already, from the helper
-    await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Second Unit' } });
-    const { agent, csrfToken } = await masterAdminAgent('import-export-multi-unit@test.local');
+  it('layer 1: rejects a row whose named unit belongs to a different site than the row\'s own site', async () => {
+    const siteA = await makeSite('Test Site Layer1 A');
+    const siteB = await makeSite('Test Site Layer1 B');
+    await prisma.projectUnit.create({ data: { siteId: siteB.id, name: 'Elsewhere Unit', code: 'ELSE-1' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-layer1@test.local');
 
     const csv = toCsv([
-      templateRow({ Project: site.name, Name: 'Multi Unit Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+      // Names siteA as the Project but a unit that only exists under siteB.
+      templateRow({ Project: siteA.name, Area: 'Elsewhere Unit', Name: 'Cross Site Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
     ]);
 
     const importRes = await agent
@@ -249,6 +293,123 @@ describe('Employee Registry import/export', () => {
     expect(importRes.status).toBe(200);
     expect(importRes.body.created).toBe(0);
     expect(importRes.body.skipped).toHaveLength(1);
-    expect(importRes.body.skipped[0].reason).toMatch(/multiple/i);
+    expect(importRes.body.skipped[0].reason).toMatch(/belongs to a different project site/i);
+    expect(await prisma.employee.findFirst({ where: { name: 'Cross Site Employee' } })).toBeNull();
+  });
+
+  it('layer 1: rejects a row whose Branch Code and Area point at two different units', async () => {
+    const site = await makeSite('Test Site Layer1 Conflict'); // unit "… Unit" with code U-1
+    await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Other Unit', code: 'U-9' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-conflict@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Area: 'Other Unit', 'Branch Code': 'U-1', Name: 'Conflicted Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.skipped).toHaveLength(1);
+    expect(importRes.body.skipped[0].reason).toMatch(/two different/i);
+  });
+
+  it('layer 3: a raw database write pairing a unit with the wrong site is rejected by the composite foreign key itself', async () => {
+    const siteA = await makeSite('Test Site Layer3 A');
+    const siteB = await makeSite('Test Site Layer3 B');
+    const unitB = await unitIdForSite(siteB.id);
+
+    // Bypasses both the import layer and the service layer deliberately — the database must
+    // catch this alone (docs/IMPLEMENTATION_PLAN.md Phase 2.5 testing strategy).
+    await expect(
+      prisma.employee.create({
+        data: { name: 'Raw Write Employee', designation: 'Guard', siteId: siteA.id, unitId: unitB, grossPay: '20000' },
+      }),
+    ).rejects.toThrow(/foreign key|constraint/i);
+  });
+
+  it('records a transfer (history row + employee.transferred audit entry) when an import moves an existing employee to another unit', async () => {
+    const site = await makeSite('Test Site Import Transfer');
+    const fromUnitId = await unitIdForSite(site.id);
+    const toUnit = await prisma.projectUnit.create({
+      data: { siteId: site.id, name: 'Transfer Target Unit', code: 'TT-1' },
+    });
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Import Transfer Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: fromUnitId,
+        grossPay: '20000',
+        cnic: '9998887776665',
+      },
+    });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-transfer@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: 'Transfer Target Unit',
+        CNIC: '9998887776665',
+        Name: 'Import Transfer Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+      }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.updated).toBe(1);
+    expect(importRes.body.skipped).toHaveLength(0);
+
+    const refreshed = await prisma.employee.findUniqueOrThrow({ where: { id: employee.id } });
+    expect(refreshed.unitId).toBe(toUnit.id);
+
+    const history = await prisma.employeeTransferHistory.findMany({ where: { employeeId: employee.id } });
+    expect(history).toHaveLength(1);
+    expect(history[0]?.fromUnitId).toBe(fromUnitId);
+    expect(history[0]?.toUnitId).toBe(toUnit.id);
+    expect(history[0]?.reason).toBe('Employee Registry import');
+
+    const transferEntries = await prisma.auditLog.findMany({ where: { action: 'employee.transferred' } });
+    expect(transferEntries.some((entry) => entry.entityId === employee.id)).toBe(true);
+  });
+
+  it('does not record a transfer when a re-import leaves the employee\'s site/unit unchanged', async () => {
+    const site = await makeSite('Test Site Import No Transfer');
+    const { agent, csrfToken } = await masterAdminAgent('import-export-no-transfer@test.local');
+
+    const createRes = await agent
+      .post('/api/v1/employees')
+      .set('x-csrf-token', csrfToken)
+      .send({
+        name: 'Stationary Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '25000.00',
+        cnic: '5554443332221',
+      });
+    expect(createRes.status).toBe(201);
+
+    const exportRes = await agent.get('/api/v1/employees/export?format=csv');
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', Buffer.from(exportRes.text, 'utf-8'), 'employee-registry.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.updated).toBe(1);
+
+    const history = await prisma.employeeTransferHistory.findMany({
+      where: { employee: { cnic: '5554443332221' } },
+    });
+    expect(history).toHaveLength(0);
   });
 });

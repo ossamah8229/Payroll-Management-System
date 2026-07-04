@@ -19,8 +19,11 @@ test suite passes 78/78, and a real-stack (live backend + live database) Playwri
 passed with zero console errors. See §1's "Database verification" subsection for the four real
 defects this surfaced and fixed, including one new migration
 (`20260704180000_audit_log_allow_fk_actor_set_null`). The "conditional" qualifier on Phase 1's and
-Phase 2's closures is hereby discharged — their DB-backed evidence now exists. Checkpoints 3–4
-(import remap/three-layer validation, CNIC/Reactivate) are next.
+Phase 2's closures is hereby discharged — their DB-backed evidence now exists. **Checkpoint 3
+(import/export remap to Project Units, three-layer Site/Unit validation) was then built and
+completed the same day** — the first checkpoint developed against a live database throughout.
+Checkpoint 4 (CNIC/Reactivate) is next; its concrete implementation still requires a
+design-approval gate before any code, per standing instruction.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -428,6 +431,57 @@ screenshot thumbnails by eye.
   pre-populates from an existing employee's site/unit; changing only the unit (a same-site transfer)
   submits the new `unitId` in the update payload. Zero console errors throughout.
 
+### Phase 2.5, Checkpoint 3 — Import/export remap to Project Units, three-layer validation (2026-07-04)
+
+Built immediately after the database verification below closed, against the live database
+throughout — the first checkpoint in this project developed with its DB-backed tests actually
+running.
+
+- **Export remap** (`employees-import-export.service.ts`): `Area` and `Area/Location` now export
+  the employee's `ProjectUnit.name` (they previously both aliased the site name); `Branch Code`
+  exports `ProjectUnit.code` (as since Checkpoint 2). The header-mapping doc comment rewritten as a
+  finalized mapping rather than a flagged assumption — `database-schema.md` §8's "those columns now
+  map onto ProjectUnit fields" is now literally true in code.
+- **Import unit resolution** (`resolveRowUnit()`): a row's unit resolves within its named site by
+  `Branch Code` (matches `ProjectUnit.code`) first, then `Area`/`Area/Location` (match
+  `ProjectUnit.name`; the two are aliases and must agree when both present), case-insensitively.
+  Every provided column must identify the same unit; a row naming no unit is a per-row error.
+  Checkpoint 2's interim single-unit auto-resolution is fully removed. Error messages are phrased
+  in the site's own `unitLabel` terminology (reusing `pluralize()`), e.g. *"No branch named X under
+  site Y"*.
+- **Three-layer Site/Unit validation, as planned** (`docs/IMPLEMENTATION_PLAN.md`): **(1)** import
+  layer — `resolveRowUnit()` explicitly distinguishes "no such unit anywhere" from "unit exists but
+  belongs to a different project site" and rejects the row with the mismatch named; **(2)** service
+  layer — `assertUnitBelongsToSite()` (now exported from `employees.service.ts`, the same assertion
+  the ordinary create/update path uses) is re-asserted before every import write; **(3)** database —
+  the `(unitId, siteId) → ProjectUnit(id, siteId)` composite FK, now covered by its own raw-write
+  test proving it catches a mismatched pair alone.
+- **Import-driven transfers are real transfers**: an import update that changes an employee's
+  site/unit writes the `EmployeeTransferHistory` row and dedicated `employee.transferred` audit
+  entry (reason: `"Employee Registry import"`) in the same transaction as the row update — required
+  by the 2026-07-03 "never fold a transfer into a generic update path" decision, which became
+  reachable the moment import could target specific units. Implemented by extracting
+  `updateEmployee()`'s transfer block into a shared `recordEmployeeTransfer()` helper so both paths
+  use one implementation (no duplication). The one-summary-`employee.import`-entry design is
+  unchanged for everything else. Unchanged-site/unit re-imports write no transfer record (tested).
+- **Route change**: `importEmployees()` now receives `RequestMeta` (ip/user-agent) so
+  transfer audit entries written inside the import carry the same request context as every other
+  audited action.
+- **Tests**: `employees-import-export.test.ts` reworked — fixtures now name their units; the two
+  interim-behavior tests (zero-units / multiple-units skip) replaced by: multi-unit import resolving
+  by name and by code (case-insensitive), the export column remap, no-unit-specified rejection,
+  layer-1 cross-site rejection, layer-1 code/name-conflict rejection, layer-3 raw-write FK
+  rejection, transfer-on-import (history + audit entry), and no-transfer-on-unchanged-reimport.
+  **Full suite: 88/88 against live PostgreSQL.**
+- typecheck/lint/build clean. **Real-stack Playwright verification** (live browser → Vite → Express
+  → PostgreSQL): uploaded a real CSV through the Employee Registry's Import button covering a
+  by-name row, a by-code row, and a deliberate cross-site row — Import Results modal showed
+  "2 created / 1 skipped" with the exact per-row cross-site reason (worded in the site's `unitLabel`
+  terminology); both created employees appeared in the list with the correct units (verified via the
+  edit form's cascading selector) and the imported `DD-MM-YYYY` DOB round-tripped correctly; zero
+  console errors. `docs/prototypes/*.html` reviewed — no prototype depicts import file contents or
+  the Import Results modal, so none required changes.
+
 ### Database verification — CLOSED 2026-07-04 (the long-standing debt, resolved in full)
 
 The first-ever verification of this project against a real PostgreSQL instance. Environment: no
@@ -500,7 +554,7 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoints 0, 1, and 2 COMMITTED; **database-verification debt CLOSED 2026-07-04**. Checkpoints 3–4 (import remap/validation, CNIC/Reactivate) not started |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoints 0–3 complete (**database-verification debt also CLOSED 2026-07-04**). Checkpoint 4 (CNIC/Reactivate) remains — design-approval gate required before its code |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
@@ -545,14 +599,14 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
    `StorageProvider` is not built in Phase 3 or Phase 4 — file uploads (logo/avatar) stay
    unavailable through both. Backup Package generation (Phase 5) is the first phase that hard-requires
    `StorageProvider`, so it must be built no later than the start of that phase.
-5. **Employee Registry import template's redundant columns — NEW, needs client confirmation.** The
-   official template (`reference/PROJECT_SPEC.md`) includes `Area`/`Area/Location` (both currently
-   exported as the project site's name) and a bare `Branch Code` alongside `Bank Branch Code` (the
-   former exported as the project site's own branch code, the latter as the employee's bank branch
-   code) — nothing in the spec disambiguates whether these are genuinely redundant in the client's
-   real files or represent distinct data this system doesn't currently capture. Not blocking (both
-   are ignored on import either way), but worth confirming before this template is relied on for a
-   real bulk import.
+5. **Employee Registry import template's redundant columns — RESOLVED 2026-07-04 (Phase 2.5
+   Checkpoint 3), pending only a client sanity-check.** The finalized mapping: `Area` and
+   `Area/Location` are unit-level aliases (both export the employee's `ProjectUnit.name`; on import
+   they must agree when both present), `Branch Code` is the employee's `ProjectUnit.code`, and
+   `Bank Branch Code` remains the employee's own bank branch code — matching `database-schema.md`
+   §8's revision note that these columns map onto `ProjectUnit` fields. Worth one confirmation pass
+   against the client's real files before the first production bulk import, but no longer an open
+   design question.
 6. **`ProjectSite.defaultBankId` — added, then removed, same session — RESOLVED 2026-07-02.** The
    Phase 2 schema/migration originally added a `defaultBankId` FK from `ProjectSite` to `Bank` (a
    "site's typical bank" default). During architectural review, the user identified this as
@@ -820,15 +874,14 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
 **Phase 1 and Phase 2 are closed with DB-backed evidence complete. Phase 2.5 Checkpoints 0, 1, and 2
 are committed, and the database-verification debt is CLOSED (2026-07-04, §1).**
 
-1. **Checkpoint 3 is the next implementation task**: Employee Registry import/export template remap
-   (mapping `Area`/`Branch Code` columns onto `ProjectUnit` fields for real, replacing Checkpoint 2's
-   interim single-unit-resolves-automatically fallback) with three-layer Site/Unit validation (import
-   layer, service layer, database composite FK). Then **Checkpoint 4** (CNIC normalization +
-   duplicate-check + Reactivate — the policy itself is finalized, §3 item 22, but the concrete
-   implementation still needs a separate design-approval gate per standing instruction) — both before
-   Phase 3's Payroll Entry Work Lines build, which depends on `PayrollEntryWorkLine.unitId`
-   composite-FKing against `ProjectUnit` the same way `Employee.unitId` now does. DB-backed tests now
-   run for real each session — provision Postgres per the §4 note before running them.
+1. **Checkpoint 4 is the next implementation task** (Checkpoint 3 completed 2026-07-04, §1): CNIC
+   normalization + duplicate-check + Reactivate. The policy itself is finalized (§3 item 22), but
+   per standing instruction the concrete implementation (exact endpoint shapes, exact fields touched
+   by Reactivate, exact audit entry contents) **must be presented for explicit approval before any
+   code is written**. This is the last Phase 2.5 checkpoint before Phase 3's Payroll Entry Work
+   Lines build, which depends on `PayrollEntryWorkLine.unitId` composite-FKing against `ProjectUnit`
+   the same way `Employee.unitId` now does. DB-backed tests now run for real each session —
+   provision Postgres per the §4 note before running them.
 2. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to

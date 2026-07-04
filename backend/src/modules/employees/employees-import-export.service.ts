@@ -5,16 +5,29 @@ import { createEmployeeSchema, formatDate, isoDateToUtcDate, pluralize, toIsoDat
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
-import { assertSiteAccess, listEmployees } from './employees.service';
+import {
+  assertSiteAccess,
+  assertUnitBelongsToSite,
+  listEmployees,
+  recordEmployeeTransfer,
+  type RequestMeta,
+} from './employees.service';
 
 /**
  * The official Employee Registry template header set, in column order, extracted verbatim from
  * real client files (reference/PROJECT_SPEC.md, "Official Data Template") — this exact header set
- * is required, not a house style. Note the source template has two apparently-redundant pairs
- * ("Area" / "Area/Location", and a bare "Branch Code" alongside "Bank Branch Code") inherited from
- * the client's real spreadsheets; the mapping decisions below are documented per-column since nothing
- * in the spec disambiguates them further and this should be confirmed with the client, matching the
- * spirit of docs/architecture/database-schema.md §26.
+ * is required, not a house style.
+ *
+ * **Column mapping finalized in Phase 2.5 Checkpoint 3** (docs/architecture/database-schema.md
+ * §8's revision note: these columns map onto `ProjectUnit` fields, not `ProjectSite` ones):
+ * - `Project` → the employee's `ProjectSite.name` (unchanged).
+ * - `Area` → the employee's `ProjectUnit.name` — the operational Branch/Department/Section.
+ * - `Branch Code` → the employee's `ProjectUnit.code` (never the site's — `ProjectSite.branchCode`
+ *   no longer exists; also unrelated to `Bank Branch Code`, the employee's own bank's code).
+ * - `Area/Location` → alias of `Area` (`ProjectUnit.name`) — the source template's two
+ *   near-duplicate columns are both unit-level; they previously both aliased the site name here.
+ * On import, a row's unit is resolved within its named site by `Branch Code` first, then
+ * `Area`/`Area/Location`; every provided column must agree on one unit (see importEmployees).
  */
 export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Sr. No',
@@ -75,13 +88,9 @@ async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
     formatDate(employee.dateOfLeaving),
     employee.mobileNumber ?? '',
     employee.designation,
-    employee.site.name, // "Area" — documented assumption: aliases Project, see header comment above
-    // "Branch Code" — now the employee's own ProjectUnit.code (Phase 2.5 Checkpoint 2;
-    // ProjectSite itself no longer owns a single branch code, see database-schema.md §8's revision
-    // note). Full column remap (a dedicated Unit name/code export scheme) is Checkpoint 3 — this is
-    // an interim, additive improvement using data Checkpoint 2 makes available on Employee.
-    employee.unit.code ?? '',
-    employee.site.name, // "Area/Location" — documented assumption: aliases Project, see above
+    employee.unit.name, // "Area" — the employee's ProjectUnit name (Checkpoint 3 remap, see header)
+    employee.unit.code ?? '', // "Branch Code" — the employee's ProjectUnit code
+    employee.unit.name, // "Area/Location" — alias of "Area", see header comment
     employee.bank?.name ?? '',
     employee.branchCode ?? '', // "Bank Branch Code" — the employee's own bank branch code
     employee.accountNumber ?? '',
@@ -175,31 +184,119 @@ export interface ImportResult {
   skipped: ImportRowError[];
 }
 
+type ImportUnit = { id: string; siteId: string; name: string; code: string | null };
+
+/**
+ * Resolves an import row's Project Unit within its already-resolved site — Phase 2.5 Checkpoint
+ * 3's finalized column mapping, replacing Checkpoint 2's interim single-unit auto-resolution.
+ *
+ * Resolution keys, all matched case-insensitively after trimming: `Branch Code` matches
+ * `ProjectUnit.code`; `Area` and `Area/Location` (aliases) match `ProjectUnit.name`. Every
+ * provided column must agree on one unit — a row whose code and name point at different units is
+ * an error, never a guess. A row providing none of the three is an error: since Checkpoint 3, a
+ * row must say which unit it means.
+ *
+ * This is **validation layer 1 of 3** (docs/IMPLEMENTATION_PLAN.md, Phase 2.5 Checkpoint 3): a
+ * unit that exists but belongs to a *different* site than the row's named site is rejected here
+ * with a per-row error naming the mismatch. Layer 2 is `assertUnitBelongsToSite()` at the shared
+ * service boundary (called again before every write below); layer 3 is the database's
+ * `(unitId, siteId) → ProjectUnit(id, siteId)` composite foreign key.
+ */
+function resolveRowUnit(
+  row: ParsedRow,
+  site: { id: string; name: string; unitLabel: string },
+  allUnits: ImportUnit[],
+): ImportUnit {
+  const unitLabel = site.unitLabel.toLowerCase();
+  const codeRaw = row.cells['Branch Code']!.trim();
+  const areaRaw = row.cells['Area']!.trim();
+  const areaLocationRaw = row.cells['Area/Location']!.trim();
+
+  if (areaRaw && areaLocationRaw && areaRaw.toLowerCase() !== areaLocationRaw.toLowerCase()) {
+    throw new Error(
+      `"Area" ("${areaRaw}") and "Area/Location" ("${areaLocationRaw}") disagree — they are aliases of the same ${unitLabel} name and must match (or leave one blank)`,
+    );
+  }
+  const nameRaw = areaRaw || areaLocationRaw;
+
+  if (!codeRaw && !nameRaw) {
+    throw new Error(
+      `Row does not specify a ${unitLabel} — provide its name in "Area" (or "Area/Location") and/or its code in "Branch Code"`,
+    );
+  }
+
+  const siteUnits = allUnits.filter((unit) => unit.siteId === site.id);
+
+  const findMismatchSuffix = (matcher: (unit: ImportUnit) => boolean): string => {
+    // Layer 1's explicit cross-site rejection: distinguish "doesn't exist anywhere" from
+    // "exists, but under a different site" so the operator sees the real problem.
+    const elsewhere = allUnits.find((unit) => unit.siteId !== site.id && matcher(unit));
+    return elsewhere
+      ? ` — it belongs to a different project site, not "${site.name}"; a row's ${unitLabel} must belong to the row's own site`
+      : ` under site "${site.name}"`;
+  };
+
+  let byCode: ImportUnit | undefined;
+  if (codeRaw) {
+    byCode = siteUnits.find((unit) => (unit.code ?? '').trim().toLowerCase() === codeRaw.toLowerCase());
+    if (!byCode) {
+      throw new Error(
+        `No ${unitLabel} with code "${codeRaw}"${findMismatchSuffix(
+          (unit) => (unit.code ?? '').trim().toLowerCase() === codeRaw.toLowerCase(),
+        )}`,
+      );
+    }
+  }
+
+  let byName: ImportUnit | undefined;
+  if (nameRaw) {
+    byName = siteUnits.find((unit) => unit.name.trim().toLowerCase() === nameRaw.toLowerCase());
+    if (!byName) {
+      throw new Error(
+        `No ${unitLabel} named "${nameRaw}"${findMismatchSuffix(
+          (unit) => unit.name.trim().toLowerCase() === nameRaw.toLowerCase(),
+        )}`,
+      );
+    }
+  }
+
+  if (byCode && byName && byCode.id !== byName.id) {
+    throw new Error(
+      `"Branch Code" ("${codeRaw}") and "Area" ("${nameRaw}") point at two different ${pluralize(site.unitLabel).toLowerCase()} under site "${site.name}" — they must identify the same one`,
+    );
+  }
+
+  return (byCode ?? byName)!;
+}
+
 /**
  * Imports parsed rows: matches an existing employee by CNIC first, then employee code, otherwise
  * creates a new one. Each row is validated and applied independently — one bad row is skipped and
  * reported, never a whole-file failure (per docs/IMPLEMENTATION_PLAN.md Phase 2 testing strategy).
  * A single summary audit log entry is written for the whole operation rather than one per row, to
  * keep the audit log readable for a bulk action instead of spammed with hundreds of near-identical
- * entries.
+ * entries — with one deliberate exception: an update that changes an employee's site/unit is a
+ * *transfer* (docs/architecture/database-schema.md §8b/§9, a business event in its own right) and
+ * writes its `EmployeeTransferHistory` row plus dedicated `employee.transferred` audit entry via
+ * the same shared `recordEmployeeTransfer()` the ordinary update path uses, atomically with the
+ * row update. Transfers are never folded into a generic/summary-only path, per the 2026-07-03
+ * decision.
  *
- * **Interim Project Unit resolution (Phase 2.5 Checkpoint 2)**: the official template has no
- * dedicated Unit column yet — mapping `Area`/`Branch Code` onto `ProjectUnit` is Checkpoint 3's
- * job. Until then, a row's unit is resolved from its site alone: if the site has exactly one
- * `ProjectUnit`, that unit is used; if it has zero or more than one, the row is skipped with a
- * clear reason rather than guessing. This means re-importing an existing multi-unit employee
- * cannot yet target a specific unit — a known, narrow limitation Checkpoint 3 resolves.
+ * A row's Project Unit is resolved from the template's `Branch Code`/`Area`/`Area/Location`
+ * columns via `resolveRowUnit()` (validation layer 1); `assertUnitBelongsToSite()` re-asserts the
+ * pair at the shared service boundary before every write (layer 2); the composite FK is the
+ * database backstop (layer 3).
  */
-export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[]): Promise<ImportResult> {
+export async function importEmployees(
+  currentUser: SessionUser,
+  rows: ParsedRow[],
+  requestMeta: RequestMeta,
+): Promise<ImportResult> {
   const sites = await prisma.projectSite.findMany();
   const banks = await prisma.bank.findMany();
   const units = await prisma.projectUnit.findMany();
   const siteByName = new Map(sites.map((site) => [site.name.trim().toLowerCase(), site]));
   const bankByName = new Map(banks.map((bank) => [bank.name.trim().toLowerCase(), bank]));
-  const unitsBySiteId = new Map<string, typeof units>();
-  for (const unit of units) {
-    unitsBySiteId.set(unit.siteId, [...(unitsBySiteId.get(unit.siteId) ?? []), unit]);
-  }
 
   let created = 0;
   let updated = 0;
@@ -215,19 +312,7 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
 
       assertSiteAccess(currentUser, site.id);
 
-      const siteUnits = unitsBySiteId.get(site.id) ?? [];
-      const unitLabelPlural = pluralize(site.unitLabel).toLowerCase();
-      if (siteUnits.length === 0) {
-        throw new Error(
-          `Site "${site.name}" has no ${unitLabelPlural} — create one before importing employees for it`,
-        );
-      }
-      if (siteUnits.length > 1) {
-        throw new Error(
-          `Site "${site.name}" has multiple ${unitLabelPlural} — column-based unit mapping is not yet available in this import (Phase 2.5 Checkpoint 3); assign a unit manually via the Employee Registry instead`,
-        );
-      }
-      const unit = siteUnits[0]!;
+      const unit = resolveRowUnit(row, site, units);
 
       const bankName = row.cells['Project Bank'];
       const bank = bankName ? bankByName.get(bankName.toLowerCase()) : undefined;
@@ -264,6 +349,11 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
         dateOfLeaving: isoDateToUtcDate(dateOfLeaving),
       };
 
+      // Validation layer 2: the same shared service-layer assertion the ordinary create/update
+      // path uses, re-asserted here so the check holds even if a future caller bypasses the
+      // import-layer resolution above. Layer 3 (the composite FK) backstops both.
+      await assertUnitBelongsToSite(unit.id, site.id);
+
       const existing = row.cells['CNIC']
         ? await prisma.employee.findFirst({ where: { cnic: row.cells['CNIC'] } })
         : input.employeeCode
@@ -272,9 +362,24 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
 
       if (existing) {
         assertSiteAccess(currentUser, existing.siteId);
-        await prisma.employee.update({
-          where: { id: existing.id },
-          data,
+        const isTransfer = existing.siteId !== site.id || existing.unitId !== unit.id;
+        await prisma.$transaction(async (tx) => {
+          await tx.employee.update({
+            where: { id: existing.id },
+            data,
+          });
+          if (isTransfer) {
+            await recordEmployeeTransfer(tx, {
+              employeeId: existing.id,
+              fromSiteId: existing.siteId,
+              toSiteId: site.id,
+              fromUnitId: existing.unitId,
+              toUnitId: unit.id,
+              actorUserId: currentUser.id,
+              reason: 'Employee Registry import',
+              requestMeta,
+            });
+          }
         });
         updated += 1;
       } else {

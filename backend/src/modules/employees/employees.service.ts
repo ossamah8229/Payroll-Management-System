@@ -31,7 +31,7 @@ export function assertSiteAccess(user: SessionUser, siteId: string): void {
  * constraint remains the real backstop — this check is a defense-in-depth companion to it, not a
  * substitute (same pattern already established for the Work Line same-site rule).
  */
-async function assertUnitBelongsToSite(
+export async function assertUnitBelongsToSite(
   unitId: string,
   siteId: string,
   client: PrismaTransactionClient = prisma,
@@ -163,6 +163,76 @@ export interface RequestMeta {
 }
 
 /**
+ * Records an Employee site/unit transfer inside an already-open transaction: the
+ * `EmployeeTransferHistory` row and the dedicated `employee.transferred` `AuditLog` entry, always
+ * together (docs/architecture/database-schema.md §8b/§9). This is the single implementation of
+ * that invariant — the ordinary update path (`updateEmployee`) and the CSV/Excel import path
+ * (Phase 2.5 Checkpoint 3, the first import that can change an employee's site/unit) both call
+ * it. The caller owns the `Employee` row update itself and the enclosing transaction; this only
+ * writes the two transfer-trail records, so the three writes commit or roll back as one.
+ */
+export async function recordEmployeeTransfer(
+  tx: PrismaTransactionClient,
+  args: {
+    employeeId: string;
+    fromSiteId: string;
+    toSiteId: string;
+    fromUnitId: string;
+    toUnitId: string;
+    actorUserId: string;
+    effectiveDateIso?: string | null;
+    reason?: string | null;
+    remarks?: string | null;
+    requestMeta: RequestMeta;
+  },
+): Promise<void> {
+  // Kept as the ISO string for the audit metadata below; converted to a UTC-midnight Date only
+  // at the Prisma write, since @db.Date rejects a bare YYYY-MM-DD string.
+  const effectiveDateIso = args.effectiveDateIso ?? toIsoDateOnly(new Date());
+  const effectiveDate = isoDateToUtcDate(effectiveDateIso);
+  if (!effectiveDate) {
+    throw badRequest('Invalid transfer effective date');
+  }
+  const reason = args.reason ?? null;
+  const remarks = args.remarks ?? null;
+
+  await tx.employeeTransferHistory.create({
+    data: {
+      employeeId: args.employeeId,
+      fromSiteId: args.fromSiteId,
+      toSiteId: args.toSiteId,
+      fromUnitId: args.fromUnitId,
+      toUnitId: args.toUnitId,
+      effectiveDate,
+      transferredByUserId: args.actorUserId,
+      reason,
+      remarks,
+    },
+  });
+
+  await recordAuditLog(
+    {
+      actorUserId: args.actorUserId,
+      action: 'employee.transferred',
+      entityType: 'Employee',
+      entityId: args.employeeId,
+      metadata: {
+        fromSiteId: args.fromSiteId,
+        toSiteId: args.toSiteId,
+        fromUnitId: args.fromUnitId,
+        toUnitId: args.toUnitId,
+        effectiveDate: effectiveDateIso,
+        reason,
+        remarks,
+      },
+      ipAddress: args.requestMeta.ipAddress,
+      userAgent: args.requestMeta.userAgent,
+    },
+    tx,
+  );
+}
+
+/**
  * Whenever this update changes `siteId` and/or `unitId`, that is a *transfer*
  * (docs/architecture/database-schema.md §9/§8b) — detected implicitly by comparing the employee's
  * current site/unit against the submitted one, not via a separate endpoint. A transfer writes the
@@ -231,50 +301,18 @@ export async function updateEmployee(
     });
 
     if (isTransfer) {
-      // Kept as the ISO string for the audit metadata below; converted to a UTC-midnight Date
-      // only at the Prisma write, since @db.Date rejects a bare YYYY-MM-DD string.
-      const effectiveDateIso = input.transferEffectiveDate ?? toIsoDateOnly(new Date());
-      const effectiveDate = isoDateToUtcDate(effectiveDateIso);
-      if (!effectiveDate) {
-        throw badRequest('Invalid transfer effective date');
-      }
-      const reason = input.transferReason ?? null;
-      const remarks = input.transferRemarks ?? null;
-
-      await tx.employeeTransferHistory.create({
-        data: {
-          employeeId: id,
-          fromSiteId: existing.siteId,
-          toSiteId: nextSiteId,
-          fromUnitId: existing.unitId,
-          toUnitId: nextUnitId,
-          effectiveDate,
-          transferredByUserId: currentUser.id,
-          reason,
-          remarks,
-        },
+      await recordEmployeeTransfer(tx, {
+        employeeId: id,
+        fromSiteId: existing.siteId,
+        toSiteId: nextSiteId,
+        fromUnitId: existing.unitId,
+        toUnitId: nextUnitId,
+        actorUserId: currentUser.id,
+        effectiveDateIso: input.transferEffectiveDate,
+        reason: input.transferReason,
+        remarks: input.transferRemarks,
+        requestMeta,
       });
-
-      await recordAuditLog(
-        {
-          actorUserId: currentUser.id,
-          action: 'employee.transferred',
-          entityType: 'Employee',
-          entityId: id,
-          metadata: {
-            fromSiteId: existing.siteId,
-            toSiteId: nextSiteId,
-            fromUnitId: existing.unitId,
-            toUnitId: nextUnitId,
-            effectiveDate: effectiveDateIso,
-            reason,
-            remarks,
-          },
-          ipAddress: requestMeta.ipAddress,
-          userAgent: requestMeta.userAgent,
-        },
-        tx,
-      );
     }
 
     // siteId/unitId already have their own dedicated employee.transferred entry above when

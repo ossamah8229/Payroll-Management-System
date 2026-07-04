@@ -283,10 +283,19 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   with a clear, per-row reason if the site has zero or multiple units (an ambiguous case Checkpoint
   3's column mapping resolves properly).
 
-**Checkpoint 3 — Employee Registry import/export template remap and three-layer Site/Unit validation**
+**Checkpoint 3 — Employee Registry import/export template remap and three-layer Site/Unit validation — COMPLETE, 2026-07-04**
 - The import/export template updated so `Area`/`Area/Location`/`Branch Code` columns map onto
   `ProjectUnit` fields instead of being ignored as redundant (`docs/PROJECT_PROGRESS.md` §3 item 5 —
-  this may resolve that old open item as a side effect).
+  resolved as a side effect, subject to a client sanity-check of real files). **As built:** export
+  writes the employee's `ProjectUnit.name` into `Area` and `Area/Location` (documented aliases) and
+  `ProjectUnit.code` into `Branch Code`; import resolves a row's unit *within its named site* by
+  `Branch Code` first, then `Area`/`Area/Location`, case-insensitively — every provided column must
+  agree on one unit, and a row naming no unit at all is a per-row error (Checkpoint 2's interim
+  single-unit auto-resolution is fully removed). An import update that changes an employee's
+  site/unit is treated as a *transfer* and writes the `EmployeeTransferHistory` row + dedicated
+  `employee.transferred` audit entry atomically with the row update, via the same shared
+  `recordEmployeeTransfer()` the ordinary update path now uses (extracted in this checkpoint so
+  there is exactly one implementation of that invariant).
 - **Every imported row's Project Unit must belong to the row's selected Project Site, enforced at three
   independent layers** (defense in depth, matching this schema's established pattern for the Work Line
   same-site rule, §12a):

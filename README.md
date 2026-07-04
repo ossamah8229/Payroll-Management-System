@@ -8,8 +8,10 @@ calculations, payslips, and related HR/finance workflows.
 > refinements) is **in progress**: Checkpoints 0–2 are **complete and committed** (shared date
 > formatting, the Project Unit module, and the Employee → Project Unit relationship with transfer
 > history), and the **long-standing database-verification debt is closed** — every migration
-> applied to a fresh, real PostgreSQL instance and the full integration suite (78/78) passing
-> against it. Checkpoints 3–4 (import/export column remap, CNIC normalization/Reactivate) are next.
+> applied to a fresh, real PostgreSQL instance and the full integration suite passing against it.
+> **Checkpoint 3 (import/export remap to Project Units, three-layer Site/Unit validation) is also
+> complete** — 88/88 tests against live PostgreSQL. Checkpoint 4 (CNIC normalization/Reactivate)
+> is next, gated on a design approval before any code.
 > See "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
@@ -73,10 +75,14 @@ npm run dev:frontend          # http://localhost:5173
     `ProjectUnit`), the new append-only `EmployeeTransferHistory` table, a dedicated
     `employee.transferred` audit entry (written atomically with the Employee update and history row),
     and a reusable Site → Unit cascading selector wired into the Employee Registry's forms.
-  - **Checkpoints 3–4 (not started):** Employee Registry import/export template remap to
-    `ProjectUnit` columns with three-layer Site/Unit validation; CNIC normalization, duplicate-check,
-    and a Reactivate Employee action (policy finalized — see `docs/PROJECT_PROGRESS.md` §3 item 22 —
-    but the concrete implementation still needs a design-approval gate before it's built).
+  - **Checkpoint 3 (complete, 2026-07-04):** Employee Registry import/export template remap to
+    `ProjectUnit` columns (`Area`/`Area/Location` = unit name, `Branch Code` = unit code) with
+    three-layer Site/Unit validation (import-layer row check, shared service-layer assertion,
+    database composite FK — each proven able to catch a violation alone); import updates that
+    change an employee's site/unit now write the full transfer trail.
+  - **Checkpoint 4 (not started):** CNIC normalization, duplicate-check, and a Reactivate Employee
+    action (policy finalized — see `docs/PROJECT_PROGRESS.md` §3 item 22 — but the concrete
+    implementation still needs a design-approval gate before it's built).
   - The CNIC duplicate-handling decision itself is **finalized, no longer pending**: CNIC stays
     globally unique with no override; rehires go through a Reactivate action that updates the
     existing record in place.
@@ -137,9 +143,8 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-The database-verification debt is closed (2026-07-04). The next implementation task is **Phase 2.5
-Checkpoint 3** (Employee Registry import/export remap onto real `ProjectUnit` columns, with
-three-layer Site/Unit validation — `docs/IMPLEMENTATION_PLAN.md`), followed by Checkpoint 4
-(CNIC normalization/duplicate-check/Reactivate, whose concrete implementation still requires a
-design-approval gate). See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and
-`docs/SESSION_HANDOFF.md` for the full handoff to the next development session.
+The database-verification debt is closed and Checkpoint 3 is complete (both 2026-07-04). The next
+implementation task is **Phase 2.5 Checkpoint 4** (CNIC normalization/duplicate-check/Reactivate),
+whose concrete implementation must be presented for explicit approval before any code is written.
+See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the
+full handoff to the next development session.
