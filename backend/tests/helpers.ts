@@ -8,10 +8,27 @@ import { prisma } from '../src/lib/prisma';
  * (by a recognizable email domain), never a blanket TRUNCATE — these tests may run against a
  * shared local Postgres instance that also has seed data (docs/architecture Phase 1 seed script)
  * that must survive a test run.
+ *
+ * AuditLog rows are deliberately NOT deleted: the table is append-only, enforced by a database
+ * trigger that rejects DELETE outright (docs/architecture/data-and-storage.md §3) — deleting a
+ * test User instead nulls those rows' actorUserId via the FK's documented ON DELETE SET NULL
+ * action (docs/architecture/database-schema.md §16). Test assertions against AuditLog are
+ * therefore scoped to the specific entityId each test created, never to an action name alone.
+ * EmployeeTransferHistory is append-only by application-layer convention only (§8b — no DB
+ * trigger), so test cleanup deleting its rows is the "direct database intervention" that
+ * convention explicitly reserves; its RESTRICT FKs would otherwise block deleting test
+ * employees, users, units, and sites.
  */
 export async function cleanTestData(): Promise<void> {
+  await prisma.employeeTransferHistory.deleteMany({
+    where: {
+      OR: [
+        { employee: { site: { name: { startsWith: 'Test Site ' } } } },
+        { transferredBy: { email: { endsWith: '@test.local' } } },
+      ],
+    },
+  });
   await prisma.userSiteAssignment.deleteMany({ where: { user: { email: { endsWith: '@test.local' } } } });
-  await prisma.auditLog.deleteMany({ where: { actor: { email: { endsWith: '@test.local' } } } });
   await prisma.employee.deleteMany({ where: { site: { name: { startsWith: 'Test Site ' } } } });
   await prisma.user.deleteMany({ where: { email: { endsWith: '@test.local' } } });
   await prisma.rolePermission.deleteMany({ where: { role: { code: { startsWith: 'TEST_' } } } });

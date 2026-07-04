@@ -11,19 +11,16 @@ see §3 items 16–22 below for the full decision record). This line is itself u
 follow-up commit that always closes a checkpoint session, so it lags the actual `HEAD` by at most
 one trivial doc-only commit — check `git log -1` if in doubt.
 **Branch:** `main`
-**Current implementation phase:** **Phase 2 — CLOSED (conditional) and committed. The pre-Phase-3
-architecture review is complete and committed.** Phase 2.5 (`docs/IMPLEMENTATION_PLAN.md` — Project
-Unit model, Payroll Work Lines prerequisite, Employee Registry refinements, §3 items 16–20, amended
-with five refinements in §3 item 22) is now **in progress**: **Checkpoints 0, 1, and 2 are all
-committed.** Checkpoint 2 (Employee → Project Unit relationship: `Employee.unitId` + composite FK,
-`EmployeeTransferHistory`, transfer audit trail, Site → Unit cascading selector on the Employee
-Registry) is code-complete, typecheck/lint/build clean, new/updated backend tests confirmed to
-compile and run correctly (blocked only by the environment's standing no-Postgres constraint),
-Playwright-verified, and approved. **The session closed after Checkpoint 2 — Checkpoint 3 has not
-started, and per the session's closing instruction, the very next task (before any further
-implementation) is closing out the database-verification debt against a real PostgreSQL instance —
-see §4/§5 below.** Checkpoints 3–4 (import remap/three-layer validation, CNIC/Reactivate) have not
-started. **Do not begin Checkpoint 3 without explicit instruction.**
+**Current implementation phase:** **Phase 2 — CLOSED and committed. The pre-Phase-3
+architecture review is complete and committed.** Phase 2.5 is **in progress**: **Checkpoints 0, 1,
+and 2 are all committed. The long-standing database-verification debt is CLOSED as of 2026-07-04**
+— all migrations applied to a completely fresh, real PostgreSQL 18 instance, the full DB-backed
+test suite passes 78/78, and a real-stack (live backend + live database) Playwright end-to-end run
+passed with zero console errors. See §1's "Database verification" subsection for the four real
+defects this surfaced and fixed, including one new migration
+(`20260704180000_audit_log_allow_fk_actor_set_null`). The "conditional" qualifier on Phase 1's and
+Phase 2's closures is hereby discharged — their DB-backed evidence now exists. Checkpoints 3–4
+(import remap/three-layer validation, CNIC/Reactivate) are next.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -431,15 +428,79 @@ screenshot thumbnails by eye.
   pre-populates from an existing employee's site/unit; changing only the unit (a same-site transfer)
   submits the new `unitId` in the update payload. Zero console errors throughout.
 
+### Database verification — CLOSED 2026-07-04 (the long-standing debt, resolved in full)
+
+The first-ever verification of this project against a real PostgreSQL instance. Environment: no
+Docker/Homebrew/psql exists in this sandbox, so real PostgreSQL 18.4 binaries were provisioned via
+the `@embedded-postgres/darwin-x64` npm package into the session scratchpad (TCP-only on
+`localhost:5432`; role `payroll`, database `payroll_dev`, matching `backend/.env.example`). The
+database lives in the scratchpad and is re-provisioned per session — cheap, since migrate + seed
+take seconds.
+
+**What passed, in order:**
+- All six pre-existing migrations (`20260701164444_init` →
+  `20260703140000_employee_unit_and_transfer_history`) applied to a completely fresh database via
+  `prisma migrate deploy`, first try, **without modification**.
+- Seed ran clean and was re-run to confirm idempotency (second run reports "already exists" and
+  changes nothing).
+- **The full backend suite: 78/78 tests, 10/10 files** — auth (login/logout/session/CSRF/
+  deactivation), DB-level Audit Log immutability, RBAC boundaries (C11 manipulated-`siteId` cases
+  included), Project Sites/Units CRUD + delete guards, Employee Registry CRUD + transfer +
+  composite-FK boundary, import/export, Settings, Users.
+- The `(unitId, siteId) → ProjectUnit(id, siteId)` composite FK verified **at the database level**
+  with raw SQL bypassing the app: a cross-site insert is rejected by Postgres itself
+  (`Employee_unitId_siteId_fkey`); the matching-site insert succeeds.
+- `EmployeeTransferHistory` writes verified live (exactly one row per transfer, with the
+  `employee.transferred` audit entry and no generic `employee.updated` entry for that edit).
+- A **second** completely fresh database replayed the full 7-migration chain + seed + 78/78 tests,
+  proving reproducibility from zero; `prisma migrate diff` (real shadow database) confirms the
+  migration history and `schema.prisma` are in sync — no drift, no inconsistent state.
+- **Real-stack Playwright E2E** (first time ever — live browser → Vite dev server → Express →
+  PostgreSQL, no mocked APIs): seeded-admin login, Project Site creation, two Units via the Manage
+  Units panel, Employee creation **with a date of birth**, DOB round-trip re-opening as
+  `15-03-1990`, and a same-site unit transfer — zero console errors, screenshots captured.
+
+**Four real defects surfaced and fixed — exactly the class of bug this debt existed to catch:**
+1. **Audit-trigger vs. `ON DELETE SET NULL` contradiction (schema defect, new migration).** The
+   immutability trigger rejected *every* UPDATE — including the one Postgres itself performs when a
+   `User` is deleted and `AuditLog.actorUserId`'s documented `SET NULL` action fires. Any user with
+   audit history was undeletable, contradicting `database-schema.md` §16's explicit design. Fixed by
+   `20260704180000_audit_log_allow_fk_actor_set_null`: the trigger now permits exactly that one
+   transition (`actorUserId` NOT NULL → NULL, all other columns byte-identical) and still rejects
+   everything else — re-verified by the still-passing DB-level immutability test. Dated revision
+   notes added to `database-schema.md` §16 and `data-and-storage.md` §3.
+2. **Every `Employee` date write was broken (production bug, Checkpoint 2 and earlier).** Prisma's
+   `@db.Date` columns reject the bare `YYYY-MM-DD` strings the Zod schemas validate — so creating an
+   employee with a DOB/DOJ, marking one as left, recording a transfer (`effectiveDate`), and the
+   import path's DOB/DOJ/DOL all 500'd against a real database. Never caught before because no live
+   DB existed and Playwright ran on mocked APIs. Fixed with a new shared `isoDateToUtcDate()`
+   (`shared/src/lib/date.ts`, exported from `@payroll/shared`) applied at every Prisma date-write
+   boundary (`employees.service.ts` create/update/transfer/leave, `employees-import-export.service.ts`);
+   grep confirmed no unconverted write remains. This also fixed a latent phantom-audit-diff bug (a
+   `Date` column compared against a string always looked "changed" in the update diff).
+3. **Test cleanup violated the system's own append-only invariant.** `cleanTestData()` tried
+   `auditLog.deleteMany()` — correctly rejected by the trigger. Audit rows are now never deleted by
+   tests (user deletion nulls `actorUserId` via the FK, per §16); all audit assertions were already
+   entity-scoped, so no assertion changes were needed. `EmployeeTransferHistory` cleanup (permitted —
+   §8b's append-only rule is application-layer convention; test cleanup is direct DB intervention)
+   was added first in FK-safe order, since its `RESTRICT` FKs otherwise block employee/user cleanup.
+4. **Login rate limiter tripped the suite.** 10 attempts/IP/15 min is correct for production but the
+   integration suite performs one real login per test from a single supertest IP. Relaxed to 1000
+   **only** under `NODE_ENV=test` (`auth.routes.ts`); the production limit is unchanged.
+
+Post-fix: typecheck/lint/build clean across all three workspaces (frontend `.tsbuildinfo` cleared
+first, per the standing `@payroll/shared` lesson). **Phase 1's five outstanding DB-backed checklist
+items and Phase 2's one are all now genuinely verified — the "conditional" closures are discharged.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Auth, RBAC, Audit Log | **Closed (conditional), 2026-07-02** — DB-backed test evidence still outstanding, tracked to close before Phase 9 |
-| 2 | Project Sites, Employee Registry, Settings, User Management | **Closed (conditional), 2026-07-02** — same DB-backed-verification caveat as Phase 1, tracked to close before Phase 9 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoints 0, 1, and 2 COMMITTED (shared dates, Project Units, Employee↔Unit relationship/transfer history). Checkpoints 3–4 (import remap/validation, CNIC/Reactivate) not started — session closed after Checkpoint 2 pending database verification (see §4/§5) |
+| 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
+| 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoints 0, 1, and 2 COMMITTED; **database-verification debt CLOSED 2026-07-04**. Checkpoints 3–4 (import remap/validation, CNIC/Reactivate) not started |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
@@ -737,27 +798,16 @@ screenshot thumbnails by eye.
 
 ## 4. Known limitations
 
-- **Database verification is outstanding for Phase 1, Phase 2, and now Phase 2.5 Checkpoints 0–2 —
-  no longer a background item; it is the explicit, mandatory next task before Checkpoint 3, per the
-  2026-07-04 session-closing instruction.** No Docker, Docker Compose, Podman, Homebrew, native
-  `psql`/`pg_ctl`, or Postgres.app has been available in any sandboxed session so far. None of the
-  DB-backed integration tests — `auth.test.ts`, `audit-log.test.ts`, `project-sites.test.ts`,
-  `employees.test.ts`, `employees-import-export.test.ts`, `settings.test.ts`, `users.test.ts`,
-  `project-units.test.ts` — have been confirmed passing anywhere; no CI run or completion report from
-  any prior session shows evidence they were run. `rbac.test.ts` and `date-utils.test.ts` are pure
-  unit tests (no DB) and have been executed directly and pass. None of this project's five
-  hand-written/hand-placed migrations (`20260701164444_init`, `20260701164509_audit_log_immutability`,
-  `20260702084133_phase2_master_data`, `20260702165738_project_site_address`,
-  `20260703100000_project_units`, `20260703140000_employee_unit_and_transfer_history` — six, not
-  five) have ever been applied to a real database; all were validated only via `prisma
-  validate`/`generate`/`format` and, for the latter two, `prisma migrate diff` against the schema
-  files — static confidence, not a `migrate deploy` run. **The next session's first task, before any
-  new implementation, is closing this out completely**: apply every migration to a fresh database,
-  confirm each applies without modification, and run the full DB-backed suite — see §5 item 1 for the
-  exact scope.
+- **Database verification — CLOSED 2026-07-04.** See §1's "Database verification" subsection: all
+  seven migrations (the original six plus `20260704180000_audit_log_allow_fk_actor_set_null`) apply
+  cleanly to a completely fresh PostgreSQL 18 database, the full DB-backed suite passes 78/78, the
+  composite FK and Audit Log immutability are verified at the raw-SQL level, and a real-stack
+  Playwright E2E run passed. The live database is provisioned per session in the sandbox scratchpad
+  (embedded-postgres binaries — no Docker/Homebrew needed); it does not survive between sessions,
+  but re-provisioning is a two-minute, fully scripted step (`migrate deploy` + seed).
 - CI (`.github/workflows/ci.yml`) has never actually run — nothing has been pushed to a remote/PR
-  yet. Pushing to get a real CI-backed Postgres run remains an alternative way to close the item
-  above, though a local Postgres-capable environment accomplishes the same thing.
+  yet. Local live-database verification (above) now covers what CI's Postgres job would have; a
+  first real CI run remains worthwhile whenever a remote/PR workflow starts.
 - `StorageProvider` does not exist despite being called for in Phase 0 — see §3 item 4. Logo/avatar
   upload UI was deliberately left out of Phase 2's Settings module for this reason.
 - `README.md` previously stated "Phase 1 complete" without this verification caveat; corrected in a
@@ -767,42 +817,27 @@ screenshot thumbnails by eye.
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are both closed (conditional). Phase 2.5 Checkpoints 0, 1, and 2 are all
-committed. The session closed deliberately after Checkpoint 2** — per explicit instruction, the next
-session's **first task, before any new implementation**, is closing out the long-standing
-database-verification debt (item 1 below), which is no longer a "before Phase 9" background item —
-it's now the explicit gate in front of Checkpoint 3. Carry the rest forward as background open items,
-not blockers, unless noted:
+**Phase 1 and Phase 2 are closed with DB-backed evidence complete. Phase 2.5 Checkpoints 0, 1, and 2
+are committed, and the database-verification debt is CLOSED (2026-07-04, §1).**
 
-1. **Database verification — now the immediate next task, not a background item.** Provision or
-   connect to a real PostgreSQL instance; apply every Prisma migration (all five, from
-   `20260701164444_init` through `20260703140000_employee_unit_and_transfer_history`) to a
-   completely fresh database and confirm every one applies without modification; run the full
-   DB-backed integration test suite (`auth.test.ts`, `audit-log.test.ts`, `project-sites.test.ts`,
-   `employees.test.ts`, `employees-import-export.test.ts`, `project-units.test.ts`, plus
-   `rbac.test.ts`/`date-utils.test.ts`, which don't need a DB but should still pass in the same run);
-   specifically confirm seeding, authentication, RBAC, CRUD, the `(unitId, siteId) ->
-   ProjectUnit(id, siteId)` composite foreign key (including that a cross-site assignment is
-   rejected), and `EmployeeTransferHistory` writes all behave correctly against a live database, not
-   just statically-reviewed code. Update this file and `docs/SESSION_HANDOFF.md` to record the debt
-   as closed once it passes. **Only after this passes does Checkpoint 3 begin.**
-2. **Then, Checkpoint 3**: Employee Registry import/export template remap (mapping `Area`/`Branch
-   Code` columns onto `ProjectUnit` fields for real, replacing Checkpoint 2's interim
-   single-unit-resolves-automatically fallback) with three-layer Site/Unit validation (import layer,
-   service layer, database composite FK). Then **Checkpoint 4** (CNIC normalization + duplicate-check
-   + Reactivate — the policy itself is finalized, §3 item 22, but the concrete implementation still
-   needs a separate design-approval gate per standing instruction) — both before Phase 3's Payroll
-   Entry Work Lines build, which depends on `PayrollEntryWorkLine.unitId` composite-FKing against
-   `ProjectUnit` the same way `Employee.unitId` now does.
-3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
+1. **Checkpoint 3 is the next implementation task**: Employee Registry import/export template remap
+   (mapping `Area`/`Branch Code` columns onto `ProjectUnit` fields for real, replacing Checkpoint 2's
+   interim single-unit-resolves-automatically fallback) with three-layer Site/Unit validation (import
+   layer, service layer, database composite FK). Then **Checkpoint 4** (CNIC normalization +
+   duplicate-check + Reactivate — the policy itself is finalized, §3 item 22, but the concrete
+   implementation still needs a separate design-approval gate per standing instruction) — both before
+   Phase 3's Payroll Entry Work Lines build, which depends on `PayrollEntryWorkLine.unitId`
+   composite-FKing against `ProjectUnit` the same way `Employee.unitId` now does. DB-backed tests now
+   run for real each session — provision Postgres per the §4 note before running them.
+2. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to
    whatever hosting a given customer provides, not assumed cloud-provider-specific.
-4. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+3. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    item 5 (calendar-month-only cycles) before Phase 3, item 3 (at-most-one-`ACTIVE`-`Advance`-per-type)
    before Phase 4.
-5. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
-6. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
+4. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
+5. When Phase 3 is explicitly authorized to start (Payroll Entry & Payroll Processing per
    `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan: `calcNet` over Work Lines,
    the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic locking), its
    Definition of Done now includes Playwright-driven visual verification (§3 item 15) and a

@@ -1,4 +1,4 @@
-import { formatDate, parseDateInput, toIsoDateOnly } from '@payroll/shared';
+import { formatDate, isoDateToUtcDate, parseDateInput, toIsoDateOnly } from '@payroll/shared';
 
 /**
  * Pure unit tests, no database involved — the shared date utilities are the single source of
@@ -75,5 +75,28 @@ describe('parseDateInput', () => {
   it('round-trips with formatDate', () => {
     const iso = '2026-03-05';
     expect(parseDateInput(formatDate(iso))).toBe(iso);
+  });
+});
+
+describe('isoDateToUtcDate', () => {
+  it('converts an ISO date-only string to a Date at UTC midnight', () => {
+    const d = isoDateToUtcDate('1990-03-15');
+    expect(d).toBeInstanceOf(Date);
+    expect(d!.toISOString()).toBe('1990-03-15T00:00:00.000Z');
+  });
+
+  it('normalizes an ISO datetime string down to UTC midnight of its date part', () => {
+    expect(isoDateToUtcDate('2026-07-04T18:30:00.000Z')!.toISOString()).toBe('2026-07-04T00:00:00.000Z');
+  });
+
+  it('returns null for null, undefined, empty, and non-ISO input', () => {
+    expect(isoDateToUtcDate(null)).toBeNull();
+    expect(isoDateToUtcDate(undefined)).toBeNull();
+    expect(isoDateToUtcDate('')).toBeNull();
+    expect(isoDateToUtcDate('15-03-1990')).toBeNull();
+  });
+
+  it('round-trips with toIsoDateOnly', () => {
+    expect(toIsoDateOnly(isoDateToUtcDate('2026-03-05')!)).toBe('2026-03-05');
   });
 });

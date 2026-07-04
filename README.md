@@ -3,13 +3,13 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 and Phase 2 are both **closed (conditional)**. Phase 2.5 (Project Units,
-> Payroll Work Lines prerequisite, Employee Registry refinements) is **in progress**: Checkpoints
-> 0–2 are **complete and committed** as of 2026-07-04 (shared date formatting, the Project Unit
-> module, and the Employee → Project Unit relationship with transfer history). Checkpoints 3–4
-> (import/export column remap, CNIC normalization/Reactivate) have not started, and neither they
-> nor Phase 3 will begin without explicit instruction. **Database verification against a real
-> PostgreSQL instance is the first task of the next session**, before any further implementation.
+> **Status:** Phase 1 and Phase 2 are both **closed, with full database-backed evidence as of
+> 2026-07-04**. Phase 2.5 (Project Units, Payroll Work Lines prerequisite, Employee Registry
+> refinements) is **in progress**: Checkpoints 0–2 are **complete and committed** (shared date
+> formatting, the Project Unit module, and the Employee → Project Unit relationship with transfer
+> history), and the **long-standing database-verification debt is closed** — every migration
+> applied to a fresh, real PostgreSQL instance and the full integration suite (78/78) passing
+> against it. Checkpoints 3–4 (import/export column remap, CNIC normalization/Reactivate) are next.
 > See "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
@@ -30,27 +30,26 @@ npm run dev:frontend          # http://localhost:5173
 
 - **Architecture:** frozen. `docs/PROJECT_PRINCIPLES.md` and `docs/architecture/*.md` are the
   binding design; implementation follows `docs/IMPLEMENTATION_PLAN.md`'s phase sequencing.
-- **Phase 1 (Auth, RBAC, Audit Log):** closed (conditional), 2026-07-02 — schema/migrations, session
-  auth, CSRF, RBAC/site-scoping middleware, insert-only Audit Log with a DB-level immutability
-  trigger, tests, and the frontend login/session/app-shell all exist and pass `typecheck`/`lint`.
-  Closed on that static evidence with explicit user sign-off, since no PostgreSQL instance has been
-  reachable in any session so far. The DB-backed test suite (`auth.test.ts`, `audit-log.test.ts`)
-  remains a tracked open item to run for real before Phase 9. See `docs/PROJECT_PROGRESS.md` for the
-  full checklist.
-- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** **closed (conditional)**,
+- **Phase 1 (Auth, RBAC, Audit Log):** closed 2026-07-02; **DB-backed evidence completed
+  2026-07-04** — schema/migrations, session auth, CSRF, RBAC/site-scoping middleware, insert-only
+  Audit Log with a DB-level immutability trigger, tests, and the frontend login/session/app-shell,
+  now all verified against a live PostgreSQL instance (see `docs/PROJECT_PROGRESS.md` §1).
+- **Phase 2 (Project Sites, Employee Registry, Settings, User Management):** **closed**,
   2026-07-02 — full CRUD for Project Sites (including a physical `address` field) and the Employee
   Registry (with CNIC/employee-code uniqueness, DOL-based soft "leaving," and site-scoped RBAC for
   Payroll Staff per the C11 decision), Employee Registry CSV/Excel import/export against the official
   client template, the Settings module (Company Details/My Profile/Theme, including a Company Logo
   placeholder), User Management, and a full UI/UX polish pass verified with real browser rendering
-  (Playwright). Same DB-backed-verification caveat as Phase 1 — see `docs/PROJECT_PROGRESS.md`. One
+  (Playwright). DB-backed evidence completed 2026-07-04, same as Phase 1. One
   flagged gap: file upload (company logo, user avatar) is not yet available — it depends on the
   `StorageProvider` abstraction, which was never actually built despite being called for in Phase 0
   (see `docs/PROJECT_PROGRESS.md` §3 item 4), and remains deferred until before Phase 5.
-- **Database verification:** still outstanding, tracked (not a blocker) — run the DB-backed test
-  suite against a real PostgreSQL instance (locally via Docker, or through CI) as soon as one is
-  available, and **before Phase 9's production sign-off** at the latest. This covers Phase 1's and
-  Phase 2's test suites and all three hand-written migrations, not just Phase 1's.
+- **Database verification: CLOSED, 2026-07-04.** All seven migrations applied to a completely fresh
+  real PostgreSQL 18 database without modification; the full integration suite passes 78/78; the
+  `(unitId, siteId)` composite FK and Audit Log immutability verified at the raw-SQL level; and a
+  real-stack (no mocks) Playwright end-to-end run passed with zero console errors. Four real defects
+  were surfaced and fixed in the process — see `docs/PROJECT_PROGRESS.md` §1's "Database
+  verification" subsection.
 - **Process note:** starting with Phase 2's close-out, every future phase's Definition of Done
   includes Playwright-driven visual verification (real browser rendering, not just
   typecheck/lint/build) — see `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria".
@@ -138,11 +137,9 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-**Before any further implementation**, the next session's first task is closing out the long-standing
-database verification debt: provision or connect to a real PostgreSQL instance, apply every Prisma
-migration to a completely fresh database, and run the full DB-backed integration test suite (auth,
-RBAC, CRUD, the composite foreign keys, transfer history) — see `docs/SESSION_HANDOFF.md` for the
-exact commands. Only once that passes does **Phase 2.5 Checkpoint 3** (Employee Registry
-import/export remap, three-layer Site/Unit validation — `docs/IMPLEMENTATION_PLAN.md`) begin. See
-`docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
-handoff to the next development session.
+The database-verification debt is closed (2026-07-04). The next implementation task is **Phase 2.5
+Checkpoint 3** (Employee Registry import/export remap onto real `ProjectUnit` columns, with
+three-layer Site/Unit validation — `docs/IMPLEMENTATION_PLAN.md`), followed by Checkpoint 4
+(CNIC normalization/duplicate-check/Reactivate, whose concrete implementation still requires a
+design-approval gate). See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and
+`docs/SESSION_HANDOFF.md` for the full handoff to the next development session.

@@ -5,7 +5,7 @@ import type {
   SessionUser,
   UpdateEmployeeInput,
 } from '@payroll/shared';
-import { ROLE_CODES, toIsoDateOnly } from '@payroll/shared';
+import { ROLE_CODES, isoDateToUtcDate, toIsoDateOnly } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { badRequest, forbidden, notFound } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
@@ -105,12 +105,12 @@ export async function createEmployee(currentUser: SessionUser, input: CreateEmpl
       name: input.name,
       fatherName: input.fatherName ?? null,
       religion: input.religion ?? null,
-      dateOfBirth: input.dateOfBirth ?? null,
+      dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
       mobileNumber: input.mobileNumber ?? null,
       designation: input.designation,
       siteId: input.siteId,
       unitId: input.unitId,
-      dateOfJoining: input.dateOfJoining ?? null,
+      dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
       payType: input.payType ?? undefined,
       grossPay: input.grossPay,
       bankId: input.bankId ?? null,
@@ -202,12 +202,12 @@ export async function updateEmployee(
     ...(input.name !== undefined && { name: input.name }),
     ...(input.fatherName !== undefined && { fatherName: input.fatherName }),
     ...(input.religion !== undefined && { religion: input.religion }),
-    ...(input.dateOfBirth !== undefined && { dateOfBirth: input.dateOfBirth }),
+    ...(input.dateOfBirth !== undefined && { dateOfBirth: isoDateToUtcDate(input.dateOfBirth) }),
     ...(input.mobileNumber !== undefined && { mobileNumber: input.mobileNumber }),
     ...(input.designation !== undefined && { designation: input.designation }),
     ...(input.siteId !== undefined && { siteId: input.siteId }),
     ...(input.unitId !== undefined && { unitId: input.unitId }),
-    ...(input.dateOfJoining !== undefined && { dateOfJoining: input.dateOfJoining }),
+    ...(input.dateOfJoining !== undefined && { dateOfJoining: isoDateToUtcDate(input.dateOfJoining) }),
     ...(input.payType !== undefined && { payType: input.payType }),
     ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
     ...(input.bankId !== undefined && { bankId: input.bankId }),
@@ -231,7 +231,13 @@ export async function updateEmployee(
     });
 
     if (isTransfer) {
-      const effectiveDate = input.transferEffectiveDate ?? toIsoDateOnly(new Date());
+      // Kept as the ISO string for the audit metadata below; converted to a UTC-midnight Date
+      // only at the Prisma write, since @db.Date rejects a bare YYYY-MM-DD string.
+      const effectiveDateIso = input.transferEffectiveDate ?? toIsoDateOnly(new Date());
+      const effectiveDate = isoDateToUtcDate(effectiveDateIso);
+      if (!effectiveDate) {
+        throw badRequest('Invalid transfer effective date');
+      }
       const reason = input.transferReason ?? null;
       const remarks = input.transferRemarks ?? null;
 
@@ -260,7 +266,7 @@ export async function updateEmployee(
             toSiteId: nextSiteId,
             fromUnitId: existing.unitId,
             toUnitId: nextUnitId,
-            effectiveDate,
+            effectiveDate: effectiveDateIso,
             reason,
             remarks,
           },
@@ -304,7 +310,7 @@ export async function markEmployeeLeft(currentUser: SessionUser, id: string, inp
 
   return prisma.employee.update({
     where: { id },
-    data: { dateOfLeaving: input.dateOfLeaving },
+    data: { dateOfLeaving: isoDateToUtcDate(input.dateOfLeaving) },
     include: { site: true, unit: true, bank: true },
   });
 }

@@ -900,7 +900,15 @@ system.
 - **Module owner:** Audit Log
 - **Immutable, append-only:** enforced at two layers — no application code path updates or deletes a
   row, **and** the database role's `UPDATE`/`DELETE` privileges on this table are revoked (or a
-  `BEFORE UPDATE OR DELETE` trigger raises an exception), per `data-and-storage.md` §3
+  `BEFORE UPDATE OR DELETE` trigger raises an exception), per `data-and-storage.md` §3.
+  **Revised 2026-07-04 (first live-database verification):** the trigger permits exactly one narrow
+  UPDATE — `actorUserId` transitioning NOT NULL → NULL with every other column byte-identical, i.e.
+  precisely what this table's own `ON DELETE SET NULL` FK action (above) produces when a `User` row
+  is deleted. The original trigger rejected *every* UPDATE, which made any user with audit history
+  undeletable — contradicting this very section's stated reason for choosing `SET NULL` over
+  `RESTRICT`. The two requirements were reconciled in favor of the documented FK semantics
+  (migration `20260704180000_audit_log_allow_fk_actor_set_null`); every other UPDATE and every
+  DELETE is still rejected at the database level, verified by live test.
 - **Transactions required:** yes, always — every audited action writes its `AuditLog` row in the same
   transaction as the change itself; there is no code path where the change commits without its audit
   entry

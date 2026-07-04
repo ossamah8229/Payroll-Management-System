@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
-import { createEmployeeSchema, formatDate, pluralize, toIsoDateOnly } from '@payroll/shared';
+import { createEmployeeSchema, formatDate, isoDateToUtcDate, pluralize, toIsoDateOnly } from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
@@ -255,6 +255,15 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
 
       const dateOfLeaving = parseImportDate(row.cells['DOL']!);
 
+      // Prisma's @db.Date columns reject the bare YYYY-MM-DD strings the Zod schema validates —
+      // convert to UTC-midnight Dates at this write boundary, same as employees.service.ts.
+      const data = {
+        ...input,
+        dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
+        dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
+        dateOfLeaving: isoDateToUtcDate(dateOfLeaving),
+      };
+
       const existing = row.cells['CNIC']
         ? await prisma.employee.findFirst({ where: { cnic: row.cells['CNIC'] } })
         : input.employeeCode
@@ -265,11 +274,11 @@ export async function importEmployees(currentUser: SessionUser, rows: ParsedRow[
         assertSiteAccess(currentUser, existing.siteId);
         await prisma.employee.update({
           where: { id: existing.id },
-          data: { ...input, dateOfLeaving },
+          data,
         });
         updated += 1;
       } else {
-        await prisma.employee.create({ data: { ...input, dateOfLeaving } });
+        await prisma.employee.create({ data });
         created += 1;
       }
     } catch (error) {

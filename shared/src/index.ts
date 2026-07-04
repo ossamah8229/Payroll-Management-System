@@ -33,5 +33,5 @@ export type { CreateUserInput, ResetUserPasswordInput, UpdateUserInput } from '.
 
 export type { SessionUser } from './types/session-user';
 
-export { formatDate, parseDateInput, toIsoDateOnly } from './lib/date';
+export { formatDate, isoDateToUtcDate, parseDateInput, toIsoDateOnly } from './lib/date';
 export { pluralize } from './lib/text';

@@ -71,6 +71,11 @@ alone is one bug away from being violated):
 2. **Database layer:** the application's database role has `UPDATE`/`DELETE` privileges revoked on
    the `audit_log` table, and/or a `BEFORE UPDATE OR DELETE` trigger raises an exception. This
    protects against future bugs, ad hoc scripts, or a raw query bypassing the service layer.
+   *(Revised 2026-07-04: the trigger carves out exactly one permitted UPDATE — the
+   `actorUserId` NOT NULL → NULL transition produced by that FK's documented `ON DELETE SET NULL`
+   action, with all other columns unchanged — because the original unconditional trigger made any
+   `User` with audit history undeletable, contradicting `database-schema.md` §16's explicit FK
+   design. See §16's matching revision note.)*
 
 **Every financial mutation writes its audit entry in the same database transaction as the change
 itself** — release, hold, correction (including a zero-net-difference correction — see

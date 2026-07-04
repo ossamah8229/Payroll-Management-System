@@ -33,6 +33,20 @@ export function toIsoDateOnly(value: string | Date | null | undefined): string {
 }
 
 /**
+ * ISO `YYYY-MM-DD` (or an ISO datetime string, or a `Date`) -> a `Date` pinned to UTC midnight,
+ * or `null`. This is the one sanctioned way to hand a date-only value to the database layer:
+ * Prisma's `@db.Date` columns accept a `Date`/full ISO-8601 datetime, never the bare
+ * `YYYY-MM-DD` string the API layer validates and transports everywhere else — surfaced by the
+ * first live-database verification (2026-07-04), which rejected bare date strings at every
+ * `Employee` date write.
+ */
+export function isoDateToUtcDate(value: string | Date | null | undefined): Date | null {
+  if (!value) return null;
+  const parts = extractIsoDateParts(value);
+  return parts ? new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00.000Z`) : null;
+}
+
+/**
  * `DD-MM-YYYY` display text -> ISO `YYYY-MM-DD` for storage/API, or `null` if the text isn't a
  * complete, valid calendar date (used by `DateInput` once the user has typed all 8 digits).
  */

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { changePasswordSchema, loginSchema, updateProfileSchema } from '@payroll/shared';
+import { isTest } from '../../config/env';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import {
@@ -18,10 +19,14 @@ export const authRouter = Router();
  * 15-minute window. Deliberately simple (in-memory, per-process) for Phase 1; revisit if this
  * system is ever deployed behind multiple backend instances, at which point a shared store
  * (the same Postgres/Redis this system already uses) would replace the in-memory default.
+ *
+ * Relaxed (not disabled) under NODE_ENV=test only: the integration suite performs one real
+ * login per test from a single supertest IP, which legitimately exceeds 10 per window — the
+ * production limit is unchanged.
  */
 const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: isTest ? 1000 : 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: { code: 'TOO_MANY_ATTEMPTS', message: 'Too many login attempts. Try again later.' } },

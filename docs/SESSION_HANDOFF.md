@@ -53,10 +53,16 @@ be enough to resume correctly without re-deriving context from scratch — per
   only on the expected "no Postgres reachable" environment constraint — not a code defect. A final,
   whole-app Playwright pass (Employee Registry + Project Sites/Manage Units together) also ran clean
   with zero console errors.
-- **No DB-backed test has been run against a real database in any session so far.** This now covers
-  Phase 1's, Phase 2's, and Phase 2.5 Checkpoints 0–2's test suites and all six
-  hand-written/hand-placed migrations. **This is the explicit, named first task of the next
-  session — see §7 — not a "before Phase 9" background item anymore.**
+- **The database-verification debt is CLOSED (2026-07-04).** Real PostgreSQL 18 was provisioned in
+  the session sandbox (embedded-postgres npm binaries — no Docker/Homebrew needed; see
+  `docs/PROJECT_PROGRESS.md` §1's "Database verification" subsection for the recipe). All six
+  pre-existing migrations applied to a completely fresh database without modification; the full
+  backend suite passes **78/78**; the composite FK and Audit Log immutability were additionally
+  verified at the raw-SQL level; a second fresh database replayed the whole chain to prove
+  reproducibility; and a first-ever **real-stack Playwright E2E** (live browser → frontend →
+  backend → PostgreSQL, no mocks) passed with zero console errors. Four real defects were found and
+  fixed — see §2's 2026-07-04 entry and §3's new rules. The live DB is scratchpad-local and must be
+  re-provisioned each session (fast: migrate deploy + seed).
 
 ## 2. What was completed today (2026-07-02)
 
@@ -205,6 +211,43 @@ review were both genuinely complete and committed.
   Checkpoint 3, and to make closing the database-verification debt the mandatory first task of the
   next session, ahead of any further implementation.
 
+### What was completed this session (2026-07-04, evening): database-verification debt CLOSED
+
+Executed exactly per §7 item 1 (as it stood): provisioned real PostgreSQL 18.4 in the sandbox
+scratchpad via `@embedded-postgres/darwin-x64` (no Docker/Homebrew exists here; the binaries run
+TCP-only on `localhost:5432` because the scratchpad path exceeds the Unix-socket length limit),
+created the `payroll`/`payroll_dev` role/database matching `backend/.env.example`, and ran the full
+sequence: `migrate deploy` (all six migrations applied to a fresh DB, unmodified, first try) → seed
+(run twice — idempotency confirmed live) → full test suite.
+
+**The first live run failed and surfaced four real defects, all fixed the same session** (full
+detail: `docs/PROJECT_PROGRESS.md` §1 "Database verification"):
+1. The Audit Log immutability trigger blocked the FK's own `ON DELETE SET NULL` — any `User` with
+   audit history was undeletable, contradicting `database-schema.md` §16. Fixed by a new migration,
+   `20260704180000_audit_log_allow_fk_actor_set_null` (permits exactly that one column transition,
+   rejects everything else); dated revision notes added to `database-schema.md` §16 and
+   `data-and-storage.md` §3.
+2. Every `Employee` date write 500'd against real Postgres (Prisma `@db.Date` rejects the bare
+   `YYYY-MM-DD` strings the Zod schemas produce) — create-with-DOB, mark-as-left, transfer
+   `effectiveDate`, and import DOB/DOJ/DOL were all affected. Fixed via a new shared
+   `isoDateToUtcDate()` in `shared/src/lib/date.ts`, applied at every Prisma date-write boundary.
+3. `cleanTestData()` deleted AuditLog rows — rejected by the project's own trigger. Tests no longer
+   delete audit rows (assertions were already entity-scoped); `EmployeeTransferHistory` cleanup was
+   added in FK-safe order (its `RESTRICT` FKs otherwise block employee/user cleanup).
+4. The login rate limiter (10/IP/15 min) tripped under one-login-per-test; relaxed to 1000 under
+   `NODE_ENV=test` only — production limit unchanged.
+
+After the fixes: **78/78 tests, 10/10 suites, green**; a second fresh database replayed all seven
+migrations + seed + suite from zero; `prisma migrate diff` against a real shadow DB shows no drift;
+raw-SQL probes confirmed the composite FK rejects cross-site pairs at the database level and the
+audit trigger still rejects ordinary UPDATE/DELETE. Then typecheck/lint/build (all clean; frontend
+`.tsbuildinfo` cleared first per §3's standing lesson) and a real-stack Playwright E2E — seeded-admin
+login, site + two units created, employee created **with a DOB** (exercising fix 2 end to end), DOB
+round-tripping as `15-03-1990`, same-site transfer writing its `EmployeeTransferHistory` row and
+`employee.transferred` audit entry — zero console errors. E2E fixtures were cleaned from the dev DB
+afterward (audit rows remain, by design). **Phase 1's five open DB-backed checklist items and
+Phase 2's one are now genuinely closed — see §5/§6.**
+
 ## 3. What must not be changed without approval
 
 - Anything in `docs/architecture/*.md` or `docs/PROJECT_PRINCIPLES.md` — the architecture is
@@ -218,12 +261,25 @@ review were both genuinely complete and committed.
   `CompanySettings` belong to Phase 2 per the now-updated `docs/IMPLEMENTATION_PLAN.md`. Do not
   re-litigate this without a new explicit request.
 - Audit Log immutability: no application code path should ever add an update/delete export from
-  `audit-log.service.ts`, and the database trigger from the
-  `20260701164509_audit_log_immutability` migration must never be dropped or worked around.
+  `audit-log.service.ts`, and the database trigger (originally
+  `20260701164509_audit_log_immutability`, amended by
+  `20260704180000_audit_log_allow_fk_actor_set_null`) must never be dropped or worked around.
+  **The 2026-07-04 amendment is not a weakening**: it permits exactly one UPDATE shape — the
+  `actorUserId` NOT NULL → NULL transition the FK's documented `ON DELETE SET NULL` action produces
+  (`database-schema.md` §16's revision note) — and still rejects every other UPDATE and all DELETEs,
+  verified live. Do not widen it further.
+- **New rule (2026-07-04): every Prisma write to a `@db.Date` column goes through
+  `isoDateToUtcDate()`** (`shared/src/lib/date.ts`) — Prisma rejects the bare `YYYY-MM-DD` strings
+  the Zod schemas validate, and this was a real, live-DB-only 500 on every Employee date write.
+  When adding any new date field (Phase 3's cycles, Phase 4's advances `dateGiven`, etc.), convert
+  at the write boundary; grep for unconverted writes before calling the work done.
 - Existing migrations (`20260701164444_init`, `20260701164509_audit_log_immutability`,
-  `20260702084133_phase2_master_data`, `20260702165738_project_site_address`) should not be edited in
+  `20260702084133_phase2_master_data`, `20260702165738_project_site_address`,
+  `20260703100000_project_units`, `20260703140000_employee_unit_and_transfer_history`,
+  `20260704180000_audit_log_allow_fk_actor_set_null`) should not be edited in
   place once applied anywhere beyond a fresh local dev database — per Principle 8 (additive-first
-  schema evolution), later changes are new migrations, not edits to these.
+  schema evolution), later changes are new migrations, not edits to these. All seven are now
+  verified against real PostgreSQL (2026-07-04).
 - The C11 decision (Payroll Staff fully site-scoped on Employee Registry view/edit/create, no
   exceptions) is enforced via `assertSiteAccess()` in
   `backend/src/modules/employees/employees.service.ts` on every read/write path, including the
@@ -363,28 +419,24 @@ review were both genuinely complete and committed.
 
 Per `docs/IMPLEMENTATION_PLAN.md`'s Phase 1 Definition of Done:
 
-- [x] Migration applies cleanly to an empty database *(believed true — migrations are additive and
-      reviewed; still not re-verified against a live DB)*
-- [ ] **Seed script confirmed idempotent against a live database** — still not run; tracked open item
-- [ ] **Scripted login as the seeded Master Admin succeeds** — still not run; tracked open item
-- [ ] **Scripted attempt to call a protected route without a session fails with 401** — covered by
-      `auth.test.ts`, still not executed; tracked open item
-- [ ] **Scripted attempt to update or delete an audit log row fails at the database level** —
-      covered by `audit-log.test.ts`, still not executed; tracked open item
-- [ ] **CSRF-missing requests to state-changing routes are rejected** — covered by `auth.test.ts`,
-      still not executed; tracked open item
-- [x] RBAC middleware unit tests (no DB required) — read-reviewed, logic matches spec
+- [x] Migration applies cleanly to an empty database — **verified live 2026-07-04** (fresh
+      PostgreSQL 18, `migrate deploy`, unmodified, twice — second fresh DB replay included)
+- [x] **Seed script confirmed idempotent against a live database** — verified 2026-07-04 (run twice)
+- [x] **Scripted login as the seeded Master Admin succeeds** — verified 2026-07-04 (`auth.test.ts`
+      live, plus a real-browser login in the Playwright E2E)
+- [x] **Scripted attempt to call a protected route without a session fails with 401** — verified
+      2026-07-04 (`auth.test.ts` live)
+- [x] **Scripted attempt to update or delete an audit log row fails at the database level** —
+      verified 2026-07-04 (`audit-log.test.ts` live, plus an independent raw-SQL probe)
+- [x] **CSRF-missing requests to state-changing routes are rejected** — verified 2026-07-04
+      (`auth.test.ts` live)
+- [x] RBAC middleware unit tests (no DB required) — passing
 - [x] `npm run typecheck` clean
 - [x] `npm run lint` clean (0 errors)
-- [x] **🛑 Review-checkpoint sign-off — CONDITIONAL, obtained 2026-07-02.** The user explicitly
-      approved closing Phase 1 on code-complete + static-check evidence alone, given no Postgres is
-      reachable in this environment, with the five unchecked items above carried forward as a tracked
-      open item (not a re-opened blocker) to close before Phase 9's hardening pass.
+- [x] **🛑 Review-checkpoint sign-off — obtained 2026-07-02 (conditional at the time).** The
+      condition — DB-backed evidence — was fully discharged 2026-07-04.
 
-**Bottom line: Phase 1 is closed (conditional).** The five DB-backed items above are real, tracked
-debt — the first Postgres-capable environment (local Docker, or a CI push) should run
-`npm run test --workspace backend` and check them off for real, but that is no longer a precondition
-for Phase 2 work.
+**Bottom line: Phase 1 is closed, unconditionally, as of 2026-07-04.**
 
 ## 6. Phase 2 completion status
 
@@ -407,11 +459,11 @@ open item, not a blocker):
 - [x] `npm run typecheck` clean (all three workspaces).
 - [x] `npm run lint` clean (0 errors, same 2 pre-existing warnings as Phase 1).
 - [x] `npm run build` clean (backend + frontend production builds).
-- [ ] **Master Admin can create a Payroll Staff user, assign sites, and confirm that user's session
+- [x] **Master Admin can create a Payroll Staff user, assign sites, and confirm that user's session
       genuinely cannot see or touch employees/sites outside that assignment** (the Phase 2
-      Definition of Done, `docs/IMPLEMENTATION_PLAN.md`) — logic is implemented and tested, but still
-      not executed against a live database; this specific DB-backed check remains the one real gap
-      carried into Phase 9 (see §4/§8), same pattern as Phase 1's five unchecked items.
+      Definition of Done, `docs/IMPLEMENTATION_PLAN.md`) — **verified live 2026-07-04**:
+      `users.test.ts` + the C11 boundary tests in `employees.test.ts`/`employees-import-export.test.ts`
+      all passing against real PostgreSQL, including the manipulated-`siteId` direct-API cases.
 - [x] Phase 2 UI/UX polish pass + final visual consistency audit (Playwright-verified) — see §2.
 - [x] **🛑 Phase 2 review checkpoint sign-off — CONDITIONAL, obtained 2026-07-02.** The user explicitly
       stated "Phase 2 is now complete" and requested this checkpoint. Phase 2 has no explicit 🛑 gate
@@ -419,35 +471,21 @@ open item, not a blocker):
       practice, an explicit sign-off was still obtained before Phase 3 — on the same conditional basis
       as Phase 1's: the one DB-backed item directly above remains open, not re-litigated.
 
-**Bottom line: Phase 2 is closed (conditional), matching Phase 1's pattern exactly.** The one
-DB-backed item above is real, tracked debt — close it out the first time a Postgres-capable
-environment is available (see §7 item 2), before Phase 9's hardening pass at the latest.
+**Bottom line: Phase 2 is closed, unconditionally, as of 2026-07-04** — its one outstanding
+DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Phase 1 and Phase 2 are closed (conditional). Phase 2.5 Checkpoints 0, 1, and 2 are all committed.
-The session ended deliberately after Checkpoint 2, per explicit instruction. Do not begin Checkpoint 3
-— or any implementation — until step 1 below passes.**
+**Phase 1 and Phase 2 are closed with full DB-backed evidence (2026-07-04). Phase 2.5 Checkpoints
+0, 1, and 2 are committed, and the database-verification debt is CLOSED — see §1/§2.**
 
-1. **First task of the next session, before any new code: close the database-verification debt.**
-   Provision or connect to a real PostgreSQL instance, then:
-   ```bash
-   cp backend/.env.example backend/.env
-   npm run prisma:generate --workspace backend
-   npx prisma migrate deploy --schema backend/prisma/schema.prisma
-   npm run prisma:seed --workspace backend
-   npm run test --workspace backend
-   ```
-   Confirm every one of the six migrations (`20260701164444_init` through
-   `20260703140000_employee_unit_and_transfer_history`) applies to a **completely fresh** database
-   without modification, and that the full test suite passes — Phase 1's three files, Phase 2's five,
-   and Phase 2.5's `project-units.test.ts` (plus `rbac.test.ts`/`date-utils.test.ts`, which don't need
-   a DB). Specifically verify seeding, authentication, RBAC, CRUD, the
-   `(unitId, siteId) -> ProjectUnit(id, siteId)` composite foreign key (a cross-site assignment must
-   be rejected at the database level), and `EmployeeTransferHistory` writes all behave correctly
-   against the live database — not just statically reviewed code. **Update this file and
-   `docs/PROJECT_PROGRESS.md` to record the debt as closed once it passes.** Only then does
-   Checkpoint 3 begin.
+1. **Per session, re-provision the local database before running DB-backed tests** — the Postgres
+   instance lives in the sandbox scratchpad and does not survive between sessions. Recipe: install
+   `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its symlinks, `initdb -U postgres -A
+   trust`, start with `-c unix_socket_directories=''` (TCP only), create role `payroll` (password
+   `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
+   `npx prisma migrate deploy`, seed, test. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Database
+   verification" subsection.
 2. **Then, Checkpoint 3** (`docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5) — the Employee Registry
    import/export template remap (mapping `Area`/`Branch Code` columns onto real `ProjectUnit` fields,
    replacing Checkpoint 2's interim single-unit-resolves-automatically fallback) with three-layer
@@ -473,19 +511,12 @@ The session ended deliberately after Checkpoint 2, per explicit instruction. Do 
 
 ## 8. Risks and assumptions
 
-- **Assumption**: the migrations as written are correct and will apply cleanly — this is inferred
-  from code review and clean `prisma generate`/typecheck, not from an actual `migrate deploy` run
-  against Postgres. This now includes all six migrations to date: the hand-written Phase 2 migration
-  (`20260702084133_phase2_master_data`, built without `prisma migrate dev`'s auto-generation since no
-  shadow database was available, cross-checked line-by-line against Phase 1's actual generated SQL
-  for convention consistency) and Phase 2.5's two migrations
-  (`20260703100000_project_units`, `20260703140000_employee_unit_and_transfer_history`), both
-  generated via `prisma migrate diff` against schema files directly rather than hand-transcribed —
-  still unverified against a real database. **This is precisely the assumption the next session's
-  first task (§7 item 1) exists to test.**
-- **Risk (open, tracked)**: if the DB-backed tests fail when finally run, the fix may touch files
-  already committed — treat existing commits as a checkpoint to diff against, not untouchable
-  history. This risk is explicitly accepted by proceeding under the conditional close pattern.
+- **Resolved 2026-07-04 — migrations verified for real.** The long-standing assumption that the
+  hand-written/`migrate diff`-generated migrations would apply cleanly was tested and held: all six
+  applied to a completely fresh PostgreSQL 18 database unmodified, first try. The companion risk
+  ("if the DB-backed tests fail, the fix may touch committed files") also materialized exactly as
+  anticipated and was handled: four real defects were found and fixed (see §2's 2026-07-04 entry),
+  one of them via a new migration — existing migrations were not edited.
 - **Resolved**: the Bank/AdjustmentType/CompanySettings scope question, the two Employee Registry
   §26 items, the `ProjectSite.defaultBankId` removal, the `StorageProvider` deferral timing (confirmed:
   before Phase 5), `ProjectSite.address` (added, scoped exception), the company name ("Broom Services
