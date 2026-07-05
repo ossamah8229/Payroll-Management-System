@@ -1,7 +1,14 @@
 import { z } from 'zod';
+import { normalizeCnic } from '../lib/cnic';
 
 /** Forms commonly submit an empty string for a cleared optional field; treat that as null. */
 const emptyToNull = (val: unknown) => (val === '' ? null : val);
+
+/** Strips non-digit characters (e.g. a "#####-#######-#" formatted CNIC) before validating, not
+ * just before storing — docs/architecture/database-schema.md §26 item 6. Applied here, once, so
+ * the create/update routes and CSV/Excel import (which all parse through this schema) normalize
+ * identically. */
+const normalizeCnicInput = (val: unknown) => (typeof val === 'string' ? normalizeCnic(val) : val);
 
 /** For non-nullable-but-optional-with-a-default fields: an empty string means "use the default". */
 const emptyToUndefined = (val: unknown) => (val === '' ? undefined : val);
@@ -20,10 +27,9 @@ const optionalDate = z.preprocess(emptyToNull, z.string().date().nullable().opti
 export const createEmployeeSchema = z.object({
   employeeCode: optionalTrimmedString(30),
   cnic: z.preprocess(
-    emptyToNull,
+    (val) => emptyToNull(normalizeCnicInput(val)),
     z
       .string()
-      .trim()
       .regex(/^\d{13}$/, 'CNIC must be exactly 13 digits')
       .nullable()
       .optional(),

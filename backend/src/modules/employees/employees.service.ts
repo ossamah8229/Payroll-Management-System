@@ -5,7 +5,7 @@ import type {
   SessionUser,
   UpdateEmployeeInput,
 } from '@payroll/shared';
-import { ROLE_CODES, isoDateToUtcDate, toIsoDateOnly } from '@payroll/shared';
+import { ROLE_CODES, isoDateToUtcDate, normalizeCnic, toIsoDateOnly } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { badRequest, forbidden, notFound } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
@@ -43,6 +43,86 @@ export async function assertUnitBelongsToSite(
   if (unit.siteId !== siteId) {
     throw badRequest('Selected unit does not belong to the selected site');
   }
+}
+
+export interface CnicAvailability {
+  exists: boolean;
+  employee: {
+    id: string;
+    name: string;
+    employeeCode: string | null;
+    siteId: string;
+    siteName: string;
+    dateOfLeaving: string | null;
+    active: boolean;
+  } | null;
+}
+
+/**
+ * The single lookup implementation for "does an Employee already hold this CNIC" — normalizes the
+ * same way `createEmployeeSchema`/`updateEmployeeSchema` do (`normalizeCnic`, shared/src/lib/cnic.ts)
+ * and is the one place both the duplicate-check endpoint (`checkCnicAvailability`, below) and the
+ * CSV/Excel importer's existing-employee match (`employees-import-export.service.ts`) look a CNIC
+ * up. A raw, un-normalized comparison here was a real bug: a dashed CNIC in an import row wouldn't
+ * match the digits-only value stored on the existing row, so a rehire's row would silently attempt
+ * to *create* a second employee instead of finding the one already on file.
+ */
+export async function findEmployeeByCnic(
+  rawCnic: string,
+  options: { excludeEmployeeId?: string; client?: PrismaTransactionClient } = {},
+) {
+  const normalized = normalizeCnic(rawCnic);
+  if (!normalized) return null;
+  const client = options.client ?? prisma;
+  return client.employee.findFirst({
+    where: {
+      cnic: normalized,
+      ...(options.excludeEmployeeId ? { id: { not: options.excludeEmployeeId } } : {}),
+    },
+    include: { site: true },
+  });
+}
+
+/**
+ * Debounced pre-submit duplicate-check lookup (docs/architecture/database-schema.md §26 item 6) —
+ * lets an operator learn about a CNIC collision, and which employee owns it, before hitting a raw
+ * 409 on submit. RBAC-aware: a Payroll Staff caller learns *that* a duplicate exists (so they know
+ * to stop and involve a Master Admin) but never the identity/site of an employee outside their own
+ * site assignment (C11, no exceptions) — Master Admin always sees full details.
+ */
+export async function checkCnicAvailability(
+  currentUser: SessionUser,
+  rawCnic: string,
+  excludeEmployeeId?: string,
+): Promise<CnicAvailability> {
+  const normalized = normalizeCnic(rawCnic);
+  if (!normalized || !/^\d{13}$/.test(normalized)) {
+    throw badRequest('CNIC must be exactly 13 digits');
+  }
+
+  const existing = await findEmployeeByCnic(normalized, { excludeEmployeeId });
+
+  if (!existing) {
+    return { exists: false, employee: null };
+  }
+
+  const canSeeDetails = isMasterAdmin(currentUser) || currentUser.siteIds.includes(existing.siteId);
+  if (!canSeeDetails) {
+    return { exists: true, employee: null };
+  }
+
+  return {
+    exists: true,
+    employee: {
+      id: existing.id,
+      name: existing.name,
+      employeeCode: existing.employeeCode,
+      siteId: existing.siteId,
+      siteName: existing.site.name,
+      dateOfLeaving: existing.dateOfLeaving ? toIsoDateOnly(existing.dateOfLeaving) : null,
+      active: !existing.dateOfLeaving,
+    },
+  };
 }
 
 export interface ListEmployeesFilters {
@@ -233,6 +313,38 @@ export async function recordEmployeeTransfer(
 }
 
 /**
+ * Maps a partial `UpdateEmployeeInput` onto a Prisma update payload — every field is applied only
+ * if the caller actually provided it (an omitted field must leave the stored value untouched, the
+ * same partial-update semantics `updateEmployeeSchema` is built for). The single implementation of
+ * that mapping, shared by `updateEmployee` (an ordinary edit) and `reactivateEmployee` (a rehire,
+ * below) — both apply the same field set, differing only in which extra writes/audit entries
+ * accompany them.
+ */
+function mapUpdateInputToData(input: UpdateEmployeeInput): Prisma.EmployeeUncheckedUpdateInput {
+  return {
+    ...(input.employeeCode !== undefined && { employeeCode: input.employeeCode }),
+    ...(input.cnic !== undefined && { cnic: input.cnic }),
+    ...(input.name !== undefined && { name: input.name }),
+    ...(input.fatherName !== undefined && { fatherName: input.fatherName }),
+    ...(input.religion !== undefined && { religion: input.religion }),
+    ...(input.dateOfBirth !== undefined && { dateOfBirth: isoDateToUtcDate(input.dateOfBirth) }),
+    ...(input.mobileNumber !== undefined && { mobileNumber: input.mobileNumber }),
+    ...(input.designation !== undefined && { designation: input.designation }),
+    ...(input.siteId !== undefined && { siteId: input.siteId }),
+    ...(input.unitId !== undefined && { unitId: input.unitId }),
+    ...(input.dateOfJoining !== undefined && { dateOfJoining: isoDateToUtcDate(input.dateOfJoining) }),
+    ...(input.payType !== undefined && { payType: input.payType }),
+    ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
+    ...(input.bankId !== undefined && { bankId: input.bankId }),
+    ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
+    ...(input.accountNumber !== undefined && { accountNumber: input.accountNumber }),
+    ...(input.accountTitle !== undefined && { accountTitle: input.accountTitle }),
+    ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount }),
+    ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
+  };
+}
+
+/**
  * Whenever this update changes `siteId` and/or `unitId`, that is a *transfer*
  * (docs/architecture/database-schema.md §9/§8b) — detected implicitly by comparing the employee's
  * current site/unit against the submitted one, not via a separate endpoint. A transfer writes the
@@ -266,27 +378,7 @@ export async function updateEmployee(
     await assertUnitBelongsToSite(nextUnitId, nextSiteId);
   }
 
-  const data: Prisma.EmployeeUncheckedUpdateInput = {
-    ...(input.employeeCode !== undefined && { employeeCode: input.employeeCode }),
-    ...(input.cnic !== undefined && { cnic: input.cnic }),
-    ...(input.name !== undefined && { name: input.name }),
-    ...(input.fatherName !== undefined && { fatherName: input.fatherName }),
-    ...(input.religion !== undefined && { religion: input.religion }),
-    ...(input.dateOfBirth !== undefined && { dateOfBirth: isoDateToUtcDate(input.dateOfBirth) }),
-    ...(input.mobileNumber !== undefined && { mobileNumber: input.mobileNumber }),
-    ...(input.designation !== undefined && { designation: input.designation }),
-    ...(input.siteId !== undefined && { siteId: input.siteId }),
-    ...(input.unitId !== undefined && { unitId: input.unitId }),
-    ...(input.dateOfJoining !== undefined && { dateOfJoining: isoDateToUtcDate(input.dateOfJoining) }),
-    ...(input.payType !== undefined && { payType: input.payType }),
-    ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
-    ...(input.bankId !== undefined && { bankId: input.bankId }),
-    ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
-    ...(input.accountNumber !== undefined && { accountNumber: input.accountNumber }),
-    ...(input.accountTitle !== undefined && { accountTitle: input.accountTitle }),
-    ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount }),
-    ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
-  };
+  const data = mapUpdateInputToData(input);
 
   const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,
@@ -351,4 +443,108 @@ export async function markEmployeeLeft(currentUser: SessionUser, id: string, inp
     data: { dateOfLeaving: isoDateToUtcDate(input.dateOfLeaving) },
     include: { site: true, unit: true, bank: true },
   });
+}
+
+/**
+ * The Reactivate Employee action (docs/architecture/database-schema.md §26 item 6, finalized
+ * 2026-07-03/04) — the *only* path in the system that clears `dateOfLeaving`. CNIC stays globally
+ * unique with no override: a rehire is never a second `Employee` row, it is this same existing row
+ * reactivated in place, so every historical `PayrollEntry` keeps referencing the one, unchanged
+ * `employeeId` (Principle 2). **Single source of truth**: every caller that can reactivate an
+ * employee — the UI's Reactivate action and the CSV/Excel importer's rehire-via-import case
+ * (`employees-import-export.service.ts`) — calls this function; neither reimplements the guard,
+ * the field update, or the audit trail.
+ *
+ * Reuses the exact same partial-update field set as an ordinary edit (`mapUpdateInputToData`) —
+ * "updates the employee's current employment details (site, unit, designation, bank details, etc.)"
+ * is simply whichever of those fields the caller supplies, same as `updateEmployee`. If the
+ * supplied `siteId`/`unitId` also differs from what's on file, that is an independent fact (a
+ * transfer) and fires alongside reactivation exactly as `updateEmployee` already does — the same
+ * `recordEmployeeTransfer()` helper, not a reimplementation.
+ */
+export async function reactivateEmployee(
+  currentUser: SessionUser,
+  id: string,
+  input: UpdateEmployeeInput,
+  requestMeta: RequestMeta,
+): Promise<{
+  employee: Awaited<ReturnType<typeof getEmployee>>;
+  changes: Record<string, { from: JsonPrimitive; to: JsonPrimitive }>;
+  transferred: boolean;
+}> {
+  const existing = await getEmployee(currentUser, id);
+
+  if (!existing.dateOfLeaving) {
+    throw badRequest('Employee is already active');
+  }
+
+  if (input.siteId !== undefined) {
+    assertSiteAccess(currentUser, input.siteId);
+  }
+
+  const nextSiteId = input.siteId ?? existing.siteId;
+  const nextUnitId = input.unitId ?? existing.unitId;
+  const isTransfer = nextSiteId !== existing.siteId || nextUnitId !== existing.unitId;
+
+  if (isTransfer) {
+    await assertUnitBelongsToSite(nextUnitId, nextSiteId);
+  }
+
+  const previousDateOfLeaving = toIsoDateOnly(existing.dateOfLeaving);
+
+  const data: Prisma.EmployeeUncheckedUpdateInput = {
+    ...mapUpdateInputToData(input),
+    dateOfLeaving: null,
+  };
+
+  const allChanges = diffFields(
+    existing as unknown as Record<string, unknown>,
+    data as unknown as Record<string, unknown>,
+  );
+
+  const employee = await prisma.$transaction(async (tx) => {
+    const updated = await tx.employee.update({
+      where: { id },
+      data,
+      include: { site: true, unit: true, bank: true },
+    });
+
+    if (isTransfer) {
+      await recordEmployeeTransfer(tx, {
+        employeeId: id,
+        fromSiteId: existing.siteId,
+        toSiteId: nextSiteId,
+        fromUnitId: existing.unitId,
+        toUnitId: nextUnitId,
+        actorUserId: currentUser.id,
+        effectiveDateIso: input.transferEffectiveDate,
+        reason: input.transferReason,
+        remarks: input.transferRemarks,
+        requestMeta,
+      });
+    }
+
+    // Distinct from `employee.updated` (and never accompanied by it) — reactivation is a business
+    // event in its own right, same treatment as `employee.left` (markEmployeeLeft) and
+    // `employee.transferred` above. siteId/unitId changes are already covered by that transfer
+    // entry, so they're excluded here the same way updateEmployee excludes them from its generic
+    // employee.updated entry.
+    const fieldChanges = omitKeys(allChanges, ['siteId', 'unitId', 'dateOfLeaving']);
+    await recordAuditLog(
+      {
+        actorUserId: currentUser.id,
+        action: 'employee.reactivated',
+        entityType: 'Employee',
+        entityId: id,
+        metadata: { previousDateOfLeaving, changes: fieldChanges },
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+      },
+      tx,
+    );
+
+    return updated;
+  });
+
+  return { employee, changes: allChanges, transferred: isTransfer };
 }

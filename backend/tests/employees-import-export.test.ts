@@ -412,4 +412,153 @@ describe('Employee Registry import/export', () => {
     });
     expect(history).toHaveLength(0);
   });
+
+  it('matches an existing employee by CNIC even when the import row writes it with dashes (normalization bug fix)', async () => {
+    const site = await makeSite('Test Site Import CNIC Dashed');
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Dashed CNIC Match Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '20000',
+        cnic: '1231231231234',
+      },
+    });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-cnic-dashed@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        CNIC: '12312-3123123-4',
+        Name: 'Dashed CNIC Match Employee',
+        Designation: 'Senior Guard',
+        'Basic/Gross Pay': '20000',
+      }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    // Before the fix, the raw dashed cell never matched the stored digits-only value, so this row
+    // would fall through to "create" and 500/skip on the cnic unique constraint instead of updating.
+    expect(importRes.body.created).toBe(0);
+    expect(importRes.body.updated).toBe(1);
+    expect(importRes.body.skipped).toHaveLength(0);
+
+    const all = await prisma.employee.findMany({ where: { cnic: '1231231231234' } });
+    expect(all).toHaveLength(1);
+    expect(all[0]?.id).toBe(employee.id);
+    expect(all[0]?.designation).toBe('Senior Guard');
+  });
+
+  it('reactivates a departed employee reappearing in an import with a blank DOL column, via the same Reactivate workflow/audit trail as the UI action', async () => {
+    const site = await makeSite('Test Site Import Reactivate');
+    const unitId = await unitIdForSite(site.id);
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Import Rehire Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId,
+        grossPay: '20000',
+        cnic: '1112223334446',
+        dateOfLeaving: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-reactivate@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        CNIC: '1112223334446',
+        Name: 'Import Rehire Employee',
+        Designation: 'Rehired Guard',
+        'Basic/Gross Pay': '22000',
+        DOL: '', // blank -> this row means the employee is active again
+      }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.updated).toBe(1);
+    expect(importRes.body.skipped).toHaveLength(0);
+
+    const refreshed = await prisma.employee.findUniqueOrThrow({ where: { id: employee.id } });
+    expect(refreshed.dateOfLeaving).toBeNull();
+    expect(refreshed.designation).toBe('Rehired Guard');
+
+    // Never a second row for the same CNIC.
+    const all = await prisma.employee.findMany({ where: { cnic: '1112223334446' } });
+    expect(all).toHaveLength(1);
+
+    const reactivatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.reactivated' } });
+    expect(reactivatedEntries.some((entry) => entry.entityId === employee.id)).toBe(true);
+
+    const updatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.updated' } });
+    expect(updatedEntries.some((entry) => entry.entityId === employee.id)).toBe(false);
+  });
+
+  it('reactivating via import into a different unit also writes an EmployeeTransferHistory row and employee.transferred entry, alongside employee.reactivated', async () => {
+    const fromSite = await makeSite('Test Site Import Reactivate Transfer From');
+    const toSite = await makeSite('Test Site Import Reactivate Transfer To');
+    const fromUnitId = await unitIdForSite(fromSite.id);
+    const toUnitId = await unitIdForSite(toSite.id);
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Import Rehire Transfer Employee',
+        designation: 'Guard',
+        siteId: fromSite.id,
+        unitId: fromUnitId,
+        grossPay: '20000',
+        cnic: '1112223334447',
+        dateOfLeaving: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    const { agent, csrfToken } = await masterAdminAgent('import-export-reactivate-transfer@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: toSite.name,
+        Area: `${toSite.name} Unit`,
+        CNIC: '1112223334447',
+        Name: 'Import Rehire Transfer Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        DOL: '',
+      }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', csv, 'employees.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.updated).toBe(1);
+
+    const refreshed = await prisma.employee.findUniqueOrThrow({ where: { id: employee.id } });
+    expect(refreshed.dateOfLeaving).toBeNull();
+    expect(refreshed.siteId).toBe(toSite.id);
+    expect(refreshed.unitId).toBe(toUnitId);
+
+    const history = await prisma.employeeTransferHistory.findMany({ where: { employeeId: employee.id } });
+    expect(history).toHaveLength(1);
+    expect(history[0]?.fromSiteId).toBe(fromSite.id);
+    expect(history[0]?.toSiteId).toBe(toSite.id);
+
+    const transferEntries = await prisma.auditLog.findMany({ where: { action: 'employee.transferred' } });
+    expect(transferEntries.some((entry) => entry.entityId === employee.id)).toBe(true);
+    const reactivatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.reactivated' } });
+    expect(reactivatedEntries.some((entry) => entry.entityId === employee.id)).toBe(true);
+  });
 });

@@ -8,7 +8,9 @@ import { badRequest } from '../../common/http-error';
 import {
   assertSiteAccess,
   assertUnitBelongsToSite,
+  findEmployeeByCnic,
   listEmployees,
+  reactivateEmployee,
   recordEmployeeTransfer,
   type RequestMeta,
 } from './employees.service';
@@ -354,8 +356,12 @@ export async function importEmployees(
       // import-layer resolution above. Layer 3 (the composite FK) backstops both.
       await assertUnitBelongsToSite(unit.id, site.id);
 
-      const existing = row.cells['CNIC']
-        ? await prisma.employee.findFirst({ where: { cnic: row.cells['CNIC'] } })
+      // Uses the same normalized-CNIC lookup the check-cnic endpoint uses (findEmployeeByCnic,
+      // employees.service.ts) — a raw comparison against the row's un-normalized cell was a real
+      // bug: a dashed CNIC in the file would never match the digits-only value already stored,
+      // so a rehire's row would fall through to "create new" instead of finding the existing one.
+      const existing = input.cnic
+        ? await findEmployeeByCnic(input.cnic)
         : input.employeeCode
           ? await prisma.employee.findFirst({ where: { employeeCode: input.employeeCode } })
           : null;
@@ -363,24 +369,41 @@ export async function importEmployees(
       if (existing) {
         assertSiteAccess(currentUser, existing.siteId);
         const isTransfer = existing.siteId !== site.id || existing.unitId !== unit.id;
-        await prisma.$transaction(async (tx) => {
-          await tx.employee.update({
-            where: { id: existing.id },
-            data,
-          });
-          if (isTransfer) {
-            await recordEmployeeTransfer(tx, {
-              employeeId: existing.id,
-              fromSiteId: existing.siteId,
-              toSiteId: site.id,
-              fromUnitId: existing.unitId,
-              toUnitId: unit.id,
-              actorUserId: currentUser.id,
-              reason: 'Employee Registry import',
-              requestMeta,
+
+        if (existing.dateOfLeaving && dateOfLeaving === null) {
+          // A departed employee reappearing with a blank DOL column is a rehire. Route through the
+          // same Reactivate workflow every other reactivation path uses — single source of truth,
+          // docs/architecture/database-schema.md §26 item 6 — rather than a bare field update, so
+          // the employee.reactivated audit entry (and, when site/unit also changed, the
+          // EmployeeTransferHistory row + employee.transferred entry) fire identically regardless
+          // of whether the reactivation came from the UI or an import. Leave-via-import stays out
+          // of scope (unchanged below) — this only ever moves departed -> active, never the reverse.
+          await reactivateEmployee(
+            currentUser,
+            existing.id,
+            { ...input, transferReason: isTransfer ? 'Employee Registry import' : undefined },
+            requestMeta,
+          );
+        } else {
+          await prisma.$transaction(async (tx) => {
+            await tx.employee.update({
+              where: { id: existing.id },
+              data,
             });
-          }
-        });
+            if (isTransfer) {
+              await recordEmployeeTransfer(tx, {
+                employeeId: existing.id,
+                fromSiteId: existing.siteId,
+                toSiteId: site.id,
+                fromUnitId: existing.unitId,
+                toUnitId: unit.id,
+                actorUserId: currentUser.id,
+                reason: 'Employee Registry import',
+                requestMeta,
+              });
+            }
+          });
+        }
         updated += 1;
       } else {
         await prisma.employee.create({ data });

@@ -341,4 +341,193 @@ describe('Employee Registry', () => {
     const entries = await prisma.auditLog.findMany({ where: { action: 'employee.left' } });
     expect(entries.some((entry) => entry.entityId === employeeId)).toBe(true);
   });
+
+  it('normalizes a dashed/spaced CNIC identically on create and update, before validation, not just storage', async () => {
+    const site = await makeSite('Test Site Employees CNIC Normalize');
+    const unitId = await unitIdForSite(site.id);
+    const { agent, csrfToken } = await masterAdminAgent('emp-cnic-normalize@test.local');
+
+    const createRes = await agent
+      .post('/api/v1/employees')
+      .set('x-csrf-token', csrfToken)
+      .send(baseEmployeePayload(site.id, unitId, { name: 'Dashed CNIC', cnic: '12345-1234567-1' }));
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.employee.cnic).toBe('1234512345671');
+
+    const updateRes = await agent
+      .patch(`/api/v1/employees/${createRes.body.employee.id}`)
+      .set('x-csrf-token', csrfToken)
+      .send({ cnic: '54321 7654321 9' });
+
+    expect(updateRes.status).toBe(200);
+    expect(updateRes.body.employee.cnic).toBe('5432176543219');
+  });
+
+  describe('GET /employees/check-cnic', () => {
+    it('reports exists:false for a CNIC no employee holds', async () => {
+      const { agent } = await masterAdminAgent('emp-check-cnic-none@test.local');
+      const res = await agent.get('/api/v1/employees/check-cnic?cnic=1112223334445');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ exists: false, employee: null });
+    });
+
+    it('gives Master Admin full detail about the existing employee, normalizing the query CNIC the same way', async () => {
+      const site = await makeSite('Test Site Employees Check CNIC Admin');
+      const unitId = await unitIdForSite(site.id);
+      const { agent, csrfToken } = await masterAdminAgent('emp-check-cnic-admin@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, unitId, { name: 'Holder', cnic: '2223334445556' }));
+
+      // A dashed query CNIC must normalize to the same digits-only value already stored.
+      const res = await agent.get('/api/v1/employees/check-cnic?cnic=22233-3444555-6');
+
+      expect(res.status).toBe(200);
+      expect(res.body.exists).toBe(true);
+      expect(res.body.employee.id).toBe(createRes.body.employee.id);
+      expect(res.body.employee.name).toBe('Holder');
+      expect(res.body.employee.siteName).toBe(site.name);
+      expect(res.body.employee.active).toBe(true);
+    });
+
+    it('masks employee detail from a Payroll Staff caller outside the holder\'s site, but still reports exists:true', async () => {
+      const site = await makeSite('Test Site Employees Check CNIC Masked');
+      const unitId = await unitIdForSite(site.id);
+      const { agent: adminAgent, csrfToken: adminCsrf } = await masterAdminAgent('emp-check-cnic-masked-admin@test.local');
+
+      await adminAgent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', adminCsrf)
+        .send(baseEmployeePayload(site.id, unitId, { name: 'Masked Holder', cnic: '3334445556667' }));
+
+      const { agent } = await createAuthenticatedAgent(app, {
+        email: 'emp-check-cnic-masked-staff@test.local',
+        password: PASSWORD,
+        roleCode: ROLE_CODES.PAYROLL_STAFF,
+        permissionKeys: EMPLOYEE_PERMISSIONS,
+        siteIds: [],
+      });
+
+      const res = await agent.get('/api/v1/employees/check-cnic?cnic=3334445556667');
+      expect(res.status).toBe(200);
+      expect(res.body.exists).toBe(true);
+      expect(res.body.employee).toBeNull();
+    });
+
+    it('excludes the employee named by excludeId, so an edit form does not flag its own record as a duplicate', async () => {
+      const site = await makeSite('Test Site Employees Check CNIC Exclude');
+      const unitId = await unitIdForSite(site.id);
+      const { agent, csrfToken } = await masterAdminAgent('emp-check-cnic-exclude@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, unitId, { name: 'Self', cnic: '4445556667778' }));
+
+      const res = await agent.get(
+        `/api/v1/employees/check-cnic?cnic=4445556667778&excludeId=${createRes.body.employee.id}`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ exists: false, employee: null });
+    });
+  });
+
+  describe('POST /employees/:id/reactivate', () => {
+    it('clears dateOfLeaving, updates supplied employment fields, and writes a distinct employee.reactivated audit entry', async () => {
+      const site = await makeSite('Test Site Employees Reactivate');
+      const unitId = await unitIdForSite(site.id);
+      const { agent, csrfToken } = await masterAdminAgent('emp-reactivate@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, unitId, { name: 'Rehire Candidate', cnic: '5556667778889' }));
+      const employeeId = createRes.body.employee.id;
+
+      await agent
+        .post(`/api/v1/employees/${employeeId}/leave`)
+        .set('x-csrf-token', csrfToken)
+        .send({ dateOfLeaving: '2026-01-15' });
+
+      const reactivateRes = await agent
+        .post(`/api/v1/employees/${employeeId}/reactivate`)
+        .set('x-csrf-token', csrfToken)
+        .send({ designation: 'Rehired Guard', grossPay: '40000.00' });
+
+      expect(reactivateRes.status).toBe(200);
+      expect(reactivateRes.body.employee.dateOfLeaving).toBeNull();
+      expect(reactivateRes.body.employee.designation).toBe('Rehired Guard');
+      expect(reactivateRes.body.employee.grossPay).toBe('40000');
+
+      // Never a second row for the same CNIC (Principle 2 — historical PayrollEntry links survive).
+      const allWithCnic = await prisma.employee.findMany({ where: { cnic: '5556667778889' } });
+      expect(allWithCnic).toHaveLength(1);
+      expect(allWithCnic[0]?.id).toBe(employeeId);
+
+      const reactivatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.reactivated' } });
+      expect(reactivatedEntries.some((e) => e.entityId === employeeId)).toBe(true);
+
+      const updatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.updated' } });
+      expect(updatedEntries.some((e) => e.entityId === employeeId)).toBe(false);
+    });
+
+    it('rejects reactivating an employee who is already active with 400', async () => {
+      const site = await makeSite('Test Site Employees Reactivate Active');
+      const unitId = await unitIdForSite(site.id);
+      const { agent, csrfToken } = await masterAdminAgent('emp-reactivate-active@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, unitId, { name: 'Still Active' }));
+
+      const res = await agent
+        .post(`/api/v1/employees/${createRes.body.employee.id}/reactivate`)
+        .set('x-csrf-token', csrfToken)
+        .send({});
+
+      expect(res.status).toBe(400);
+    });
+
+    it('reactivating with a different site/unit also writes an EmployeeTransferHistory row and employee.transferred entry alongside employee.reactivated', async () => {
+      const fromSite = await makeSite('Test Site Employees Reactivate Transfer From');
+      const toSite = await makeSite('Test Site Employees Reactivate Transfer To');
+      const fromUnitId = await unitIdForSite(fromSite.id);
+      const toUnitId = await unitIdForSite(toSite.id);
+      const { agent, csrfToken } = await masterAdminAgent('emp-reactivate-transfer@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(fromSite.id, fromUnitId, { name: 'Rehire And Transfer' }));
+      const employeeId = createRes.body.employee.id;
+
+      await agent
+        .post(`/api/v1/employees/${employeeId}/leave`)
+        .set('x-csrf-token', csrfToken)
+        .send({ dateOfLeaving: '2026-02-01' });
+
+      const reactivateRes = await agent
+        .post(`/api/v1/employees/${employeeId}/reactivate`)
+        .set('x-csrf-token', csrfToken)
+        .send({ siteId: toSite.id, unitId: toUnitId });
+
+      expect(reactivateRes.status).toBe(200);
+      expect(reactivateRes.body.employee.siteId).toBe(toSite.id);
+
+      const history = await prisma.employeeTransferHistory.findMany({ where: { employeeId } });
+      expect(history).toHaveLength(1);
+      expect(history[0]?.fromSiteId).toBe(fromSite.id);
+      expect(history[0]?.toSiteId).toBe(toSite.id);
+
+      const transferEntries = await prisma.auditLog.findMany({ where: { action: 'employee.transferred' } });
+      expect(transferEntries.some((e) => e.entityId === employeeId)).toBe(true);
+
+      const reactivatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.reactivated' } });
+      expect(reactivatedEntries.some((e) => e.entityId === employeeId)).toBe(true);
+    });
+  });
 });

@@ -10,7 +10,15 @@ import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { createEmployee, getEmployee, listEmployees, markEmployeeLeft, updateEmployee } from './employees.service';
+import {
+  checkCnicAvailability,
+  createEmployee,
+  getEmployee,
+  listEmployees,
+  markEmployeeLeft,
+  reactivateEmployee,
+  updateEmployee,
+} from './employees.service';
 import { exportEmployeesToCsv, exportEmployeesToXlsx, importEmployees, parseEmployeeImportFile } from './employees-import-export.service';
 
 export const employeesRouter = Router();
@@ -103,6 +111,18 @@ employeesRouter.get('/', requirePermission(PERMISSIONS.EMPLOYEES_VIEW), async (r
   }
 });
 
+// Registered ahead of GET /:id — otherwise Express would match "check-cnic" as an :id param.
+employeesRouter.get('/check-cnic', requirePermission(PERMISSIONS.EMPLOYEES_VIEW), async (req, res, next) => {
+  try {
+    const cnic = typeof req.query.cnic === 'string' ? req.query.cnic : '';
+    const excludeEmployeeId = typeof req.query.excludeId === 'string' ? req.query.excludeId : undefined;
+    const result = await checkCnicAvailability(req.currentUser!, cnic, excludeEmployeeId);
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 employeesRouter.get('/:id', requirePermission(PERMISSIONS.EMPLOYEES_VIEW), async (req, res, next) => {
   try {
     const employee = await getEmployee(req.currentUser!, requireIdParam(req.params.id));
@@ -142,6 +162,24 @@ employeesRouter.patch('/:id', requirePermission(PERMISSIONS.EMPLOYEES_EDIT), asy
     // transfer occurs, the EmployeeTransferHistory insert — not here, so the route never needs to
     // (and must not) log a second, redundant employee.updated entry after the fact.
     const { employee } = await updateEmployee(req.currentUser!, id, input, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.status(200).json({ employee });
+  } catch (error) {
+    next(error);
+  }
+});
+
+employeesRouter.post('/:id/reactivate', requirePermission(PERMISSIONS.EMPLOYEES_EDIT), async (req, res, next) => {
+  try {
+    const id = requireIdParam(req.params.id);
+    const input = updateEmployeeSchema.parse(req.body);
+    // Same as PATCH /:id — reactivateEmployee owns all audit logging (employee.reactivated, plus
+    // employee.transferred when a transfer co-occurs) inside its own transaction, so the route
+    // never logs a second, redundant entry after the fact.
+    const { employee } = await reactivateEmployee(req.currentUser!, id, input, {
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });

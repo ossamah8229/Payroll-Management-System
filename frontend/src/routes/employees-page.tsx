@@ -1,7 +1,7 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Download, MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import { toIsoDateOnly, type SessionUser } from '@payroll/shared';
+import { normalizeCnic, toIsoDateOnly, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,12 +23,16 @@ import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import { SiteUnitSelect } from '@/components/ui/site-unit-select';
 import {
+  checkCnicAvailability,
   downloadEmployeeExport,
   useCreateEmployee,
+  useEmployee,
   useEmployees,
   useImportEmployees,
   useMarkEmployeeLeft,
+  useReactivateEmployee,
   useUpdateEmployee,
+  type CnicAvailability,
   type Employee,
   type ImportResult,
 } from '@/hooks/use-employees';
@@ -41,11 +45,13 @@ function EmployeeFormModal({
   onOpenChange,
   employee,
   defaultSiteId,
+  onReactivateRequested,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   employee?: Employee;
   defaultSiteId?: string;
+  onReactivateRequested?: (employeeId: string) => void;
 }) {
   const banks = useBanks();
   const createEmployee = useCreateEmployee();
@@ -78,6 +84,40 @@ function EmployeeFormModal({
   function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
+
+  const [cnicAvailability, setCnicAvailability] = useState<CnicAvailability | undefined>(undefined);
+
+  // Debounced pre-submit duplicate-check (docs/architecture/database-schema.md §26 item 6) — only
+  // fires once the field holds a complete, normalized 13-digit CNIC, and is skipped entirely when
+  // editing an employee whose CNIC hasn't changed (excludeId also guards against a same-record
+  // false positive if it has).
+  useEffect(() => {
+    const normalized = normalizeCnic(form.cnic);
+    if (!normalized || normalized.length !== 13) {
+      setCnicAvailability(undefined);
+      return;
+    }
+    if (isEdit && normalized === normalizeCnic(employee?.cnic ?? '')) {
+      setCnicAvailability(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      checkCnicAvailability(normalized, employee?.id)
+        .then((result) => {
+          if (!cancelled) setCnicAvailability(result);
+        })
+        .catch(() => {
+          if (!cancelled) setCnicAvailability(undefined);
+        });
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [form.cnic, isEdit, employee?.cnic, employee?.id]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -155,8 +195,36 @@ function EmployeeFormModal({
                   value={form.cnic}
                   onChange={(e) => setField('cnic', e.target.value)}
                   placeholder="13 digits, optional"
-                  maxLength={13}
+                  maxLength={15}
                 />
+                {cnicAvailability?.exists && (
+                  <div className="rounded border border-warning bg-warning-light px-2.5 py-1.5 text-[11px] text-text">
+                    {cnicAvailability.employee ? (
+                      <>
+                        Already registered to <span className="font-medium">{cnicAvailability.employee.name}</span> at{' '}
+                        {cnicAvailability.employee.siteName} (
+                        {cnicAvailability.employee.active ? 'active' : 'departed'}).
+                        {!cnicAvailability.employee.active && onReactivateRequested && (
+                          <>
+                            {' '}
+                            <button
+                              type="button"
+                              className="font-medium underline underline-offset-2 hover:no-underline"
+                              onClick={() => {
+                                onReactivateRequested(cnicAvailability.employee!.id);
+                                onOpenChange(false);
+                              }}
+                            >
+                              Reactivate instead
+                            </button>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      'This CNIC is already registered to an employee outside your assigned sites — contact a Master Admin.'
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="emp-father">Father's name</Label>
@@ -298,7 +366,7 @@ function EmployeeFormModal({
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={isPending}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isPending}>
+            <Button type="submit" disabled={isPending || (!isEdit && cnicAvailability?.exists)}>
               {isEdit ? 'Save changes' : 'Create employee'}
             </Button>
           </ModalFooter>
@@ -358,6 +426,189 @@ function MarkLeftModal({
   );
 }
 
+/**
+ * The Reactivate Employee action (docs/architecture/database-schema.md §26 item 6) — symmetric to
+ * `MarkLeftModal` above. Fetches the full current record (rather than relying on whatever partial
+ * detail the CNIC duplicate-check surfaced) so every current-employment field can be reviewed and,
+ * if needed, updated in the same call that clears `dateOfLeaving`, via the single `reactivateEmployee`
+ * workflow the backend exposes at `POST /employees/:id/reactivate`.
+ */
+function ReactivateEmployeeModal({
+  open,
+  onOpenChange,
+  employeeId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  employeeId: string;
+}) {
+  const { data: employee, isLoading } = useEmployee(employeeId);
+  const banks = useBanks();
+  const reactivateEmployee = useReactivateEmployee();
+
+  const [form, setForm] = useState({
+    siteId: '',
+    unitId: '',
+    designation: '',
+    payType: 'DAILY_WAGE' as 'DAILY_WAGE' | 'MONTHLY',
+    grossPay: '',
+    bankId: '',
+    branchCode: '',
+    accountNumber: '',
+    accountTitle: '',
+  });
+
+  useEffect(() => {
+    if (!employee) return;
+    setForm({
+      siteId: employee.siteId,
+      unitId: employee.unitId,
+      designation: employee.designation,
+      payType: employee.payType,
+      grossPay: employee.grossPay,
+      bankId: employee.bankId ?? '',
+      branchCode: employee.branchCode ?? '',
+      accountNumber: employee.accountNumber ?? '',
+      accountTitle: employee.accountTitle ?? '',
+    });
+  }, [employee]);
+
+  function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSubmit() {
+    try {
+      await reactivateEmployee.mutateAsync({
+        id: employeeId,
+        input: {
+          siteId: form.siteId,
+          unitId: form.unitId,
+          designation: form.designation,
+          payType: form.payType,
+          grossPay: form.grossPay,
+          bankId: form.bankId || null,
+          branchCode: form.branchCode || null,
+          accountNumber: form.accountNumber || null,
+          accountTitle: form.accountTitle || null,
+        },
+      });
+      toast.success(`${employee?.name ?? 'Employee'} reactivated`);
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Something went wrong');
+    }
+  }
+
+  return (
+    <Modal open={open} onOpenChange={(next) => !reactivateEmployee.isPending && onOpenChange(next)}>
+      <ModalContent title="Reactivate Employee" widthClassName="max-w-[520px] max-h-[85vh] overflow-y-auto">
+        {isLoading || !employee ? (
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        ) : (
+          <>
+            <p className="mb-3 text-xs text-text-muted">
+              <span className="font-medium text-text">{employee.name}</span> left on{' '}
+              {employee.dateOfLeaving ?? 'an earlier date'}. Reactivating clears that and restores them to
+              the active roster on this same record — review or update their current details below.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-designation">Designation</Label>
+                <Input
+                  id="reactivate-designation"
+                  required
+                  maxLength={80}
+                  value={form.designation}
+                  onChange={(e) => setField('designation', e.target.value)}
+                />
+              </div>
+              <SiteUnitSelect
+                siteId={form.siteId}
+                unitId={form.unitId}
+                onSiteChange={(siteId) => setField('siteId', siteId)}
+                onUnitChange={(unitId) => setField('unitId', unitId)}
+              />
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-pay-type">Pay type</Label>
+                <select
+                  id="reactivate-pay-type"
+                  className={selectClassName}
+                  value={form.payType}
+                  onChange={(e) => setField('payType', e.target.value as 'DAILY_WAGE' | 'MONTHLY')}
+                >
+                  <option value="DAILY_WAGE">Daily wage</option>
+                  <option value="MONTHLY">Monthly</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-gross-pay">Gross pay</Label>
+                <Input
+                  id="reactivate-gross-pay"
+                  required
+                  value={form.grossPay}
+                  onChange={(e) => setField('grossPay', e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-bank">Bank</Label>
+                <select
+                  id="reactivate-bank"
+                  className={selectClassName}
+                  value={form.bankId}
+                  onChange={(e) => setField('bankId', e.target.value)}
+                >
+                  <option value="">None (cash payment)</option>
+                  {(banks.data ?? []).map((bank) => (
+                    <option key={bank.id} value={bank.id}>
+                      {bank.name} ({bank.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-branch-code">Branch code</Label>
+                <Input
+                  id="reactivate-branch-code"
+                  value={form.branchCode}
+                  onChange={(e) => setField('branchCode', e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-account-number">Account number</Label>
+                <Input
+                  id="reactivate-account-number"
+                  value={form.accountNumber}
+                  onChange={(e) => setField('accountNumber', e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reactivate-account-title">Account title</Label>
+                <Input
+                  id="reactivate-account-title"
+                  value={form.accountTitle}
+                  onChange={(e) => setField('accountTitle', e.target.value)}
+                />
+              </div>
+            </div>
+          </>
+        )}
+        <ModalFooter>
+          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={reactivateEmployee.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={reactivateEmployee.isPending || isLoading || !employee}>
+            Reactivate
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 function ImportResultModal({
   open,
   onOpenChange,
@@ -410,6 +661,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | undefined>(undefined);
   const [leavingEmployee, setLeavingEmployee] = useState<Employee | undefined>(undefined);
+  const [reactivatingEmployeeId, setReactivatingEmployeeId] = useState<string | undefined>(undefined);
   const [importResult, setImportResult] = useState<ImportResult | undefined>(undefined);
   const importEmployees = useImportEmployees();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -560,6 +812,11 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                                 Mark as left
                               </DropdownMenuItem>
                             )}
+                            {employee.dateOfLeaving && (
+                              <DropdownMenuItem onSelect={() => setReactivatingEmployeeId(employee.id)}>
+                                Reactivate
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -572,7 +829,12 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
         </CardContent>
       </Card>
 
-      <EmployeeFormModal open={createOpen} onOpenChange={setCreateOpen} defaultSiteId={siteFilter || undefined} />
+      <EmployeeFormModal
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        defaultSiteId={siteFilter || undefined}
+        onReactivateRequested={setReactivatingEmployeeId}
+      />
 
       {editingEmployee && (
         <EmployeeFormModal
@@ -587,6 +849,14 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
           open={Boolean(leavingEmployee)}
           onOpenChange={(open) => !open && setLeavingEmployee(undefined)}
           employee={leavingEmployee}
+        />
+      )}
+
+      {reactivatingEmployeeId && (
+        <ReactivateEmployeeModal
+          open={Boolean(reactivatingEmployeeId)}
+          onOpenChange={(open) => !open && setReactivatingEmployeeId(undefined)}
+          employeeId={reactivatingEmployeeId}
         />
       )}
 

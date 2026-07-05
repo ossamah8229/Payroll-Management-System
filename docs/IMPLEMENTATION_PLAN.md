@@ -309,7 +309,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
      (Checkpoint 2) rejects the row outright as the final backstop, exactly as it already does for the
      ordinary Employee create/edit path.
 
-**Checkpoint 4 — CNIC: finalized policy, normalization, duplicate-check, Reactivate workflow**
+**Checkpoint 4 — CNIC: finalized policy, normalization, duplicate-check, Reactivate workflow — COMPLETE, 2026-07-05**
 - **The duplicate-handling policy is now finalized** (this session): CNIC remains globally unique
   (`docs/architecture/database-schema.md` §9's existing partial-unique constraint — no change to the
   constraint itself); duplicate `Employee` records are never permitted, with no override mechanism of
@@ -334,6 +334,52 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   by Reactivate, exact audit entry contents) is presented for explicit approval before this
   checkpoint's code is written** — the policy decision above is final, but the implementation still
   gets a design read before it's built, same as every other checkpoint's code does.
+
+**As built:**
+- `shared/src/lib/cnic.ts` — `normalizeCnic()`, the single normalization implementation used by
+  `createEmployeeSchema`/`updateEmployeeSchema` (strips non-digits before validating, not just
+  before storing), the duplicate-check endpoint, and the CSV/Excel importer's existing-employee
+  match — one implementation, not three.
+- `findEmployeeByCnic()` (`employees.service.ts`) — the single normalized-CNIC lookup, shared by
+  `checkCnicAvailability()` (below) and the importer. Fixed a real bug in the process: the importer
+  previously matched an existing employee against the *raw* CSV cell, so a dashed CNIC in a file
+  never matched the digits-only value already stored — a rehire's row would silently fall through
+  to "create" instead of finding the record already on file.
+- `GET /api/v1/employees/check-cnic?cnic=&excludeId=` — wired to `checkCnicAvailability()`. RBAC-
+  aware: a Payroll Staff caller learns *that* a duplicate exists but never the identity/site of an
+  employee outside their assignment (C11); Master Admin and a same-site Payroll Staff caller see
+  full detail (name, site, active/departed). `excludeId` lets an edit form skip flagging its own
+  record.
+- `POST /api/v1/employees/:id/reactivate` — wired to `reactivateEmployee()`, the single Reactivate
+  implementation every path calls (UI action, CSV/Excel import rehire case). Body reuses
+  `updateEmployeeSchema` (the same partial field set an ordinary edit accepts). Clears
+  `dateOfLeaving`; 400s if the employee is already active; if the supplied `siteId`/`unitId` also
+  differs from what's on file, reuses `recordEmployeeTransfer()` (the existing single transfer
+  implementation) so the `EmployeeTransferHistory` row and `employee.transferred` entry fire
+  alongside a distinct `employee.reactivated` entry, in one transaction — never a second `Employee`
+  row for the same CNIC.
+- **Import-based reactivation uses the identical workflow**: when an import row matches an existing
+  employee (by CNIC, now correctly normalized) whose `dateOfLeaving` is set, and the row's own DOL
+  column is blank, `importEmployees()` calls `reactivateEmployee()` instead of a bare field update —
+  same audit trail, same transfer handling, regardless of entry point. Leave-via-import remains out
+  of scope, unchanged (a row with a normal update path never sets `dateOfLeaving` through this
+  action).
+- Frontend: a debounced `check-cnic` call in the Employee create form (400ms, only once 13
+  normalized digits are present) surfaces a warning with the existing employee's detail and, if
+  they're departed, a "Reactivate instead" shortcut that opens a dedicated Reactivate modal
+  (pre-filled from the real current record via a new `GET /employees/:id` hook); Create is disabled
+  while a duplicate is flagged. A "Reactivate" action was added to the Employee Registry's row menu
+  for any already-departed employee, symmetric to "Mark as left".
+- **Tests**: 19 new/updated cases in `employees.test.ts` (CNIC normalization on create/update,
+  `check-cnic` exists/masked/excluded, Reactivate clears DOL + updates fields + 400-if-active +
+  co-occurring transfer) and `employees-import-export.test.ts` (dashed-CNIC import match regression,
+  import-driven reactivation, import-driven reactivation-with-transfer) — **99/99 backend tests
+  passing against live PostgreSQL**.
+- Real-stack Playwright verification (live browser → Vite → Express → PostgreSQL): created an
+  employee, marked them as left, attempted to create a second employee with the same CNIC (dashed
+  vs. undashed) — duplicate warning shown, Create disabled, "Reactivate instead" opened the
+  pre-filled Reactivate modal, submitting it restored the employee to Active; a direct API call
+  reactivating the now-active employee again returned 400; zero console errors throughout.
 
 **Depends on:** Phase 2 (extends its already-shipped Project Sites/Employee Registry modules).
 

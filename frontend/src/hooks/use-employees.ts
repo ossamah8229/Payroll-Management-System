@@ -74,6 +74,47 @@ export function useUpdateEmployee() {
   });
 }
 
+export function useEmployee(id: string | undefined) {
+  return useQuery({
+    queryKey: [...EMPLOYEES_QUERY_KEY, id],
+    queryFn: () => apiRequest<{ employee: Employee }>(`/api/v1/employees/${id}`).then((res) => res.employee),
+    enabled: Boolean(id),
+  });
+}
+
+export interface CnicAvailability {
+  exists: boolean;
+  employee: {
+    id: string;
+    name: string;
+    employeeCode: string | null;
+    siteId: string;
+    siteName: string;
+    dateOfLeaving: string | null;
+    active: boolean;
+  } | null;
+}
+
+/** The one place the frontend calls the duplicate-check endpoint (docs/architecture/database-schema.md
+ * §26 item 6) — the CNIC field's debounced check and any future consumer share this fetcher rather
+ * than each building their own query string/response handling. */
+export function checkCnicAvailability(cnic: string, excludeEmployeeId?: string): Promise<CnicAvailability> {
+  const params = new URLSearchParams({ cnic });
+  if (excludeEmployeeId) params.set('excludeId', excludeEmployeeId);
+  return apiRequest<CnicAvailability>(`/api/v1/employees/check-cnic?${params.toString()}`);
+}
+
+export function useReactivateEmployee() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateEmployeeInput }) =>
+      apiRequest<{ employee: Employee }>(`/api/v1/employees/${id}/reactivate`, { method: 'POST', body: input }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: EMPLOYEES_QUERY_KEY });
+    },
+  });
+}
+
 /** Triggers a browser download of the export file — bypasses apiRequest since the response is a
  * file, not JSON, and reads the CSRF cookie the same way apiRequest does for consistency. */
 export async function downloadEmployeeExport(format: 'csv' | 'xlsx'): Promise<void> {

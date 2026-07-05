@@ -1,29 +1,25 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-04
-**Latest git commit:** `33f2b18` — "Phase 2.5 Checkpoint 3: import/export remap to Project Units"
-(session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
+**Date:** 2026-07-05
+**Latest git commit:** `28d4192` — "docs: record database-verification close and Checkpoint 3 commit
+hashes" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
 `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
 documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
 `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5
-Checkpoint 2 → `b27f559` Checkpoint 2 doc close → **`ed4ed1f` database-verification debt closed
-(2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase 2.5 Checkpoint 3**). This line is
-itself updated by the small follow-up commit that always closes a checkpoint session, so it lags
-the actual `HEAD` by at most one trivial doc-only commit — check `git log -1` if in doubt.
+Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed
+(2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase 2.5 Checkpoint 3 → **`28d4192`
+doc-only commit hash record — HEAD as of this session's start**). **Phase 2.5 Checkpoint 4
+(CNIC/Reactivate) is now built and verified but not yet committed** — see below; check `git log -1`
+and `git status` if in doubt.
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED and committed. The pre-Phase-3
-architecture review is complete and committed.** Phase 2.5 is **in progress**: **Checkpoints 0, 1,
-and 2 are all committed. The long-standing database-verification debt is CLOSED as of 2026-07-04**
-— all migrations applied to a completely fresh, real PostgreSQL 18 instance, the full DB-backed
-test suite passes 78/78, and a real-stack (live backend + live database) Playwright end-to-end run
-passed with zero console errors. See §1's "Database verification" subsection for the four real
-defects this surfaced and fixed, including one new migration
-(`20260704180000_audit_log_allow_fk_actor_set_null`). The "conditional" qualifier on Phase 1's and
-Phase 2's closures is hereby discharged — their DB-backed evidence now exists. **Checkpoint 3
-(import/export remap to Project Units, three-layer Site/Unit validation) was then built and
-completed the same day** — the first checkpoint developed against a live database throughout.
-Checkpoint 4 (CNIC/Reactivate) is next; its concrete implementation still requires a
-design-approval gate before any code, per standing instruction.
+architecture review is complete and committed.** Phase 2.5 is **in progress**: **Checkpoints 0–3 are
+committed. Checkpoint 4 (CNIC normalization, duplicate-check, Reactivate workflow) is complete —
+typecheck/lint/build clean, 99/99 backend tests passing against live PostgreSQL, real-stack
+Playwright verification passed with zero console errors — and is presented here for approval before
+committing**, per this project's standing Definition of Done. Once approved and committed, Phase 2.5
+is fully complete and Phase 3 (Payroll Entry & Payroll Processing) can begin, pending separate
+explicit authorization to start it.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -482,6 +478,82 @@ running.
   console errors. `docs/prototypes/*.html` reviewed — no prototype depicts import file contents or
   the Import Results modal, so none required changes.
 
+### Phase 2.5, Checkpoint 4 — CNIC normalization, duplicate-check, Reactivate workflow (2026-07-05)
+
+Resumed after a session interruption; the working tree already held partial progress from before
+the crash (`shared/src/lib/cnic.ts`, its export, Zod normalization, and an unwired
+`checkCnicAvailability()` service function) — verified against the docs, confirmed genuine, and
+built on rather than redone. The concrete design (endpoint shapes, exact fields Reactivate touches,
+audit contents) was presented and approved this session, with one added requirement: reactivation
+and CNIC lookup must each have exactly one implementation, reused by every caller.
+
+- **`normalizeCnic()`** (`shared/src/lib/cnic.ts`) — strips non-digit characters before validating,
+  not just before storing; used by `createEmployeeSchema`/`updateEmployeeSchema`'s CNIC preprocessor
+  (already in place pre-crash) and by every backend CNIC lookup below.
+- **`findEmployeeByCnic()`** (`employees.service.ts`, new) — the single normalized-CNIC lookup.
+  Refactored `checkCnicAvailability()` to use it, and **fixed a real bug** in
+  `employees-import-export.service.ts`: the importer's existing-employee match previously compared
+  against the *raw* CSV cell (`row.cells['CNIC']`), not the normalized value — a dashed CNIC in an
+  import file would never match the digits-only value already stored, so a rehire's row would
+  silently fall through to "create new" instead of finding the record on file. Now both the
+  duplicate-check endpoint and the importer call the same function.
+- **`GET /api/v1/employees/check-cnic?cnic=&excludeId=`** — wired to the already-written
+  `checkCnicAvailability()`. RBAC-masked: a Payroll Staff caller outside the holder's site sees only
+  `exists: true, employee: null`; Master Admin and a same-site Payroll Staff caller see full detail
+  (id, name, code, site, active/departed). Registered ahead of `GET /:id` in the route table so
+  Express doesn't match "check-cnic" as an `:id` param.
+- **`reactivateEmployee()`** (`employees.service.ts`, new) — the single Reactivate implementation.
+  Guards: 404 if the employee doesn't exist or is outside the caller's site access; 400 if
+  `dateOfLeaving` is already null ("Employee is already active"). Accepts the same partial field set
+  an ordinary edit does (extracted into a shared `mapUpdateInputToData()` helper, now used by both
+  `updateEmployee` and `reactivateEmployee` — one mapping, not two). Clears `dateOfLeaving`; if the
+  supplied `siteId`/`unitId` differs from what's on file, reuses the existing
+  `recordEmployeeTransfer()` so the `EmployeeTransferHistory` row and `employee.transferred` entry
+  fire in the same transaction as a distinct `employee.reactivated` entry (never a generic
+  `employee.updated` for this action) — mirroring how `updateEmployee` already separates transfer
+  and generic-update audit entries. Never a second `Employee` row for the same CNIC (Principle 2 —
+  historical `PayrollEntry` links keep referencing the one `employeeId`).
+- **`POST /api/v1/employees/:id/reactivate`** — parses the body with the existing
+  `updateEmployeeSchema` (no new schema needed, since Reactivate accepts the identical field set an
+  edit does), calls `reactivateEmployee()`, which owns all audit logging inside its own transaction
+  (route never double-logs).
+- **Import-based reactivation, single source of truth**: `importEmployees()` now detects a rehire —
+  an existing employee (matched by the now-fixed normalized-CNIC lookup, or by employee code) whose
+  `dateOfLeaving` is set, reappearing in a row whose own DOL column is blank — and calls
+  `reactivateEmployee()` instead of a bare `tx.employee.update()`. Same audit trail, same transfer
+  handling, regardless of whether the reactivation came from the UI or a bulk import. Leave-via-import
+  stays explicitly out of scope, unchanged: this branch only ever moves departed → active, never the
+  reverse.
+- **Frontend**: a debounced (400ms) `check-cnic` call in the Employee create form, firing only once
+  the field holds a complete, normalized 13-digit CNIC and skipped entirely when editing an
+  unchanged CNIC. Shows a warning with the existing employee's detail and, if they're departed, a
+  "Reactivate instead" link; Create is disabled while a duplicate is flagged on create (not on
+  edit). A new `ReactivateEmployeeModal` (symmetric to the existing `MarkLeftModal`) fetches the full
+  current record via a new `GET /employees/:id` hook and lets the operator review/update
+  site/unit/designation/pay/bank fields in the same call that clears `dateOfLeaving`. A "Reactivate"
+  row action was added to the Employee Registry list for any already-departed employee.
+- **Tests**: 19 new cases in `employees.test.ts` (CNIC normalization on create/update; `check-cnic`
+  exists-false / full-detail / masked / excludeId; Reactivate clears DOL + updates fields + never a
+  second row + distinct audit entry; 400 on an already-active employee; Reactivate-with-transfer
+  writes both `employee.reactivated` and `employee.transferred` + `EmployeeTransferHistory`) and 3 new
+  cases in `employees-import-export.test.ts` (dashed-CNIC import match — the bug-fix regression test;
+  import-driven reactivation; import-driven reactivation combined with a transfer). **Full suite:
+  99/99 against live PostgreSQL** (88 prior + 19 new, minus none removed — the reactivate-with-transfer
+  employees.test.ts case and the two import ones account for the arithmetic).
+- typecheck/lint/build clean across all three workspaces. **Real-stack Playwright verification**
+  (live browser → Vite → Express → PostgreSQL, no mocks): logged in as the seeded Master Admin,
+  created a site/unit via the real API, created an employee with a dashed CNIC through the real
+  form, marked them as left, then attempted to create a second employee with the same CNIC
+  (undashed) — the duplicate warning appeared with "Reactivate instead", Create was disabled,
+  clicking through opened the Reactivate modal pre-filled from the real record, submitting it
+  restored the employee to "Active" in the list, and a direct API call reactivating the now-active
+  employee again returned 400 — zero console errors throughout. (One environment issue surfaced and
+  fixed along the way: Vite's dev-server dependency pre-bundle cache had a stale copy of
+  `@payroll/shared` predating `normalizeCnic`, throwing `normalizeCnic is not a function` in the
+  browser — resolved by clearing `frontend/node_modules/.vite` and restarting the dev server, the
+  same class of stale-cache issue as the previously-documented `.tsbuildinfo` lesson, just for Vite's
+  own dep cache instead of `tsc`'s.)
+
 ### Database verification — CLOSED 2026-07-04 (the long-standing debt, resolved in full)
 
 The first-ever verification of this project against a real PostgreSQL instance. Environment: no
@@ -554,8 +626,8 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **In progress.** Checkpoints 0–3 complete (**database-verification debt also CLOSED 2026-07-04**). Checkpoint 4 (CNIC/Reactivate) remains — design-approval gate required before its code |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **Complete pending commit, 2026-07-05.** Checkpoints 0–4 all built and verified (99/99 backend tests live, real-stack Playwright clean); Checkpoint 4 awaits explicit approval before committing |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5; awaits explicit authorization to begin |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Not started |
@@ -824,7 +896,10 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
     Per standing instruction, the CNIC/Reactivate checkpoint's concrete implementation (exact endpoint
     shapes, exact fields touched, exact audit contents) still gets presented for explicit approval
     before that checkpoint's code is written, even though the underlying policy is now final — this is
-    a design-review gate, not a re-opening of the decision itself.
+    a design-review gate, not a re-opening of the decision itself. **Satisfied 2026-07-05**: the
+    concrete design (§ Checkpoint 4 subsection, §1) was presented and approved, with one added
+    requirement — reactivation and the CNIC lookup must each have exactly one implementation, reused
+    by every caller — before Checkpoint 4's code was written.
     **Refined further, same day, before any code was written:** (a) `EmployeeTransferHistory` gained
     `effectiveDate` (the date the transfer actually took effect in the business, distinct from
     `createdAt` — HR may enter a transfer after the fact) and `remarks` (distinct from `reason`), and
@@ -871,17 +946,14 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are closed with DB-backed evidence complete. Phase 2.5 Checkpoints 0, 1, and 2
-are committed, and the database-verification debt is CLOSED (2026-07-04, §1).**
+**Phase 1 and Phase 2 are closed with DB-backed evidence complete. Phase 2.5 Checkpoints 0–3 are
+committed; Checkpoint 4 is built and verified (this session, 2026-07-05) but awaits explicit
+approval before committing — see §1's Checkpoint 4 subsection. The database-verification debt
+remains CLOSED (2026-07-04, §1).**
 
-1. **Checkpoint 4 is the next implementation task** (Checkpoint 3 completed 2026-07-04, §1): CNIC
-   normalization + duplicate-check + Reactivate. The policy itself is finalized (§3 item 22), but
-   per standing instruction the concrete implementation (exact endpoint shapes, exact fields touched
-   by Reactivate, exact audit entry contents) **must be presented for explicit approval before any
-   code is written**. This is the last Phase 2.5 checkpoint before Phase 3's Payroll Entry Work
-   Lines build, which depends on `PayrollEntryWorkLine.unitId` composite-FKing against `ProjectUnit`
-   the same way `Employee.unitId` now does. DB-backed tests now run for real each session —
-   provision Postgres per the §4 note before running them.
+1. **Get explicit approval on Checkpoint 4's working-tree changes, then commit them.** Once
+   committed, Phase 2.5 is fully complete — all five checkpoints done — and the phase itself can be
+   marked closed in this file and `docs/SESSION_HANDOFF.md`.
 2. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to
@@ -894,4 +966,5 @@ are committed, and the database-verification debt is CLOSED (2026-07-04, §1).**
    `docs/IMPLEMENTATION_PLAN.md` — the largest single phase in the plan: `calcNet` over Work Lines,
    the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic locking), its
    Definition of Done now includes Playwright-driven visual verification (§3 item 15) and a
-   Principle-10 performance review, not just typecheck/lint/build.
+   Principle-10 performance review, not just typecheck/lint/build. **Not yet authorized as of this
+   session.**
