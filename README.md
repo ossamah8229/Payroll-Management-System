@@ -3,15 +3,15 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1 and Phase 2 are both **closed, with full database-backed evidence as of
-> 2026-07-04**. Phase 2.5 (Project Units, Payroll Work Lines prerequisite, Employee Registry
-> refinements) is **in progress**: Checkpoints 0–2 are **complete and committed** (shared date
-> formatting, the Project Unit module, and the Employee → Project Unit relationship with transfer
-> history), and the **long-standing database-verification debt is closed** — every migration
-> applied to a fresh, real PostgreSQL instance and the full integration suite passing against it.
-> **Checkpoint 3 (import/export remap to Project Units, three-layer Site/Unit validation) is also
-> complete** — 88/88 tests against live PostgreSQL. Checkpoint 4 (CNIC normalization/Reactivate)
-> is next, gated on a design approval before any code.
+> **Status:** Phase 1, Phase 2, and Phase 2.5 are all **closed, with full database-backed evidence**
+> (Phase 2.5's five checkpoints — shared date formatting, the Project Unit module, Employee ↔ Project
+> Unit transfer history, import/export remap, and CNIC normalization/Reactivate — all complete and
+> committed as of 2026-07-05). **A dedicated Phase 3 Architecture Review session then froze the
+> complete Payroll Entry, Payroll Processing, Release, and Corrections/Balance Adjustments design**
+> (per-Project-Unit release, a new site-scoped Finance role, a Correction Request/approval workflow,
+> immediate/deferred and installment-based settlement — see `docs/PROJECT_PROGRESS.md` §1's "Phase 3
+> Architecture Review" for the full record) — **architecture only, no application code.** Phase 3
+> implementation has **not** started and requires separate, explicit authorization to begin.
 > See "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
@@ -63,36 +63,48 @@ npm run dev:frontend          # http://localhost:5173
   user-facing dates now display as `DD-MM-YYYY` (ISO internally, unchanged); a new architectural
   principle sets a 10,000-employee performance/scale design floor. Full record:
   `docs/PROJECT_PROGRESS.md` §3 items 16–21.
-- **Phase 2.5 — in progress, 2026-07-03/04.** Broken into five checkpoints
+- **Phase 2.5 — CLOSED, 2026-07-05.** All five checkpoints complete and committed
   (`docs/IMPLEMENTATION_PLAN.md`):
-  - **Checkpoint 0 (committed `0d9ea33`):** shared `formatDate()`/`parseDateInput()`/`toIsoDateOnly()`
-    utilities and a reusable `DateInput` component — the single source of truth for the `DD-MM-YYYY`
-    convention, applied to the Employee Registry's date fields.
-  - **Checkpoint 1 (committed `c60094c`):** `ProjectUnit` as a dedicated master-data module nested
-    under Project Sites, replacing `ProjectSite.branchCode` with `ProjectSite.unitLabel`-driven
-    terminology; a "Manage Units" panel in the Project Sites UI.
-  - **Checkpoint 2 (committed — see the commit hash below):** `Employee.unitId` (composite-FK'd to
-    `ProjectUnit`), the new append-only `EmployeeTransferHistory` table, a dedicated
-    `employee.transferred` audit entry (written atomically with the Employee update and history row),
-    and a reusable Site → Unit cascading selector wired into the Employee Registry's forms.
-  - **Checkpoint 3 (complete, 2026-07-04):** Employee Registry import/export template remap to
-    `ProjectUnit` columns (`Area`/`Area/Location` = unit name, `Branch Code` = unit code) with
-    three-layer Site/Unit validation (import-layer row check, shared service-layer assertion,
-    database composite FK — each proven able to catch a violation alone); import updates that
-    change an employee's site/unit now write the full transfer trail.
-  - **Checkpoint 4 (not started):** CNIC normalization, duplicate-check, and a Reactivate Employee
-    action (policy finalized — see `docs/PROJECT_PROGRESS.md` §3 item 22 — but the concrete
-    implementation still needs a design-approval gate before it's built).
-  - The CNIC duplicate-handling decision itself is **finalized, no longer pending**: CNIC stays
-    globally unique with no override; rehires go through a Reactivate action that updates the
-    existing record in place.
+  - **Checkpoint 0:** shared `formatDate()`/`parseDateInput()`/`toIsoDateOnly()` utilities and a
+    reusable `DateInput` component — the single source of truth for the `DD-MM-YYYY` convention,
+    applied to the Employee Registry's date fields.
+  - **Checkpoint 1:** `ProjectUnit` as a dedicated master-data module nested under Project Sites,
+    replacing `ProjectSite.branchCode` with `ProjectSite.unitLabel`-driven terminology; a "Manage
+    Units" panel in the Project Sites UI.
+  - **Checkpoint 2:** `Employee.unitId` (composite-FK'd to `ProjectUnit`), the new append-only
+    `EmployeeTransferHistory` table, a dedicated `employee.transferred` audit entry (written
+    atomically with the Employee update and history row), and a reusable Site → Unit cascading
+    selector wired into the Employee Registry's forms.
+  - **Checkpoint 3:** Employee Registry import/export template remap to `ProjectUnit` columns
+    (`Area`/`Area/Location` = unit name, `Branch Code` = unit code) with three-layer Site/Unit
+    validation (import-layer row check, shared service-layer assertion, database composite FK — each
+    proven able to catch a violation alone); import updates that change an employee's site/unit now
+    write the full transfer trail.
+  - **Checkpoint 4:** CNIC normalization, a debounced duplicate-check endpoint, and a Reactivate
+    Employee action (rehires update the existing record in place, never a second row for the same
+    CNIC) — 99/99 backend tests against live PostgreSQL.
+- **Phase 3 Architecture Review — COMPLETE, 2026-07-05 (architecture only, no application code).** A
+  dedicated design session froze the complete Payroll Entry, Payroll Processing, Release, and
+  Corrections/Balance Adjustments architecture: release now happens independently per Project Unit
+  (`PayrollUnitRelease`), executed by a new site-scoped **Finance** role; a non-gating "Ready for
+  Release" status (`PayrollUnitReadiness`); a Correction Request/approval workflow
+  (`CorrectionRequest`) separating who may propose a correction from who may decide it; a positive
+  balance may settle immediately or deferred (`CorrectionPayment` for the no-open-entry case); a
+  negative balance may now recover across multiple cycles as an installment
+  (`BalanceAdjustmentSettlement`); a Late Entry exception for payroll added after its Unit already
+  released. "Master Admin" renamed "Master User" throughout the architecture docs. **Phase 3
+  implementation has not started** — full decision record in `docs/PROJECT_PROGRESS.md` §1's "Phase 3
+  Architecture Review" subsection.
 - **Current git checkpoint:** see `docs/PROJECT_PROGRESS.md`'s header for the exact latest commit
   hash and full lineage — kept there rather than duplicated here to avoid drift between two copies
   of the same fact.
 - Static, framework-free visual previews of the current UI are available under `docs/prototypes/`
   (`phase1-preview.html`; `phase2-project-sites-preview.html`;
   `phase2-employee-registry-preview.html`; `phase2-settings-users-preview.html`) — open any of them
-  directly in a browser.
+  directly in a browser. **Reviewed 2026-07-05 against the Phase 3 architecture freeze: none depict
+  Payroll Entry, Release, or Corrections screens, so none were factually contradicted; left
+  unchanged** — the full UI/UX prototype pass for those screens is deferred until the corresponding
+  functional phases are built.
 
 ## Project Structure
 
@@ -143,8 +155,10 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-The database-verification debt is closed and Checkpoint 3 is complete (both 2026-07-04). The next
-implementation task is **Phase 2.5 Checkpoint 4** (CNIC normalization/duplicate-check/Reactivate),
-whose concrete implementation must be presented for explicit approval before any code is written.
-See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the
-full handoff to the next development session.
+Phase 2.5 is fully closed and the Phase 3 Architecture Review is complete (both 2026-07-05) —
+Payroll Entry, Payroll Processing, Release, and Corrections/Balance Adjustments are now fully
+designed in `docs/architecture/*.md` and `docs/IMPLEMENTATION_PLAN.md`. **Phase 3 implementation is
+the next task, but requires separate, explicit authorization before any code is written** — no
+further architecture review is needed once that authorization is given. See
+`docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
+handoff to the next development session.

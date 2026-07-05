@@ -11,22 +11,25 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `e26fe8c`** — "Phase 2.5 Checkpoint 4: CNIC normalization,
-  duplicate-check, and Reactivate workflow". Full lineage: `674ab04` (Phase 2's substantive build) →
-  `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf`
-  (pre-Phase-3 architecture review) → `74c124e` (further doc status update) → `0d9ea33`
-  (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc
-  close) → `ed4ed1f` (**database-verification debt closed**, 2026-07-04) → `33f2b18` (Checkpoint 3) →
-  `28d4192` (doc-only commit hash record) → **`e26fe8c` (Checkpoint 4, this session's substantive
-  commit — a small follow-up doc-only commit closing this exact hash into the record may follow it;
-  check `git log -1` if in doubt).**
-- **Working tree is clean. Phase 2.5 Checkpoint 4 (CNIC normalization, duplicate-check, Reactivate
-  workflow) is approved, committed, and verified** — typecheck/lint/build clean, 99/99 backend tests
-  against live PostgreSQL, real-stack Playwright verification clean. **Phase 2.5 is now fully
-  complete — all five checkpoints (0–4) done and committed.** Full detail in
-  `docs/PROJECT_PROGRESS.md` §1's Checkpoint 4 subsection. **Phase 3 has not been started and
-  requires separate, explicit authorization before any architecture review or implementation
-  begins** — not given as of this session.
+- **Latest committed commit before tonight's architecture-review session: `0ca9a8f`** —
+  "docs: record Checkpoint 4 commit hash, close Phase 2.5". Full lineage: `674ab04` (Phase 2's
+  substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint
+  documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc status
+  update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
+  `b27f559` (Checkpoint 2 doc close) → `ed4ed1f` (**database-verification debt closed**, 2026-07-04)
+  → `33f2b18` (Checkpoint 3) → `28d4192` (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) →
+  `0ca9a8f` (doc-only commit hash record, closing Phase 2.5). **This session's own documentation-only
+  commit (the Phase 3 architecture freeze, below) lands on top — check `git log -1` for the exact
+  hash.**
+- **A separate Phase 3 Architecture Review session ran immediately after Phase 2.5 closed, same
+  date (2026-07-05) — architecture only, explicitly no application code.** The complete Payroll
+  Entry, Payroll Processing, Release (now per Project Unit), and Corrections/Balance Adjustments
+  design is now frozen into `docs/architecture/*.md` and `docs/IMPLEMENTATION_PLAN.md`. Full decision
+  record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection (new). **Working
+  tree is clean as of this session's own documentation commit. Phase 3 implementation has NOT
+  started** — no application code was written, and no database migration or schema implementation
+  exists for any of tonight's decisions. Separate, explicit authorization is still required before
+  any Phase 3 code is written.
 - Checkpoint 2 shipped (prior session): `Employee.unitId` + composite FK against
   `ProjectUnit(id, siteId)`, the new append-only `EmployeeTransferHistory` table, migration
   `20260703140000_employee_unit_and_transfer_history`, `assertUnitBelongsToSite()`, `updateEmployee()`
@@ -48,11 +51,12 @@ be enough to resume correctly without re-deriving context from scratch — per
   **The CNIC recommendation is now a finalized decision, not pending** — see §3 below and
   `docs/PROJECT_PROGRESS.md` §3 item 22. Full decision record: `docs/PROJECT_PROGRESS.md` §3 items
   16–22.
-- **Phase 2.5 is in progress.** Checkpoints 0–3 are complete (0–2 committed in prior sessions; the
-  database-verification close and Checkpoint 3 — import/export remap to Project Units with
-  three-layer Site/Unit validation — were both completed 2026-07-04, see §2's entries for that
-  date). Checkpoint 4 (CNIC/Reactivate) remains, and its concrete implementation requires a
-  design-approval gate before any code is written.
+- **Phase 2.5 is now CLOSED (updated 2026-07-05 — this bullet described an in-progress state as of an
+  earlier point in the project and is corrected here to avoid contradicting §1's current-status
+  summary above).** All five checkpoints are complete and committed: 0–2 in prior sessions, the
+  database-verification close and Checkpoint 3 (import/export remap to Project Units with
+  three-layer Site/Unit validation) on 2026-07-04, and Checkpoint 4 (CNIC normalization, duplicate-
+  check, Reactivate workflow) on 2026-07-05 — see §2's entries for the full detail on each.
 - `npm run typecheck`, `npm run lint` (0 errors, same 3 pre-existing `react-refresh` warnings), and
   `npm run build` were all re-run at the end of this session after Checkpoint 2's code changes and
   are clean across all three workspaces. `backend/tests/date-utils.test.ts` and `rbac.test.ts` (no DB
@@ -286,6 +290,73 @@ checkpoint in this project developed with its DB-backed tests actually running. 
   per-row reason shown in the Import Results modal; units verified via the edit form; zero console
   errors). Prototypes reviewed — none depict import contents, none changed.
 
+### What was completed this session (2026-07-05): Phase 3 Architecture Review — COMPLETE, no code
+
+A dedicated, explicitly design-only session ("do not begin implementation yet" was the opening
+instruction) run immediately after Phase 2.5 Checkpoint 4 closed. Objective: freeze the complete
+Payroll Entry, Payroll Processing, Release, and Corrections/Balance Adjustments architecture before
+any Phase 3 code is written, incorporating six new business rules — the system is not an attendance
+management system; payroll managers may freely edit until release; "Ready for Release" is a
+non-locking status; payroll releases independently per Project Unit; Finance may release immediately
+or wait for client funding; corrections after release require Master User approval, with positive/
+negative balances settling differently (immediate/deferred, or installment recovery).
+
+**Full decision record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection** —
+not duplicated here in full; the highlights any future session needs to know before touching Phase 3:
+
+- **Release moves to Project Unit granularity** (`PayrollUnitRelease`, `database-schema.md` §12b),
+  executed by a new **Finance** role, not Payroll Staff. `PayrollEntry.released` keeps its existing
+  shape but is now *derived* — an entry releases only once every Project Unit its work lines touch has
+  released, so a multi-unit split employee (Phase 2.5's own capability) still resolves to exactly one
+  net salary and one Bank Sheet row (Principle 1, 6 both held intact — this was the session's central
+  design fork, resolved after weighing three candidate options with the user).
+- **`PayrollUnitReadiness`** — the new, explicitly non-gating "Ready for Release" signal, modeled by
+  row existence (not a boolean), the one deliberate exception to this schema's anti-deletion
+  convention.
+- **The correction trigger simplifies to one clause**: `PayrollEntry.released = true` (previously two
+  clauses — released OR cycle-not-Draft — now redundant since Cycle status is itself derived).
+- **`CorrectionRequest`** (§13a) — any authorized payroll user may propose a correction; only a Master
+  User may approve (producing a `Correction`) or reject it. A Master User correcting personally still
+  bypasses this table entirely, unchanged from before this session.
+- **`BalanceAdjustment` gains immediate/deferred timing** (`PAYABLE`, via a new `CorrectionPayment`
+  table for the no-open-entry case, §14a) **and installment recovery** (`RECOVERY`, via
+  `recoveryInstallmentAmount`/`remainingAmount` and a new append-only `BalanceAdjustmentSettlement`
+  history table, §14b, mirroring `Advance.scheduledInstallmentAmount`'s and
+  `EmployeeTransferHistory`'s already-established patterns respectively).
+- **Late Entry exception**: an entry created after its Unit already released needs its own one-off
+  release (`PayrollEntry.lateReason`, a single field — "is this entry late" is derived, never stored).
+  Documented (not yet built): its one-off document should share implementation with
+  `CorrectionPayment`'s where practical, while staying separate business entities.
+- **`FINANCE`** — new, third, site-scoped role (reuses `UserSiteAssignment`, no new mechanism); can
+  view payroll/release Units/execute Correction Payments; explicitly cannot edit payroll, mark Ready,
+  or approve/reject corrections.
+- **"Master Admin" renamed "Master User"** — `docs/architecture/*.md` and `docs/IMPLEMENTATION_PLAN.md`
+  **only**. Not applied to `reference/PROJECT_SPEC.md` (frozen, never edited), the HTML prototypes
+  (reviewed this session, left unchanged — see below), or this file's/`PROJECT_PROGRESS.md`'s own
+  historical entries.
+
+**Net schema growth:** 5 new tables, 2 new enums, 4 new columns across `PayrollEntry`/
+`BalanceAdjustment` — bringing the documented schema to 25 tables. **None of this exists in
+`backend/prisma/schema.prisma` yet** — it's a design specification, same as the rest of
+`database-schema.md`, waiting for Phase 3 implementation.
+
+**Files touched:** `docs/architecture/database-schema.md`, `data-and-storage.md`,
+`post-release-corrections.md`, `authentication.md`, `overview.md`, `docs/IMPLEMENTATION_PLAN.md`
+(Phase 3/4/6 sections + file-wide Master User rename). `docs/PROJECT_PRINCIPLES.md` reviewed, no
+changes needed — every decision is additive/consistent with the existing ten principles.
+
+**HTML prototypes reviewed this session, none refreshed**: none of the four existing prototypes
+(`phase1-preview.html`, `phase2-project-sites-preview.html`,
+`phase2-employee-registry-preview.html`, `phase2-settings-users-preview.html`) depict Payroll Entry,
+Release, or Corrections screens, so nothing in them is factually contradicted by tonight's decisions.
+The full UI/UX prototype pass for these new screens stays deferred until the corresponding functional
+phases are actually built, per standing project practice — this was a deliberate "leave alone unless
+factually wrong" review, not an oversight.
+
+**No architectural questions remain open from this session.** Pre-existing open items unrelated to
+tonight (Company Bank Account modeling, at-most-one-`ACTIVE`-`Advance`-per-type, calendar-month-only
+cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their own original timelines.
+
 ## 3. What must not be changed without approval
 
 - Anything in `docs/architecture/*.md` or `docs/PROJECT_PRINCIPLES.md` — the architecture is
@@ -428,30 +499,76 @@ checkpoint in this project developed with its DB-backed tests actually running. 
     real, missing-`unitId` type error in `employees-page.tsx` — caught only because the clean result
     looked suspicious given that file hadn't been touched yet. **Whenever `@payroll/shared` changes,
     clear frontend's `.tsbuildinfo` files before trusting `npm run typecheck --workspace frontend`.**
+- **New 2026-07-05, Phase 3 Architecture Review — final decisions, do not re-litigate:**
+  - **Release granularity is per Project Unit, not per Site/Cycle.** `PayrollUnitRelease`
+    (`database-schema.md` §12b) is the release event; `PayrollEntry.released` is derived from it,
+    releasing an entry only once *every* Project Unit its work lines touch has released. Do not
+    reintroduce a direct per-employee "release" write path, and do not collapse a multi-unit entry's
+    release back to "whichever unit releases first" — it must wait for all of them, preserving one
+    entry/one net salary/one Bank Sheet row.
+  - **`PayrollUnitReadiness` ("Ready for Release") is permanently non-gating.** Do not add any code
+    path where Finance's ability to release a Unit depends on whether it was marked Ready — this was
+    an explicit business rule ("NOT locked"), not an oversight to "fix" later.
+  - **`FINANCE` is a real, permanent third role**, site-scoped identically to Payroll Staff, holding
+    `payroll:view` (read-only) + `payroll:release` + `bank-sheets:view`/`cash-receiving:view` only. Do
+    not grant Finance payroll-edit, mark-ready, or corrections-approve/reject permissions — the
+    separation of preparation/execution/governance across Payroll Staff/Finance/Master User is
+    deliberate, not provisional.
+  - **The correction trigger is now one clause**: `PayrollEntry.released = true`. Do not reintroduce
+    the old two-clause "OR cycle no longer Draft" form — it's now redundant by construction, since
+    Cycle status is itself derived from Unit releases.
+  - **`CorrectionRequest` (§13a) is the only path for a non-Master-User-initiated correction.** A
+    Master User correcting directly still bypasses it entirely — do not force every correction through
+    the request table regardless of who's making it.
+  - **`BalanceAdjustment.paymentTiming`/`recoveryInstallmentAmount`/`remainingAmount` are additive.**
+    `NULL` `recoveryInstallmentAmount` must continue to reproduce the original full-amount-next-cycle
+    behavior exactly — this is a regression risk worth its own explicit test when Phase 6 is built.
+  - **A Late Entry (`PayrollEntry.lateReason`) only applies while its Cycle is still Draft.** Do not
+    extend this exception to an already-`Released` cycle — a new hire after full cycle finalization
+    simply waits for the next cycle, no exception needed there.
+  - **"Master Admin" → "Master User" is scoped to `docs/architecture/*.md` and
+    `docs/IMPLEMENTATION_PLAN.md` only.** Do not rename it in `reference/PROJECT_SPEC.md` (frozen,
+    never edited) or in this file's/`PROJECT_PROGRESS.md`'s own historical entries describing what was
+    literally built and named at the time — those are accurate historical record, not architecture.
+  - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review"
+    subsection. **Phase 3 implementation still requires separate, explicit authorization** — the
+    architecture being frozen does not itself authorize starting to write code.
 
 ## 4. Current frozen architecture (reference index)
 
 - `docs/PROJECT_PRINCIPLES.md` — **10 standing principles as of 2026-07-03** (e.g. Payroll Entry as
   single source of truth, additive-first migrations, insert-only Audit Log, and the new Principle 10:
-  a 10,000-employee performance/scale design floor).
+  a 10,000-employee performance/scale design floor). **Reviewed 2026-07-05 — no changes needed**,
+  every Phase 3 architecture-review decision is additive/consistent with all ten.
 - `docs/architecture/overview.md` — the load-bearing data path: Employee Registry/Project Units →
-  Payroll Entry (+ Payroll Entry Work Lines) → Payroll Processing → Release → Bank Sheets/Cash
-  Receiving, with Corrections/Balance Adjustments as the highest-risk branch. Major Modules table now
-  includes **Project Units** as its own module.
-- `docs/architecture/database-schema.md` — **full 20-table schema as of 2026-07-03** (18 original +
-  `ProjectUnit`, §8a, + `PayrollEntryWorkLine`, §12a; Phase 1 + Phase 2 together implement a subset of
-  it; see §1 of `docs/PROJECT_PROGRESS.md`). §26 item 6 (new) holds the CNIC duplicate-detection
-  recommendation still pending final sign-off.
+  Payroll Entry (+ Payroll Entry Work Lines) → Payroll Processing → Release (**now per Project Unit,
+  2026-07-05**) → Bank Sheets/Cash Receiving, with CorrectionRequest → Corrections/Balance Adjustments
+  as the highest-risk branch. Major Modules table includes **Project Units** as its own module and
+  reflects Finance's new role in Release Salary.
+- `docs/architecture/database-schema.md` — **full 25-table schema as of 2026-07-05** (18 original +
+  `ProjectUnit`/`PayrollEntryWorkLine`, 2026-07-03 + `PayrollUnitRelease`/`PayrollUnitReadiness`/
+  `CorrectionRequest`/`CorrectionPayment`/`BalanceAdjustmentSettlement`, 2026-07-05; Phase 1 + Phase 2
+  together implement a subset of it; see §1 of `docs/PROJECT_PROGRESS.md`). §26 item 6 (CNIC
+  duplicate-detection) is resolved, no longer pending.
 - `docs/architecture/authentication.md` — session-based auth, CSRF double-submit, RBAC +
-  site-scoping as independent middleware layers. **Unaffected by 2026-07-03's changes** — multi-unit
-  attendance splitting is always intra-site, so no unit-level RBAC concept was introduced.
-- `docs/architecture/post-release-corrections.md` — the baseline-reconstruction/replay algorithm,
-  deliberately scheduled late (Phase 6) per the plan.
+  site-scoping as independent middleware layers. **Now three roles as of 2026-07-05**: Master User,
+  Payroll Staff, and the new site-scoped **Finance** role (its own permission set documented in full).
+  Multi-unit attendance splitting is still always intra-site, so no unit-level RBAC concept was
+  introduced for that reason — unchanged since 2026-07-03.
+- `docs/architecture/post-release-corrections.md` — the baseline-reconstruction/replay algorithm
+  (unaffected by 2026-07-05's changes — always operates on the resulting `Correction` regardless of
+  which path produced it), deliberately scheduled late (Phase 6) per the plan. **As of 2026-07-05**,
+  also covers the `CorrectionRequest` request/approval/rejection split, immediate/deferred `PAYABLE`
+  settlement, and installment `RECOVERY` settlement.
 - `docs/architecture/data-and-storage.md` — `StorageProvider` abstraction, Finalize Cycle
-  precondition, Backup Package versioning.
+  precondition (wording unchanged by 2026-07-05's per-Unit release move), Backup Package versioning.
+  **As of 2026-07-05**, §4 also documents the per-Unit release mechanism, the simplified one-clause
+  correction trigger, and the Late Entry exception.
 - `docs/design-system.md` — tokens (color/type/spacing/radius), layout patterns, the shared component
   inventory the frontend must reuse rather than re-implement per page, and, **as of 2026-07-03, §4's
   `DD-MM-YYYY` date-display convention** (alongside the existing `en-US` number-format convention).
+  **Not touched by 2026-07-05's session** — no new UI/UX design decisions were made, only backend/data
+  architecture.
 
 ## 5. Phase 1 completion checklist
 
@@ -514,37 +631,51 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Phase 1, Phase 2, and Phase 2.5 are all closed with full DB-backed evidence — see §1/§2.
-Checkpoint 4 (the last of Phase 2.5's five checkpoints) was approved and committed this session
-(`e26fe8c`, 2026-07-05). Phase 2.5 is fully complete.**
+**Phase 1, Phase 2, and Phase 2.5 are all closed with full DB-backed evidence — see §1/§2. The Phase 3
+Architecture Review (2026-07-05, separate session, architecture only) is also COMPLETE — see §1's
+opening and `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection for the full
+decision record. Phase 3 implementation has NOT started: no application code, no migration, no schema
+implementation exist for any of tonight's decisions.**
 
-1. **Per session, re-provision the local database before running DB-backed tests** — the Postgres
-   instance lives in the sandbox scratchpad and does not survive between sessions. Recipe: install
-   `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its symlinks, `initdb -U postgres -A
-   trust`, start with `-c unix_socket_directories=''` (TCP only), create role `payroll` (password
-   `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
-   `npx prisma migrate deploy`, seed, test. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Database
-   verification" subsection.
-2. **Phase 3 (Payroll Entry & Payroll Processing) is next** — `PayrollEntryWorkLine.unitId`
-   composite-FKing against `ProjectUnit` the same way `Employee.unitId` does (Checkpoint 2), now
-   unblocked since Phase 2.5 is closed. **Requires separate, explicit authorization to start** —
-   not given this session. Do not begin the pre-Phase-3 architecture review or write any Phase 3
-   code without it.
-3. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
+1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
+   `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest
+   commit/clean working tree, per this project's standing "How to Resume" procedure.
+2. **Re-provision the local database before running DB-backed tests** — the Postgres instance lives
+   in the sandbox scratchpad and does not survive between sessions. Recipe unchanged by tonight's
+   architecture-only session: install `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its
+   symlinks, `initdb -U postgres -A trust`, start with `-c unix_socket_directories=''` (TCP only),
+   create role `payroll` (password `payroll_dev_password`) and database `payroll_dev`, then
+   `cp backend/.env.example backend/.env`, `npx prisma migrate deploy` (all 7 existing migrations,
+   unchanged), seed **twice** (confirm idempotency), `npm run test --workspace backend` (expect
+   **99/99** — unchanged, since no code or schema changed tonight). Full detail:
+   `docs/PROJECT_PROGRESS.md` §1's "Database verification" subsection.
+3. **Confirm the 99/99 baseline is green before touching any code.**
+4. **Phase 3 (Payroll Entry & Payroll Processing) implementation is next — architecture is already
+   frozen, per tonight's session.** `PayrollEntryWorkLine.unitId` composite-FKing against
+   `ProjectUnit` the same way `Employee.unitId` does (Checkpoint 2); `PayrollEntry.lateReason` per
+   §12's 2026-07-05 revision note. **Still requires separate, explicit authorization to start** — not
+   given as of tonight's session. No further architecture review is needed before starting — that was
+   the whole point of tonight's freeze — but do not write any Phase 3 code without that explicit
+   authorization first.
+5. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
    Phase 5, not scheduled into Phase 2.5, 3, or 4. Design for hosting portability (§3 item 13).
-4. Decide how Broom Services' own disbursement source bank account(s) should be modeled
-   (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins.
-5. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+   **Unaffected by tonight's session.**
+6. Decide how Broom Services' own disbursement source bank account(s) should be modeled
+   (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins. **Unaffected by
+   tonight's session** — this is about the source account for disbursements, a separate concern from
+   tonight's per-Unit release timing decisions.
+7. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
    calendar-month-only cycles before Phase 3, at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
-6. Optionally confirm the Employee Registry import template's redundant-column interpretation with the
+   **Unaffected by tonight's session.**
+8. Optionally confirm the Employee Registry import template's redundant-column interpretation with the
    client (`docs/PROJECT_PROGRESS.md` §3 item 5) — likely resolved as a side effect of Checkpoint 3's
    `ProjectUnit` remap, but worth an explicit client confirmation once that lands.
-7. When explicitly instructed to begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet` over
+9. When explicitly instructed to begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet` over
    Work Lines, the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic
-   locking, the largest single phase in the plan — its Definition of Done now includes Playwright-
-   driven visual verification and a Principle-10 performance review as mandatory steps (§3's new
-   process rules, `docs/IMPLEMENTATION_PLAN.md`'s "Definition of Done — Generic Criteria"), not just
-   typecheck/lint/build.
+   locking, the largest single phase in the plan, now built directly against the frozen per-Unit
+   release/Correction Request/installment-recovery design — follow the standing Definition of Done:
+   **architecture compliance → implementation → typecheck → lint → build → backend tests →
+   real-stack Playwright → documentation updates → ask before committing.**
 
 ## 8. Risks and assumptions
 
@@ -576,3 +707,14 @@ Checkpoint 4 (the last of Phase 2.5's five checkpoints) was approved and committ
   scalar per employee per cycle regardless of how many units they worked.
 - **Assumption**: no one has manually altered the database, `.env`, or any untracked local file
   outside of what's described here since the last commit.
+- **New, 2026-07-05 — the Phase 3 architecture freeze spans what were originally Phase 3, 4, and 6
+  territory (Payroll Entry/Processing, Release, and Corrections/Balance Adjustments), because the
+  session's new business rules made those three areas tightly interdependent (per-Unit release
+  changes what "released" means for the correction trigger; the correction settlement model needed
+  designing alongside it).** This does not change the implementation *sequencing* in
+  `docs/IMPLEMENTATION_PLAN.md` — Phase 3's code should still be built and proven before Phase 4's,
+  and Phase 4's before Phase 6's, per the plan's own stated strategy (build the trunk before its
+  branches) — only the *architecture* for all three was frozen together, in one session, because they
+  couldn't be designed in isolation from each other this time. Future sessions implementing Phase 4 or
+  6 should not re-open architecture review for those phases; the design is already frozen and dated
+  2026-07-05 alongside Phase 3's.

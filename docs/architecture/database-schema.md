@@ -50,6 +50,8 @@ It builds directly on the frozen architecture: `docs/PROJECT_PRINCIPLES.md`,
 | `CorrectionField` | `GROSS_PAY`, `DAYS`, `OT_HOURS`, `OT_RATE`, `ALLOWANCE`, `LEAVE_DAYS`, `LEAVE_RATE`, `CYCLE_DAYS`, `EOBI_AMOUNT`, `EOBI_APPLICABLE`, `ADVANCE_DEDUCTION`, `EID_ADVANCE_DEDUCTION`, `FINE` |
 | `BalanceAdjustmentType` | `PAYABLE`, `RECOVERY`, `NONE` (a correction with zero net difference — see `docs/architecture/post-release-corrections.md`) |
 | `BalanceAdjustmentStatus` | `PENDING`, `SETTLED` |
+| `BalanceAdjustmentPaymentTiming` | `IMMEDIATE`, `DEFERRED` — added 2026-07-05; meaningful only for `type = PAYABLE` (§14), null for `RECOVERY`/`NONE` |
+| `CorrectionRequestStatus` | `PENDING`, `APPROVED`, `REJECTED` — added 2026-07-05 (§13a) |
 | `AdvanceType` | `LOAN`, `EID_ADVANCE` |
 | `AdvanceRepaymentType` | `FULL_DEDUCTION`, `INSTALLMENT` |
 | `AdvanceStatus` | `ACTIVE`, `PAID_OFF` |
@@ -70,16 +72,22 @@ schema change together by necessity, so there's no extensibility benefit to a lo
 
 ## 2. `Role`
 
-**Purpose:** Defines a named bundle of permissions (Master Admin, Payroll Staff, and any future role
-such as an ESS "Employee" role).
+**Purpose:** Defines a named bundle of permissions (Master User, Payroll Staff, Finance, and any
+future role such as an ESS "Employee" role).
 **Why it exists:** `docs/architecture/authentication.md` requires RBAC to be modeled as
 Role → Permission, not hardcoded role checks, so a new role is a data change.
 **Business rule tie-in:** Principle 7 (RBAC must never be bypassed).
+**Revised 2026-07-05 (Phase 3 architecture review) — `FINANCE` added as a third role:** the new
+per-Project-Unit release model (§12b) introduces a distinct capability — executing a Unit's release
+once client funding is confirmed — that is neither Payroll Staff's data-entry role nor Master User's
+governance/approval role. See `docs/architecture/authentication.md` for its full permission set and
+site-scoping. **"Master Admin" is renamed "Master User" throughout this document set as of the same
+review** — same role, no functional change, terminology only.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
-| `code` | varchar(40) | no | — | e.g. `MASTER_ADMIN`, `PAYROLL_STAFF` — stable programmatic key |
+| `code` | varchar(40) | no | — | e.g. `MASTER_USER`, `PAYROLL_STAFF`, `FINANCE` — stable programmatic key |
 | `name` | varchar(80) | no | — | display name |
 | `description` | text | yes | — | |
 | `createdAt` | timestamptz | no | `now()` | |
@@ -88,7 +96,7 @@ Role → Permission, not hardcoded role checks, so a new role is a data change.
 - **Unique constraints:** `code`
 - **Indexes:** unique index on `code` (doubles as lookup index)
 - **Module owner:** Authentication
-- **Row count:** 2–5 (rarely grows)
+- **Row count:** 2–5 (rarely grows) — now 3 at launch (`MASTER_USER`, `PAYROLL_STAFF`, `FINANCE`)
 
 ## 3. `Permission`
 
@@ -129,7 +137,7 @@ Role → Permission, not hardcoded role checks, so a new role is a data change.
 
 ## 5. `User`
 
-**Purpose:** A login account — Master Admin or Payroll Staff.
+**Purpose:** A login account — Master User, Payroll Staff, or (added 2026-07-05) Finance.
 **Why it exists:** Core identity for everyone who accesses the system (not to be confused with
 `Employee`, who is paid but does not log in, at least until an ESS module exists).
 **Business rule tie-in:** Principle 7; `docs/architecture/authentication.md`.
@@ -160,11 +168,14 @@ Role → Permission, not hardcoded role checks, so a new role is a data change.
 
 ## 6. `UserSiteAssignment`
 
-**Purpose:** Which project sites a Payroll Staff user may access.
+**Purpose:** Which project sites a Payroll Staff **or Finance** user may access.
 **Why it exists:** Site-based permission scoping, independent of role
 (`docs/architecture/authentication.md`).
 **Business rule tie-in:** "Payroll Staff can enter attendance/payroll data only for their assigned
-project sites" (`PROJECT_SPEC.md`).
+project sites" (`PROJECT_SPEC.md`); the same site-scoping mechanism was reused, unchanged, for
+Finance's own site assignment when that role was added 2026-07-05 (Phase 3 architecture review) —
+no new assignment table was needed, since Finance's scoping model is identical in shape to Payroll
+Staff's.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -175,8 +186,9 @@ project sites" (`PROJECT_SPEC.md`).
 
 - **Unique constraints:** (`userId`, `siteId`)
 - **Indexes:** (`userId`), (`siteId`)
-- **Note:** Master Admin has implicit access to all sites and has no rows here — absence of rows for
-  an admin is not treated as "no access," this table is only consulted for Payroll Staff.
+- **Note:** Master User has implicit access to all sites and has no rows here — absence of rows for
+  Master User is not treated as "no access"; this table is only consulted for Payroll Staff and
+  Finance.
 - **Module owner:** Settings/Authentication
 
 ## 7. `Bank`
@@ -432,7 +444,7 @@ attendance breakdown: an employee occasionally working a different unit for part
   is deliberately **not** unit-granular — since a `ProjectUnit` belongs to exactly one `ProjectSite`,
   a Payroll Staff member with site access already has full access to every unit under it; there is no
   separate unit-level assignment concept, and 2026-07-03's architecture review confirmed there should
-  never be a cross-site editing exception for a multi-unit employee (see §12a). Master Admin is
+  never be a cross-site editing exception for a multi-unit employee (see §12a). Master User is
   unrestricted.
 - **Audit logging:** every create/update writes a generic `employee.updated` (or `.created`) entry
   with a field-level diff in `metadata`. **Revised 2026-07-03 (session 2):** an edit that changes
@@ -456,6 +468,15 @@ attendance breakdown: an employee occasionally working a different unit for part
 (`docs/architecture/data-and-storage.md` §4) that everything else in the system keys off.
 **Business rule tie-in:** Principles 2 and 9; historical viewing (Payroll Cycle Selector) is always
 scoped by a `PayrollCycle`.
+**Revised 2026-07-05 (Phase 3 architecture review) — release now happens per Project Unit, not
+per Cycle directly:** `PayrollEntry.released` (below, §12) is no longer set by a direct per-employee
+action — it's now derived, set transactionally the moment every `ProjectUnit` an entry's work lines
+touch has its own `PayrollUnitRelease` row (§12b) for this cycle. **This section's finalization
+precondition wording is unchanged** — "no `PayrollEntry` with `released = false AND hold = false`" —
+because that flag's *meaning* didn't change, only what sets it. Finalize Cycle also **stays an
+explicit, separate Master User action** on top of per-Unit release completing (confirmed 2026-07-05,
+not automatic) — a cycle whose every Unit has released-or-been-held is merely *eligible* to finalize,
+still shown as `DRAFT` until a Master User explicitly finalizes it, exactly as today.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -483,9 +504,11 @@ scoped by a `PayrollCycle`.
   a cross-row check inside the same transaction as the status update — the transition is refused
   unless zero `PayrollEntry` rows in this cycle have `released = false AND hold = false`. This cannot
   be expressed as a single-row `CHECK` constraint since it spans every entry in the cycle. **There is
-  no Master Admin override**: a cycle with unreleased, non-held stragglers cannot be finalized until
+  no Master User override**: a cycle with unreleased, non-held stragglers cannot be finalized until
   they are released or held. Employees left on `hold` do not block finalization and may remain
-  outstanding indefinitely.
+  outstanding indefinitely. **A Late Entry (§12b) does not block finalization either** if it's still
+  awaiting its own one-off release — it behaves like an unreleased-and-non-held entry for this
+  precondition's purposes, same as any other straggler, with no special exception.
 - **Immutability:** the row itself (status/timestamps) is updated exactly three times over its
   lifetime (created → released → archived); **once `ARCHIVED`, no column on this row changes again**
 - **Transactions required:** yes — every status transition is a multi-table transaction (see §22)
@@ -530,8 +553,15 @@ lines, and an ordinary single-unit entry is simply the case where that sum has o
 `allowance`, `leaveDays`, `leaveRate`, EOBI, advance/eid deduction, and `fine` all stay here, unchanged
 — none of them are attendance-location data (gross pay in particular was verified 2026-07-03 to be
 documented nowhere as unit-varying, see §9's matching note).
-
-| Column | Type | Nullable | Default | Notes |
+**Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity:**
+`released`/`releasedAt`/`releasedBy` (below) keep their existing shape and query patterns unchanged,
+but are no longer set by a direct per-employee release action. They are now **derived**: set
+transactionally the moment every distinct `ProjectUnit` this entry's work lines touch has its own
+`PayrollUnitRelease` row (§12b) for this cycle — an entry with work lines at two Units waits for
+*both* to release before it releases at all, preserving the one-entry/one-`netSalary`/one-Bank-Sheet-
+row model (Principle 1, Principle 6) unchanged even for a genuinely split employee. See §12b for the
+full mechanism, and the new `lateReason` column below for the one exception (an entry created after
+its Unit has already released this cycle).
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
@@ -554,9 +584,10 @@ documented nowhere as unit-varying, see §9's matching note).
 | `eidAdvanceId` | uuid | yes | — | FK → `Advance.id`, `ON DELETE RESTRICT` — same, for the `EID_ADVANCE`-type advance |
 | `fine` | numeric(12,2) | no | `0` | |
 | `hold` | boolean | no | `false` | |
-| `released` | boolean | no | `false` | per-employee release flag |
+| `released` | boolean | no | `false` | per-employee release flag — **derived** as of 2026-07-05, see the revision note above; set once every touched `ProjectUnit` has released, or by a Late Entry's own one-off release |
 | `releasedAt` | timestamptz | yes | — | |
-| `releasedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` |
+| `releasedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` — for an ordinary release this is whichever Finance user's `PayrollUnitRelease` action was the *last* of this entry's touched Units to clear; for a Late Entry, the Finance user who performed its one-off release |
+| `lateReason` | text | yes | — | **added 2026-07-05.** Populated *only* when this entry undergoes its own one-off "Late Entry" release (§12b) — i.e. it was created after every `ProjectUnit` it touches had already released for this cycle, so no future `PayrollUnitRelease` sweep will ever reach it. `NULL` for every ordinarily-released entry. Whether an unreleased entry currently *qualifies* as a Late Entry is not stored — it's derived on demand (`released = false AND every touched unit already has a PayrollUnitRelease row for this cycle`), since the ordinary sweep already correctly handles any entry with at least one still-pending Unit. Mandatory (enforced at the application layer) at the moment of that one-off release, mirroring `Correction.reason`'s "reason mandatory" convention. |
 | `sortOrder` | integer | no | (sequence) | user-controlled drag-to-reorder position within the cycle |
 | `version` | integer | no | `1` | **optimistic locking token** — incremented on every update |
 | `createdAt` | timestamptz | no | `now()` | |
@@ -583,7 +614,9 @@ row disappearing from a Payroll Staff user's view mid-session because of an unre
 - **Check constraints:** `grossPay >= 0`; `allowance >= 0`; `leaveDays >= 0`; `eobiAmount >= 0`;
   `advanceDeduction >= 0`; `eidAdvanceDeduction >= 0`; `fine >= 0`;
   `released = true ⇒ releasedAt IS NOT NULL AND releasedBy IS NOT NULL` (the `days`/`otHours`/
-  `cycleDays` range checks moved to `PayrollEntryWorkLine`, §12a)
+  `cycleDays` range checks moved to `PayrollEntryWorkLine`, §12a); `lateReason IS NOT NULL ⇒ released
+  = true` (a `lateReason` only ever gets written at the moment of the one-off release itself — added
+  2026-07-05)
 - **Indexes:** unique(`cycleId`, `employeeId`); (`cycleId`); (`employeeId`); composite
   (`cycleId`, `hold`, `released`) — the exact filter combination used by Release Salary, Bank Sheets,
   and Cash Receiving, and by the Payroll Cycle finalization precondition check (§10); (`cycleId`, `siteId`)
@@ -608,10 +641,12 @@ row disappearing from a Payroll Staff user's view mid-session because of an unre
   `version` prevents a lost update on the same row
 - **Transactions required:** yes — creating a `PayrollEntry` always creates its first
   `PayrollEntryWorkLine` in the same transaction (§12a, never a two-step process that could leave an
-  entry with zero lines); an update to a `PayrollEntry` on release must, in the same transaction,
-  update any `PENDING` `BalanceAdjustment` rows for that employee to `SETTLED` and write an `AuditLog`
-  entry (§16); recording a non-zero `advanceDeduction`/`eidAdvanceDeduction` must, in the same
-  transaction, decrement the linked `Advance.outstandingBalance` (§15)
+  entry with zero lines); a `PayrollUnitRelease` insert (§12b) must, in the same transaction, sweep
+  and flip `released = true` on every entry whose touched Units are now all released, settle any
+  `PENDING` `BalanceAdjustment` for each such employee, and write the corresponding `AuditLog`
+  entries; a Late Entry's own one-off release (§12b) follows the identical pattern for exactly one
+  entry, plus writing `lateReason`; recording a non-zero `advanceDeduction`/`eidAdvanceDeduction` must,
+  in the same transaction, decrement the linked `Advance.outstandingBalance` (§15)
 - **Calculated, not stored** (computed identically wherever displayed or exported — Principle 5, 6):
   for each work line *i* under this entry (§12a), `dailyRate_i = grossPay / line_i.cycleDays`;
   `earnedAmount_i = dailyRate_i × line_i.days`;
@@ -733,14 +768,114 @@ cycle by whoever enters that month's data, consistent with attendance itself res
   additional lines on top — not expected to meaningfully change the table's overall scale even at
   Principle 10's 10,000-employee floor
 
+## 12b. `PayrollUnitRelease` and `PayrollUnitReadiness`
+
+**Added 2026-07-05, Phase 3 architecture review.** Two small tables that together implement release
+at Project Unit granularity — the new business rule that payroll may be released independently per
+Project Unit, with Finance choosing to release immediately or wait for client funding, rather than
+only as a whole-Cycle action.
+
+### `PayrollUnitRelease`
+
+**Purpose:** The actual release event for one Project Unit, for one cycle. This is the new source of
+truth that `PayrollEntry.released` (§12) is derived from.
+**Why it exists:** Release needed a grain finer than `PayrollCycle` (too coarse — a whole month) and
+finer than `ProjectSite` (too coarse — a site can have several Units funded on different schedules by
+different client disbursements) without abandoning the one-entry/one-payment model Principle 1 and
+Principle 6 already established. A dedicated event-log table, rather than a flag directly on
+`PayrollEntry`, is what lets one release action correctly fan out across every entry that Unit
+touches — including a multi-unit entry that needs *this* to be the last of several such events before
+it can release.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
+| `unitId` | uuid | no | — | FK → `ProjectUnit.id`, `ON DELETE RESTRICT` |
+| `releasedAt` | timestamptz | no | `now()` | |
+| `releasedById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — must hold the `FINANCE` (or Master User) `payroll:release` permission for this Unit's Site, enforced at the application layer |
+
+- **Unique constraints:** (`cycleId`, `unitId`) — a Unit releases at most once per cycle; there is no
+  "un-release" action (matches Principle 9 — once released, it stays released)
+- **Indexes:** unique(`cycleId`, `unitId`); (`cycleId`) for "which Units have released this cycle";
+  (`unitId`) for historical/reporting queries
+- **Cascade:** both FKs `RESTRICT`
+- **Module owner:** Payroll Processing / Release Salary (the same module boundary as before — this is
+  Release Salary's own event log, not a new module)
+- **Immutable, append-only:** yes — inserted once per `(cycleId, unitId)`, never updated or deleted,
+  same convention as `Correction`/`AuditLog`/`EmployeeTransferHistory`
+- **Transactions required:** yes, always — inserting this row must, in the same transaction, sweep
+  every `PayrollEntry` with a work line touching `unitId` in `cycleId` and, for each one whose *every*
+  distinct touched Unit now has a `PayrollUnitRelease` row, flip `released = true` /
+  `releasedAt` / `releasedBy`, settle any `PENDING` `BalanceAdjustment` for that employee (merged into
+  the Bank Sheet/Cash Sheet payment amount, unchanged from the existing rule, §14), and write the
+  corresponding `AuditLog` entries (a `payroll_unit.released` entry for this event itself, plus the
+  ordinary `payroll.released` entry for each entry it swept in)
+- **Row count:** roughly (Units per Site × Sites) per cycle — comparable in order of magnitude to
+  `ProjectUnit` itself (§8a: ~50–300 total), not to `PayrollEntry`
+
+### `PayrollUnitReadiness`
+
+**Purpose:** The informational "payroll preparation for this Unit is complete" signal — the new
+"Ready for Release" status. **Deliberately non-gating**: Finance can release a Unit whether or not it
+has been marked Ready; this table has no bearing on whether `PayrollUnitRelease` can be inserted.
+**Why it exists:** Payroll Staff need a way to signal "done entering this Unit's data" to Finance
+without that signal becoming a lock (the business rule is explicit: "'Ready for Release' is NOT
+locked; it simply indicates payroll preparation is complete").
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
+| `unitId` | uuid | no | — | FK → `ProjectUnit.id`, `ON DELETE RESTRICT` |
+| `markedReadyById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — Payroll Staff (site-scoped) or Master User; **not** Finance, which has no permission to mark this |
+| `markedReadyAt` | timestamptz | no | `now()` | |
+
+- **Unique constraints:** (`cycleId`, `unitId`) — a Unit is either marked Ready for this cycle or it
+  isn't; there's no meaning to marking it twice
+- **Row existence, not a boolean column, models readiness** (refined 2026-07-05): the row's presence
+  *is* "Ready"; un-marking Ready **deletes** the row rather than flipping a flag. This is the one
+  deliberate exception to this schema's general preference against deleting rows — there is no
+  historical-preservation requirement here (unlike `PayrollUnitRelease` or any append-only table),
+  since this status is purely a live, current-state workflow signal with no business-history value
+  once superseded. Deletion and (re)creation are still each their own audited event
+  (`payroll_unit.marked_ready` / `payroll_unit.unmarked_ready`) even though the row itself doesn't
+  persist — the audit trail is what preserves the historical fact that it happened, not this table.
+- **Indexes:** unique(`cycleId`, `unitId`); (`cycleId`) for "which Units are Ready this cycle"
+- **Cascade:** both FKs `RESTRICT`
+- **Module owner:** Payroll Entry / Release Salary jointly (Payroll Staff set it from the Payroll
+  Entry side, Finance reads it from the Release side)
+- **"Modified after Ready" indicator:** computed on read, not stored — comparing `markedReadyAt`
+  against `MAX(PayrollEntry.updatedAt)` across every entry touching this Unit in this cycle. If any
+  entry was edited after the Unit was marked Ready, Finance sees a "modified since marked ready"
+  notice (with the last-modified timestamp, and the acting user resolved via the most recent relevant
+  `AuditLog` entry for that entry — no new "last edited by" column is added to `PayrollEntry` for
+  this, keeping that table's write surface unchanged). This is informational only and never clears
+  the readiness row automatically — matches the "not locked" rule exactly.
+- **Row count:** at most one row per `(cycleId, unitId)` pair currently marked Ready — small,
+  comparable to `PayrollUnitRelease`'s scale, and shrinks further once released (Ready is typically
+  cleared or simply superseded by the actual release; nothing requires clearing it, it's just moot
+  once released)
+
 ## 13. `Correction`
 
-**Purpose:** A single approved change to one field of a `PayrollEntry` that has been individually
-released, or whose parent cycle is no longer `Draft` — the unified trigger condition stated once in
-`docs/architecture/data-and-storage.md` §4.
+**Purpose:** A single approved change to one field of a `PayrollEntry` that has released (§12) — the
+trigger condition stated once in `docs/architecture/data-and-storage.md` §4.
 **Why it exists:** The only permitted mechanism for changing a locked entry's outcome — never a
 direct edit (Principle 9).
 **Business rule tie-in:** `docs/architecture/post-release-corrections.md` in full.
+**Revised 2026-07-05 (Phase 3 architecture review) — trigger condition simplified to one clause:**
+previously stated as "individually released, **OR** its parent cycle is no longer Draft." Now that
+`PayrollCycle.status` is itself derived from every Unit having released-or-been-held (§10), Cycle
+status can never diverge from entry-level `released` — so the second clause is no longer an
+independent condition, it's implied by the first. The trigger is now simply: **`PayrollEntry.released
+= true`.**
+**Also revised 2026-07-05 — a `Correction` may now originate two ways:** (1) unchanged — a Master
+User creates one directly, with no separate approval step, since they *are* the approver; (2) new —
+approving a `CorrectionRequest` (§13a), submitted by any authorized payroll user, produces exactly one
+`Correction` row in the same transaction as the request's own approval. Either path produces an
+identical `Correction` row; nothing downstream (baseline reconstruction, `BalanceAdjustment` creation)
+distinguishes which path produced it.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -753,7 +888,7 @@ direct edit (Principle 9).
 | `newNetSalary` | numeric(12,2) | no | — | `calcNet` result after this change (trial computation, never written back to `PayrollEntry`) |
 | `adjustmentTypeId` | uuid | no | — | FK → `AdjustmentType.id`, `ON DELETE RESTRICT` |
 | `reason` | text | no | — | mandatory, free-text explanation |
-| `approvedById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — must hold the Corrections-approval permission (Master Admin), enforced at the application layer |
+| `approvedById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — must hold the Corrections-approval permission (Master User), enforced at the application layer |
 | `approvedAt` | timestamptz | no | `now()` | |
 
 **Baseline reconstruction:** since `PayrollEntry` is never mutated, a *second* (or later) correction
@@ -775,9 +910,72 @@ Corrections") for the full algorithm and rationale.
 - **Immutable, append-only:** yes — a `Correction`, once approved, is never edited or deleted; a
   mistaken correction is itself corrected via a new `Correction`, not by editing this row
 - **Transactions required:** yes — creating a `Correction` must, in the same transaction, create its
-  `BalanceAdjustment` (§14) and an `AuditLog` entry (§16)
+  `BalanceAdjustment` (§14) and an `AuditLog` entry (§16); when it originates from an approved
+  `CorrectionRequest` (§13a), that request's own `status → APPROVED` update and `resultingCorrectionId`
+  link are part of the same transaction too
 - **Audit logging:** every `Correction` creation is itself an audited event
 - **Row count:** sporadic — realistically tens per month at most across ~1,500 employees
+
+## 13a. `CorrectionRequest`
+
+**Added 2026-07-05, Phase 3 architecture review.** The pending half of the correction workflow that
+didn't exist before this session — until now, a `Correction` row was only ever created *already
+approved* (§13's `approvedById`/`approvedAt` are `NOT NULL` by design). The new business rule —
+"correction requests may be initiated by any authorized payroll user, but approval belongs to the
+Master User" — needs a genuine pending/rejected state, which this table provides, without changing
+`Correction`'s own always-approved shape at all.
+
+**Purpose:** A proposed correction to one field of a released `PayrollEntry`, awaiting Master User
+review.
+**Why it exists:** Separates *proposing* a correction (any authorized payroll user) from *deciding*
+one (Master User only) — Principle 7's RBAC boundary applies to the decision, not the proposal.
+**Business rule tie-in:** `docs/architecture/post-release-corrections.md`'s "Correction Requests"
+section.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `payrollEntryId` | uuid | no | — | FK → `PayrollEntry.id`, `ON DELETE RESTRICT` |
+| `field` | `CorrectionField` | no | — | which field the requester believes needs correcting |
+| `proposedNewValue` | varchar(80) | no | — | the requester's proposed value — a starting point for the Master User's review, not binding; the eventual `Correction.newValue` may differ if the Master User adjusts it during approval |
+| `adjustmentTypeId` | uuid | no | — | FK → `AdjustmentType.id`, `ON DELETE RESTRICT` — the requester's proposed classification, likewise revisable at approval |
+| `reason` | text | no | — | mandatory, free-text explanation from the requester |
+| `requestedById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` |
+| `requestedAt` | timestamptz | no | `now()` | |
+| `status` | `CorrectionRequestStatus` | no | `'PENDING'` | `PENDING` / `APPROVED` / `REJECTED` — new native enum (§1), closed set mechanically tied to this workflow |
+| `reviewedById` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` — the Master User who approved or rejected; null while `PENDING` |
+| `reviewedAt` | timestamptz | yes | — | null while `PENDING` |
+| `rejectionReason` | text | yes | — | mandatory when `status = REJECTED` (mirrors `Correction.reason`'s "reason mandatory" convention, applied symmetrically to rejection); always null otherwise |
+| `resultingCorrectionId` | uuid | yes | — | FK → `Correction.id`, `ON DELETE RESTRICT`, **unique** (1:1) — set only on approval, never on rejection |
+
+**When the Master User corrects personally instead of reviewing a request:** this table is bypassed
+entirely — a `Correction` is created directly (§13), exactly as it already worked before this table
+existed. A `CorrectionRequest` is only ever the path when someone *other* than the acting Master User
+initiated it, or when the Master User chooses to formalize their own proposal as a request first (not
+required, but not prevented either).
+
+- **Check constraints:** `length(trim(reason)) > 0`; `status = 'REJECTED' ⇒ rejectionReason IS NOT
+  NULL AND reviewedById IS NOT NULL AND reviewedAt IS NOT NULL`; `status = 'APPROVED' ⇒
+  resultingCorrectionId IS NOT NULL AND reviewedById IS NOT NULL AND reviewedAt IS NOT NULL`;
+  `status = 'PENDING' ⇒ reviewedById IS NULL AND reviewedAt IS NULL AND resultingCorrectionId IS NULL
+  AND rejectionReason IS NULL`
+- **Unique constraints:** `resultingCorrectionId` (enforces the 1:1 relationship, where present)
+- **Indexes:** (`payrollEntryId`); (`status`) — the "pending requests awaiting review" queue, the hot
+  read path for the Master User's own worklist; (`requestedById`); (`reviewedById`)
+- **Cascade:** all FKs `RESTRICT`
+- **Module owner:** Corrections
+- **Immutability:** effectively immutable with **exactly one permitted transition** —
+  `PENDING → APPROVED` or `PENDING → REJECTED`, never edited otherwise once decided; mirrors
+  `BalanceAdjustment`'s (§14) single-permitted-transition pattern rather than being fully append-only,
+  since (unlike `Correction`) it does have one real state change to make
+- **Transactions required:** yes — approval creates the `Correction` (+ its own downstream
+  `BalanceAdjustment` + `AuditLog`, §13/§14) and updates this row's `status`/`resultingCorrectionId`
+  all together; rejection is a single-row update + `AuditLog` entry (`correction_request.rejected`)
+- **Audit logging:** creation (`correction_request.created`), approval (folded into the resulting
+  `correction.approved` entry, cross-referencing the request), and rejection
+  (`correction_request.rejected`) are all audited events
+- **Row count:** a subset of eventual `Correction` rows, plus whatever fraction are rejected — smaller
+  than `Correction` is unlikely; comparable order of magnitude
 
 ## 14. `BalanceAdjustment`
 
@@ -786,6 +984,20 @@ silently into an ordinary payroll field.
 **Why it exists:** `docs/architecture/post-release-corrections.md` — the entire reason this table
 exists is to keep a post-release balance distinct and reportable, rather than indistinguishable from
 a normal allowance/advance.
+**Revised 2026-07-05 (Phase 3 architecture review) — `PAYABLE` immediate/deferred and `RECOVERY`
+installment settlement:** two previously single-shot behaviors now branch by `type`:
+- **`PAYABLE`** may settle `IMMEDIATE`ly (folded into the employee's already-open `PayrollEntry` if
+  one exists, else a standalone `CorrectionPayment`, §14a) or stay `DEFERRED` (unchanged from before
+  this session — automatically surfaces in the next Draft cycle's entry, settled on that entry's
+  release). This choice is recorded once, at approval time, in the new `paymentTiming` column.
+- **`RECOVERY`** may now settle across **multiple** future cycles as an installment, not only in full
+  in the very next one — see the new `recoveryInstallmentAmount`/`remainingAmount` columns and the new
+  `BalanceAdjustmentSettlement` child table (§14b), which records each cycle's partial application.
+  `recoveryInstallmentAmount = NULL` reproduces the original one-shot-next-cycle behavior exactly (the
+  degenerate case of an installment plan with one installment equal to the full amount) — this is a
+  purely additive change, no existing `RECOVERY` behavior was removed.
+- **`NONE`** is entirely unchanged — still created already `SETTLED`, zero amount, no timing/
+  installment concept applies.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -794,37 +1006,141 @@ a normal allowance/advance.
 | `employeeId` | uuid | no | — | FK → `Employee.id`, `ON DELETE RESTRICT` — denormalized from `correction → payrollEntry → employee` for fast "pending balances for employee X" lookups; always derived server-side from the approving `Correction`, never accepted as independent input |
 | `sourceCycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` — the cycle the correction was made against (this may be `Released` or `Archived`, or a still-`Draft` cycle in which this specific entry was individually released — see the unified trigger condition in `docs/architecture/data-and-storage.md` §4) |
 | `adjustmentTypeId` | uuid | no | — | FK → `AdjustmentType.id`, `ON DELETE RESTRICT` — a direct, denormalized copy of the originating `Correction.adjustmentTypeId`, consistent with `employeeId`/`sourceCycleId` above already being denormalized onto this same row; enables direct filtering/reporting ("all pending Advance Recovery adjustments") without a join |
-| `amount` | numeric(12,2) | no | — | absolute value; `0` only when `type = 'NONE'` |
+| `amount` | numeric(12,2) | no | — | absolute value, the *original total* — `0` only when `type = 'NONE'`. For `RECOVERY`, this stays the original total even as it's recovered in installments; see `remainingAmount` below for the live outstanding figure |
 | `type` | `BalanceAdjustmentType` | no | — | `PAYABLE`, `RECOVERY`, or `NONE` (zero net difference — see `docs/architecture/post-release-corrections.md`) |
-| `status` | `BalanceAdjustmentStatus` | no | `'PENDING'` | a `NONE`-type row is created already `SETTLED` |
+| `status` | `BalanceAdjustmentStatus` | no | `'PENDING'` | a `NONE`-type row is created already `SETTLED`. For `RECOVERY`, stays `PENDING` across as many cycles as it takes `remainingAmount` to reach zero — this is the one behavior change from before this session, where a single cycle always fully settled it |
+| `paymentTiming` | `BalanceAdjustmentPaymentTiming` | yes | — | **added 2026-07-05.** `IMMEDIATE` or `DEFERRED`, set at approval time; meaningful only for `type = PAYABLE`, always `NULL` for `RECOVERY`/`NONE` (negative balances have no immediate option per the business rule; `NONE` needs no timing at all) |
+| `recoveryInstallmentAmount` | numeric(12,2) | yes | — | **added 2026-07-05, `RECOVERY`-only.** The per-cycle amount to recover; `NULL` means "recover the full `remainingAmount` in the next cycle" (today's original behavior, unchanged as the default). Staff/Master-User-editable at any time before `remainingAmount` reaches zero, mirroring `Advance.scheduledInstallmentAmount`'s already-established editable-schedule pattern (`docs/IMPLEMENTATION_PLAN.md` Phase 4) — always `NULL` for `PAYABLE`/`NONE` |
+| `remainingAmount` | numeric(12,2) | no | (= `amount` at creation) | **added 2026-07-05.** The live outstanding balance still to be recovered/paid. Decremented by each `BalanceAdjustmentSettlement` (§14b) application; reaches `0` exactly when `status` flips to `SETTLED`. For `PAYABLE`/`NONE`, this settles in one step (immediately or on the deferred cycle's release) so it simply jumps from `amount` to `0` — the multi-step decrement pattern is a `RECOVERY`-specific behavior |
 | `remark` | text | no | — | auto-composed display remark shown on the Payslip and Statement of Account, per post-release-corrections.md §5 (the Bank Sheet/Cash Sheet row itself is a single merged amount and carries no per-line remark — see "Representation in Bank Sheets, Cash Sheets, and Payslips") |
-| `settledInCycleId` | uuid | yes | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT`; set only at settlement; always null for a `NONE`-type row |
-| `settledAt` | timestamptz | yes | — | set only at settlement; set immediately (creation time) for a `NONE`-type row |
+| `settledInCycleId` | uuid | yes | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT`; set only at final settlement (when `remainingAmount` reaches zero); always null for a `NONE`-type row |
+| `settledAt` | timestamptz | yes | — | set only at final settlement; set immediately (creation time) for a `NONE`-type row |
 | `createdAt` | timestamptz | no | `now()` | |
 
 - **Unique constraints:** `correctionId` (enforces the 1:1 relationship to `Correction`)
 - **Check constraints:**
   `(type = 'NONE' AND amount = 0 AND status = 'SETTLED') OR (type IN ('PAYABLE','RECOVERY') AND amount > 0)`;
-  `status = 'SETTLED' AND type != 'NONE' ⇒ settledInCycleId IS NOT NULL AND settledAt IS NOT NULL`;
-  `status = 'PENDING' ⇒ settledInCycleId IS NULL AND settledAt IS NULL AND type != 'NONE'`
+  `status = 'SETTLED' AND type != 'NONE' ⇒ ((settledInCycleId IS NOT NULL AND settledAt IS NOT NULL) OR
+  a linked CorrectionPayment exists, §14a — added 2026-07-05, since an IMMEDIATE PAYABLE with no open
+  entry to fold into settles outside any cycle)`;
+  `status = 'PENDING' ⇒ settledInCycleId IS NULL AND settledAt IS NULL AND type != 'NONE'`;
+  `remainingAmount >= 0 AND remainingAmount <= amount` (added 2026-07-05);
+  `status = 'SETTLED' ⇒ remainingAmount = 0` (added 2026-07-05);
+  `paymentTiming IS NOT NULL ⇒ type = 'PAYABLE'` (added 2026-07-05);
+  `recoveryInstallmentAmount IS NOT NULL ⇒ type = 'RECOVERY'` (added 2026-07-05)
 - **Indexes:** unique(`correctionId`); composite (`employeeId`, `status`) — the hot lookup ("does this
   employee have a pending balance to include in this Draft cycle"); (`status`) for the "all pending"
   admin view; composite (`adjustmentTypeId`, `status`) for "pending by type" reporting;
   (`sourceCycleId`); (`settledInCycleId`)
 - **Cascade:** all FKs `RESTRICT`
 - **Module owner:** Balance Adjustments
-- **Immutability:** effectively immutable with **exactly one permitted transition** —
-  `PENDING → SETTLED`, performed only by the automatic settlement workflow, never by a general update
-  route. A `NONE`-type row never transitions at all — it's created in its final, settled state. No
-  field other than `status`/`settledInCycleId`/`settledAt` ever changes after creation.
-- **Transactions required:** yes, at both ends — creation is transactional with its `Correction`
+- **Immutability:** effectively immutable except for `remainingAmount`/`status`/`settledInCycleId`/
+  `settledAt` (final settlement) and the staff-editable `recoveryInstallmentAmount` (`RECOVERY` only,
+  before full settlement) — performed only by the automatic settlement workflow or an explicit,
+  audited installment-amount edit, never a general update route. A `NONE`-type row never transitions
+  at all — it's created in its final, settled state.
+- **Transactions required:** yes, at multiple points — creation is transactional with its `Correction`
   (§13), and, when the correction is to `ADVANCE_DEDUCTION`/`EID_ADVANCE_DEDUCTION`, with the linked
-  `Advance.outstandingBalance` reconciliation (§15); settlement is transactional with the triggering
-  `PayrollEntry` release and is merged into that release's Bank Sheet/Cash Sheet payment amount for
-  the employee, never a second row (§16, and `docs/architecture/post-release-corrections.md`)
-- **Audit logging:** creation (including a `NONE`-type creation) and settlement are both audited
-  events
+  `Advance.outstandingBalance` reconciliation (§15); an `IMMEDIATE` `PAYABLE`'s settlement is
+  transactional with either folding into the employee's open `PayrollEntry` or creating a
+  `CorrectionPayment` (§14a), at approval time itself, not later; a `DEFERRED` `PAYABLE`'s or a
+  `RECOVERY` installment's settlement is transactional with the triggering `PayrollEntry` release,
+  merged into that release's Bank Sheet/Cash Sheet payment amount, never a second row (§16, and
+  `docs/architecture/post-release-corrections.md`) — for a `RECOVERY` with more `remainingAmount`
+  left after this cycle's installment, the same release transaction also inserts this cycle's
+  `BalanceAdjustmentSettlement` row (§14b) and leaves `status = PENDING` for the next cycle to
+  continue
+- **Audit logging:** creation (including a `NONE`-type creation), each partial/final settlement, and
+  any `recoveryInstallmentAmount` edit are all audited events
 - **Row count:** a subset of `Correction` rows — smaller still
+
+## 14a. `CorrectionPayment`
+
+**Added 2026-07-05, Phase 3 architecture review.** The standalone artifact for an `IMMEDIATE`
+`PAYABLE` `BalanceAdjustment` when the employee has **no** already-open `PayrollEntry` to fold it
+into — i.e. every entry they currently have is already released. Generates its own one-off Bank
+Sheet/Cash Sheet-style document rather than waiting for or modifying any `PayrollEntry`.
+**Purpose:** A one-off, traceable payment settling a `BalanceAdjustment` outside the ordinary
+per-Cycle/per-Unit release pipeline.
+**Why it exists:** Principle 9 (released payroll is never modified) rules out folding this payment
+into an already-released entry; Principle 6 (every exported value must match underlying data) still
+requires this payment to be a real, auditable, exportable record, not an off-system side payment.
+**Implementation note (2026-07-05):** this table's actual PDF/Excel generation should share
+implementation with the Late Entry one-off release's own document (§12b/§12, `lateReason`) where
+practical — both are structurally "a one-off, single-row payment artifact outside the normal
+per-Unit/per-Cycle sheet" — while remaining **separate business entities** (a `CorrectionPayment`
+settles a `BalanceAdjustment`; a Late Entry release settles an ordinary `PayrollEntry`'s first-ever
+release). Not a schema-level decision — flagged here for whoever builds Phase 4/6's PDF/Excel
+generation to reuse a shared single-row-sheet renderer rather than duplicating it.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `balanceAdjustmentId` | uuid | no | — | FK → `BalanceAdjustment.id`, `ON DELETE RESTRICT`, **unique** (1:1) |
+| `employeeId` | uuid | no | — | FK → `Employee.id`, `ON DELETE RESTRICT` — denormalized, same convention as `BalanceAdjustment.employeeId` |
+| `amount` | numeric(12,2) | no | — | always equals the settling `BalanceAdjustment.remainingAmount` at the moment of payment (always the full `PAYABLE` amount, since `PAYABLE` never installments) |
+| `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT` — snapshot copied from `Employee`/`PayrollEntry` at payment time, **copied not linked**, same convention as `PayrollEntry`'s own bank fields (§12), so a later `Employee` bank-detail change never retroactively alters a historical payment record |
+| `branchCode` | varchar(20) | yes | — | snapshot, same convention |
+| `accountNumber` | varchar(40) | yes | — | snapshot, same convention; null + null `bankId` ⇒ cash payment, same derived rule as everywhere else this is checked |
+| `accountTitle` | varchar(160) | yes | — | snapshot, same convention |
+| `paidAt` | timestamptz | no | `now()` | |
+| `paidById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — the Finance user who executed the payment |
+
+- **Unique constraints:** `balanceAdjustmentId` (enforces the 1:1 relationship)
+- **Check constraints:** `amount > 0`
+- **Indexes:** unique(`balanceAdjustmentId`); (`employeeId`)
+- **Cascade:** all FKs `RESTRICT`
+- **Module owner:** Balance Adjustments (jointly with Release Salary for the payment-execution half —
+  same cross-module pattern already established between Payroll Processing and Release Salary)
+- **Immutable, append-only:** yes — a payment record, once created, is never edited or deleted, same
+  convention as `Correction`/`AuditLog`
+- **Transactions required:** yes — creation is transactional with flipping the settling
+  `BalanceAdjustment.status → SETTLED` (`remainingAmount → 0`, `settledAt` set; `settledInCycleId`
+  stays null, per §14's loosened check constraint) and the corresponding `AuditLog` entry
+- **Audit logging:** creation is itself an audited event (`correction_payment.paid`)
+- **Row count:** a small subset of `PAYABLE` `BalanceAdjustment` rows — only the ones settled
+  `IMMEDIATE`ly with no open entry available; expected to be the less common of the two `IMMEDIATE`
+  outcomes in practice, most employees have another cycle entry open when a positive correction lands
+
+## 14b. `BalanceAdjustmentSettlement`
+
+**Added 2026-07-05, Phase 3 architecture review.** Append-only history of each cycle's partial
+recovery application against an installment-based `RECOVERY` `BalanceAdjustment` — the business
+history counterpart to `AuditLog`'s audit history, following the exact precedent already established
+by `EmployeeTransferHistory` (§8b) for `Employee` transfers.
+**Purpose:** One row per cycle in which a `RECOVERY` `BalanceAdjustment` had an installment applied
+against it, so Statement of Account and reporting can show a clean per-cycle breakdown ("PKR 2,000
+recovered this cycle, PKR 6,000 remaining") without parsing `AuditLog.metadata` JSON.
+**Why it exists:** `BalanceAdjustment` (§14) holds only the current aggregate state
+(`remainingAmount`, `recoveryInstallmentAmount`) — once an installment plan can span several cycles,
+the *history* of which cycles paid down how much is itself a first-class fact worth its own typed,
+directly queryable rows, exactly the reasoning that gave `EmployeeTransferHistory` its own table
+instead of relying on `AuditLog` alone.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `balanceAdjustmentId` | uuid | no | — | FK → `BalanceAdjustment.id`, `ON DELETE RESTRICT` |
+| `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` — the cycle whose release applied this installment |
+| `amountApplied` | numeric(12,2) | no | — | `min(recoveryInstallmentAmount ?? remainingAmount-at-the-time, remainingAmount-at-the-time)` — the actual amount this cycle recovered, which may be less than the standing installment amount if it's the final, smaller-than-usual installment |
+| `appliedAt` | timestamptz | no | `now()` | |
+
+- **Unique constraints:** (`balanceAdjustmentId`, `cycleId`) — a given `BalanceAdjustment` is
+  recovered at most once per cycle (an employee held in a cycle simply has no row for it that cycle,
+  per the existing "held ⇒ carries forward unchanged" rule, unaffected by this addition)
+- **Check constraints:** `amountApplied > 0`
+- **Indexes:** (`balanceAdjustmentId`) — the "full recovery history for this balance" lookup, the
+  primary Statement of Account read path; (`cycleId`)
+- **Cascade:** both FKs `RESTRICT`
+- **Module owner:** Balance Adjustments
+- **Immutable, append-only:** yes — same convention as `EmployeeTransferHistory`/`Correction`/
+  `AuditLog`; a mistaken installment application is never edited here, only reflected going forward
+- **Transactions required:** yes — inserted in the same transaction as the triggering cycle's release
+  sweep (§12b) and the parent `BalanceAdjustment.remainingAmount` decrement (and, if this installment
+  brings `remainingAmount` to zero, the parent's `status → SETTLED`/`settledInCycleId`/`settledAt`)
+- **Row count:** one row per cycle an installment-based `RECOVERY` actually settles against — bounded
+  by (number of installment `RECOVERY` adjustments) × (typical installment count), expected to stay
+  small relative to `PayrollEntry`
 
 ## 15. `Advance`
 
@@ -1024,6 +1340,20 @@ PayrollCycle (1) ───< PayrollCycle (many)     [sourceCycleId, self-referen
 PayrollEntry (1) ───< PayrollEntryWorkLine (many)    [always ≥1, enforced transactionally — §12a]
 ProjectUnit (1) ───< PayrollEntryWorkLine (many)     [unitId, composite FK with siteId — §12a]
 
+PayrollCycle (1) ───< PayrollUnitRelease (many)      [cycleId — §12b, added 2026-07-05]
+ProjectUnit (1) ───< PayrollUnitRelease (many)       [unitId — §12b]
+User (1) ───< PayrollUnitRelease (many)              [releasedById — §12b]
+
+PayrollCycle (1) ───< PayrollUnitReadiness (many)    [cycleId — §12b, added 2026-07-05]
+ProjectUnit (1) ───< PayrollUnitReadiness (many)     [unitId — §12b]
+User (1) ───< PayrollUnitReadiness (many)            [markedReadyById — §12b]
+
+PayrollEntry (1) ───< CorrectionRequest (many)       [payrollEntryId — §13a, added 2026-07-05]
+AdjustmentType (1) ───< CorrectionRequest (many)     [adjustmentTypeId — §13a]
+User (1) ───< CorrectionRequest (many)               [requestedById — §13a]
+User (1) ───< CorrectionRequest (many)               [reviewedById, optional — §13a]
+CorrectionRequest (0..1) ─── (1) Correction          [resultingCorrectionId, optional — §13a]
+
 PayrollEntry (1) ───< Correction (many)
 AdjustmentType (1) ───< Correction (many)
 
@@ -1032,6 +1362,13 @@ Employee (1) ───< BalanceAdjustment (many)          [denormalized]
 PayrollCycle (1) ───< BalanceAdjustment (many)      [sourceCycleId]
 PayrollCycle (1) ───< BalanceAdjustment (many)      [settledInCycleId, optional]
 AdjustmentType (1) ───< BalanceAdjustment (many)    [denormalized from Correction]
+
+BalanceAdjustment (1) ─── (0..1) CorrectionPayment  [balanceAdjustmentId — §14a, added 2026-07-05]
+Employee (1) ───< CorrectionPayment (many)          [employeeId — §14a]
+User (1) ───< CorrectionPayment (many)               [paidById — §14a]
+
+BalanceAdjustment (1) ───< BalanceAdjustmentSettlement (many)  [balanceAdjustmentId — §14b, added 2026-07-05]
+PayrollCycle (1) ───< BalanceAdjustmentSettlement (many)       [cycleId — §14b]
 
 Employee (1) ───< Advance (many)
 Advance (1) ───< PayrollEntry (many)                [advanceId, optional]
@@ -1046,15 +1383,26 @@ BackupPackage (1) ───< BackupPackageFile (many)
 CompanySettings (singleton, standalone)
 ```
 
-The load-bearing spine, matching `docs/architecture/overview.md`'s data-flow diagram:
+The load-bearing spine, matching `docs/architecture/overview.md`'s data-flow diagram — **revised
+2026-07-05** to show release now happening at Project Unit granularity, and the correction path's new
+request/timing/installment branches:
 
 ```
 Employee ─┐
-          ├─> PayrollEntry ──> (Release) ──> Bank Sheets / Cash Receiving
-ProjectSite ┘        │                        (derived, no table of their own; one row per employee,
-                      │                         amount = netSalary ± any settling BalanceAdjustments)
-                      └─> Correction ──> BalanceAdjustment ──(auto-settles, merged into payment,
-                                                                in)──> next Draft PayrollEntry
+          ├─> PayrollEntry ──> PayrollUnitRelease (per touched Unit, §12b) ──> once ALL touched
+ProjectSite ┘        │           Units have released, PayrollEntry.released flips true (or a Late
+                      │           Entry gets its own one-off release, lateReason) ──> Bank Sheets /
+                      │           Cash Receiving (derived, one row per employee, amount = netSalary
+                      │           ± any settling BalanceAdjustments)
+                      │
+                      └─> CorrectionRequest (optional, §13a) ──approved──> Correction ──>
+                            BalanceAdjustment ──┬─ PAYABLE, IMMEDIATE ──> fold into an already-open
+                                                 │   PayrollEntry, else CorrectionPayment (§14a)
+                                                 ├─ PAYABLE, DEFERRED ──> next Draft PayrollEntry
+                                                 │   (unchanged from before this session)
+                                                 └─ RECOVERY ──> one or more future cycles'
+                                                     PayrollEntry releases, each installment logged
+                                                     as a BalanceAdjustmentSettlement row (§14b)
 ```
 
 Bank Sheets, Cash Receiving, Statements, Payslips, Reports, and Dashboard have **no tables of their
@@ -1071,24 +1419,49 @@ own** — they are query modules over the tables above, per Principle 1 and the 
 cycle leaves `DRAFT` (`hold` does **not** gate this — it's an ordinary field until the row locks, at
 which point it freezes along with every other column; see §12), and every `PayrollEntryWorkLine`
 under such a row, which locks in lockstep with its parent entry (§12a). `BalanceAdjustment` is
-immutable except for its single permitted `PENDING → SETTLED` transition (a `NONE`-type row is created
-already in its final state and never transitions at all).
+immutable except for `remainingAmount`/`status`/`settledInCycleId`/`settledAt` (settlement, now
+potentially multi-step for `RECOVERY`) and the staff-editable `recoveryInstallmentAmount` (a `NONE`-
+type row is created already in its final state and never transitions at all). **Added 2026-07-05:**
+`PayrollUnitRelease` (§12b) is immutable from creation — a Unit's release for a cycle is never undone.
+`CorrectionRequest` (§13a) is immutable except for its single permitted `PENDING → APPROVED` or
+`PENDING → REJECTED` transition. `CorrectionPayment` (§14a) is immutable from creation.
+`BalanceAdjustmentSettlement` (§14b) is immutable from creation.
 
 ### Append-only tables
 `Correction`, `AuditLog`, `BackupPackage`, `BackupPackageFile`, `EmployeeTransferHistory` (added
-2026-07-03, session 2 — §8b).
+2026-07-03, session 2 — §8b). **Added 2026-07-05:** `PayrollUnitRelease` (§12b),
+`BalanceAdjustmentSettlement` (§14b), `CorrectionPayment` (§14a). **The one deliberate exception:**
+`PayrollUnitReadiness` (§12b) is **not** append-only — un-marking Ready **deletes** the row, since it
+is a purely informational, current-state workflow signal with no historical-preservation requirement,
+unlike every other table in this list.
 
 ### Tables requiring multi-statement transactions
 - `PayrollEntry` insert + its first `PayrollEntryWorkLine` insert, always together, never a two-step
   process that could leave an entry with zero lines (§12a)
-- `PayrollEntry` update (release) + settlement of any `PENDING` `BalanceAdjustment` for that employee
-  (merged into this release's Bank Sheet/Cash Sheet payment amount, §14) + `AuditLog` insert
+- **Added 2026-07-05:** `PayrollUnitRelease` insert + a sweep flipping `PayrollEntry.released = true`
+  on every entry whose touched Units are now all released + settlement of any `PENDING`
+  `BalanceAdjustment` for each such employee (merged into that release's Bank Sheet/Cash Sheet payment
+  amount, §14) + `AuditLog` insert(s) (§12b) — the direct successor to the old single-entry "release"
+  transaction below, now fanned out per Unit-release event
+- **Added 2026-07-05:** a Late Entry's own one-off release: `lateReason` write + `PayrollEntry.released
+  = true` + the same `BalanceAdjustment` settlement/`AuditLog` steps as above, for exactly one entry
+  (§12b)
+- **Added 2026-07-05:** `CorrectionRequest` approval: `Correction` insert + `BalanceAdjustment` insert
+  + `CorrectionRequest.status → APPROVED`/`resultingCorrectionId` update + `AuditLog` insert, all
+  together (§13a)
 - `Correction` insert + `BalanceAdjustment` insert (always — including a `NONE`-type, zero-amount,
   already-`SETTLED` row for a zero-net-difference correction) + `Advance.outstandingBalance`
   reconciliation, when the corrected field is `ADVANCE_DEDUCTION`/`EID_ADVANCE_DEDUCTION` and a linked
   advance exists (§15) + `AuditLog` insert
-- `PayrollCycle` finalization (`DRAFT → RELEASED`): the no-override precondition check (§10) + status
-  update + `AuditLog` insert, in one transaction
+- **Added 2026-07-05:** an `IMMEDIATE` `PAYABLE` `BalanceAdjustment`'s settlement, at approval time:
+  either folding into the employee's already-open `PayrollEntry`, or a `CorrectionPayment` insert
+  (§14a) + `BalanceAdjustment.status → SETTLED` + `AuditLog` insert
+- **Added 2026-07-05:** a `RECOVERY` `BalanceAdjustment` installment applied during a cycle's release:
+  `BalanceAdjustmentSettlement` insert (§14b) + `BalanceAdjustment.remainingAmount` decrement (+
+  `status → SETTLED` only if this brings it to zero) + `AuditLog` insert
+- `PayrollCycle` finalization (`DRAFT → RELEASED`): the no-override precondition check (§10,
+  unchanged wording — see its 2026-07-05 revision note) + status update + `AuditLog` insert, in one
+  transaction
 - `PayrollCycle` archive transition (`RELEASED → ARCHIVED`) + `BackupPackage`/`BackupPackageFile`
   insert (DB rows only — the actual file write via `StorageProvider` is external I/O and cannot
   participate in a DB transaction; the recommended pattern is: write the file first, then commit the
@@ -1113,15 +1486,19 @@ already covers them.
 ### Tables requiring audit logging on every mutation
 `PayrollEntry` (release/hold/field edits while Draft, including work-line attendance changes — §12a —
 captured in the same field-level diff), `Correction` (every creation, including a
-zero-net-difference/`NONE` correction), `BalanceAdjustment` (creation and settlement),
-`PayrollCycle` (every status transition, including a finalization attempt blocked by the precondition),
-`Advance` (creation and both balance-changing events — original deduction and correction-triggered
-reconciliation), `Employee` (every create/update — a site/unit-changing edit writes a dedicated
-`employee.transferred` entry, not the generic `employee.updated` entry, plus an `EmployeeTransferHistory`
-row (§8b); leaving/reactivating write their own dedicated `employee.left`/`employee.reactivated`
-entries — see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation, role/site reassignment),
-`ProjectSite` (creation, edit, deletion attempt), `ProjectUnit` (creation, edit, deletion attempt —
-same pattern as `ProjectSite`, §8a), `CompanySettings` (every update).
+zero-net-difference/`NONE` correction), `BalanceAdjustment` (creation and every settlement step,
+partial or final), `PayrollCycle` (every status transition, including a finalization attempt blocked
+by the precondition), `Advance` (creation and both balance-changing events — original deduction and
+correction-triggered reconciliation), `Employee` (every create/update — a site/unit-changing edit
+writes a dedicated `employee.transferred` entry, not the generic `employee.updated` entry, plus an
+`EmployeeTransferHistory` row (§8b); leaving/reactivating write their own dedicated `employee.left`/
+`employee.reactivated` entries — see §9), `User`/`Role`/`UserSiteAssignment` (creation, deactivation,
+role/site reassignment), `ProjectSite` (creation, edit, deletion attempt), `ProjectUnit` (creation,
+edit, deletion attempt — same pattern as `ProjectSite`, §8a), `CompanySettings` (every update).
+**Added 2026-07-05:** `PayrollUnitRelease` (creation — `payroll_unit.released`), `PayrollUnitReadiness`
+(marking and un-marking — `payroll_unit.marked_ready` / `.unmarked_ready`), `CorrectionRequest`
+(creation, approval, rejection), `CorrectionPayment` (creation — `correction_payment.paid`), a Late
+Entry's one-off release (`payroll.late_released`, carrying `lateReason`).
 
 ### Values that must never be duplicated (single source of truth)
 - Net salary and every `calcNet` intermediate — always computed from `PayrollEntry` (and, for a
@@ -1170,6 +1547,13 @@ current headcount.
   Principle 10's concrete techniques (virtualization, server-side pagination, background processing
   for long-running operations, bulk writes over row-by-row loops) rather than relying on indexing
   alone to carry a 10,000-employee dataset through, say, an unvirtualized full-table render.
+- **Added 2026-07-05:** the `PayrollUnitRelease` sweep (§12b) — flipping `released = true` across
+  every `PayrollEntry` a Unit's release affects — must be a single bulk `UPDATE ... WHERE` statement
+  keyed off `(cycleId, siteId/unitId)`, not a row-by-row loop over entries, consistent with Principle
+  10 even though a single Unit's entry count is typically small; the same applies to computing which
+  entries now have *every* touched Unit released, which is a set-membership check expressible as one
+  query (count of distinct touched units vs. count of matching `PayrollUnitRelease` rows) rather than
+  N queries per entry.
 
 ## 24. Future Extensibility
 
@@ -1202,10 +1586,11 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
   migrations rather than one initial migration — `ProjectUnit`, `Employee.unitId`, and
   `EmployeeTransferHistory` land in Phase 2.5's migrations, `PayrollEntryWorkLine` in Phase 3's, per
   `docs/IMPLEMENTATION_PLAN.md`'s Phase 2.5/3 sections, not edits to existing ones.)
-- Seed data required at initial migration: the two roles and their permissions, the three banks
-  (ABL/HBL/MCB), the seven initial `AdjustmentType` rows, one Master Admin `User`, and the singleton
-  `CompanySettings` row. `BalanceAdjustmentType.NONE` needs no seed data — it's an enum value, not a
-  lookup row.
+- Seed data required at initial migration: the three roles (`MASTER_USER`, `PAYROLL_STAFF`, `FINANCE`
+  — the third added 2026-07-05, Phase 3 architecture review) and their permissions, the three banks
+  (ABL/HBL/MCB), the seven initial `AdjustmentType` rows, one Master User account, and the singleton
+  `CompanySettings` row. `BalanceAdjustmentType.NONE` and `CorrectionRequestStatus` need no seed data —
+  they're enum values, not lookup rows.
 - `PayrollEntry.advanceId`/`.eidAdvanceId` and `BalanceAdjustment.adjustmentTypeId` are part of the
   initial migration (this is a pre-implementation design, not a later addition to an existing schema).
 - Any future migration touching `PayrollEntry`, `Correction`, `BalanceAdjustment`, or `AuditLog`
@@ -1222,8 +1607,10 @@ explicit-linkage schema addition, but the underlying business assumption it flag
 confirming.
 
 1. ~~`PayrollCycle` Draft → Released trigger~~ — **Resolved.** Draft → Released is an explicit
-   Master Admin "Finalize Cycle" action, gated by a precondition (no non-held unreleased entries) with
-   **no override**. See §10 and `docs/architecture/data-and-storage.md` §4.
+   Master User "Finalize Cycle" action, gated by a precondition (no non-held unreleased entries) with
+   **no override**. See §10 and `docs/architecture/data-and-storage.md` §4. **Reaffirmed 2026-07-05**
+   (Phase 3 architecture review): this stays an explicit action even though `PayrollEntry.released` is
+   now itself derived from per-Unit release events (§12b) — the precondition's wording is unchanged.
 2. ~~`Employee.cnic` and `.employeeCode` are nullable.~~ — **Resolved 2026-07-02, confirmed as
    documented.** Real client sample data included employees with a blank CNIC. Given CNIC is
    described as "the primary key across the whole system," this is modeled as

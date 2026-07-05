@@ -64,7 +64,7 @@ staging deploy.
 **Builds:** Prisma schema for the auth/RBAC/audit subset of `docs/architecture/database-schema.md`
 in one initial migration — `Role`, `Permission`, `RolePermission`, `User`, `ProjectSite` (minimal:
 id/name/branchCode/isActive only), `UserSiteAssignment`, `AuditLog`; seed
-script (two roles + permissions, one Master Admin user); `express-session` + `connect-pg-simple` +
+script (two roles + permissions, one Master User account); `express-session` + `connect-pg-simple` +
 Argon2 login/logout; CSRF token issuance/validation middleware; the permission-check middleware and
 the site-scoping middleware (independent layers, per `docs/architecture/authentication.md`); the
 Audit Log module's insert-only service function plus the database-level `UPDATE`/`DELETE` block
@@ -91,7 +91,7 @@ later phase's security posture depends on getting this right once, rather than r
   database itself — this is the one test in the whole plan that verifies a defense-in-depth
   guarantee, not just application logic.
 
-**Definition of Done:** a scripted login as the seeded Master Admin succeeds; a scripted attempt to
+**Definition of Done:** a scripted login as the seeded Master User succeeds; a scripted attempt to
 call any protected route without a session fails with 401; a scripted attempt to update or delete an
 audit log row fails at the database level; CSRF-missing requests to state-changing routes are
 rejected.
@@ -115,7 +115,7 @@ data). Project Sites CRUD (delete
 blocked while employees remain assigned); Employee Registry CRUD (CNIC/employee-code partial-unique
 handling, DOL-based soft "leaving," full site-scoped RBAC for Payroll Staff on view/edit/create per
 the C11 decision, generic audit logging on every create/update); Company Details / My Profile / Theme
-(Settings module); User Management (Master Admin creates Payroll Staff accounts with per-site
+(Settings module); User Management (Master User creates Payroll Staff accounts with per-site
 assignment via `UserSiteAssignment`); Employee Registry CSV/Excel import/export against the official
 template headers.
 
@@ -133,7 +133,7 @@ template headers.
 - Import/export round-trip: export then re-import the same file produces no unintended changes;
   malformed rows are rejected with per-row error messages, not a whole-file failure.
 
-**Definition of Done:** Master Admin can create a Payroll Staff user, assign sites, and confirm that
+**Definition of Done:** Master User can create a Payroll Staff user, assign sites, and confirm that
 user's session genuinely cannot see or touch employees/sites outside that assignment.
 
 ---
@@ -203,7 +203,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   Project Site (`GET`/`POST /api/v1/sites/:siteId/units`, `PATCH`/`DELETE /api/v1/units/:id`), the
   list/create routes gated by `requireSiteAccess` (this middleware's first real consumer — it existed
   since Phase 1 but had no site-scoped route to guard until now), update/delete gated by
-  `sites:manage` alone (Master Admin only, matching `ProjectSite`'s own mutation gating).
+  `sites:manage` alone (Master User only, matching `ProjectSite`'s own mutation gating).
   `deleteProjectSite` now also blocks while any `ProjectUnit` still belongs to the site, per §8's
   revision note. `deleteProjectUnit`'s own guard against `Employee`/`PayrollEntryWorkLine` references
   is written but is a no-op until Checkpoint 2 adds `Employee.unitId` — explicitly flagged in its code
@@ -347,7 +347,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   to "create" instead of finding the record already on file.
 - `GET /api/v1/employees/check-cnic?cnic=&excludeId=` — wired to `checkCnicAvailability()`. RBAC-
   aware: a Payroll Staff caller learns *that* a duplicate exists but never the identity/site of an
-  employee outside their assignment (C11); Master Admin and a same-site Payroll Staff caller see
+  employee outside their assignment (C11); Master User and a same-site Payroll Staff caller see
   full detail (name, site, active/departed). `excludeId` lets an edit form skip flagging its own
   record.
 - `POST /api/v1/employees/:id/reactivate` — wired to `reactivateEmployee()`, the single Reactivate
@@ -418,6 +418,17 @@ live, and Phase 3 can begin against a schema that already has `ProjectUnit` in p
 
 ### Phase 3 — Payroll Entry & Payroll Processing (the core)
 
+**Note (2026-07-05):** a full Phase 3 architecture review (this document's own process, not yet
+implementation) froze the release/correction model this phase's schema work must be built against —
+see `docs/architecture/data-and-storage.md` §4, `docs/architecture/post-release-corrections.md`, and
+`docs/architecture/database-schema.md` §12/§12b/§13a/§14/§14a/§14b. The concrete consequence for this
+phase specifically: `PayrollEntry` now includes a `lateReason` column (§12) as part of its own schema,
+even though the mechanism that uses it — a Late Entry's one-off release — is Phase 4's Release Salary
+work, not this phase's. This phase does not implement release, Correction Requests, or Balance
+Adjustments; it only needs to shape `PayrollEntry`'s schema correctly so those later phases have
+something correct to build on, consistent with this plan's own sequencing strategy (build the trunk
+before its branches).
+
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always
 at least one, so there is one calculation path, not a split/non-split branch
@@ -479,11 +490,27 @@ Release, Bank Sheets, or Corrections on top of it.
 
 ### Phase 4 — Release, Payment Artifacts, and Advances
 
-**Builds:** Release Salary (per-employee release, bulk Release All/Hold All scoped by site, with the
-corrected C1/C2 behavior — `hold` never gates editability, and freezes only once `released = true`);
+**Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
+The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
+superseded by the frozen design in `docs/architecture/data-and-storage.md` §4 and
+`docs/architecture/database-schema.md` §12b — release is no longer a Site-scoped bulk action, it's an
+independent per-Project-Unit action executed by the new **Finance** role
+(`docs/architecture/authentication.md`), not by Payroll Staff.
+
+**Builds:** Release Salary — now: `PayrollUnitRelease` (Finance releases one Project Unit at a time,
+per cycle, immediately or waiting for client funding; this sweeps every non-held `PayrollEntry` whose
+*every* touched Unit has now released, preserving one entry/one net salary/one Bank Sheet row even
+for a multi-unit split employee — Principle 1, 6); `PayrollUnitReadiness` (Payroll Staff's/Master
+User's own non-gating "Ready for Release" signal to Finance — informational only, never required
+before Finance can release); the Late Entry one-off release path (`PayrollEntry.lateReason`, for an
+entry created after its Unit already released this cycle — mandatory reason, its own one-off Bank/
+Cash document, never reopens the already-released Unit); the corrected C1/C2 behavior (`hold` never
+gates editability, and freezes only once `released = true`, unchanged by the granularity change).
 Bank Sheets and Cash Receiving Sheets (derived, read-only, filtered by bank/site, PDF via Puppeteer
 and Excel via ExcelJS, matching the client's exact historical formats, disbursed from Broom Services'
-own Company Bank Account(s) — see the design note added 2026-07-02 below); Payslip generation (PDF).
+own Company Bank Account(s) — see the design note added 2026-07-02 below) — **now generated per Unit-
+release event, not only per whole-Cycle release**, since different Units can release on different
+days; Payslip generation (PDF).
 
 **Advances module, explicitly expanded 2026-07-02** (terms below map to the existing `Advance`
 model in `docs/architecture/database-schema.md` §15 except where flagged as new or open):
@@ -537,10 +564,22 @@ Sheet generation event (coarser)? See `docs/PROJECT_PROGRESS.md` §3 item 7.
 - State-machine tests: an employee cannot be released while `hold = true`; toggling hold has no
   effect on field editability; once released, every field including `hold` is verified immutable
   (application layer, plus a direct-write test against the recommended DB trigger).
+- **Added 2026-07-05 — per-Unit release tests:** a Unit's release sweeps and releases every non-held
+  entry whose *every* touched Unit is now released, and leaves a multi-unit entry unreleased while
+  even one of its touched Units is still pending; RBAC test that only Finance (or Master User) can
+  execute a Unit's release, site-scoped identically to Payroll Staff's own scoping, including the
+  manipulated-`unitId`/`siteId` direct-API-call boundary case (mirroring the C11 pattern already
+  established for Employee Registry); `PayrollUnitReadiness` test that marking/un-marking Ready has
+  **zero** effect on whether a release can proceed; Late Entry test — an entry created after its Unit
+  already released requires its own one-off release with a mandatory `lateReason`, generates its own
+  single-row Bank/Cash document, and never reopens the already-released Unit's other entries; a Late
+  Entry left unreleased and non-held is confirmed to still block Cycle finalization exactly like any
+  other straggler (Phase 5).
 - Bank Sheet/Cash Receiving derivation tests: only released, non-held, correctly-bank/no-bank
   employees appear; totals match the sum of underlying `PayrollEntry.netSalary` values exactly
   (Principle 6) — a golden-file comparison against a hand-computed expected sheet for a fixed test
-  dataset.
+  dataset. **Added 2026-07-05:** a Bank Sheet generated at one Unit's release event contains only that
+  Unit's newly-released entries, not the whole cycle's.
 - PDF/Excel output tests: generated documents match the client's real formats (payslip, bank sheet,
   cash sheet) closely enough to be usable as-is — this one benefits from an actual client review pass,
   not just automated snapshot testing.
@@ -548,9 +587,12 @@ Sheet generation event (coarser)? See `docs/PROJECT_PROGRESS.md` §3 item 7.
   create a second `ACTIVE` advance of the same type for one employee is rejected by the partial unique
   index.
 
-**Definition of Done:** a full release cycle — release a filtered site, generate its Bank Sheet and
-Cash Receiving Sheet as PDF and Excel, generate a payslip for a released employee — can be performed
-end to end and the client (or someone standing in for them) confirms the documents are usable as-is.
+**Definition of Done:** a full release cycle — a Finance user releases one Project Unit, generates its
+Bank Sheet and Cash Receiving Sheet as PDF and Excel, generates a payslip for a released employee —
+can be performed end to end and the client (or someone standing in for them) confirms the documents
+are usable as-is. **Added 2026-07-05:** also demonstrated end to end — a multi-unit split employee's
+entry stays unreleased until every touched Unit has released; a Late Entry added to an already-
+released Unit is released via its own one-off action with a mandatory reason and its own document.
 
 ---
 
@@ -569,7 +611,7 @@ Cycle Selector (browse any historical cycle, always reading PostgreSQL, never a 
 
 **Testing strategy:**
 - Finalization precondition test: blocked while any non-held entry is unreleased; **explicitly test
-  that no code path — including a direct API call as Master Admin — can override this**, since the
+  that no code path — including a direct API call as Master User — can override this**, since the
   decision was "no override," not "override requires extra permission."
 - New-cycle-creation transaction test: verifies the all-or-nothing behavior (archive + backup +
   new-cycle creation succeed together or not at all); a deliberately-departed employee with a
@@ -594,14 +636,32 @@ to be trusted first.
 
 ### Phase 6 — Corrections & Balance Adjustments (highest-risk logic)
 
+**Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
+`PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,
+simpler single-shot model — see `docs/architecture/post-release-corrections.md` and
+`docs/architecture/database-schema.md` §13a/§14/§14a/§14b for the frozen design this phase now
+implements against.
+
 **Builds:** the Correction workflow (before/after preview, mandatory reason + standardized Adjustment
-Type, Master-Admin-only approval); the **baseline-reconstruction/replay algorithm**
-(`docs/architecture/post-release-corrections.md`) exactly as specified — this is the most
-implementation-sensitive piece of logic in the entire system; the Balance Adjustment automatic
-settlement pipeline, including the `NONE`-type zero-difference case; the Advance-reconciliation
-transaction triggered by a correction to a deduction field; the merged-payment representation in Bank
-Sheets/Cash Receiving Sheets (one row, combined amount) with the breakdown surfaced separately on
-Payslips and the Statement of Account groundwork (full Statement itself is Phase 7).
+Type); **`CorrectionRequest`** (new) — any authorized payroll user may propose a correction, which
+sits `PENDING` until a Master User approves (producing a `Correction`) or rejects it (mandatory
+rejection reason, no `Correction` created); a Master User may still correct directly, bypassing the
+request entirely, with no separate approval step, exactly as before this revision. The
+**baseline-reconstruction/replay algorithm** (`docs/architecture/post-release-corrections.md`) exactly
+as specified — this is the most implementation-sensitive piece of logic in the entire system,
+unaffected by the request/approval split (it always operates on the resulting `Correction`, regardless
+of which path produced it); the Balance Adjustment automatic settlement pipeline, including the
+`NONE`-type zero-difference case, now branching by `type`: a `PAYABLE` settles `IMMEDIATE`ly (folded
+into an already-open `PayrollEntry`, else a standalone `CorrectionPayment` with its own one-off
+document) or stays `DEFERRED` (unchanged single-shot next-Draft-cycle behavior); a `RECOVERY` may
+settle across one or more future cycles as an installment (`recoveryInstallmentAmount`/
+`remainingAmount`, staff-editable like `Advance.scheduledInstallmentAmount`), each cycle's partial
+application logged as a `BalanceAdjustmentSettlement` row; the Advance-reconciliation transaction
+triggered by a correction to a deduction field (unaffected by the timing/installment changes — it's a
+one-time delta applied at approval, orthogonal to how the resulting salary-level balance settles); the
+merged-payment representation in Bank Sheets/Cash Receiving Sheets (one row, combined amount, for
+`DEFERRED`/`RECOVERY` settlements merging into an ordinary release) with the breakdown surfaced
+separately on Payslips and the Statement of Account groundwork (full Statement itself is Phase 7).
 
 **Depends on:** Phases 3–5 (Payroll Entry, Release, and Archiving must all be solid — this phase
 operates entirely on data those phases produce and lock).
@@ -627,11 +687,33 @@ operates entirely on data those phases produce and lock).
 - Archived-cycle correction test: a correction against a cycle archived months earlier succeeds,
   triggers a new `BackupPackage` version for that cycle (tying back to Phase 5), and never touches the
   archived `PayrollEntry` row itself.
+- **Added 2026-07-05 — Correction Request tests:** a non-Master-User request sits `PENDING` and is
+  invisible as a `Correction` until reviewed; approval creates exactly one `Correction` +
+  `BalanceAdjustment`, linked back via `resultingCorrectionId`; rejection requires a mandatory reason
+  and creates neither; a Master User correcting directly bypasses the request table entirely with
+  identical downstream results.
+- **Added 2026-07-05 — immediate/deferred `PAYABLE` tests:** `IMMEDIATE` with an existing open entry
+  folds in and settles without waiting for any future release; `IMMEDIATE` with no open entry creates
+  a `CorrectionPayment`, settles the `BalanceAdjustment` outside any cycle, and never touches a
+  released `PayrollEntry`; `DEFERRED` reproduces the original single-shot next-Draft-cycle behavior
+  byte-for-byte, including when the employee happens to have another entry open sooner (deferred must
+  still wait for the *next* cycle, not the sooner one).
+- **Added 2026-07-05 — installment `RECOVERY` tests:** a `NULL` `recoveryInstallmentAmount` recovers
+  the full balance in one cycle (regression-tested against the pre-revision single-shot behavior); a
+  set installment amount spreads recovery across exactly as many cycles as needed, each logging its
+  own `BalanceAdjustmentSettlement` row, with `remainingAmount` decrementing correctly and `status`
+  flipping to `SETTLED` only when it reaches zero; a held cycle skips that cycle's installment without
+  writing a settlement row and correctly resumes the next Draft cycle; editing the installment amount
+  mid-recovery is itself a distinct, audited action.
 
 **Definition of Done:** the property-style sequential-correction test suite passes consistently
 across many randomized runs (not just fixed examples); a full walkthrough — release a cycle, archive
 it, submit two corrections against the same historical entry weeks apart, confirm the resulting
 balance settles correctly and automatically in a future cycle's release — is demonstrable end to end.
+**Added 2026-07-05:** also demonstrated end to end — a Correction Request submitted by Payroll Staff
+and approved by a Master User; an `IMMEDIATE` `PAYABLE` settling via a standalone `CorrectionPayment`;
+a `RECOVERY` spread across three future cycles via installments, each showing correctly on the
+Statement of Account.
 
 **🛑 Review checkpoint.** Stop here for explicit sign-off. This phase is where a subtle bug would be
 both easiest to introduce and most expensive to discover late (a wrong balance amount is a real
@@ -682,7 +764,7 @@ last because the spec explicitly deprioritizes it.
 acceptable here given the spec's own prioritization, but audit log viewing must still be verified
 against the real `AuditLog` data generated by earlier phases' tests, not fixture-only data.
 
-**Definition of Done:** Master Admin can browse the audit trail generated by every prior phase's
+**Definition of Done:** Master User can browse the audit trail generated by every prior phase's
 testing and recognize a coherent, readable history of the test scenarios that were run.
 
 ---
@@ -815,9 +897,11 @@ frontend is built against it (per the overall strategy above).
 
 ## Final Production Readiness Checklist
 
-- [ ] All 20 tables migrated on production Postgres (18 in the original design +
-      `ProjectUnit`/`PayrollEntryWorkLine`, added 2026-07-03); seed data (roles, permissions, banks,
-      adjustment types, Master Admin account, company settings) applied and verified.
+- [ ] All 25 tables migrated on production Postgres (18 in the original design + `ProjectUnit`/
+      `PayrollEntryWorkLine`, added 2026-07-03 + `PayrollUnitRelease`/`PayrollUnitReadiness`/
+      `CorrectionRequest`/`CorrectionPayment`/`BalanceAdjustmentSettlement`, added 2026-07-05); seed
+      data (three roles including `FINANCE`, permissions, banks, adjustment types, Master User
+      account, company settings) applied and verified.
 - [ ] A load/performance test at Principle 10's 10,000-employee design floor — not just the client's
       current ~1,500 — run against the production build, covering at minimum the Payroll Entry grid
       and Employee Registry list.

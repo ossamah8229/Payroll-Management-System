@@ -24,23 +24,29 @@ append-only audit log) enforceable in practice rather than just documented in pr
 | Module | Owns | Responsibility |
 |---|---|---|
 | **Authentication** | Sessions, CSRF tokens | Login/logout, session lifecycle (`docs/architecture/authentication.md`), password verification. Publishes the current-user/permission context every other module's access-control middleware depends on. Depends on no other module. |
-| **Employee Registry** | `Employee` | Identity, employment, and bank details (CNIC, name, father's name, DOB/DOJ/DOL, designation, deputed site, deputed Project Unit, bank/account). Enforces CNIC as the unique cross-system key (database-unique, partial — see `docs/architecture/database-schema.md` §26 item 6 for the duplicate-detection UX built around it) and historical preservation (DOL, never hard-delete). **Payroll Staff are fully site-scoped here — view, edit, and create are all restricted to their assigned sites, with no global access, and no separate unit-level scoping exists since a Project Unit belongs to exactly one Project Site**; Master Admin is unrestricted (`docs/architecture/authentication.md`). Editing `Employee.siteId`/`.unitId` (a transfer) never cascades into any existing `PayrollEntry` — see Payroll Entry, below. |
+| **Employee Registry** | `Employee` | Identity, employment, and bank details (CNIC, name, father's name, DOB/DOJ/DOL, designation, deputed site, deputed Project Unit, bank/account). Enforces CNIC as the unique cross-system key (database-unique, partial — see `docs/architecture/database-schema.md` §26 item 6 for the duplicate-detection UX built around it) and historical preservation (DOL, never hard-delete). **Payroll Staff are fully site-scoped here — view, edit, and create are all restricted to their assigned sites, with no global access, and no separate unit-level scoping exists since a Project Unit belongs to exactly one Project Site**; Master User is unrestricted (`docs/architecture/authentication.md`). Editing `Employee.siteId`/`.unitId` (a transfer) never cascades into any existing `PayrollEntry` — see Payroll Entry, below. |
 | **Project Sites** | `ProjectSite` | Pure client/location master data (name, address, and the site's configured unit terminology — "Branch"/"Department"/etc.) — no banking or operational-unit properties of its own (revised 2026-07-03; previously conflated site and branch-code concepts). Referenced by Project Units and by Authentication/Settings (Payroll Staff site assignment, still site-level). Blocks deletion while units remain under it. |
 | **Project Units** | `ProjectUnit` | **New, dedicated master-data module (2026-07-03)**, one level under Project Sites — the actual operational sub-division (a specific branch/department/section) an employee is deputed to, owning its own code and name (the direct successor to the old `ProjectSite.branchCode`). Referenced by Employee Registry (an employee's default unit) and Payroll Entry (work-line attendance, below). Blocks deletion while employees or work lines remain assigned. |
 | **Payroll Entry** | `PayrollEntry` + `PayrollEntryWorkLine` (Draft-cycle writes) | The single editable data-capture surface for a cycle's monthly figures — Principle 1. `PayrollEntry` holds gross pay, allowance, leave, EOBI, advances, fines, hold; attendance (days, OT) is captured on one or more `PayrollEntryWorkLine` rows, **always at least one per entry**, each attributed to a specific Project Unit under the entry's own site (2026-07-03 — see `docs/architecture/database-schema.md` §12a) so an employee working across more than one Branch/Department within a cycle is a native, non-special-cased workflow. **Business rule, enforced at both the database and application layers (§12a): a Work Line may only reference a Project Unit belonging to the same Project Site as its parent Payroll Entry — an employee's Work Lines can never span more than one Project Site within a cycle.** Site, designation, and bank fields are copied from `Employee` when the entry is created, then behave as ordinary Draft-editable fields (same as `grossPay`) — an `Employee` update never reaches back to change them. Payroll-data site-scoping is enforced against `PayrollEntry.siteId`, not `Employee.siteId`; multi-unit splitting is always intra-site per the rule above, so this remains the only scoping check needed. All downstream financial views — release, net salary, Bank Sheets, Payslips, Corrections — read from `PayrollEntry`'s aggregate figures only; none maintain an independent copy, and none operate at the work-line level. |
-| **Payroll Processing** | `PayrollCycle`, `calcNet` | Owns the cycle lifecycle (Draft → Released → Archived, `docs/architecture/data-and-storage.md` §4), including the explicit "Finalize Cycle" action that transitions Draft → Released. Finalization is blocked — with no Master Admin override — while any non-held employee remains unreleased. Also owns the deterministic net-salary calculation (Principle 5) and orchestrates new-cycle creation: archiving the outgoing cycle, generating its backup package, and selecting which employees receive a new `PayrollEntry` (every active employee, plus any employee with a pending Balance Adjustment still to settle). |
-| **Release Salary** | Release/Hold flags | Per-employee release, bulk Release All/Hold All scoped by site. Writes release/hold status; never independently edits payroll figures, and does not itself transition the cycle's own status (that's Payroll Processing's Finalize action, above). |
-| **Corrections** | `Correction` | The Correction workflow, triggered whenever a `PayrollEntry` has been individually released **or** its cycle is no longer Draft (`docs/architecture/data-and-storage.md` §4) — before/after preview computed against the entry's *current effective state* (replaying any prior corrections, not the stale original — `docs/architecture/post-release-corrections.md`), mandatory reason + standardized Adjustment Type, Master-Admin-only approval. Never mutates the underlying `PayrollEntry` (Principle 9). |
-| **Balance Adjustments** | `BalanceAdjustment` | The automatic settlement pipeline: always created on Correction approval (a zero-difference correction still creates one, typed `NONE` and immediately settled), surfaced automatically in the active Draft cycle, marked `SETTLED` automatically on release — merged into that release's ordinary payment amount, never a second transfer. No manual transfer between cycles, ever. A correction to an advance-deduction field also reconciles the linked `Advance`'s balance in the same transaction. |
+| **Payroll Processing** | `PayrollCycle`, `calcNet` | Owns the cycle lifecycle (Draft → Released → Archived, `docs/architecture/data-and-storage.md` §4), including the explicit "Finalize Cycle" action that transitions Draft → Released — unchanged as an explicit Master User action even though `PayrollEntry.released` is now derived from per-Unit release events, below (revised 2026-07-05). Finalization is blocked — with no Master User override — while any non-held employee remains unreleased. Also owns the deterministic net-salary calculation (Principle 5) and orchestrates new-cycle creation: archiving the outgoing cycle, generating its backup package, and selecting which employees receive a new `PayrollEntry` (every active employee, plus any employee with a pending Balance Adjustment still to settle). |
+| **Release Salary** | `PayrollUnitRelease`, `PayrollUnitReadiness` (both added 2026-07-05) | **Revised 2026-07-05: release now happens per Project Unit, executed by the new Finance role**, not per-employee/per-site by Payroll Staff. Finance releases a Unit immediately or waits for client funding; this sweeps every non-held `PayrollEntry` whose every touched Unit has now released (an entry spanning multiple Units waits for all of them, preserving one entry/one payment — Principle 1, 6). A Late Entry (created after its Unit already released) gets its own one-off release instead, `lateReason` mandatory. `PayrollUnitReadiness` is Payroll Staff's/Master User's own non-gating "prep complete" signal to Finance — informational only, never required for release. Writes release/hold/readiness status; never independently edits payroll figures, and does not itself transition the cycle's own status (that's Payroll Processing's Finalize action, above — its precondition wording is unchanged, see `docs/architecture/database-schema.md` §10). |
+| **Corrections** | `Correction`, `CorrectionRequest` (added 2026-07-05) | The Correction workflow, triggered whenever `PayrollEntry.released = true` (`docs/architecture/data-and-storage.md` §4) — before/after preview computed against the entry's *current effective state* (replaying any prior corrections, not the stale original — `docs/architecture/post-release-corrections.md`), mandatory reason + standardized Adjustment Type. **Revised 2026-07-05:** any authorized payroll user may submit a `CorrectionRequest`; only a Master User may approve or reject it (producing a `Correction` on approval) — or a Master User may correct directly, bypassing the request entirely. Never mutates the underlying `PayrollEntry` (Principle 9). |
+| **Balance Adjustments** | `BalanceAdjustment`, `CorrectionPayment`, `BalanceAdjustmentSettlement` (both added 2026-07-05) | The automatic settlement pipeline: always created on Correction approval (a zero-difference correction still creates one, typed `NONE` and immediately settled). **Revised 2026-07-05:** a `PAYABLE` balance settles `IMMEDIATE`ly (folded into an already-open `PayrollEntry`, else a standalone `CorrectionPayment`) or `DEFERRED` (unchanged — surfaced automatically in the next Draft cycle, settled and merged into that release's ordinary payment on release, never a second transfer). A `RECOVERY` balance may now settle across one or more future cycles as an installment, each cycle's partial application logged as a `BalanceAdjustmentSettlement` row. No manual transfer between cycles, ever. A correction to an advance-deduction field also reconciles the linked `Advance`'s balance in the same transaction. |
 | **Bank Sheets** | (derived, read-only) | Released, non-held, bank-account-holding employees for a cycle/bank/site — exactly one row per employee, amount = net salary ± any settling Balance Adjustments. No data entry — filters and export only. |
 | **Cash Receiving** | (derived, read-only) | Same as Bank Sheets, for employees without a bank account, matching the Cash Receiving Sheet format — also exactly one row per employee. |
 | **Statements** | (read/aggregation only) | Per-employee ledger: earnings, deductions, corrections, and balance adjustments across cycles, with running balance. Reads Payroll Entry, Corrections, and Balance Adjustments; owns no primary data of its own. |
 | **Reports** | (read-only queries) | Fines & EOBI Report and future reports. Each report is an isolated, side-effect-free query module — this is also the extensibility seam for future reports (see below). |
 | **Dashboard** | (read-only, cached) | Summary stats, per-site payroll summary, release progress, deduction breakdown. The most read-heavy module; a candidate for short-TTL caching. |
-| **Settings** | `User`, `Role`, `CompanySettings` | Company Details (Master-Admin-only; feeds Payslip/Bank Sheet headers), My Profile, Theme, and User Management (accounts, role assignment, per-site assignment for Payroll Staff) — the "Settings & Profile" and "User Management" screens both live here, working with Authentication's permission model. |
+| **Settings** | `User`, `Role`, `CompanySettings` | Company Details (Master-User-only; feeds Payslip/Bank Sheet headers), My Profile, Theme, and User Management (accounts, role assignment, per-site assignment for Payroll Staff **and, added 2026-07-05, Finance**) — the "Settings & Profile" and "User Management" screens both live here, working with Authentication's permission model. |
 | **Audit Log** | `AuditLog` | Append-only recorder and query surface for every financial/administrative action across all other modules (Principle 3). Receives events; never depends on other modules' internals. |
 
 ## Interactions & High-Level Data Flow
+
+**Revised 2026-07-05 (Phase 3 architecture review)** — release now happens at Project Unit
+granularity, executed by the new Finance role, and the Corrections branch gained a request/approval
+split plus immediate/deferred and installment settlement options. The overall shape (master data →
+Payroll Entry → Processing → Release → derived sheets, with Corrections/Balance Adjustments as the one
+branch that changes a released entry's outcome) is unchanged.
 
 ```
                         ┌──────────────────┐     ┌────────────────┐
@@ -57,27 +63,32 @@ append-only audit log) enforceable in practice rather than just documented in pr
                                      │ Payroll Processing │  ← cycle lifecycle, calcNet
                                      └──────────┬─────────┘
                                                 ▼
-                                     ┌───────────────────┐
-                                     │   Release Salary    │
-                                     └──────────┬─────────┘
+                                     ┌────────────────────────────────┐
+                                     │   Release Salary (per Unit)     │  ← Finance releases each Project
+                                     │   PayrollUnitRelease            │    Unit independently; an entry
+                                     │   PayrollUnitReadiness (signal) │    releases once ALL its touched
+                                     └──────────┬───────────────────────┘    Units have (or via its own
+                                                ▼                            Late Entry release)
                               ┌──────────────────┼──────────────────┐
                               ▼                                    ▼
                     ┌─────────────────┐                  ┌───────────────────┐
                     │   Bank Sheets    │                  │  Cash Receiving    │   ← derived, read-only
                     └─────────────────┘                  └───────────────────┘
 
-   (once an entry is individually released, or its cycle is no longer Draft, further changes to it
-    flow through:)
+   (once released = true, further changes to an entry flow through:)
 
-   ┌─────────────┐        ┌──────────────────────┐        (next Draft cycle)
-   │ Corrections  │ ─────► │ Balance Adjustments   │ ─────► automatically surfaced, then merged into
-   └─────────────┘        └──────────────────────┘         that cycle's Bank Sheet / Cash Receiving
-                                                             row on release; shown separately on
-                                                             Payslips / Statements
+   ┌───────────────────┐    ┌─────────────┐    ┌───────────────────────┐
+   │ CorrectionRequest  │──► │ Corrections  │──► │  Balance Adjustments   │
+   │ (optional; any     │    │ (Master User │    │  ┌─ PAYABLE, IMMEDIATE │──► fold into an open entry,
+   │  payroll user;     │    │  approves/   │    │  │                     │    else a CorrectionPayment
+   │  Master User        │    │  rejects, or │    │  ├─ PAYABLE, DEFERRED  │──► next Draft cycle (unchanged)
+   │  approves/rejects) │    │  corrects    │    │  │                     │
+   └───────────────────┘    │  directly)   │    │  └─ RECOVERY            │──► one or more future cycles,
+                              └─────────────┘    └───────────────────────┘    each installment logged
 
-   Every mutation above (release, hold, correction — including zero-difference, balance adjustment
-   created/settled, advance reconciled, cycle finalized/archived, employee/user/role change) →
-   Audit Log  (append-only, same transaction)
+   Every mutation above (Unit release, hold, correction request/approval/rejection, balance adjustment
+   created/settled at any stage, advance reconciled, cycle finalized/archived, employee/user/role
+   change) → Audit Log  (append-only, same transaction)
 
    Statements, Reports, Dashboard  ←  read-only aggregations over all of the above
 
@@ -87,9 +98,9 @@ append-only audit log) enforceable in practice rather than just documented in pr
 ```
 
 The load-bearing path is **Employee Registry / Project Sites → Payroll Entry → Payroll Processing →
-Release Salary → (Bank Sheets / Cash Receiving)**, with **Corrections → Balance Adjustments**
-providing the only route by which an entry that requires the Correction workflow (individually
-released, or its cycle no longer Draft) can still have its outcome change — always by adding a new,
+Release Salary (now per Project Unit) → (Bank Sheets / Cash Receiving)**, with **CorrectionRequest →
+Corrections → Balance Adjustments** providing the only route by which an entry that requires the
+Correction workflow (`released = true`) can still have its outcome change — always by adding a new,
 linked record, never by editing the path it branches from.
 
 ## Extensibility: Adding Future Modules Without Changing Payroll Processing
@@ -123,5 +134,6 @@ path with new upstream data (attendance, leave), or (b) consumes existing module
 compute something new (ESS, Gratuity, additional Reports) — never (c) modifies Payroll Processing's
 internal state machine or calculation logic, and never reaches into another module's tables directly.
 This is the same modular-monolith discipline already governing the current 16 modules (added Project
-Units, 2026-07-03), applied
-concretely to what comes next.
+Units, 2026-07-03; Release Salary, Corrections, and Balance Adjustments' internal mechanics revised
+2026-07-05 for per-Unit release and the Finance role, without changing the module boundaries
+themselves), applied concretely to what comes next.

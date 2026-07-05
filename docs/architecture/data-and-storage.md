@@ -91,20 +91,27 @@ from this list.
 
 ## 4. Payroll Cycle Lifecycle & Historical Access
 
+**Revised 2026-07-05 (Phase 3 architecture review) — release now happens at Project Unit granularity,
+not Site/Cycle granularity.** Everything below reflects that decision. The core shape of this section
+(Draft → Released → Archived, Corrections apply once released, historical viewing always reads
+PostgreSQL) is unchanged; what changed is *what sets* `PayrollEntry.released`, and the new
+Correction-request/timing/installment mechanics layered on top of what happens after release. Full
+schema detail: `docs/architecture/database-schema.md` §12, §12b, §13a, §14, §14a, §14b.
+
 ### When the Correction workflow applies
 
 This is the single trigger condition referenced everywhere in this document set — stated once here,
 authoritatively, and never rephrased differently elsewhere:
 
-> **A `PayrollEntry` requires the Correction workflow whenever the `PayrollEntry` has been
-> individually released, OR its parent `PayrollCycle` is no longer in Draft.**
+> **A `PayrollEntry` requires the Correction workflow whenever `PayrollEntry.released = true`.**
 
-This is an OR across two independent granularities that both matter: an individually-released
-employee is locked immediately, even while the rest of the cycle is still `Draft` (the original,
-spec-verified rule); and once the cycle itself leaves `Draft` (Released or Archived), every entry in
-it is locked regardless of whether that specific employee was ever individually released. Any
-document or table that previously said "a Released or Archived cycle" as the trigger is describing
-only the second half of this condition and should be read as shorthand for the full statement above.
+**Simplified 2026-07-05** from the original two-clause "individually released, OR its parent
+`PayrollCycle` is no longer in Draft." `PayrollCycle.status` is now itself derived from every Project
+Unit under it having released or having all its remaining entries held (see "Cycle states" below) —
+it can no longer diverge from entry-level `released`, so the second clause was never an independent
+condition once that derivation exists; it's implied by the first. Any document or table that
+previously stated the two-clause form is describing the same thing, just before this simplification
+was possible.
 
 ### Cycle states
 
@@ -118,25 +125,62 @@ Archived (Locked)
 
 - **Draft (Open)** — the current, in-progress cycle.
   - Payroll editing is allowed (all Payroll Entry fields, per employee) for any entry not yet
-    individually released.
-  - Employee release is allowed (per-employee release, or bulk Release All/Hold All scoped by site).
+    released. Payroll managers (Payroll Staff, Master User) may freely edit any not-yet-released
+    entry — this is unchanged and was never locked to only "before some deadline."
+  - **Release now happens per Project Unit, not per Site (revised 2026-07-05).** Finance (a new role,
+    see `docs/architecture/authentication.md`) executes "Release Unit X," inserting a
+    `PayrollUnitRelease` row (`database-schema.md` §12b) for `(cycleId, unitId)`. This immediately
+    sweeps and releases every non-held `PayrollEntry` whose *every* touched Project Unit has now
+    released — an entry with work lines at two Units waits for both, preserving one entry / one net
+    salary / one Bank Sheet row even for a genuinely split employee (Principle 1, Principle 6). Finance
+    may release a Unit immediately or wait for client funding to arrive — there is no forced timing,
+    and different Units within the same Site or Cycle may release on entirely different days.
+  - **"Ready for Release" (`PayrollUnitReadiness`, `database-schema.md` §12b) is a separate,
+    non-gating, informational status** — Payroll Staff mark a Unit "Ready" once its data entry is
+    believed complete. This has **no effect whatsoever** on whether Finance can release that Unit;
+    Finance may release a Unit that was never marked Ready, and marking a Unit Ready doesn't queue or
+    trigger anything automatically. It exists purely so Finance has a signal, not a gate. Un-marking
+    Ready deletes the row (there's no historical requirement to preserve it); if payroll data changes
+    after a Unit was marked Ready, the system shows Finance a "modified since marked ready" notice
+    (computed on read, not stored) without ever auto-clearing the flag.
   - Reports (Dashboard, Fines & EOBI Report, progress bars) continue updating live as figures change.
 
-- **Released** — the cycle as a whole has been finalized by an explicit Master Admin action
+- **Released** — the cycle as a whole has been finalized by an explicit Master User action
   ("Finalize Payroll Cycle"), not automatically and not as a side effect of any other action.
+  **Reaffirmed 2026-07-05: this explicit action stays, even though `PayrollEntry.released` is now
+  itself derived from per-Unit release events** — a cycle whose every Unit has released-or-been-held
+  is merely *eligible* to finalize; it still shows as `Draft` until the Master User explicitly clicks
+  Finalize, exactly as before this session.
   - **Finalization precondition, strictly enforced, with no override:** the cycle cannot transition
     from `Draft` to `Released` while any `PayrollEntry` in it has `released = false AND hold = false`
-    — i.e., every employee who could be released has been. Employees left `hold = true` are
-    explicitly exempted from this precondition and may remain outstanding indefinitely; they do not
-    block finalization. **There is no Master Admin override of this precondition.** A cycle with
-    unreleased, non-held stragglers simply cannot be finalized until they are released or held — this
-    is deliberate: Corrections exist for genuine post-release discoveries, not as a shortcut around
-    finishing the month's release work.
+    — i.e., every employee who could be released has been. **This wording is unchanged by the move to
+    per-Unit release** — only the mechanism that sets `released = true` changed (§12b's sweep, or a
+    Late Entry's own one-off release, below), not the precondition itself. Employees left `hold = true`
+    are explicitly exempted from this precondition and may remain outstanding indefinitely; they do not
+    block finalization. A pending **Late Entry** (below) is *not* exempted — it behaves like any other
+    unreleased-and-non-held entry and blocks finalization the same way, unless also held. **There is no
+    Master User override of this precondition.** A cycle with unreleased, non-held stragglers simply
+    cannot be finalized until they are released or held — this is deliberate: Corrections exist for
+    genuine post-release discoveries, not as a shortcut around finishing the month's release work.
+  - **Late Entry exception (added 2026-07-05):** if a new `PayrollEntry` is created for a Project Unit
+    that has *already* released this cycle (e.g. a new hire added to an already-released Unit), the
+    ordinary per-Unit sweep will never reach it — there's no future `PayrollUnitRelease` event left to
+    trigger it. Such an entry needs its own dedicated, single-entry release action (mirroring "Release
+    Unit X" but scoped to exactly one entry), requiring a mandatory reason (`PayrollEntry.lateReason`,
+    `database-schema.md` §12) and generating its own one-off Bank Sheet/Cash Sheet document — the
+    already-released Unit itself is never reopened or modified. Whether an unreleased entry currently
+    qualifies for this path is derived, not stored: it's true exactly when every Project Unit the entry
+    touches already has a `PayrollUnitRelease` row as of now. **This exception only applies while the
+    Cycle itself is still `Draft`** — once the whole Cycle has been finalized (`Released`), no new
+    `PayrollEntry` can be created against it at all; a new hire after full cycle finalization simply
+    waits for the next cycle. The two behaviors reconcile this way, not as alternatives to choose
+    between.
   - Once `Released`, payroll is finalized — ordinary field edits no longer apply to any entry in this
-    cycle (see the trigger condition above: the cycle is no longer Draft, so every entry in it now
-    requires the Correction workflow, including any entry that happened to never be individually
-    released — though finalization guarantees no such non-held entry exists).
-  - Corrections are allowed, per Principle 9.
+    cycle (every entry in it now has `released = true`, per the finalization precondition above, so the
+    trigger condition applies to all of them).
+  - Corrections are allowed, per Principle 9 — see `docs/architecture/post-release-corrections.md` for
+    the full request/approval, immediate/deferred, and installment-recovery mechanics (all revised
+    2026-07-05).
   - Balance Adjustments are generated from approved corrections (see
     `docs/architecture/post-release-corrections.md`) rather than the original figures being changed.
   - The original released payroll record remains unchanged, permanently (Principle 9).
@@ -185,8 +229,8 @@ rule as any new `PayrollEntry` — see `docs/architecture/database-schema.md` §
 Users can open and view **any** previous cycle at any time, in whichever state it's in — Payroll
 Entry, Release status, Bank Sheets, Cash Sheets, Payslips, and Statements as they existed for that
 cycle. Every such view is scoped by `cycleId` and reads live from PostgreSQL. Editability of what's
-shown follows the trigger condition above: an entry is editable only if it hasn't been individually
-released **and** its cycle is still `Draft`; otherwise, changes only via Correction.
+shown follows the trigger condition above: an entry is editable only if `released = false` (simplified
+2026-07-05, above); otherwise, changes only via Correction.
 
 **Historical viewing inside the application always comes from PostgreSQL — never from a backup
 package.** Backup packages (below) exist for disaster recovery and external/offline access only. This
