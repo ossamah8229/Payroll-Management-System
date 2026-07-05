@@ -1,25 +1,24 @@
 # Project Progress — Payroll Management System
 
 **Date:** 2026-07-05
-**Latest git commit:** `28d4192` — "docs: record database-verification close and Checkpoint 3 commit
-hashes" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
-`89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
-documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
-`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5
-Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed
-(2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase 2.5 Checkpoint 3 → **`28d4192`
-doc-only commit hash record — HEAD as of this session's start**). **Phase 2.5 Checkpoint 4
-(CNIC/Reactivate) is now built and verified but not yet committed** — see below; check `git log -1`
-and `git status` if in doubt.
+**Latest git commit:** `e26fe8c` — "Phase 2.5 Checkpoint 4: CNIC normalization, duplicate-check, and
+Reactivate workflow" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
+substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit →
+`11cdc9d` Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review →
+`74c124e` further doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5
+Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f`
+database-verification debt closed (2026-07-04, four real defects fixed — see §1) → `33f2b18`
+Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → **`e26fe8c` Phase 2.5 Checkpoint 4,
+this session's substantive commit — a small follow-up doc-only commit closing this exact hash into
+the record may follow it; check `git log -1` if in doubt).**
 **Branch:** `main`
 **Current implementation phase:** **Phase 2 — CLOSED and committed. The pre-Phase-3
-architecture review is complete and committed.** Phase 2.5 is **in progress**: **Checkpoints 0–3 are
-committed. Checkpoint 4 (CNIC normalization, duplicate-check, Reactivate workflow) is complete —
-typecheck/lint/build clean, 99/99 backend tests passing against live PostgreSQL, real-stack
-Playwright verification passed with zero console errors — and is presented here for approval before
-committing**, per this project's standing Definition of Done. Once approved and committed, Phase 2.5
-is fully complete and Phase 3 (Payroll Entry & Payroll Processing) can begin, pending separate
-explicit authorization to start it.
+architecture review is complete and committed. Phase 2.5 is now FULLY COMPLETE and committed** — all
+five checkpoints (0–4) done: Checkpoint 4 (CNIC normalization, duplicate-check, Reactivate workflow)
+was approved and committed this session (`e26fe8c`), with typecheck/lint/build clean, 99/99 backend
+tests passing against live PostgreSQL, and real-stack Playwright verification passing with zero
+console errors. **Phase 3 (Payroll Entry & Payroll Processing) has not been started and requires
+separate, explicit authorization before any architecture review or implementation begins.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -478,7 +477,7 @@ running.
   console errors. `docs/prototypes/*.html` reviewed — no prototype depicts import file contents or
   the Import Results modal, so none required changes.
 
-### Phase 2.5, Checkpoint 4 — CNIC normalization, duplicate-check, Reactivate workflow (2026-07-05)
+### Phase 2.5, Checkpoint 4 — CNIC normalization, duplicate-check, Reactivate workflow (2026-07-05, COMMITTED as `e26fe8c`)
 
 Resumed after a session interruption; the working tree already held partial progress from before
 the crash (`shared/src/lib/cnic.ts`, its export, Zod normalization, and an unwired
@@ -626,8 +625,8 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
 |---|---|---|
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
-| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **Complete pending commit, 2026-07-05.** Checkpoints 0–4 all built and verified (99/99 backend tests live, real-stack Playwright clean); Checkpoint 4 awaits explicit approval before committing |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5; awaits explicit authorization to begin |
+| 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | Not started — depends on Phase 2.5 (now closed); awaits explicit authorization to begin |
 | 4 | Release, Bank Sheets, Cash Receiving, Advances | Not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Not started |
@@ -946,14 +945,14 @@ items and Phase 2's one are all now genuinely verified — the "conditional" clo
 
 ## 5. Exact next action for the next development session
 
-**Phase 1 and Phase 2 are closed with DB-backed evidence complete. Phase 2.5 Checkpoints 0–3 are
-committed; Checkpoint 4 is built and verified (this session, 2026-07-05) but awaits explicit
-approval before committing — see §1's Checkpoint 4 subsection. The database-verification debt
-remains CLOSED (2026-07-04, §1).**
+**Phase 1, Phase 2, and Phase 2.5 are all closed with DB-backed evidence complete — see §1.
+Checkpoint 4 was approved and committed this session (`e26fe8c`, 2026-07-05). The database-
+verification debt remains CLOSED (2026-07-04, §1).**
 
-1. **Get explicit approval on Checkpoint 4's working-tree changes, then commit them.** Once
-   committed, Phase 2.5 is fully complete — all five checkpoints done — and the phase itself can be
-   marked closed in this file and `docs/SESSION_HANDOFF.md`.
+1. **Phase 3 (Payroll Entry & Payroll Processing) is next, but requires separate, explicit
+   authorization to start — not given as of this session.** When authorized, begin with the
+   pre-Phase-3 review of `calcNet` over Work Lines and the Payroll Entry grid design, per
+   `docs/IMPLEMENTATION_PLAN.md`.
 2. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to

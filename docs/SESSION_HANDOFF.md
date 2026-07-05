@@ -11,26 +11,22 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `28d4192`** — "docs: record database-verification close and Checkpoint 3
-  commit hashes". Full lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX
-  polish pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture
-  review) → `74c124e` (further doc status update) → `0d9ea33` (Checkpoint 0) → `c60094c`
-  (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc close) → `ed4ed1f`
-  (**database-verification debt closed**, 2026-07-04) → `33f2b18` (Checkpoint 3) → **`28d4192`
-  (doc-only commit hash record) — HEAD as of this session's start.**
-- **Working tree is NOT clean as of this session — Phase 2.5 Checkpoint 4 (CNIC normalization,
-  duplicate-check, Reactivate workflow) has been built and verified (typecheck/lint/build clean,
-  99/99 backend tests against live PostgreSQL, real-stack Playwright verification clean) but is
-  presented for approval and not yet committed.** Modified:
-  `backend/src/modules/employees/employees.service.ts`,
-  `backend/src/modules/employees/employees.routes.ts`,
-  `backend/src/modules/employees/employees-import-export.service.ts`, `backend/tests/employees.test.ts`,
-  `backend/tests/employees-import-export.test.ts`, `shared/src/index.ts`,
-  `shared/src/schemas/employee.ts`, `frontend/src/hooks/use-employees.ts`,
-  `frontend/src/routes/employees-page.tsx`; new: `shared/src/lib/cnic.ts`. Full detail in
-  `docs/PROJECT_PROGRESS.md` §1's Checkpoint 4 subsection. **Do not begin Phase 3 without first
-  getting this committed and without separate, explicit authorization to start Phase 3** — both
-  remain outstanding as of this session.
+- **Latest committed commit: `e26fe8c`** — "Phase 2.5 Checkpoint 4: CNIC normalization,
+  duplicate-check, and Reactivate workflow". Full lineage: `674ab04` (Phase 2's substantive build) →
+  `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf`
+  (pre-Phase-3 architecture review) → `74c124e` (further doc status update) → `0d9ea33`
+  (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc
+  close) → `ed4ed1f` (**database-verification debt closed**, 2026-07-04) → `33f2b18` (Checkpoint 3) →
+  `28d4192` (doc-only commit hash record) → **`e26fe8c` (Checkpoint 4, this session's substantive
+  commit — a small follow-up doc-only commit closing this exact hash into the record may follow it;
+  check `git log -1` if in doubt).**
+- **Working tree is clean. Phase 2.5 Checkpoint 4 (CNIC normalization, duplicate-check, Reactivate
+  workflow) is approved, committed, and verified** — typecheck/lint/build clean, 99/99 backend tests
+  against live PostgreSQL, real-stack Playwright verification clean. **Phase 2.5 is now fully
+  complete — all five checkpoints (0–4) done and committed.** Full detail in
+  `docs/PROJECT_PROGRESS.md` §1's Checkpoint 4 subsection. **Phase 3 has not been started and
+  requires separate, explicit authorization before any architecture review or implementation
+  begins** — not given as of this session.
 - Checkpoint 2 shipped (prior session): `Employee.unitId` + composite FK against
   `ProjectUnit(id, siteId)`, the new append-only `EmployeeTransferHistory` table, migration
   `20260703140000_employee_unit_and_transfer_history`, `assertUnitBelongsToSite()`, `updateEmployee()`
@@ -518,9 +514,9 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Phase 1 and Phase 2 are closed with full DB-backed evidence (2026-07-04). Phase 2.5 Checkpoints
-0–3 are committed, the database-verification debt is CLOSED — see §1/§2 — and Checkpoint 4 is built
-and verified this session (2026-07-05) but not yet committed.**
+**Phase 1, Phase 2, and Phase 2.5 are all closed with full DB-backed evidence — see §1/§2.
+Checkpoint 4 (the last of Phase 2.5's five checkpoints) was approved and committed this session
+(`e26fe8c`, 2026-07-05). Phase 2.5 is fully complete.**
 
 1. **Per session, re-provision the local database before running DB-backed tests** — the Postgres
    instance lives in the sandbox scratchpad and does not survive between sessions. Recipe: install
@@ -529,13 +525,11 @@ and verified this session (2026-07-05) but not yet committed.**
    `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed, test. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Database
    verification" subsection.
-2. **Get explicit approval on Checkpoint 4's working-tree changes, then commit them.** The design was
-   already presented and approved this session (with the added single-source-of-truth requirement
-   for reactivation and CNIC lookup); what remains is reviewing the actual diff before it's
-   committed. Once committed, Phase 2.5 is fully complete (all five checkpoints done) and Phase 3
-   (which needs `PayrollEntryWorkLine.unitId`, depending on `ProjectUnit` from Checkpoint 1) can be
-   considered — but only once separately, explicitly authorized to start; that authorization was not
-   given this session.
+2. **Phase 3 (Payroll Entry & Payroll Processing) is next** — `PayrollEntryWorkLine.unitId`
+   composite-FKing against `ProjectUnit` the same way `Employee.unitId` does (Checkpoint 2), now
+   unblocked since Phase 2.5 is closed. **Requires separate, explicit authorization to start** —
+   not given this session. Do not begin the pre-Phase-3 architecture review or write any Phase 3
+   code without it.
 3. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
    Phase 5, not scheduled into Phase 2.5, 3, or 4. Design for hosting portability (§3 item 13).
 4. Decide how Broom Services' own disbursement source bank account(s) should be modeled
