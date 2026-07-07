@@ -1,7 +1,9 @@
 // Payroll Management System — Prisma schema
 //
 // Phase 1 (Role, Permission, RolePermission, User, ProjectSite, UserSiteAssignment, AuditLog) +
-// Phase 2 master data (Bank, Employee, AdjustmentType, CompanySettings) — see
+// Phase 2 master data (Bank, Employee, AdjustmentType, CompanySettings) + Phase 2.5 (ProjectUnit,
+// Employee.unitId, EmployeeTransferHistory) + Phase 3 Checkpoint 0 (PayrollCycle, PayrollEntry,
+// PayrollEntryWorkLine — schema/migration only, no routes/services yet) — see
 // docs/architecture/database-schema.md for the full design and docs/IMPLEMENTATION_PLAN.md for
 // phase sequencing.
 //
@@ -12,11 +14,20 @@
 // (Employee.bankId); Broom Services' own source account(s) for disbursement are a distinct concept
 // not yet modeled anywhere in this schema — see docs/PROJECT_PROGRESS.md for the open item.
 //
-// Every other table in database-schema.md (PayrollCycle, PayrollEntry, Correction,
-// BalanceAdjustment, Advance, BackupPackage, BackupPackageFile) is deferred to the phase that
-// actually builds the module owning it, added via a new additive migration at that time — per
-// Principle 8 (prefer additive schema evolution) and docs/IMPLEMENTATION_PLAN.md's phase
-// breakdown. Nothing here contradicts database-schema.md; it is a strict subset, sequenced
+// Every other table in database-schema.md (Correction, BalanceAdjustment, Advance, BackupPackage,
+// BackupPackageFile, PayrollUnitRelease, PayrollUnitReadiness, CorrectionRequest,
+// CorrectionPayment, BalanceAdjustmentSettlement) is deferred to the phase that actually builds
+// the module owning it, added via a new additive migration at that time — per Principle 8 (prefer
+// additive schema evolution) and docs/IMPLEMENTATION_PLAN.md's phase breakdown.
+//
+// PayrollEntry.advanceId/.eidAdvanceId are deliberately NOT included here even though
+// database-schema.md §12 specifies them: both are FKs to Advance, which Phase 4 builds. Adding
+// them now would require either a premature Advance stub or an FK to a nonexistent table, so per
+// explicit Phase 3 Checkpoint 0 sign-off (docs/PROJECT_PROGRESS.md), both nullable columns and
+// their indexes are deferred to a Phase 4 additive migration. PayrollEntry.remarks is the one
+// column present here that is NOT in database-schema.md §12 as originally frozen — also an
+// explicit, approved Checkpoint 0 addition (see database-schema.md §12's dated revision note).
+// Nothing else here contradicts database-schema.md; it is a strict subset, sequenced
 // deliberately.
 //
 // Naming: model and field names match database-schema.md exactly (PascalCase models, camelCase
@@ -105,6 +116,10 @@ model User {
   auditLogEntries        AuditLog[]
   companySettingsUpdates CompanySettings[]
   employeeTransfers      EmployeeTransferHistory[]
+  payrollCyclesCreated   PayrollCycle[]            @relation("PayrollCycleCreatedBy")
+  payrollCyclesReleased  PayrollCycle[]            @relation("PayrollCycleReleasedBy")
+  payrollCyclesArchived  PayrollCycle[]            @relation("PayrollCycleArchivedBy")
+  payrollEntriesReleased PayrollEntry[]            @relation("PayrollEntryReleasedBy")
 
   @@index([roleId])
 }
@@ -120,7 +135,8 @@ model Bank {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
-  employees Employee[]
+  employees      Employee[]
+  payrollEntries PayrollEntry[]
 }
 
 /// Project site master data — a pure client/location record (name, address; no banking
@@ -149,6 +165,7 @@ model ProjectSite {
   units           ProjectUnit[]
   transfersFrom   EmployeeTransferHistory[] @relation("EmployeeTransferFromSite")
   transfersTo     EmployeeTransferHistory[] @relation("EmployeeTransferToSite")
+  payrollEntries  PayrollEntry[]
 }
 
 /// The operational sub-division of a ProjectSite that an employee is actually deputed to — a
@@ -174,12 +191,13 @@ model ProjectUnit {
   employees     Employee[]
   transfersFrom EmployeeTransferHistory[] @relation("EmployeeTransferFromUnit")
   transfersTo   EmployeeTransferHistory[] @relation("EmployeeTransferToUnit")
+  workLines     PayrollEntryWorkLine[]
 
-  // `@@unique([id, siteId])` exists purely so downstream tables (Employee.unitId, added here in
-  // Checkpoint 2, and PayrollEntryWorkLine in Phase 3) can declare a composite foreign key against
-  // it — this is what makes "the unit must belong to the same site as the referencing row" a
-  // database-level guarantee rather than an application-layer check alone
-  // (database-schema.md §8a/§9/§12a).
+  // `@@unique([id, siteId])` exists purely so downstream tables (Employee.unitId, added in
+  // Checkpoint 2, and PayrollEntryWorkLine.unitId, added in Phase 3 Checkpoint 0) can declare a
+  // composite foreign key against it — this is what makes "the unit must belong to the same site
+  // as the referencing row" a database-level guarantee rather than an application-layer check
+  // alone (database-schema.md §8a/§9/§12a).
   @@unique([siteId, name])
   @@unique([id, siteId])
   @@index([siteId])
@@ -226,6 +244,7 @@ model Employee {
   bank Bank?       @relation(fields: [bankId], references: [id], onDelete: Restrict)
 
   transferHistory EmployeeTransferHistory[]
+  payrollEntries  PayrollEntry[]
 
   // Partial unique indexes (WHERE ... IS NOT NULL) and the CNIC numeric-pattern check constraint
   // are not expressible via Prisma's schema DSL — both are added by raw SQL in the migration
@@ -336,4 +355,143 @@ model CompanySettings {
   updatedById       String?  @db.Uuid
 
   updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+/// Closed, code-coupled set (docs/architecture/database-schema.md §1) — the cycle lifecycle
+/// state machine (docs/architecture/data-and-storage.md §4) everything else keys off.
+enum PayrollCycleStatus {
+  DRAFT
+  RELEASED
+  ARCHIVED
+}
+
+/// One calendar month's payroll processing run and its lifecycle state
+/// (docs/architecture/database-schema.md §10). Phase 3 Checkpoint 0 adds only this schema — the
+/// explicit "Start First Payroll Cycle" bootstrap action, "Finalize Cycle", and archiving are all
+/// later-checkpoint/phase work (docs/IMPLEMENTATION_PLAN.md). `month BETWEEN 1 AND 12` and the
+/// partial index `WHERE status = 'DRAFT'` (§10 — "the hot 'which cycle is Draft' lookup") are
+/// Prisma-DSL-inexpressible and added by raw SQL in the migration, same pattern as `Employee`'s
+/// CNIC check constraint (Phase 2).
+model PayrollCycle {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  year          Int                @db.SmallInt
+  month         Int                @db.SmallInt
+  status        PayrollCycleStatus @default(DRAFT)
+  sourceCycleId String?            @db.Uuid
+  createdAt     DateTime           @default(now()) @db.Timestamptz(6)
+  createdBy     String             @db.Uuid
+  releasedAt    DateTime?          @db.Timestamptz(6)
+  releasedBy    String?            @db.Uuid
+  archivedAt    DateTime?          @db.Timestamptz(6)
+  archivedBy    String?            @db.Uuid
+
+  sourceCycle    PayrollCycle?  @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  derivedCycles  PayrollCycle[] @relation("PayrollCycleSource")
+  createdByUser  User           @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  releasedByUser User?          @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  archivedByUser User?          @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  entries        PayrollEntry[]
+
+  @@unique([year, month])
+}
+
+/// The single editable record of one employee's monthly payroll figures for one cycle — the
+/// system's single source of truth (Principle 1, docs/architecture/database-schema.md §12).
+/// Attendance (`days`/`otHours`/`otRate`/`cycleDays`) lives exclusively on the child
+/// `PayrollEntryWorkLine` — every entry has at least one line, always (§12a).
+///
+/// **Deliberately deviates from §12 in two approved ways (Phase 3 Checkpoint 0 sign-off):**
+/// (1) `advanceId`/`eidAdvanceId` are NOT included — both are FKs to `Advance`, a Phase 4 table;
+/// deferred to a Phase 4 additive migration rather than building a premature `Advance` stub.
+/// (2) `remarks` IS included even though §12's original column list doesn't have it — an
+/// approved addition, editable while the entry is editable, frozen into the permanent snapshot
+/// once released, same as every other field (see this file's revision note and
+/// `docs/architecture/database-schema.md` §12's own dated note).
+///
+/// The numeric `>= 0` check constraints, `released = true ⇒ releasedAt/releasedBy NOT NULL`, and
+/// `lateReason IS NOT NULL ⇒ released = true` are Prisma-DSL-inexpressible and added by raw SQL
+/// in the migration.
+model PayrollEntry {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId             String    @db.Uuid
+  employeeId          String    @db.Uuid
+  siteId              String    @db.Uuid
+  designation         String    @db.VarChar(80)
+  bankId              String?   @db.Uuid
+  branchCode          String?   @db.VarChar(20)
+  accountNumber       String?   @db.VarChar(40)
+  accountTitle        String?   @db.VarChar(160)
+  grossPay            Decimal   @db.Decimal(12, 2)
+  allowance           Decimal   @default(0) @db.Decimal(12, 2)
+  leaveDays           Decimal   @default(0) @db.Decimal(5, 2)
+  leaveRate           Decimal?  @db.Decimal(10, 2)
+  eobiAmount          Decimal   @default(400.00) @db.Decimal(10, 2)
+  eobiApplicable      Boolean   @default(true)
+  advanceDeduction    Decimal   @default(0) @db.Decimal(12, 2)
+  eidAdvanceDeduction Decimal   @default(0) @db.Decimal(12, 2)
+  fine                Decimal   @default(0) @db.Decimal(12, 2)
+  hold                Boolean   @default(false)
+  released            Boolean   @default(false)
+  releasedAt          DateTime? @db.Timestamptz(6)
+  releasedBy          String?   @db.Uuid
+  lateReason          String?
+  /// Approved Phase 3 Checkpoint 0 addition — not in database-schema.md §12 as originally
+  /// frozen. Editable while the entry is editable; frozen into the permanent snapshot once
+  /// released, exactly like every other Draft-editable field.
+  remarks             String?
+  /// User-controlled drag-to-reorder position within the cycle. Assigned by the application at
+  /// entry-creation time (Checkpoint 1), not a database sequence.
+  sortOrder           Int       @default(0)
+  /// Optimistic-locking token — incremented on every update (Checkpoint 1).
+  version             Int       @default(1)
+  createdAt           DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @db.Timestamptz(6)
+
+  cycle          PayrollCycle           @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  employee       Employee               @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  site           ProjectSite            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  bank           Bank?                  @relation(fields: [bankId], references: [id], onDelete: Restrict)
+  releasedByUser User?                  @relation("PayrollEntryReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  workLines      PayrollEntryWorkLine[]
+
+  @@unique([cycleId, employeeId])
+  @@index([cycleId])
+  @@index([employeeId])
+  @@index([cycleId, hold, released])
+  @@index([cycleId, siteId])
+  @@index([bankId])
+}
+
+/// One employee's attendance at one specific `ProjectUnit`, for one `PayrollEntry`
+/// (docs/architecture/database-schema.md §12a) — always at least one per entry, never zero,
+/// never optional (enforced transactionally at write time in Checkpoint 1, not by this schema
+/// alone). `siteId` here is a denormalized copy of the parent `PayrollEntry.siteId` at
+/// line-creation time, present purely so `unitId` can be composite-FK'd against it — it is not
+/// independently FK'd to `ProjectSite` itself (the parent `PayrollEntry.siteId` already is).
+/// The business rule that a line's unit must belong to the same site as its parent entry is a
+/// database-level guarantee via this composite FK, exactly the same mechanism already proven by
+/// `Employee.unitId` (Phase 2.5). The `days >= 0`, `otHours >= 0`, and
+/// `cycleDays BETWEEN 1 AND 31` check constraints are Prisma-DSL-inexpressible and added by raw
+/// SQL in the migration.
+model PayrollEntryWorkLine {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payrollEntryId String   @db.Uuid
+  siteId         String   @db.Uuid
+  unitId         String   @db.Uuid
+  days           Decimal  @default(0) @db.Decimal(5, 2)
+  otHours        Decimal  @default(0) @db.Decimal(6, 2)
+  otRate         Decimal? @db.Decimal(10, 2)
+  cycleDays      Int      @default(30) @db.SmallInt
+  /// Display order within the entry; the line with the lowest sortOrder is the entry's "primary"
+  /// line for leave-rate-basis purposes (§12).
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  payrollEntry PayrollEntry @relation(fields: [payrollEntryId], references: [id], onDelete: Cascade)
+  unit         ProjectUnit  @relation(fields: [unitId, siteId], references: [id, siteId], onDelete: Restrict)
+
+  @@unique([payrollEntryId, unitId])
+  @@index([payrollEntryId])
+  @@index([unitId])
 }

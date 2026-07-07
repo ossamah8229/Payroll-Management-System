@@ -429,6 +429,86 @@ Adjustments; it only needs to shape `PayrollEntry`'s schema correctly so those l
 something correct to build on, consistent with this plan's own sequencing strategy (build the trunk
 before its branches).
 
+**Executed as seven explicit, individually-gated checkpoints (added 2026-07-07, after explicit user
+approval), the same discipline Phase 2.5 used** — each ends with typecheck → lint → build → backend
+tests → (Playwright where the checkpoint has UI surface) → documentation update → **ask before
+committing**:
+
+- **Checkpoint 0 — Schema foundation: `PayrollCycle`, `PayrollEntry`, `PayrollEntryWorkLine` +
+  shared `calcNet` — COMPLETE, 2026-07-07.** See below.
+- Checkpoint 1 — Cycle bootstrap ("Start First Payroll Cycle") + Payroll Entry backend CRUD/read
+  routes, RBAC/site-scoping, optimistic locking.
+- Checkpoint 2 — Payroll Entry grid frontend (TanStack Table + Virtual, inline editing,
+  autosave/conflict UX, Serial Number/Remarks/live-totals columns).
+- Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants).
+- Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar.
+- Checkpoint 5 — Payroll Entry CSV/Excel import/export.
+- Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor + this phase's own
+  🛑 review checkpoint (below).
+
+**Checkpoint 0 — Schema foundation — COMPLETE, 2026-07-07**
+- Prisma schema: `PayrollCycleStatus` enum; `PayrollCycle` (§10); `PayrollEntry` (§12) and
+  `PayrollEntryWorkLine` (§12a) — one migration, `20260707120000_payroll_cycle_and_entry`, applied
+  cleanly to a fresh database. Every check constraint and the `PayrollCycle` `WHERE status = 'DRAFT'`
+  partial index that Prisma's schema DSL can't express are hand-added raw SQL in the same migration,
+  the same pattern as `Employee`'s CNIC check constraint (Phase 2).
+- **Two approved deviations from `database-schema.md` §12 as it stood before this checkpoint** (both
+  presented for explicit sign-off before implementation, per this project's standing practice — see
+  `docs/PROJECT_PROGRESS.md` for the full decision record and §12's own dated revision notes):
+  (1) `advanceId`/`eidAdvanceId` are deferred to a Phase 4 migration — both FK to `Advance`, which
+  Phase 4 builds, and Checkpoint 0 does not create a live FK to a nonexistent table or a premature
+  `Advance` stub. (2) `PayrollEntry.remarks` (nullable text) is added — not in §12's original column
+  list — editable while the entry is editable, frozen into the permanent snapshot once released,
+  intended as the grid's last column (Checkpoint 2).
+- **`calcNet`** (`shared/src/lib/calc-net.ts`, exported from `@payroll/shared`) — the single
+  implementation used by backend Payroll Processing, the frontend's live grid totals, import/export,
+  reports, and (Phase 6) correction calculations, per explicit approval; not backend-only as
+  `docs/architecture/overview.md`'s Major Modules table originally read (see its matching
+  2026-07-07 revision note). Built on a new `decimal.js` dependency (added to `shared/package.json`)
+  — native JS floats are never used. **Rounding policy, per explicit approval:** every intermediate
+  value that feeds a further multiplication/division (the per-line daily rate, effective OT rate,
+  effective leave rate) is carried at full decimal precision and never rounded before being used in
+  the next step; only once a figure is done being multiplied/divided (`earnedAmount`, `otEarned`,
+  `leaveEarned`) is it rounded to 2 decimal places (`ROUND_HALF_UP`). `totalEarning`/`totalDeduction`/
+  `netSalary` are then pure addition/subtraction of already-2dp-safe values, so `netSalary` always
+  exactly reconciles with `totalEarning - totalDeduction` as displayed — no double-rounding drift.
+  Per-line breakdown figures returned for transparency are independently rounded for display; the
+  authoritative entry-level totals are always summed from the unrounded per-line values, never
+  re-derived from the rounded breakdown (avoiding "sum of rounded parts" drift). Designed so a later
+  UI checkpoint can total every user-entered numeric column plus a Net Salary grand total across the
+  grid, per explicit instruction.
+- **Tests**: `backend/tests/calc-net.test.ts` — pure unit tests, no database, mirroring
+  `date-utils.test.ts`'s pattern for a `shared/` function: golden-output cases taken directly from
+  `reference/payroll_prototype.html`'s real `calcNet()`/sample employee fixtures, multi-line sums,
+  the primary-line-by-`sortOrder` leave-rate basis, OT-rate derivation/override, boundary `cycleDays`
+  (1 and 31), zero `days`/`grossPay`, a `ROUND_HALF_UP` tie-breaking case, and a classic
+  repeating-decimal (10000/3) accumulation case proving no float drift across summed lines.
+  `backend/tests/payroll-schema.test.ts` — schema/migration-level tests only (no service/route layer
+  exists yet), writing directly via Prisma the same way Phase 2.5's "layer 3" composite-FK test does:
+  the composite-FK boundary (`PayrollEntryWorkLine.unitId`/`.siteId` cross-site rejection), every
+  check constraint (`PayrollCycle.month`, `PayrollEntryWorkLine.cycleDays`/`days`/`otHours`,
+  `PayrollEntry`'s seven non-negative fields, the `released ⇒ releasedAt/releasedBy` and
+  `lateReason ⇒ released` conditional constraints), both unique constraints
+  (`PayrollCycle(year,month)`, `PayrollEntry(cycleId,employeeId)`,
+  `PayrollEntryWorkLine(payrollEntryId,unitId)`), and cascade-delete (deleting a `PayrollEntry`
+  removes its work lines, no orphans). **145/145 backend tests passing against live PostgreSQL**
+  (99 prior + 46 new). `backend/tests/helpers.ts`'s `cleanTestData()` extended for the new tables,
+  scoped by a fake `year: 2900` rather than a text-column prefix (neither new table has one).
+- typecheck/lint/build clean across all three workspaces (frontend `.tsbuildinfo` cleared first per
+  the standing `@payroll/shared`-change lesson, then re-verified clean, not just assumed).
+- **No Playwright this checkpoint** — zero frontend/UI surface was touched (no routes, no service
+  layer, no components), an explicitly approved, narrow exception to the otherwise-mandatory
+  per-checkpoint Playwright rule, not a silent skip.
+- **Environment note**: a migration-diff command was initially run with `--shadow-database-url`
+  pointed at the live `payroll_dev` scratch database instead of a dedicated shadow database, which
+  reset it (Prisma uses that URL as scratch space) — no git-tracked file or durable data was
+  affected, since this database is explicitly documented as ephemeral/re-provisioned every session,
+  but it's recorded here as a process lesson: always point `--shadow-database-url` at a dedicated,
+  disposable database, never the working dev database, even in a throwaway sandbox.
+- **Scope discipline**: no routes, no service layer, no frontend component, no cycle-bootstrap
+  action, and no `AuditLog`/RBAC changes were introduced this checkpoint, per its explicit scope —
+  all of that is Checkpoint 1 onward.
+
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always
 at least one, so there is one calculation path, not a split/non-split branch

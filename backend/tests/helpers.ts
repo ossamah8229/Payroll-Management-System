@@ -18,8 +18,19 @@ import { prisma } from '../src/lib/prisma';
  * trigger), so test cleanup deleting its rows is the "direct database intervention" that
  * convention explicitly reserves; its RESTRICT FKs would otherwise block deleting test
  * employees, users, units, and sites.
+ *
+ * PayrollEntry/PayrollCycle (Phase 3 Checkpoint 0 — no routes/service layer yet, so today's only
+ * callers are direct-Prisma boundary tests) are scoped by a deliberately fake `year` (2900,
+ * comfortably outside any real payroll year but a valid `smallint`) rather than a name/email
+ * pattern, since neither table has a text column to prefix. PayrollEntryWorkLine is NOT deleted
+ * explicitly — its `payrollEntryId` FK is `ON DELETE CASCADE` (§12a), so deleting the parent
+ * PayrollEntry removes its work lines automatically. PayrollEntry must be deleted before
+ * Employee/ProjectSite/Bank (all RESTRICT from PayrollEntry), and PayrollCycle before User (its
+ * createdBy/releasedBy/archivedBy FKs are RESTRICT) — both ordered ahead of those deletes below.
  */
 export async function cleanTestData(): Promise<void> {
+  await prisma.payrollEntry.deleteMany({ where: { cycle: { year: 2900 } } });
+  await prisma.payrollCycle.deleteMany({ where: { year: 2900 } });
   await prisma.employeeTransferHistory.deleteMany({
     where: {
       OR: [

@@ -11,25 +11,34 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit before tonight's architecture-review session: `0ca9a8f`** —
-  "docs: record Checkpoint 4 commit hash, close Phase 2.5". Full lineage: `674ab04` (Phase 2's
-  substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint
-  documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc status
-  update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
-  `b27f559` (Checkpoint 2 doc close) → `ed4ed1f` (**database-verification debt closed**, 2026-07-04)
-  → `33f2b18` (Checkpoint 3) → `28d4192` (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) →
-  `0ca9a8f` (doc-only commit hash record, closing Phase 2.5). **This session's own documentation-only
-  commit (the Phase 3 architecture freeze, below) lands on top — check `git log -1` for the exact
-  hash.**
-- **A separate Phase 3 Architecture Review session ran immediately after Phase 2.5 closed, same
-  date (2026-07-05) — architecture only, explicitly no application code.** The complete Payroll
-  Entry, Payroll Processing, Release (now per Project Unit), and Corrections/Balance Adjustments
-  design is now frozen into `docs/architecture/*.md` and `docs/IMPLEMENTATION_PLAN.md`. Full decision
-  record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection (new). **Working
-  tree is clean as of this session's own documentation commit. Phase 3 implementation has NOT
-  started** — no application code was written, and no database migration or schema implementation
-  exists for any of tonight's decisions. Separate, explicit authorization is still required before
-  any Phase 3 code is written.
+- **Latest committed commit before this session (2026-07-07): `1c4d61f`** — "docs: record Phase 3
+  architecture freeze". Full lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2
+  UI/UX polish pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3
+  architecture review) → `74c124e` (further doc status update) → `0d9ea33` (Checkpoint 0) →
+  `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc close) →
+  `ed4ed1f` (**database-verification debt closed**, 2026-07-04) → `33f2b18` (Checkpoint 3) →
+  `28d4192` (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) → `0ca9a8f` (doc-only commit
+  hash record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture freeze, doc-only). **This
+  session's own Checkpoint 0 commit lands on top — check `git log -1` for the exact hash.**
+- **Phase 3 implementation was explicitly authorized this session (2026-07-07), scoped to
+  Checkpoint 0 only** (schema/migration + shared `calcNet` — no routes, services, or frontend). A
+  detailed implementation design was presented and approved with nine explicit decisions before any
+  code was written, per this project's standing practice. **Checkpoint 0 is now COMPLETE**: the
+  `PayrollCycle`/`PayrollEntry`/`PayrollEntryWorkLine` schema (migration
+  `20260707120000_payroll_cycle_and_entry`) and shared `calcNet` (`shared/src/lib/calc-net.ts`) are
+  built, tested (145/145 backend tests against live PostgreSQL), and typecheck/lint/build clean. Full
+  decision record and as-built detail: `docs/PROJECT_PROGRESS.md` §1's new "Phase 3, Checkpoint 0"
+  subsection. **Checkpoints 1–6 have NOT started** — each requires its own explicit go-ahead, per the
+  checkpoint breakdown this session established in `docs/IMPLEMENTATION_PLAN.md`'s Phase 3 section.
+- **The earlier Phase 3 Architecture Review session (2026-07-05, architecture only, no code)**
+  produced the complete Payroll Entry, Payroll Processing, Release (now per Project Unit), and
+  Corrections/Balance Adjustments design now frozen into `docs/architecture/*.md` and
+  `docs/IMPLEMENTATION_PLAN.md`. Full decision record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3
+  Architecture Review" subsection. This session's Checkpoint 0 implements against that frozen
+  design, with two explicitly approved deviations recorded in `database-schema.md` §12/§25's dated
+  revision notes (the `advanceId`/`eidAdvanceId` deferral to Phase 4, and the new
+  `PayrollEntry.remarks` column) and one in `overview.md` (`calcNet`'s implementation living in
+  `shared/`, not backend-only).
 - Checkpoint 2 shipped (prior session): `Employee.unitId` + composite FK against
   `ProjectUnit(id, siteId)`, the new append-only `EmployeeTransferHistory` table, migration
   `20260703140000_employee_unit_and_transfer_history`, `assertUnitBelongsToSite()`, `updateEmployee()`
@@ -533,6 +542,39 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review"
     subsection. **Phase 3 implementation still requires separate, explicit authorization** — the
     architecture being frozen does not itself authorize starting to write code.
+- **New 2026-07-07, Phase 3 Checkpoint 0 — implementation decisions, do not re-litigate:**
+  - **`PayrollEntry.advanceId`/`.eidAdvanceId` do not exist yet.** Deferred to a Phase 4 additive
+    migration (they FK to `Advance`, which Phase 4 builds). Do not add them to a Checkpoint 1–6
+    migration — they land specifically when Phase 4 introduces `Advance`.
+  - **`PayrollEntry.remarks` (nullable text) exists**, an approved addition beyond
+    `database-schema.md` §12's original design — ordinarily Draft-editable, frozen into the permanent
+    snapshot once released, intended as the Payroll Entry grid's last column (a later checkpoint's UI
+    work, not yet built).
+  - **`calcNet`'s implementation lives in `shared/src/lib/calc-net.ts`**, not backend-only — exported
+    from `@payroll/shared`, built on a new `decimal.js` dependency. **There must be exactly one
+    implementation**, used by backend Payroll Processing, the frontend's live grid totals,
+    import/export, reports, and (Phase 6) correction calculations. Do not write a second, backend- or
+    frontend-only reimplementation of this formula anywhere.
+  - **Rounding policy, do not relitigate**: every intermediate value feeding a further
+    multiplication/division (daily rate, effective OT rate, effective leave rate) is carried at full
+    decimal precision and never rounded before use in the next step. Only `earnedAmount`/`otEarned`/
+    `leaveEarned` — each "done" being multiplied/divided — are rounded to 2dp (`ROUND_HALF_UP`).
+    `totalEarning`/`totalDeduction`/`netSalary` are pure addition/subtraction of already-2dp values,
+    guaranteeing `netSalary` always exactly equals `totalEarning - totalDeduction` as displayed. Do
+    not round a rate before multiplying it, and do not compute `netSalary` from independently
+    re-rounded full-precision totals — the existing addition-of-already-rounded-values approach is
+    what keeps the payslip's own numbers internally consistent.
+  - **No routes, service layer, frontend component, cycle-bootstrap action, or `AuditLog`/RBAC changes
+    exist for Payroll Entry/Processing yet.** Checkpoint 0 is schema/migration + `calcNet` only.
+    Checkpoint 1 owns the cycle bootstrap ("Start First Payroll Cycle", Master-User-only, audited,
+    available only when zero `PayrollCycle` rows exist) and the first CRUD/read routes.
+  - **`--shadow-database-url` must always point at a dedicated, disposable database** (e.g.
+    `payroll_shadow`), never the working `payroll_dev` scratch database — Prisma uses that URL as
+    scratch space and will reset whatever database it points at. This was a real process mistake this
+    checkpoint (no lasting harm, since `payroll_dev` is ephemeral by design, but avoid repeating it).
+  - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 0" subsection.
+    **Checkpoint 1 still requires its own separate, explicit authorization** — Checkpoint 0 being
+    complete does not itself authorize starting Checkpoint 1.
 
 ## 4. Current frozen architecture (reference index)
 
@@ -631,51 +673,50 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Phase 1, Phase 2, and Phase 2.5 are all closed with full DB-backed evidence — see §1/§2. The Phase 3
-Architecture Review (2026-07-05, separate session, architecture only) is also COMPLETE — see §1's
-opening and `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection for the full
-decision record. Phase 3 implementation has NOT started: no application code, no migration, no schema
-implementation exist for any of tonight's decisions.**
+**Phase 1, Phase 2, and Phase 2.5 are all closed with full DB-backed evidence — see §1/§2. Phase 3
+implementation is authorized and Checkpoint 0 (schema foundation) is COMPLETE this session — see
+§1's opening and `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 0" subsection for the full
+as-built record. Checkpoints 1–6 have NOT started and each requires its own explicit go-ahead.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest
    commit/clean working tree, per this project's standing "How to Resume" procedure.
 2. **Re-provision the local database before running DB-backed tests** — the Postgres instance lives
-   in the sandbox scratchpad and does not survive between sessions. Recipe unchanged by tonight's
-   architecture-only session: install `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its
-   symlinks, `initdb -U postgres -A trust`, start with `-c unix_socket_directories=''` (TCP only),
-   create role `payroll` (password `payroll_dev_password`) and database `payroll_dev`, then
-   `cp backend/.env.example backend/.env`, `npx prisma migrate deploy` (all 7 existing migrations,
-   unchanged), seed **twice** (confirm idempotency), `npm run test --workspace backend` (expect
-   **99/99** — unchanged, since no code or schema changed tonight). Full detail:
-   `docs/PROJECT_PROGRESS.md` §1's "Database verification" subsection.
-3. **Confirm the 99/99 baseline is green before touching any code.**
-4. **Phase 3 (Payroll Entry & Payroll Processing) implementation is next — architecture is already
-   frozen, per tonight's session.** `PayrollEntryWorkLine.unitId` composite-FKing against
-   `ProjectUnit` the same way `Employee.unitId` does (Checkpoint 2); `PayrollEntry.lateReason` per
-   §12's 2026-07-05 revision note. **Still requires separate, explicit authorization to start** — not
-   given as of tonight's session. No further architecture review is needed before starting — that was
-   the whole point of tonight's freeze — but do not write any Phase 3 code without that explicit
-   authorization first.
+   in the sandbox scratchpad and does not survive between sessions. Recipe: install
+   `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its symlinks, `initdb -U postgres -A
+   trust`, start with `-c unix_socket_directories=''` (TCP only), create role `payroll` (password
+   `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
+   `npx prisma migrate deploy` (now **8** migrations, including Checkpoint 0's
+   `20260707120000_payroll_cycle_and_entry`), seed **twice** (confirm idempotency),
+   `npm run test --workspace backend` (expect **145/145** — 99 pre-Checkpoint-0 + 46 new). Full
+   detail: `docs/PROJECT_PROGRESS.md` §1's "Database verification" and new "Phase 3, Checkpoint 0"
+   subsections. **If using `prisma migrate diff` with `--shadow-database-url` for a future
+   checkpoint's migration, point it at a dedicated, disposable shadow database — never the working
+   `payroll_dev` one** (Checkpoint 0's own process lesson, recorded in `docs/PROJECT_PROGRESS.md`).
+3. **Confirm the 145/145 baseline is green before touching any new code.**
+4. **Phase 3 Checkpoint 1 (cycle bootstrap + Payroll Entry backend CRUD/read routes, RBAC/
+   site-scoping, optimistic locking) is next — still requires its own separate, explicit
+   authorization**, per this project's standing per-checkpoint practice (the same gate Phase 2.5 used
+   for each of its five checkpoints). See `docs/IMPLEMENTATION_PLAN.md`'s Phase 3 section for the full
+   Checkpoint 0–6 breakdown this session established.
 5. Build `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) — confirmed deferred until before
    Phase 5, not scheduled into Phase 2.5, 3, or 4. Design for hosting portability (§3 item 13).
-   **Unaffected by tonight's session.**
+   **Unaffected by Checkpoint 0.**
 6. Decide how Broom Services' own disbursement source bank account(s) should be modeled
    (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins. **Unaffected by
-   tonight's session** — this is about the source account for disbursements, a separate concern from
-   tonight's per-Unit release timing decisions.
+   Checkpoint 0** — this is about the source account for disbursements, a separate concern.
 7. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
-   calendar-month-only cycles before Phase 3, at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
-   **Unaffected by tonight's session.**
+   calendar-month-only cycles (Checkpoint 0 assumed this holds — `PayrollCycle.year`/`.month` has no
+   other period-length concept — but it remains formally unconfirmed with the client),
+   at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
 8. Optionally confirm the Employee Registry import template's redundant-column interpretation with the
    client (`docs/PROJECT_PROGRESS.md` §3 item 5) — likely resolved as a side effect of Checkpoint 3's
    `ProjectUnit` remap, but worth an explicit client confirmation once that lands.
-9. When explicitly instructed to begin Phase 3 (Payroll Entry & Payroll Processing) — `calcNet` over
-   Work Lines, the Payroll Entry grid at a 10,000-employee design floor (Principle 10), optimistic
-   locking, the largest single phase in the plan, now built directly against the frozen per-Unit
-   release/Correction Request/installment-recovery design — follow the standing Definition of Done:
-   **architecture compliance → implementation → typecheck → lint → build → backend tests →
-   real-stack Playwright → documentation updates → ask before committing.**
+9. When explicitly instructed to begin Phase 3 Checkpoint 1 — cycle bootstrap, Payroll Entry
+   CRUD/read routes, RBAC/site-scoping keyed off `PayrollEntry.siteId` (reusing
+   `assertSiteAccess()`/`requireSiteAccess` unchanged), optimistic locking via `version` — follow the
+   standing Definition of Done: **architecture compliance → implementation → typecheck → lint →
+   build → backend tests → real-stack Playwright → documentation updates → ask before committing.**
 
 ## 8. Risks and assumptions
 

@@ -1,27 +1,25 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-05 (two sessions today — the Phase 2.5 close-out, then a separate Phase 3
-architecture-review session, both recorded below)
-**Latest git commit at the start of the architecture-review session:** `0ca9a8f` — "docs: record
-Checkpoint 4 commit hash, close Phase 2.5" (session lineage before that: `2e804d4` closed Phase 1 →
-`674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual
-consistency audit → `11cdc9d` Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3
-architecture review → `74c124e` further doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 →
-`c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc
-close → `ed4ed1f` database-verification debt closed (2026-07-04, four real defects fixed — see §1) →
-`33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5
-Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5). **This session's own
-documentation-only commit (the Phase 3 architecture freeze, below) lands on top of `0ca9a8f` — check
-`git log -1` for the exact hash.**
+**Date:** 2026-07-07 — Phase 3 implementation authorized and Checkpoint 0 (schema foundation)
+completed this session; see the new "Phase 3, Checkpoint 0" entry in §1, below. Prior entries
+(2026-07-05 and earlier) are preserved unchanged below this point.
+**Latest git commit at the start of this session:** `1c4d61f` — "docs: record Phase 3 architecture
+freeze" (session lineage before that: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
+substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit →
+`11cdc9d` Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review →
+`74c124e` further doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5
+Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f`
+database-verification debt closed (2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase
+2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5 Checkpoint 4 →
+`0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3 architecture freeze,
+doc-only). **This session's own Checkpoint 0 commit lands on top of `1c4d61f` — check `git log -1`
+for the exact hash.**
 **Branch:** `main`
-**Current implementation phase:** **Phase 2.5 — CLOSED and committed (all five checkpoints, see
-above). A full Phase 3 Architecture Review session followed on the same date — architecture only, no
-code — and is now COMPLETE: the entire Payroll Entry, Payroll Processing, Release, and Corrections/
-Balance Adjustments design is frozen into `docs/architecture/*.md` and `docs/IMPLEMENTATION_PLAN.md`.
-See the new "Phase 3 Architecture Review" entry in §1, below, for the full decision record.
-Phase 3 implementation has NOT started** — no application code was written, no database migration or
-schema implementation exists for any of tonight's decisions, and explicit authorization to begin
-implementation is still required before any code is written.
+**Current implementation phase:** **Phase 3 implementation is authorized and underway. Checkpoint 0
+(schema foundation: `PayrollCycle`, `PayrollEntry`, `PayrollEntryWorkLine`, shared `calcNet`) is
+COMPLETE this session — see §1's new "Phase 3, Checkpoint 0" entry below. No routes, service layer,
+frontend components, or the cycle-bootstrap action exist yet — that begins at Checkpoint 1, which
+has NOT started and requires its own explicit authorization, per this project's standing practice.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -735,6 +733,70 @@ tracked in §3 below (Company Bank Account modeling, at-most-one-`ACTIVE`-`Advan
 month-only cycles) — untouched by this review, still to be resolved on their own original timelines
 (before Phase 4, before Phase 4, before Phase 3, respectively).
 
+### Phase 3, Checkpoint 0 — Schema foundation: PayrollCycle, PayrollEntry, PayrollEntryWorkLine, shared calcNet (2026-07-07)
+
+Phase 3 implementation was explicitly authorized this session, with instruction to proceed with
+Checkpoint 0 only (schema/migration + `calcNet`) and stop before any routes, services, or frontend
+work. A detailed implementation design was presented first (scope, schema, migration, RBAC, audit,
+performance, test strategy, documentation, risks, and open ambiguities) and approved with nine
+explicit implementation decisions, all applied as designed — see `docs/IMPLEMENTATION_PLAN.md`'s
+Phase 3 section for the full checkpoint breakdown this session established (Checkpoints 0–6).
+
+- **Schema/migration**: `PayrollCycleStatus` enum; `PayrollCycle` (§10); `PayrollEntry` (§12);
+  `PayrollEntryWorkLine` (§12a) — one migration, `20260707120000_payroll_cycle_and_entry`, generated
+  via `prisma migrate diff` against the schema files (a dedicated `payroll_shadow` database, not the
+  working `payroll_dev` one — see the environment note below) and hand-edited to append every check
+  constraint and the `PayrollCycle` `WHERE status = 'DRAFT'` partial index Prisma's DSL can't
+  express, the same pattern as `Employee`'s CNIC check constraint (Phase 2). Applied cleanly to a
+  completely fresh database, first try, alongside the seven pre-existing migrations (unmodified).
+- **Two schema deviations from `database-schema.md` §12, both explicitly approved before being
+  written**: (1) `PayrollEntry.advanceId`/`.eidAdvanceId` deferred to a Phase 4 migration (both FK to
+  `Advance`, which Phase 4 builds — building a premature stub or an FK to a nonexistent table was
+  rejected as an option). (2) `PayrollEntry.remarks` (nullable text) added — not in §12's original
+  design — editable while the entry is editable, frozen into the permanent snapshot once released,
+  intended as the grid's last column (a later checkpoint). Both recorded with dated revision notes in
+  `docs/architecture/database-schema.md` §12 and §25, and in `docs/architecture/overview.md` (the
+  matching `calcNet`-ownership note, below).
+- **`calcNet`** (`shared/src/lib/calc-net.ts`) — the single implementation for backend, frontend live
+  totals, import/export, reports, and future corrections, per explicit approval (a deviation from
+  `overview.md`'s original backend-only attribution, now revision-noted there). New `decimal.js`
+  dependency added to `shared/package.json` — no native JS float arithmetic anywhere in the function.
+  **Rounding policy** (explicitly approved): every intermediate value feeding a further
+  multiplication/division (daily rate, effective OT rate, effective leave rate) stays at full decimal
+  precision and is never rounded before use in the next step; only `earnedAmount`/`otEarned`/
+  `leaveEarned` — each "done" being multiplied/divided — are rounded to 2dp (`ROUND_HALF_UP`).
+  `totalEarning`/`totalDeduction`/`netSalary` are then pure addition/subtraction of already-2dp
+  values, so `netSalary` always exactly reconciles with `totalEarning - totalDeduction` as displayed.
+  Golden-output test cases were taken directly from `reference/payroll_prototype.html`'s real
+  `calcNet()` implementation and sample employee fixtures (id 15/16), per the Implementation Plan's
+  own instruction to reuse them.
+- **Tests**: `backend/tests/calc-net.test.ts` (pure, no DB — golden cases, multi-line sums, OT/leave
+  rate derivation vs. override, the primary-line-by-`sortOrder` rule, boundary `cycleDays`, zero
+  inputs, a `ROUND_HALF_UP` tie-break case, and a repeating-decimal accumulation case proving no float
+  drift) and `backend/tests/payroll-schema.test.ts` (schema/migration-level, direct-Prisma, no service
+  layer yet — the composite-FK cross-site boundary, every check constraint, both new unique
+  constraints, and cascade-delete of work lines). `backend/tests/helpers.ts`'s `cleanTestData()`
+  extended for the two new tables, scoped by a fake `year: 2900` since neither has a text column to
+  prefix. **Full suite: 145/145 against live PostgreSQL** (99 prior + 46 new), typecheck/lint/build
+  clean across all three workspaces (frontend `.tsbuildinfo` cleared first, then re-verified, per the
+  standing `@payroll/shared`-change lesson).
+- **No Playwright this checkpoint** — an explicitly approved, narrow exception: zero frontend/UI
+  surface was touched (no routes, no service layer, no components), so there was nothing to render.
+  Not a silent skip of the otherwise-mandatory per-checkpoint Playwright rule.
+- **Environment note (process lesson, not a data-loss incident)**: the first `prisma migrate diff`
+  invocation was run with `--shadow-database-url` pointed at the live `payroll_dev` scratch database
+  instead of a dedicated one — Prisma uses that URL as scratch space and reset it. No git-tracked file
+  or durable data was affected; `payroll_dev` is explicitly documented as ephemeral and
+  re-provisioned every session, and it was already being re-provisioned this session regardless. Fixed
+  by creating a dedicated `payroll_shadow` database and re-running the diff (identical output,
+  confirming the diff itself was correct all along — only the scratch-space target was wrong), then
+  dropping and recreating `payroll_dev` fresh and re-running the full migrate-deploy/seed/test
+  sequence. Recorded here so a future session never repeats it: **`--shadow-database-url` must always
+  point at a dedicated, disposable database, never the working dev database.**
+- **Scope discipline maintained**: no routes, no service layer, no frontend component, no
+  cycle-bootstrap action, and no `AuditLog`/RBAC changes were introduced — all explicitly deferred to
+  Checkpoint 1 onward, per the approved checkpoint scope.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -744,7 +806,7 @@ month-only cycles) — untouched by this review, still to be resolved on their o
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Architecture frozen, 2026-07-05 (see §1's "Phase 3 Architecture Review").** Implementation not started — depends on Phase 2.5 (closed); awaits separate, explicit authorization to begin |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoint 0 (schema foundation) COMPLETE — see §1. Checkpoints 1–6 not started, each requiring its own go-ahead per this project's standing per-checkpoint practice |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |

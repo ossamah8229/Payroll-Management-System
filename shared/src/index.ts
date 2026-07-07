@@ -36,3 +36,11 @@ export type { SessionUser } from './types/session-user';
 export { formatDate, isoDateToUtcDate, parseDateInput, toIsoDateOnly } from './lib/date';
 export { pluralize } from './lib/text';
 export { normalizeCnic } from './lib/cnic';
+export { calcNet } from './lib/calc-net';
+export type {
+  CalcNetResult,
+  MoneyInput,
+  PayrollEntryCalcInput,
+  PayrollWorkLineCalcInput,
+  PayrollWorkLineCalcResult,
+} from './lib/calc-net';

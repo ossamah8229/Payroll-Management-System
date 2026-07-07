@@ -562,6 +562,18 @@ transactionally the moment every distinct `ProjectUnit` this entry's work lines 
 row model (Principle 1, Principle 6) unchanged even for a genuinely split employee. See §12b for the
 full mechanism, and the new `lateReason` column below for the one exception (an entry created after
 its Unit has already released this cycle).
+**Revised 2026-07-07 (Phase 3 Checkpoint 0, implementation) — two approved deviations from this
+section as it stood before today:** (1) **`advanceId`/`eidAdvanceId` are deferred to Phase 4.** Both
+are FKs to `Advance` (§15), a table Phase 4 builds — Checkpoint 0 cannot create a live FK to a
+table that doesn't exist yet, and building a premature `Advance` stub just to satisfy the FK would
+contradict this project's own anti-premature-abstraction discipline. Both nullable columns (and
+their indexes) are added later, additively, in a Phase 4 migration (Principle 8) — nothing else
+about this table's design changes as a result; every other column below is implemented in
+Checkpoint 0's `20260707120000_payroll_cycle_and_entry` migration. (2) **`remarks` is added**, a
+free-text column with no prior mention in this section — an explicitly approved Checkpoint 0
+addition (not merely filling a documentation gap), ordinarily Draft-editable like every other field
+here, frozen into the permanent snapshot once released, and intended to render as the last column
+of the Payroll Entry grid (a later, UI-focused checkpoint's concern).
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
@@ -579,15 +591,16 @@ its Unit has already released this cycle).
 | `eobiAmount` | numeric(10,2) | no | `400.00` | |
 | `eobiApplicable` | boolean | no | `true` | |
 | `advanceDeduction` | numeric(12,2) | no | `0` | this cycle's loan installment |
-| `advanceId` | uuid | yes | — | FK → `Advance.id`, `ON DELETE RESTRICT` — the specific `LOAN`-type advance this deduction reduces, recorded at the time the deduction is entered (auto-linked to the employee's current `ACTIVE` loan). Never re-inferred later — see §15 and `docs/architecture/post-release-corrections.md` ("Interaction with Advances") for why a later correction must reconcile against this exact stored link. |
+| `advanceId` | uuid | yes | — | **Deferred to Phase 4 (2026-07-07) — not in Checkpoint 0's migration.** FK → `Advance.id`, `ON DELETE RESTRICT` — the specific `LOAN`-type advance this deduction reduces, recorded at the time the deduction is entered (auto-linked to the employee's current `ACTIVE` loan). Never re-inferred later — see §15 and `docs/architecture/post-release-corrections.md` ("Interaction with Advances") for why a later correction must reconcile against this exact stored link. |
 | `eidAdvanceDeduction` | numeric(12,2) | no | `0` | this cycle's Eid advance installment |
-| `eidAdvanceId` | uuid | yes | — | FK → `Advance.id`, `ON DELETE RESTRICT` — same, for the `EID_ADVANCE`-type advance |
+| `eidAdvanceId` | uuid | yes | — | **Deferred to Phase 4 (2026-07-07) — not in Checkpoint 0's migration.** FK → `Advance.id`, `ON DELETE RESTRICT` — same, for the `EID_ADVANCE`-type advance |
 | `fine` | numeric(12,2) | no | `0` | |
 | `hold` | boolean | no | `false` | |
 | `released` | boolean | no | `false` | per-employee release flag — **derived** as of 2026-07-05, see the revision note above; set once every touched `ProjectUnit` has released, or by a Late Entry's own one-off release |
 | `releasedAt` | timestamptz | yes | — | |
 | `releasedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` — for an ordinary release this is whichever Finance user's `PayrollUnitRelease` action was the *last* of this entry's touched Units to clear; for a Late Entry, the Finance user who performed its one-off release |
 | `lateReason` | text | yes | — | **added 2026-07-05.** Populated *only* when this entry undergoes its own one-off "Late Entry" release (§12b) — i.e. it was created after every `ProjectUnit` it touches had already released for this cycle, so no future `PayrollUnitRelease` sweep will ever reach it. `NULL` for every ordinarily-released entry. Whether an unreleased entry currently *qualifies* as a Late Entry is not stored — it's derived on demand (`released = false AND every touched unit already has a PayrollUnitRelease row for this cycle`), since the ordinary sweep already correctly handles any entry with at least one still-pending Unit. Mandatory (enforced at the application layer) at the moment of that one-off release, mirroring `Correction.reason`'s "reason mandatory" convention. |
+| `remarks` | text | yes | — | **added 2026-07-07 (Phase 3 Checkpoint 0), not in this section's original design.** Free-text, ordinarily Draft-editable like any other field, frozen into the permanent snapshot once released — renders as the last column of the Payroll Entry grid (a later checkpoint's concern). |
 | `sortOrder` | integer | no | (sequence) | user-controlled drag-to-reorder position within the cycle |
 | `version` | integer | no | `1` | **optimistic locking token** — incremented on every update |
 | `createdAt` | timestamptz | no | `now()` | |
@@ -1591,8 +1604,13 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
   (ABL/HBL/MCB), the seven initial `AdjustmentType` rows, one Master User account, and the singleton
   `CompanySettings` row. `BalanceAdjustmentType.NONE` and `CorrectionRequestStatus` need no seed data —
   they're enum values, not lookup rows.
-- `PayrollEntry.advanceId`/`.eidAdvanceId` and `BalanceAdjustment.adjustmentTypeId` are part of the
-  initial migration (this is a pre-implementation design, not a later addition to an existing schema).
+- **Superseded 2026-07-07 (Phase 3 Checkpoint 0, implementation):** this bullet originally read
+  "`PayrollEntry.advanceId`/`.eidAdvanceId` and `BalanceAdjustment.adjustmentTypeId` are part of the
+  initial migration (this is a pre-implementation design, not a later addition to an existing
+  schema)." In practice, per the same additive-migration-per-phase pattern the bullet above already
+  describes, `advanceId`/`eidAdvanceId` are deferred to a Phase 4 migration (they FK to `Advance`,
+  which Phase 4 builds — see §12's matching 2026-07-07 revision note); `BalanceAdjustment.adjustmentTypeId`
+  is unaffected and remains part of whichever migration Phase 6 adds `BalanceAdjustment` in.
 - Any future migration touching `PayrollEntry`, `Correction`, `BalanceAdjustment`, or `AuditLog`
   should get an explicit review pass given their financial/audit criticality, per Principle 4.
 
