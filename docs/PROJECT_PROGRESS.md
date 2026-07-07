@@ -12,8 +12,8 @@ Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc
 database-verification debt closed (2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase
 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5 Checkpoint 4 →
 `0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3 architecture freeze,
-doc-only). **This session's own Checkpoint 0 commit lands on top of `1c4d61f` — check `git log -1`
-for the exact hash.**
+doc-only → **`aefa64f`** — "feat(payroll): implement Phase 3 Checkpoint 0 foundation", this
+session's Checkpoint 0 commit).
 **Branch:** `main`
 **Current implementation phase:** **Phase 3 implementation is authorized and underway. Checkpoint 0
 (schema foundation: `PayrollCycle`, `PayrollEntry`, `PayrollEntryWorkLine`, shared `calcNet`) is

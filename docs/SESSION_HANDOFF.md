@@ -18,8 +18,9 @@ be enough to resume correctly without re-deriving context from scratch — per
   `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc close) →
   `ed4ed1f` (**database-verification debt closed**, 2026-07-04) → `33f2b18` (Checkpoint 3) →
   `28d4192` (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) → `0ca9a8f` (doc-only commit
-  hash record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture freeze, doc-only). **This
-  session's own Checkpoint 0 commit lands on top — check `git log -1` for the exact hash.**
+  hash record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture freeze, doc-only) → **`aefa64f`**
+  — "feat(payroll): implement Phase 3 Checkpoint 0 foundation", this session's Checkpoint 0 commit.
+  **Working tree is clean as of this commit.**
 - **Phase 3 implementation was explicitly authorized this session (2026-07-07), scoped to
   Checkpoint 0 only** (schema/migration + shared `calcNet` — no routes, services, or frontend). A
   detailed implementation design was presented and approved with nine explicit decisions before any
