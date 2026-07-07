@@ -1,29 +1,30 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-07 (two sessions today — Checkpoint 0, committed, then a separate Checkpoint 1
-session, implementation complete and awaiting review/commit as this file is written). See the
-"Phase 3, Checkpoint 0" and "Phase 3, Checkpoint 1" entries in §1, below. Prior entries (2026-07-05
-and earlier) are preserved unchanged below this point.
-**Latest committed commit:** `d9c3184` — "docs: record Checkpoint 0 commit hash" (session lineage:
-`2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX
-polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint documentation →
-`b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update → `0d9ea33`
-Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 →
-`b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed (2026-07-04) →
-`33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5
-Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3
-architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation → `d9c3184` doc-only
-commit hash record). **Checkpoint 1's implementation (this session) is complete but NOT YET
-COMMITTED** — awaiting explicit review/approval before any commit, per instruction. Working tree
-has uncommitted Checkpoint 1 changes as of this file being written.
+**Date:** 2026-07-07 (two sessions today — Checkpoint 0, then a separate Checkpoint 1 session, both
+reviewed, approved, and committed). See the "Phase 3, Checkpoint 0" and "Phase 3, Checkpoint 1"
+entries in §1, below. Prior entries (2026-07-05 and earlier) are preserved unchanged below this
+point.
+**Latest committed commit:** `55eda58` — "feat(payroll): implement Phase 3 Checkpoint 1 backend
+CRUD" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
+`89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
+documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update
+→ `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5
+Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed
+(2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record →
+`e26fe8c` Phase 2.5 Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 →
+`1c4d61f` Phase 3 architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation →
+`d9c3184` doc-only commit hash record → `55eda58` Phase 3 Checkpoint 1 implementation). **This
+session's own doc-only commit hash record (below) lands on top — check `git log -1` for the exact
+hash.**
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoint 0 is committed and closed. Checkpoint 1
-(cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD, RBAC/site-scoping, audit logging)
-is implementation-complete this session — 160/160 backend tests passing, typecheck/lint/build
-clean — but sits uncommitted, awaiting review. See §1's "Phase 3, Checkpoint 1" entry below for the
-full as-built record. No frontend, Release, Corrections, Balance Adjustments, Finance, or Advances
-were touched, per this checkpoint's explicit scope. Checkpoint 2 has NOT started and requires its
-own explicit authorization.**
+**Current implementation phase:** **Phase 3 Checkpoints 0 and 1 are both committed and closed.**
+Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD, RBAC/site-scoping,
+audit logging) is complete — 160/160 backend tests passing, typecheck/lint/build clean. See §1's
+"Phase 3, Checkpoint 1" entry below for the full as-built record, including the now-frozen Payroll
+Bootstrap Rule and the confirmed permanent decision that `PayrollEntry.siteId` is non-editable via
+the update API. No frontend, Release, Corrections, Balance Adjustments, Finance, or Advances were
+touched, per this checkpoint's explicit scope. **Checkpoint 2 has NOT started and requires its own
+explicit authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -875,7 +876,7 @@ Release, Corrections, Balance Adjustments, Finance, or Advances. Full as-built d
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoint 0 (schema foundation) COMPLETE and committed. Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD) implementation-complete this session, awaiting review/commit — see §1. Checkpoints 2–6 not started, each requiring its own go-ahead per this project's standing per-checkpoint practice |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoint 0 (schema foundation) and Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD) are both COMPLETE and committed — see §1. Checkpoints 2–6 not started, each requiring its own go-ahead per this project's standing per-checkpoint practice |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
