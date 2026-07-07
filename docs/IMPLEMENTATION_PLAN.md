@@ -436,8 +436,8 @@ committing**:
 
 - **Checkpoint 0 — Schema foundation: `PayrollCycle`, `PayrollEntry`, `PayrollEntryWorkLine` +
   shared `calcNet` — COMPLETE, 2026-07-07.** See below.
-- Checkpoint 1 — Cycle bootstrap ("Start First Payroll Cycle") + Payroll Entry backend CRUD/read
-  routes, RBAC/site-scoping, optimistic locking.
+- **Checkpoint 1 — Cycle bootstrap/creation + Payroll Entry/Work Line backend CRUD, RBAC/
+  site-scoping, audit logging — COMPLETE, 2026-07-07.** See below.
 - Checkpoint 2 — Payroll Entry grid frontend (TanStack Table + Virtual, inline editing,
   autosave/conflict UX, Serial Number/Remarks/live-totals columns).
 - Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants).
@@ -508,6 +508,109 @@ committing**:
 - **Scope discipline**: no routes, no service layer, no frontend component, no cycle-bootstrap
   action, and no `AuditLog`/RBAC changes were introduced this checkpoint, per its explicit scope —
   all of that is Checkpoint 1 onward.
+
+**Checkpoint 1 — Cycle bootstrap/creation + Payroll Entry/Work Line backend CRUD — COMPLETE, 2026-07-07**
+- **`payroll-processing` module** (`backend/src/modules/payroll-processing/`): `createPayrollCycle` —
+  one implementation for both the very first cycle (no cycles exist) and every subsequent one,
+  since the entry-seeding logic Phase 3 owns is identical either way. Enforces the one
+  phase-independent invariant that's actually timeless (§10): only one `PayrollCycle` may be
+  `DRAFT` at a time; a duplicate `(year, month)` is also rejected with a clean 409 ahead of the
+  raw unique-constraint violation. **Explicit, approved scope boundary — what this checkpoint's
+  cycle creation deliberately does NOT do**: it does not require the outgoing cycle to be
+  `RELEASED`, does not archive it, does not generate a `BackupPackage`, and does not include
+  departed employees with a pending `BalanceAdjustment` — that full transaction is Phase 5's own
+  job (`docs/IMPLEMENTATION_PLAN.md` Phase 5) and depends on Finalize Cycle/Release (Phase 4),
+  `BackupPackage`/`StorageProvider` (Phase 5), and `BalanceAdjustment` (Phase 6), none of which
+  exist yet — building any of it now would mean either a premature stub or silently skipping a
+  load-bearing precondition, both rejected. The previous cycle's own `status` is left untouched.
+- **The Payroll Bootstrap Rule — a frozen business rule, confirmed 2026-07-07** (presented as an
+  interpretation for review in this checkpoint's implementation report; now ratified as a
+  permanent decision, not an open question): for a continuing employee, `grossPay`/`eobiAmount`/
+  `eobiApplicable`/`leaveRate` and the new line's `cycleDays`/`otRate` are always carried forward
+  from that employee's most recent prior entry, never copied from `Employee`'s own record — payroll
+  values represent payroll history and stay stable across cycles until intentionally changed in
+  Payroll Entry itself (`Employee.grossPay` is documented, §9, as a "template value only").
+  Conversely, `designation`/bank fields and the new line's `unitId` (Primary Project Unit) always
+  refresh from `Employee`'s CURRENT record instead — Employee master data should always reflect the
+  employee's latest assignment/banking information — which is also what keeps a genuine cross-site
+  transfer's new entry consistent with its own work line's unit (the composite-FK invariant).
+  Attendance always resets to zero. A genuinely new employee (no prior entry) seeds entirely fresh
+  from `Employee`'s defaults.
+- **`PayrollEntry.siteId` is permanently non-editable via the update API — confirmed 2026-07-07**
+  (this checkpoint's own scope-narrowing choice, now ratified as a permanent decision rather than a
+  deferred one). Future site changes flow exclusively through the Employee Transfer workflow,
+  which the next cycle's bootstrap then automatically picks up via the Payroll Bootstrap Rule above
+  — never a direct edit to an existing entry's site. See `shared/src/schemas/payroll-entry.ts`'s
+  `updatePayrollEntrySchema` doc comment for the exact reasoning.
+- **Performance (Principle 10)**: cycle-bootstrap seeding uses two chunked `createMany` calls
+  (500-row batches) rather than one `create` per employee, with entry/work-line IDs generated
+  client-side (`randomUUID()`) so the two bulk inserts can still reference each other. Smoke-tested
+  at 3,000 employees: cycle + 3,000 entries + 3,000 work lines in ~1.3 seconds (not a full
+  Checkpoint 6 performance validation, but confirms the design holds well toward the
+  10,000-employee floor).
+- **`payroll-entry` module** (`backend/src/modules/payroll-entry/`): `computeEntryCalc` — the one
+  adapter from stored `Decimal` fields to shared `calcNet`'s string contract, called by every read
+  path (list/get) so a returned entry's `netSalary` is always the same computation, never
+  reimplemented per route. Full CRUD: `createPayrollEntry` (copies `Employee`'s current record,
+  never caller-supplied overrides, always creates its first `PayrollEntryWorkLine` in the same
+  transaction — §12a's "never zero lines" invariant); `updatePayrollEntry` (optimistic locking via
+  `updateMany({ where: { id, version } })`, a stale version rejected with a new 409 `conflict()`
+  helper, not silently overwritten); `deletePayrollEntry` (only while unreleased and the cycle is
+  still Draft — this is Draft data entry, not yet "historical payroll," so Principle 2 doesn't
+  block it). Work Line CRUD (`addWorkLine`/`updateWorkLine`/`deleteWorkLine`) — the backend
+  capability behind "Split by {unitLabel}" (its UI is Checkpoint 3's, not built here): work lines
+  carry no `version` of their own, so every mutation bumps the parent `PayrollEntry.version` inside
+  the same transaction, and every change is folded into a `payroll_entry.updated` audit entry
+  (§22: "work-line attendance changes... captured in the same field-level diff"), never a separate
+  `PayrollEntryWorkLine`-typed action. Deleting the last remaining work line is rejected.
+- **RBAC**: reuses `PERMISSIONS.PAYROLL_ENTRY` (already seeded, already granted to Payroll Staff
+  since Phase 1's front-loaded permission list) for all Payroll Entry/Work Line routes; a new
+  `PERMISSIONS.PAYROLL_CYCLE_MANAGE` permission (Master-User-only, via the existing
+  `Object.values(PERMISSIONS)` grant) gates cycle creation specifically, since creating a cycle is
+  a system-lifecycle action, the same class as Finalize Cycle, not Payroll Staff's routine data
+  entry. Finance is explicitly not touched — still a two-role system (`MASTER_ADMIN`,
+  `PAYROLL_STAFF`) this checkpoint, per its own scope.
+- **Site-scoping**: reuses `assertSiteAccess()`/`isMasterAdmin()` (imported directly from the
+  Employees module's service layer — the modular-monolith's own established cross-module
+  interaction pattern) against `PayrollEntry.siteId`, exactly as `docs/architecture/
+  authentication.md` specifies — no new site-scoping concept, no unit-level RBAC.
+- **Audit logging**: every mutation (`payroll_cycle.created`, `payroll_entry.created/updated/
+  deleted`) writes its `AuditLog` entry inside the same database transaction as the change itself
+  (Principle 3), using the existing generic, polymorphic `AuditLog` table — no schema change
+  needed. `updatePayrollEntry`'s field-level diff reuses the shared `diffFields`/`omitKeys`
+  utility, newly extracted to `backend/src/common/audit-diff.ts` (previously private,
+  unexported helpers inside `employees.service.ts`) rather than redefined a second time — the same
+  extraction happened for `RequestMeta` (`backend/src/common/request-meta.ts`), per the standing
+  "grep for duplicates on new shared utility" rule.
+- **Tests**: `backend/tests/payroll-cycle.test.ts` (bootstrap seeding correctness, RBAC rejection
+  of non-Master-User cycle creation, the one-Draft-at-a-time and duplicate-(year,month) guards,
+  the carry-forward-vs-fresh-seed field-source rule verified end to end, list/get) and
+  `backend/tests/payroll-entry.test.ts` (create/duplicate-rejection, Payroll Staff site-scoping via
+  a direct API call with a manipulated `employeeId` — the C11 boundary-test pattern — a
+  bespoke-permission RBAC-missing-permission case, optimistic-locking stale-version rejection on
+  update/delete, immutability once a cycle is no longer Draft, cascade-delete of work lines, and
+  full work-line add/update/delete including the cross-site-unit rejection and the
+  last-remaining-line-delete rejection). **160/160 backend tests passing against live PostgreSQL**
+  (145 prior + 15 new). `backend/tests/helpers.ts` needed no further changes — Checkpoint 0's
+  `year: 2900` cleanup scoping already covers every cycle/entry these tests create.
+- **Two real bugs found and fixed while writing these tests, not shipped**: (1) `createPayrollCycleSchema`'s
+  `year` upper bound (2100) collided with the project's own `year: 2900` test-fixture convention
+  (Checkpoint 0), rejecting every test cycle with a validation error — widened to 2999, still a
+  real bound against garbage input. (2) An initial test ordering created the test employee *before*
+  the cycle, so the cycle's own bootstrap sweep auto-enrolled them — the subsequent manual "create
+  an entry" call then correctly 409'd against an entry that already existed, which looked like a
+  service bug until traced to test order; fixed by creating the cycle first in every
+  `payroll-entry.test.ts` case (the manual-create endpoint's real use case — a late hire mid-cycle
+  — inherently requires the employee not to exist yet at cycle-creation time).
+- typecheck/lint/build clean across all three workspaces. **No Playwright this checkpoint** — no
+  frontend/UI surface exists yet (Checkpoint 2's work), the same explicitly-approved exception
+  Checkpoint 0 used.
+- **Scope discipline maintained**: no Release, `PayrollUnitRelease`, `PayrollUnitReadiness`,
+  Finance role, `CorrectionRequest`, Corrections, Balance Adjustments, `CorrectionPayment`,
+  installment recovery, Advances, Ready-for-Release, Holds-as-a-workflow-concept beyond the plain
+  editable field, Statements, Bank Sheets, Cash Receiving Sheets, imports/exports, Reports,
+  Payslips, or any frontend/UI of any kind were introduced — all explicitly out of scope per this
+  checkpoint's authorization and deferred to their own later checkpoints/phases.
 
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always

@@ -8,7 +8,11 @@ import type {
 import { ROLE_CODES, isoDateToUtcDate, normalizeCnic, toIsoDateOnly } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { badRequest, forbidden, notFound } from '../../common/http-error';
+import { diffFields, omitKeys, type JsonPrimitive } from '../../common/audit-diff';
+import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
+
+export type { RequestMeta };
 
 export const isMasterAdmin = (user: SessionUser) => user.roleCode === ROLE_CODES.MASTER_ADMIN;
 
@@ -202,44 +206,6 @@ export async function createEmployee(currentUser: SessionUser, input: CreateEmpl
     },
     include: { site: true, unit: true, bank: true },
   });
-}
-
-type JsonPrimitive = string | number | boolean | null;
-
-function toJsonPrimitive(value: unknown): JsonPrimitive {
-  if (value === undefined || value === null) return null;
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-  return String(value);
-}
-
-/** Field-level diff for the audit log's `metadata` (docs/architecture/database-schema.md §9). */
-function diffFields(
-  before: Record<string, unknown>,
-  after: Record<string, unknown>,
-): Record<string, { from: JsonPrimitive; to: JsonPrimitive }> {
-  const changes: Record<string, { from: JsonPrimitive; to: JsonPrimitive }> = {};
-  for (const key of Object.keys(after)) {
-    const normalizedBefore = toJsonPrimitive(before[key]);
-    const normalizedAfter = toJsonPrimitive(after[key]);
-    if (normalizedBefore !== normalizedAfter) {
-      changes[key] = { from: normalizedBefore, to: normalizedAfter };
-    }
-  }
-  return changes;
-}
-
-function omitKeys<V>(obj: Record<string, V>, keys: string[]): Record<string, V> {
-  const result: Record<string, V> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (!keys.includes(key)) result[key] = value;
-  }
-  return result;
-}
-
-export interface RequestMeta {
-  ipAddress: string | null;
-  userAgent: string | null;
 }
 
 /**

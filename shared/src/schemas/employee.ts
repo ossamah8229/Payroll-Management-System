@@ -1,28 +1,12 @@
 import { z } from 'zod';
 import { normalizeCnic } from '../lib/cnic';
-
-/** Forms commonly submit an empty string for a cleared optional field; treat that as null. */
-const emptyToNull = (val: unknown) => (val === '' ? null : val);
+import { decimalString, emptyToNull, emptyToUndefined, optionalDate, optionalTrimmedString } from './common';
 
 /** Strips non-digit characters (e.g. a "#####-#######-#" formatted CNIC) before validating, not
  * just before storing — docs/architecture/database-schema.md §26 item 6. Applied here, once, so
  * the create/update routes and CSV/Excel import (which all parse through this schema) normalize
  * identically. */
 const normalizeCnicInput = (val: unknown) => (typeof val === 'string' ? normalizeCnic(val) : val);
-
-/** For non-nullable-but-optional-with-a-default fields: an empty string means "use the default". */
-const emptyToUndefined = (val: unknown) => (val === '' ? undefined : val);
-
-const optionalTrimmedString = (max: number) =>
-  z.preprocess(emptyToNull, z.string().trim().max(max).nullable().optional());
-
-/** numeric(12,2)/numeric(10,2)-safe: transported as a decimal string, never a float, per Principle 5. */
-const decimalString = z
-  .string()
-  .trim()
-  .regex(/^\d{1,10}(\.\d{1,2})?$/, 'Enter a valid amount (up to 2 decimal places)');
-
-const optionalDate = z.preprocess(emptyToNull, z.string().date().nullable().optional());
 
 export const createEmployeeSchema = z.object({
   employeeCode: optionalTrimmedString(30),

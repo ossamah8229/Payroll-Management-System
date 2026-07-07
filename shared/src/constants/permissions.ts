@@ -15,6 +15,11 @@ export const PERMISSIONS = {
   EMPLOYEES_CREATE: 'employees:create',
   SITES_MANAGE: 'sites:manage',
   PAYROLL_ENTRY: 'payroll:entry',
+  /** Master-User-only cycle lifecycle action (bootstrap/create a Payroll Cycle) — added Phase 3
+   * Checkpoint 1. Distinct from `PAYROLL_ENTRY` (Payroll Staff's day-to-day data-entry
+   * permission): creating a cycle is a system-lifecycle action, the same class of action as
+   * Finalize Cycle (Phase 5), not routine data entry. */
+  PAYROLL_CYCLE_MANAGE: 'payroll-cycle:manage',
   PAYROLL_RELEASE: 'payroll:release',
   CORRECTIONS_APPROVE: 'corrections:approve',
   ADVANCES_MANAGE: 'advances:manage',

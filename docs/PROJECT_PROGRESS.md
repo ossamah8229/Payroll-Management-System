@@ -1,25 +1,29 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-07 — Phase 3 implementation authorized and Checkpoint 0 (schema foundation)
-completed this session; see the new "Phase 3, Checkpoint 0" entry in §1, below. Prior entries
-(2026-07-05 and earlier) are preserved unchanged below this point.
-**Latest git commit at the start of this session:** `1c4d61f` — "docs: record Phase 3 architecture
-freeze" (session lineage before that: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
-substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit →
-`11cdc9d` Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review →
-`74c124e` further doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5
-Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f`
-database-verification debt closed (2026-07-04, four real defects fixed — see §1) → `33f2b18` Phase
-2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5 Checkpoint 4 →
-`0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3 architecture freeze,
-doc-only → **`aefa64f`** — "feat(payroll): implement Phase 3 Checkpoint 0 foundation", this
-session's Checkpoint 0 commit).
+**Date:** 2026-07-07 (two sessions today — Checkpoint 0, committed, then a separate Checkpoint 1
+session, implementation complete and awaiting review/commit as this file is written). See the
+"Phase 3, Checkpoint 0" and "Phase 3, Checkpoint 1" entries in §1, below. Prior entries (2026-07-05
+and earlier) are preserved unchanged below this point.
+**Latest committed commit:** `d9c3184` — "docs: record Checkpoint 0 commit hash" (session lineage:
+`2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX
+polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint documentation →
+`b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update → `0d9ea33`
+Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 →
+`b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed (2026-07-04) →
+`33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5
+Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3
+architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation → `d9c3184` doc-only
+commit hash record). **Checkpoint 1's implementation (this session) is complete but NOT YET
+COMMITTED** — awaiting explicit review/approval before any commit, per instruction. Working tree
+has uncommitted Checkpoint 1 changes as of this file being written.
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 implementation is authorized and underway. Checkpoint 0
-(schema foundation: `PayrollCycle`, `PayrollEntry`, `PayrollEntryWorkLine`, shared `calcNet`) is
-COMPLETE this session — see §1's new "Phase 3, Checkpoint 0" entry below. No routes, service layer,
-frontend components, or the cycle-bootstrap action exist yet — that begins at Checkpoint 1, which
-has NOT started and requires its own explicit authorization, per this project's standing practice.**
+**Current implementation phase:** **Phase 3 Checkpoint 0 is committed and closed. Checkpoint 1
+(cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD, RBAC/site-scoping, audit logging)
+is implementation-complete this session — 160/160 backend tests passing, typecheck/lint/build
+clean — but sits uncommitted, awaiting review. See §1's "Phase 3, Checkpoint 1" entry below for the
+full as-built record. No frontend, Release, Corrections, Balance Adjustments, Finance, or Advances
+were touched, per this checkpoint's explicit scope. Checkpoint 2 has NOT started and requires its
+own explicit authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -797,6 +801,71 @@ Phase 3 section for the full checkpoint breakdown this session established (Chec
   cycle-bootstrap action, and no `AuditLog`/RBAC changes were introduced — all explicitly deferred to
   Checkpoint 1 onward, per the approved checkpoint scope.
 
+### Phase 3, Checkpoint 1 — Cycle bootstrap/creation + Payroll Entry/Work Line backend CRUD (2026-07-07)
+
+Authorized immediately after Checkpoint 0's review/commit, scoped explicitly to backend-only:
+cycle creation, Payroll Entry/Work Line CRUD, RBAC/site-scoping, audit logging — no frontend,
+Release, Corrections, Balance Adjustments, Finance, or Advances. Full as-built detail:
+`docs/IMPLEMENTATION_PLAN.md`'s Phase 3 section (Checkpoint 1 entry). Highlights:
+
+- **`payroll-processing` module** — `createPayrollCycle` unifies "bootstrap the first cycle" and
+  "create a subsequent one" into one implementation (the entry-seeding logic is identical either
+  way), enforcing the one timeless invariant that doesn't depend on Phase 4/5/6 existing: only one
+  `PayrollCycle` may be `DRAFT` at a time. **Explicitly, deliberately does not** require the
+  outgoing cycle to be `RELEASED`, archive it, generate a `BackupPackage`, or account for
+  `BalanceAdjustment`-pending departed employees — that full transaction is Phase 5's own job and
+  depends on tables/mechanisms that don't exist yet (Finalize/Release, `BackupPackage`/
+  `StorageProvider`, `BalanceAdjustment`). The previous cycle's status is left untouched.
+- **The Payroll Bootstrap Rule — frozen business rule, confirmed 2026-07-07** (presented for review
+  as an interpretation in this checkpoint's implementation report; now ratified, permanent, not
+  open): continuing employees inherit `grossPay`/`eobiAmount`/`eobiApplicable`/`leaveRate` and the
+  new line's `cycleDays`/`otRate` from their most recent prior entry — payroll values represent
+  payroll history and stay stable across cycles until intentionally changed in Payroll Entry itself
+  (§9 calls `Employee.grossPay` a "template value only", so reverting to it would silently discard
+  a deliberate adjustment). `designation`/bank fields (`bankId`, `branchCode`, `accountNumber`,
+  `accountTitle`) and the new line's `unitId` (Primary Project Unit) always refresh from
+  `Employee`'s current record instead — Employee master data should always reflect the employee's
+  latest assignment/banking information — which also keeps a cross-site transfer's new entry and
+  its work line's unit consistent with each other (the composite-FK invariant). New employees seed
+  entirely fresh from `Employee`'s defaults.
+- **`PayrollEntry.siteId` confirmed permanently non-editable via the update API, 2026-07-07** (this
+  checkpoint's own scope-narrowing choice, now ratified as permanent rather than deferred). Future
+  site changes flow exclusively through the Employee Transfer workflow, picked up automatically by
+  the next cycle's bootstrap via the Payroll Bootstrap Rule above — never a direct edit to an
+  existing entry's site.
+- **Performance**: cycle-bootstrap seeding uses two chunked `createMany` calls (not one `create`
+  per employee), client-generated UUIDs linking entries to their first work line. Smoke-tested at
+  3,000 employees — cycle + 3,000 entries + 3,000 work lines in ~1.3 seconds.
+- **`payroll-entry` module** — full CRUD for both `PayrollEntry` and `PayrollEntryWorkLine`:
+  optimistic locking (`updateMany({ where: { id, version } })`, a new `conflict()` 409 helper for a
+  stale version), immutability (unreleased + Draft-cycle-only), the "never zero work lines"
+  invariant on delete, and every work-line mutation folded into a `payroll_entry.updated` audit
+  entry rather than a separate action type (§22's explicit instruction). Delete is permitted only
+  while unreleased/Draft — not yet "historical payroll," so Principle 2 doesn't block it.
+- **RBAC**: a new `PERMISSIONS.PAYROLL_CYCLE_MANAGE` (Master-User-only) gates cycle creation
+  specifically — a system-lifecycle action, not Payroll Staff's routine data entry — added to the
+  shared permission registry alongside the already-seeded `payroll:entry` Payroll Entry/Work Line
+  routes reuse unchanged. Finance is untouched; still a two-role system this checkpoint.
+- **Code health**: extracted `diffFields`/`toJsonPrimitive`/`omitKeys` (previously private to
+  `employees.service.ts`) into `backend/src/common/audit-diff.ts`, and `RequestMeta` into
+  `backend/src/common/request-meta.ts`, so Payroll Entry's audit logging reuses the same
+  implementation rather than a second copy — per the standing "grep for duplicates on new shared
+  utility" rule, applied proactively this time rather than caught after the fact.
+- **Tests**: `payroll-cycle.test.ts` and `payroll-entry.test.ts` — bootstrap/carry-forward
+  correctness, RBAC (including a bespoke-permission-set missing-permission case and the C11
+  manipulated-`employeeId` site-scoping pattern), optimistic locking, immutability, cascade-delete,
+  and full work-line CRUD including the cross-site and last-line-delete rejections. **160/160
+  backend tests passing** (145 prior + 15 new).
+- **Two real bugs caught while writing these tests**: the new `createPayrollCycleSchema`'s `year`
+  upper bound (2100) collided with Checkpoint 0's own `year: 2900` test-fixture convention —
+  widened to 2999; and an initial test ordering created the test employee *before* the cycle,
+  so the cycle's bootstrap sweep auto-enrolled them, making the test's own "create an entry" call
+  correctly 409 against an already-existing entry — fixed by creating the cycle first in every
+  test (which is also the manual-create endpoint's actual real-world use case: a late hire mid-cycle).
+- No Playwright (no frontend/UI exists yet — Checkpoint 2's work), same approved exception as
+  Checkpoint 0. No Release/Corrections/Balance Adjustments/Finance/Advances/frontend of any kind
+  — all explicitly out of scope and untouched, per this checkpoint's authorization.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -806,7 +875,7 @@ Phase 3 section for the full checkpoint breakdown this session established (Chec
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoint 0 (schema foundation) COMPLETE — see §1. Checkpoints 1–6 not started, each requiring its own go-ahead per this project's standing per-checkpoint practice |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoint 0 (schema foundation) COMPLETE and committed. Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD) implementation-complete this session, awaiting review/commit — see §1. Checkpoints 2–6 not started, each requiring its own go-ahead per this project's standing per-checkpoint practice |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |

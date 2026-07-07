@@ -18,6 +18,12 @@ import { banksRouter } from './modules/banks/banks.routes';
 import { employeesRouter } from './modules/employees/employees.routes';
 import { settingsRouter } from './modules/settings/settings.routes';
 import { usersRouter } from './modules/users/users.routes';
+import { payrollCyclesRouter } from './modules/payroll-processing/payroll-processing.routes';
+import {
+  payrollCycleEntriesRouter,
+  payrollEntriesRouter,
+  workLinesRouter,
+} from './modules/payroll-entry/payroll-entry.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -95,6 +101,13 @@ export function createApp(): Express {
   app.use('/api/v1/employees', employeesRouter);
   app.use('/api/v1/settings', settingsRouter);
   app.use('/api/v1/users', usersRouter);
+  // Nested under a cycle for list/create; mounted before payrollCyclesRouter's own /:id route so
+  // Express matches the more specific /:cycleId/entries path first (same reasoning as
+  // projectUnitsRouter being mounted ahead of projectSitesRouter, above).
+  app.use('/api/v1/payroll-cycles/:cycleId/entries', payrollCycleEntriesRouter);
+  app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
+  app.use('/api/v1/payroll-entries', payrollEntriesRouter);
+  app.use('/api/v1/work-lines', workLinesRouter);
 
   app.use(errorHandler);
 
