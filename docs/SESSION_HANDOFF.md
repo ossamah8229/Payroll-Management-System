@@ -397,6 +397,20 @@ factually wrong" review, not an oversight.
 tonight (Company Bank Account modeling, at-most-one-`ACTIVE`-`Advance`-per-type, calendar-month-only
 cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their own original timelines.
 
+**Documentation architecture restructuring — COMPLETE, 2026-07-08.** Commit `cfc4ef4`
+(`docs(architecture): split architecture into modular bounded-context documentation`).
+`docs/architecture/database-schema.md`, `data-and-storage.md`, and `post-release-corrections.md`
+were split into bounded-context files under the new `docs/architecture/database/` (13 schema files
++ `README.md` index), the new `docs/architecture/workflows/` (3 workflow narratives), and a new
+`docs/architecture/system-conventions.md`, per a restructuring plan frozen across multiple
+architecture-review rounds — global §-numbering preserved unchanged, the Documentation Ownership
+Rule and a size guideline adopted (`docs/architecture/folder-structure.md`). **Documentation-only:
+no application behavior, database schema, migrations, or API surface changed** — every code and
+migration comment citing an old path was rewritten to its new location (migration `.sql` files had
+only `--` comment lines touched, never DDL), and all three workspaces typecheck cleanly. A
+dedicated pre-commit documentation-integrity audit (bare `§N` cross-reference review across the
+three process docs) preceded the commit.
+
 ## 3. What must not be changed without approval
 
 - Anything in `docs/architecture/*.md` or `docs/PROJECT_PRINCIPLES.md` — the architecture is

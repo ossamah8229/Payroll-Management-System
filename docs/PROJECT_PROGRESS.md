@@ -1172,6 +1172,28 @@ Release, Corrections, Balance Adjustments, Finance, or Advances. Full as-built d
   Checkpoint 0. No Release/Corrections/Balance Adjustments/Finance/Advances/frontend of any kind
   — all explicitly out of scope and untouched, per this checkpoint's authorization.
 
+### Documentation architecture restructuring — COMPLETE, 2026-07-08
+
+**Commit:** `cfc4ef4` — `docs(architecture): split architecture into modular bounded-context
+documentation`.
+
+**Purpose:** `docs/architecture/database-schema.md` (1,961 lines), `data-and-storage.md`
+(359 lines), and `post-release-corrections.md` (356 lines) were split into focused,
+bounded-context files — 13 schema files plus a navigation index under the new
+`docs/architecture/database/`, 3 workflow narratives under the new
+`docs/architecture/workflows/`, and a new `docs/architecture/system-conventions.md` — following a
+restructuring plan frozen across multiple architecture-review rounds (global, stable §-numbering
+preserved unchanged; the Documentation Ownership Rule and a documentation size guideline adopted;
+see `docs/architecture/folder-structure.md`).
+
+**Documentation-only — confirmed.** No application behavior, database schema, Prisma migrations,
+or API surface changed as part of this restructuring. Every code comment and migration comment
+citing an old file path was mechanically rewritten to its new location; every migration `.sql`
+file had only `--` comment lines touched, never DDL (verified via diff before commit). All three
+workspaces (`backend`, `frontend`, `shared`) typecheck cleanly against the edited comments. A
+dedicated documentation-integrity audit pass (bare `§N` cross-reference review across
+`IMPLEMENTATION_PLAN.md`, `PROJECT_PROGRESS.md`, `SESSION_HANDOFF.md`) preceded this commit.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
