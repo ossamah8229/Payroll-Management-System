@@ -1,29 +1,29 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-07 (two sessions today — Checkpoint 0, then a separate Checkpoint 1 session, both
-reviewed, approved, and committed). See the "Phase 3, Checkpoint 0" and "Phase 3, Checkpoint 1"
-entries in §1, below. Prior entries (2026-07-05 and earlier) are preserved unchanged below this
-point.
-**Latest committed commit:** `55eda58` — "feat(payroll): implement Phase 3 Checkpoint 1 backend
-CRUD" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build →
-`89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
-documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update
-→ `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5
-Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed
-(2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record →
-`e26fe8c` Phase 2.5 Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 →
-`1c4d61f` Phase 3 architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation →
-`d9c3184` doc-only commit hash record → `55eda58` Phase 3 Checkpoint 1 implementation). **This
-session's own doc-only commit hash record (below) lands on top — check `git log -1` for the exact
-hash.**
+**Date:** 2026-07-09 (a dedicated, documentation-only architecture session — the Advance Deduction
+Deferral pre-Checkpoint-2 amendment — run between the 2026-07-07 Checkpoint 1 session and the
+not-yet-started Checkpoint 2). See the "Advance Deduction Deferral" entry in §1, below. Prior entries
+(2026-07-07 and earlier) are preserved unchanged below this point.
+**Latest committed commit:** this session's own single documentation-only commit — **check `git log
+-1` for the exact hash** (session lineage up to and including the prior session: `2e804d4` closed
+Phase 1 → `674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final
+visual consistency audit → `11cdc9d` Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3
+architecture review → `74c124e` further doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 →
+`c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc
+close → `ed4ed1f` database-verification debt closed (2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3
+→ `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5 Checkpoint 4 → `0ca9a8f` doc-only
+commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3 architecture freeze, doc-only → `aefa64f`
+Phase 3 Checkpoint 0 implementation → `d9c3184` doc-only commit hash record → `55eda58` Phase 3
+Checkpoint 1 implementation → **[this session's hash]** Advance Deduction Deferral architecture
+amendment, doc-only, frozen).
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoints 0 and 1 are both committed and closed.**
-Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD, RBAC/site-scoping,
-audit logging) is complete — 160/160 backend tests passing, typecheck/lint/build clean. See §1's
-"Phase 3, Checkpoint 1" entry below for the full as-built record, including the now-frozen Payroll
-Bootstrap Rule and the confirmed permanent decision that `PayrollEntry.siteId` is non-editable via
-the update API. No frontend, Release, Corrections, Balance Adjustments, Finance, or Advances were
-touched, per this checkpoint's explicit scope. **Checkpoint 2 has NOT started and requires its own
+**Current implementation phase:** **Phase 3 Checkpoints 0 and 1 remain committed and closed, exactly
+as before this session.** This was an architecture-only session — no implementation, no Prisma, no
+migrations, no application code. It froze the **Advance Deduction Deferral** architecture (BR-ADV-001
+through BR-ADV-006, `ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized Outstanding
+Payroll Obligations seam) ahead of Phase 4, so that frozen design is ready and waiting once Phase 4
+implementation begins. See §1's new "Advance Deduction Deferral" entry for the full decision record.
+**Checkpoint 2 has NOT started, is entirely unaffected by this session, and still requires its own
 explicit authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
@@ -801,6 +801,102 @@ Phase 3 section for the full checkpoint breakdown this session established (Chec
 - **Scope discipline maintained**: no routes, no service layer, no frontend component, no
   cycle-bootstrap action, and no `AuditLog`/RBAC changes were introduced — all explicitly deferred to
   Checkpoint 1 onward, per the approved checkpoint scope.
+
+### Advance Deduction Deferral — Pre-Checkpoint-2 Architecture Amendment — FROZEN, 2026-07-09 (architecture only, no application code)
+
+A dedicated, documentation-only architecture session, run between Phase 3 Checkpoint 1 (committed
+`55eda58`) and the not-yet-started Checkpoint 2, triggered by a new business requirement: payroll no
+longer assumes an Advance is automatically deducted in its scheduled cycle — authorized users must be
+able to defer that deduction to a future payroll cycle before release, for genuine employee
+circumstances, with a complete audit trail. "Do not begin implementation yet" was the session's
+opening instruction and was honored throughout — no Prisma schema, no migrations, no application code.
+
+**Method:** the same discipline as the 2026-07-05 Phase 3 Architecture Review — every proposal was
+presented back to the user for explicit approval before being written into `docs/architecture/*.md` or
+`docs/IMPLEMENTATION_PLAN.md`, across four review rounds as the user progressively refined the design
+(each round's refinements folded in before the next was drafted), ending with a clean, independently
+re-run, read-only consistency verification pass across all five touched files before this freeze.
+
+**Business rules frozen (`database-schema.md` §15):**
+
+- **BR-ADV-001.** Every Advance has an Original Scheduled Deduction Payroll Cycle.
+- **BR-ADV-002.** Before payroll is released, Payroll Staff or a Master User may defer the deduction to
+  another future Draft Payroll Cycle. Released payroll may never be modified.
+- **BR-ADV-003.** The user may select any future Draft payroll cycle — not limited to "next" or "one
+  after next."
+- **BR-ADV-004.** Every deferral must permanently record: Original Scheduled Cycle, New Scheduled
+  Cycle, Reason, Deferred By, Deferred At.
+- **BR-ADV-005.** Only one scheduled deduction may exist for an Advance at any time. Deferral moves the
+  deduction; it never duplicates it.
+- **BR-ADV-006.** An Advance deduction may only be moved to a future Draft payroll cycle. Released
+  cycles are immutable.
+
+**Key design decisions, in full:**
+
+1. **`ScheduledPayrollPeriod`** (`database-schema.md` §10a, new) — the single canonical representation
+   of a calendar payroll period that does not yet have a materialized `PayrollCycle`. Resolved this over
+   an initial, rejected design using raw `(year, month)` scalar columns directly on `Advance`, which the
+   user correctly flagged as introducing a second, competing representation of "a payroll cycle" (only
+   `PayrollCycle` itself may own real cycle identity/lifecycle). Immutable `year`/`month`; the only
+   permitted transition is `payrollCycleId`/`resolvedAt` moving `NULL → NOT NULL`, exactly once; never
+   deleted once referenced, even after its cycle archives — a permanent part of payroll history.
+   **Ownership boundary, added as a final clarifying refinement:** owned exclusively by Payroll
+   Processing; domain modules (Advances today) may only reference it by foreign key and must go through
+   Payroll Processing's own exposed find-or-create function — never a direct write to the table itself.
+2. **`Advance.originalScheduledPeriodId`** (immutable, set once — BR-ADV-001) and
+   **`.currentScheduledPeriodId`** (the single live pointer a deferral moves — BR-ADV-005), both FK →
+   `ScheduledPayrollPeriod`.
+3. **`AdvanceScheduleChange`** (`database-schema.md` §15a) — append-only (no updates, no deletes, only
+   inserts, same convention as `EmployeeTransferHistory`/`BalanceAdjustmentSettlement`) history of every
+   deferral. Named for recording *changes to* the schedule, not *being* the schedule — renamed during
+   the session from an earlier `AdvanceScheduleHistory`/`AdvanceDeferral` working name specifically so a
+   hypothetical future "bring forward" rule would never require another rename.
+4. **Outstanding Payroll Obligations** (`data-and-storage.md` §4, `overview.md` Extensibility) — a named,
+   documented extension seam generalizing what was originally a Balance-Adjustment-specific carry-forward
+   rule. Each owning module registers a carry-forward predicate and, optionally, a **Payroll
+   Materialization Hook** (renamed from an earlier "population hook" working name — the responsibility is
+   materializing a payroll obligation into a `PayrollEntry`, not merely populating data). Payroll
+   Processing's cycle bootstrap orchestrates only — it never contains obligation-specific knowledge.
+   **Providers must be independent and order-independent** — Payroll Processing never relies on
+   registration order, and any future genuine ordering dependency must be an explicit architecture
+   decision, not an implicit one. Today's two providers: Balance Adjustments (predicate only, unchanged)
+   and Advances (predicate + hook, new).
+5. **Complete audited lifecycle** (`database-schema.md` §15) — `advance.deferred` (repeatable) and the
+   new `advance.schedule_materialized` (written once, by the Advances Payroll Materialization Hook, the
+   moment a scheduled deduction actually lands in a real `PayrollEntry`) together give an auditor the
+   full chain — Advance created → deferred → deferred again (optional) → schedule materialized → fully
+   recovered — without reconstructing it across multiple tables.
+6. **Generalized new-cycle carry-forward rule** (`data-and-storage.md` §4) — "carry any employee with at
+   least one PENDING Balance Adjustment" widened to "carry any employee with at least one outstanding
+   payroll obligation," so a departed employee with a deferred, not-yet-arrived Advance deduction is
+   never stranded, and so a future obligation type never requires editing this rule again.
+
+**Net schema growth:** 2 new tables (`ScheduledPayrollPeriod`, `AdvanceScheduleChange`), 2 new columns
+on `Advance` (`originalScheduledPeriodId`, `currentScheduledPeriodId`), plus a new **Advances** row in
+`overview.md`'s Major Modules table (previously undocumented as its own module row, since `Advance`
+hasn't been migrated yet). **None of this exists in `backend/prisma/schema.prisma` yet** — it lands in
+Phase 4's not-yet-built `Advance` migration, additively, alongside `Advance` itself; no destructive
+change and no retrofit of any already-shipped table (`PayrollCycle`/`PayrollEntry` are untouched).
+
+**Files updated (architecture only):** `docs/architecture/database-schema.md`,
+`docs/architecture/data-and-storage.md`, `docs/architecture/overview.md`,
+`docs/architecture/authentication.md`, `docs/IMPLEMENTATION_PLAN.md` (Phase 4/5 sections).
+`docs/PROJECT_PRINCIPLES.md` and `docs/architecture/post-release-corrections.md` needed no changes —
+nothing here is in tension with any existing principle or the Correction/Balance Adjustment mechanics.
+
+**Verification performed before freezing:** a full, independent, read-only consistency pass across all
+five touched files confirmed (a) zero remaining references to superseded working names (`Population
+Hook`, `AdvanceScheduleHistory`, `AdvanceDeferral`, raw year/month scalar fields), (b) consistent use of
+the final terminology everywhere, (c) all six BR-ADV rules defined exactly once and correctly
+cross-referenced, (d) section numbering (§10a, §15, §15a) resolves correctly with no dangling
+references, and (e) the final ownership-boundary clarification introduced no contradiction with the
+already-frozen deferral mechanics.
+
+**This architecture is now FROZEN.** Per explicit instruction, it must not be reopened or redesigned
+unless implementation reveals a genuine blocker or a new business requirement is introduced. Phase 4
+implementation should build directly against this frozen documentation. **Phase 3 Checkpoint 2 remains
+unaffected and still requires its own separate explicit authorization to begin** — this session did not
+touch Payroll Entry grid frontend work in any way.
 
 ### Phase 3, Checkpoint 1 — Cycle bootstrap/creation + Payroll Entry/Work Line backend CRUD (2026-07-07)
 

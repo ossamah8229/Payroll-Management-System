@@ -514,6 +514,95 @@ still shown as `DRAFT` until a Master User explicitly finalizes it, exactly as t
 - **Transactions required:** yes — every status transition is a multi-table transaction (see §22)
 - **Row count:** one per month — trivially small (~12/year)
 
+## 10a. `ScheduledPayrollPeriod`
+
+**Added 2026-07-08, pre-Checkpoint-2 architecture amendment (Advance Deduction Deferral).** The
+canonical way any module references a calendar payroll period that does not yet have a materialized
+`PayrollCycle` row — introduced specifically so the Advance Deduction Deferral rule (§15's BR-ADV
+rules, below) never needs a second, competing representation of "a payroll cycle." `PayrollCycle`
+remains the only entity with real cycle identity and lifecycle (status, entries, release); this table
+is deliberately thin — no status, no lifecycle, no entries — purely a calendar coordinate that
+resolves into a `PayrollCycle` once one is created for it.
+**Why it exists:** Only one `PayrollCycle` is ever `DRAFT` at a time
+(`docs/architecture/data-and-storage.md` §4), and future cycles do not exist as rows until the
+ordinary sequential "Start New Payroll Cycle" bootstrap reaches them. A business rule that needs to
+reference an arbitrary future month (not just "next cycle") has nothing to point a foreign key at
+until that month's cycle actually exists. Rather than let each consumer (Advances today, any future
+Outstanding Payroll Obligation provider tomorrow — `docs/architecture/data-and-storage.md` §4) invent
+its own raw `(year, month)` scalar pair to work around this — which would recreate exactly the
+two-competing-representations problem this table exists to avoid — every such reference goes through
+this one table instead.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `year` | smallint | no | — | |
+| `month` | smallint | no | — | 1–12 |
+| `payrollCycleId` | uuid | yes | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` — **null until a `PayrollCycle` is actually created for this `(year, month)`**, set exactly once, never again |
+| `resolvedAt` | timestamptz | yes | — | set in the same instant `payrollCycleId` is set |
+| `createdAt` | timestamptz | no | `now()` | |
+
+- **Unique constraints:** `(year, month)` — the same shape as `PayrollCycle`'s own uniqueness (§10);
+  two different consumers referencing the same future month share exactly one row, never two
+- **Check constraints:** `month BETWEEN 1 AND 12`
+- **Indexes:** unique(`year`, `month`); partial index `WHERE payrollCycleId IS NULL` (the
+  "still-pending periods" lookup the cycle-bootstrap resolution step needs every time a new cycle is
+  created — see `docs/architecture/data-and-storage.md` §4)
+- **Cascade:** `payrollCycleId` is `RESTRICT`
+- **Module owner:** Payroll Processing — the same module that owns `PayrollCycle` and the cycle
+  bootstrap logic that resolves these rows. Every consuming module (Advances today; a future module
+  tomorrow) only ever holds a foreign key into this table; none of them owns it.
+- **Ownership boundary — explicit clarification (added 2026-07-09, no schema/workflow/behavioral
+  change):** `ScheduledPayrollPeriod` is infrastructure owned **exclusively** by Payroll Processing —
+  the same "modules interact through each other's service-layer functions, never by reaching directly
+  into another module's database tables" discipline `docs/architecture/overview.md` already states for
+  this codebase generally. Domain modules (Advances today; any future Outstanding Payroll Obligation
+  provider) may **reference** a `ScheduledPayrollPeriod` row via foreign key, but must never create,
+  resolve, mutate, or delete one directly — there is no code path in any domain module that writes to
+  this table itself. When a domain module needs a period that may not exist yet (e.g. Advances at the
+  moment of a deferral, §15a), it calls Payroll Processing's own exposed find-or-create function rather
+  than touching the table directly — the row is still created lazily, exactly as already described
+  below, only ever performed by Payroll-Processing-owned code, whether that code is invoked by its own
+  cycle bootstrap or by another module's request. **Resolution** (`payrollCycleId`/`resolvedAt`,
+  `NULL → NOT NULL`) remains, as already specified, exclusively a cycle-creation-time step — no other
+  code path ever performs it.
+- **Creation:** lazily, find-or-create by `(year, month)` — performed only by Payroll Processing's own
+  function (per the ownership boundary above), the first time anything needs to reference that future
+  month (an Advance's very first schedule, or a schedule change) — never pre-created in bulk for months
+  nobody has referenced yet. The unique constraint is the concurrency backstop: two consumers
+  referencing the same future month at the same instant race on find-or-create, one wins, the other
+  finds the row the winner just created.
+- **Resolution (one-time transition):** when a new `PayrollCycle` is created for `(Y, M)`
+  (`docs/architecture/data-and-storage.md` §4), the bootstrap looks up
+  `ScheduledPayrollPeriod WHERE (year, month) = (Y, M)` **first, before invoking any registered
+  Outstanding Payroll Obligation provider** and, if found, sets `payrollCycleId`/`resolvedAt` — a
+  single, generic step owned by Payroll Processing that has no knowledge of which module(s), if any,
+  reference that period. If no row exists for `(Y, M)`, there is nothing to resolve and ordinary cycle
+  creation proceeds unaffected.
+- **Immutability — explicit invariant (strengthened 2026-07-08):** `year` and `month` are immutable
+  from the moment a row is created — there is no code path, application-layer or otherwise, that ever
+  changes which calendar period a `ScheduledPayrollPeriod` row identifies. **The only permitted state
+  transition on this table is `payrollCycleId`/`resolvedAt` moving `NULL → NOT NULL`, exactly once** —
+  the same single-permitted-transition pattern already used for `CorrectionRequest` (§13a). Once
+  created, a `ScheduledPayrollPeriod` row represents a permanent payroll identity: which specific
+  calendar month it names never changes, only whether that month has since acquired a real
+  `PayrollCycle`.
+- **Deletion:** never, under any circumstance, once referenced by any payroll obligation —
+  `originalScheduledPeriodId`/`currentScheduledPeriodId` (§15) and `fromPeriodId`/`toPeriodId` (§15a)
+  are all `ON DELETE RESTRICT`, so the database itself refuses to delete a referenced row. This holds
+  **even after the row resolves and its `PayrollCycle` completes and archives** — a resolved period is
+  not "done" and eligible for cleanup; it becomes a permanent part of payroll history (which month an
+  advance was originally due, which months it passed through before finally landing) and exists for
+  auditability exactly as EmployeeTransferHistory/BalanceAdjustmentSettlement rows do (§8b, §14b) —
+  never pruned, never reused for a different calendar month later.
+- **RBAC:** no direct RBAC surface — this table is never independently created, viewed, or edited by a
+  user action; rows exist only as a side effect of another module's own scheduling workflow (§15), and
+  are resolved only by the cycle-bootstrap process itself.
+- **Row count:** small — bounded by the number of distinct future months anything has ever referenced,
+  not by employee or advance count; realistically a handful to low dozens of rows even at scale, since
+  schedule changes are rare and the granularity is a calendar month, not a per-employee or per-advance
+  record.
+
 ## 11. `AdjustmentType`
 
 **Purpose:** The standardized classification list for Corrections (`docs/architecture/post-release-corrections.md`).
@@ -1162,6 +1251,58 @@ instead of relying on `AuditLog` alone.
 those balances living only in someone's head.
 **Business rule tie-in:** "No auto-calculation of installment size... but the system should track and
 display remaining outstanding balance" (`PROJECT_SPEC.md`).
+**Revised 2026-07-08, pre-Checkpoint-2 architecture amendment — Advance Deduction Deferral.** The
+architecture previously assumed an advance's deduction is automatically applied in whatever cycle
+happens to be Draft. This is now changed: before payroll is released, an authorized user may defer the
+deduction to a chosen future Draft payroll cycle. The following business rules are now frozen:
+
+> **BR-ADV-001.** Every Advance has an Original Scheduled Deduction Payroll Cycle.
+>
+> **BR-ADV-002.** Before payroll is released, Payroll Staff or a Master User may defer the deduction to
+> another future Draft Payroll Cycle. Released payroll may never be modified.
+>
+> **BR-ADV-003.** The user may select any future Draft payroll cycle. The system is not limited to
+> "next payroll" or "one after next."
+>
+> **BR-ADV-004.** Every deferral must permanently record: Original Scheduled Cycle, New Scheduled
+> Cycle, Reason, Deferred By, Deferred At.
+>
+> **BR-ADV-005.** Only one scheduled deduction may exist for an Advance at any time. Deferral moves the
+> deduction. It never duplicates it.
+>
+> **BR-ADV-006.** An Advance deduction may only be moved to a future Draft payroll cycle. Released
+> cycles are immutable.
+
+Both "Original Scheduled Cycle" and "New Scheduled Cycle" reference a `ScheduledPayrollPeriod` (§10a),
+never a raw `(year, month)` pair — see §10a for why. The full deferral mechanics live in
+`docs/architecture/data-and-storage.md` §4; the permanent per-change history lives in the new
+`AdvanceScheduleChange` table (§15a).
+
+**The complete audited lifecycle (added 2026-07-08)** — an auditor can read this chain directly from
+`AuditLog` without reconstructing it across multiple tables:
+
+```
+Advance created
+        ↓
+Advance deferred                         (advance.deferred — §15a, may repeat any number of times)
+        ↓
+Advance deferred again (optional)        (advance.deferred, same event, one row per change)
+        ↓
+Advance schedule materialized            (advance.schedule_materialized — written by the Advances
+        ↓                                 Payroll Materialization Hook, `data-and-storage.md` §4, the
+        |                                 moment a scheduled deduction actually lands in a real
+        |                                 PayrollEntry — distinct from advance.deferred, which only
+        |                                 records that the target moved, not that it arrived)
+Advance fully recovered                  (outstandingBalance reaches 0, status → PAID_OFF — one of
+                                           the two existing outstandingBalance-changing events, below)
+```
+
+`advance.deferred` and `advance.schedule_materialized` are deliberately two different events: the
+first records *intent to move* a not-yet-arrived deduction (BR-ADV-004), the second records *arrival* —
+that this cycle's `PayrollEntry` was actually populated. A deferred advance produces exactly one
+`advance.deferred` entry per deferral and exactly one `advance.schedule_materialized` entry the one
+time its (possibly several-times-moved) target finally resolves — never the reverse, and never more
+than one materialization for the same scheduled landing.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -1174,6 +1315,8 @@ display remaining outstanding balance" (`PROJECT_SPEC.md`).
 | `repaymentType` | `AdvanceRepaymentType` | no | — | informational only, per spec — does not drive auto-calculation |
 | `notes` | text | yes | — | |
 | `status` | `AdvanceStatus` | no | `'ACTIVE'` | flips to `PAID_OFF` when `outstandingBalance` reaches 0 |
+| `originalScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (§10a), `ON DELETE RESTRICT` — **BR-ADV-001.** Set once, the first time this advance's deduction is ever scheduled; immutable forever after, regardless of any later deferral |
+| `currentScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (§10a), `ON DELETE RESTRICT` — the live "where does the next deduction land" pointer. Exactly one value at a time (**BR-ADV-005** — a deferral overwrites this, never adds a second pointer). Null once `status = PAID_OFF` |
 | `createdAt` | timestamptz | no | `now()` | |
 | `updatedAt` | timestamptz | no | `now()` | |
 
@@ -1188,11 +1331,15 @@ the employee has since paid it off and taken out a new one of the same type — 
 `docs/architecture/post-release-corrections.md` ("Interaction with Advances").
 
 - **Unique constraints:** partial unique (`employeeId`, `type`) `WHERE status = 'ACTIVE'`
-- **Check constraints:** `totalAmount > 0`; `outstandingBalance >= 0`; `outstandingBalance <= totalAmount`
-- **Indexes:** the partial unique index above (also the primary lookup); (`employeeId`)
-- **Cascade:** `employeeId` is `RESTRICT`
-- **Module owner:** Advances (a supporting module feeding Payroll Entry, alongside the 15 core
-  modules — see `docs/architecture/overview.md`)
+- **Check constraints:** `totalAmount > 0`; `outstandingBalance >= 0`; `outstandingBalance <=
+  totalAmount`; **added 2026-07-08:** `status = 'PAID_OFF' ⇒ currentScheduledPeriodId IS NULL`
+- **Indexes:** the partial unique index above (also the primary lookup); (`employeeId`); **added
+  2026-07-08:** (`currentScheduledPeriodId`) — the lookup the cycle-bootstrap sweep uses to find every
+  `ACTIVE` advance whose schedule resolves to the cycle being created
+- **Cascade:** `employeeId`, `originalScheduledPeriodId`, and `currentScheduledPeriodId` are all
+  `RESTRICT`
+- **Module owner:** Advances — its own row in the Major Modules table, added 2026-07-08 alongside this
+  amendment (see `docs/architecture/overview.md`)
 - **What can change `outstandingBalance`:** exactly two paths, both transactional — (1) the original
   `PayrollEntry` save that records a non-zero linked deduction (decrements by that amount, flips to
   `PAID_OFF` at zero); (2) a later approved `Correction` to the linked `advanceDeduction`/
@@ -1202,8 +1349,84 @@ the employee has since paid it off and taken out a new one of the same type — 
   time), path (2) is skipped and logged — the salary-level `BalanceAdjustment` is still created
   regardless, since advance-balance tracking is an informational aid (`PROJECT_SPEC.md`), not a gate
   on payroll correctness.
-- **Audit logging:** creation, and both of the above balance-changing events
+- **What can change `currentScheduledPeriodId` (added 2026-07-08):** a schedule change (deferral,
+  BR-ADV-002/006) updates the pointer and is the only path that moves it early — **it never touches
+  `outstandingBalance`**, since deferral changes only *when* a deduction lands, never *how much*. The
+  pointer also advances automatically, without a deferral, the ordinary way: each time a scheduled
+  deduction materializes onto a new cycle's `PayrollEntry` (§10a's resolution step,
+  `docs/architecture/data-and-storage.md` §4), it is set forward to the immediately-following month as
+  the new default target, unless the advance became `PAID_OFF` this cycle (in which case it is cleared
+  to null).
+- **Audit logging:** creation, both `outstandingBalance`-changing events, and (added 2026-07-08) every
+  schedule change (`advance.deferred`, §15a) and every schedule arrival
+  (`advance.schedule_materialized`, written by the Advances Payroll Materialization Hook the moment a
+  scheduled deduction actually lands in a `PayrollEntry` — see the full lifecycle chain, above)
 - **Row count:** tens to low hundreds created per month; total accumulates but stays small
+
+## 15a. `AdvanceScheduleChange`
+
+**Added 2026-07-08, pre-Checkpoint-2 architecture amendment.** The append-only history of every change
+made to an Advance's scheduled deduction period. Named for what it records — **changes to the
+schedule** — not the schedule itself, which always lives on `Advance.currentScheduledPeriodId` (§15).
+Today every recorded change is a deferral (a move strictly later in time, BR-ADV-006); the table's name
+and column names are deliberately general so a future business rule permitting a schedule to move
+*earlier* would never require another rename — only, if that rule ever arrives, a new check-constraint
+variant on top of the same table. The audit event this produces stays specifically named
+(`advance.deferred`) regardless of the table's general name, since today's only real-world behavior is
+a deferral.
+**Why it exists:** Mirrors this schema's established pattern of pairing a mutable "current state"
+pointer on a parent row with a typed, directly queryable history table for how it got there —
+`EmployeeTransferHistory` (§8b) alongside `Employee.siteId`/`.unitId`, and `BalanceAdjustmentSettlement`
+(§14b) alongside `BalanceAdjustment.remainingAmount`, are the direct precedents.
+**Business rule tie-in:** BR-ADV-002 through BR-ADV-006 (§15).
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `advanceId` | uuid | no | — | FK → `Advance.id`, `ON DELETE RESTRICT` |
+| `payrollEntryId` | uuid | no | — | FK → `PayrollEntry.id`, `ON DELETE RESTRICT` — the entry this change removed the materialized deduction from |
+| `fromPeriodId` | uuid | no | — | FK → `ScheduledPayrollPeriod.id` (§10a), `ON DELETE RESTRICT` — the schedule immediately before this change |
+| `toPeriodId` | uuid | no | — | FK → `ScheduledPayrollPeriod.id` (§10a), `ON DELETE RESTRICT` — the new schedule |
+| `reason` | text | no | — | mandatory (BR-ADV-004) |
+| `changedById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` |
+| `changedAt` | timestamptz | no | `now()` | |
+
+- **Unique constraints:** none — an Advance may be rescheduled any number of times
+- **Check constraints:** `length(trim(reason)) > 0`
+- **A note on what is *not* database-enforced here:** BR-ADV-006 ("only ever moved to a future Draft
+  payroll cycle") would ordinarily also get a same-row check constraint, matching this schema's usual
+  defense-in-depth convention (e.g. the Audit Log's immutability trigger, §16; the Work Line same-site
+  rule, §12a). That isn't possible here without denormalizing `fromPeriodId`/`toPeriodId`'s own
+  `(year, month)` back onto this row — which would recreate exactly the dual-representation problem
+  §10a exists to eliminate. **This is therefore a deliberate, narrower exception to the schema's normal
+  database-plus-application enforcement pattern:** the strictly-future ordering rule is enforced at the
+  application/service layer only — verified by joining `fromPeriodId`/`toPeriodId` to their
+  `ScheduledPayrollPeriod` rows and comparing `(year, month)` at the moment a change is recorded — and
+  must be covered by a dedicated, thorough test (`docs/IMPLEMENTATION_PLAN.md` Phase 4) precisely
+  because it has no database-level backstop.
+- **Indexes:** (`advanceId`, `changedAt` desc) — the full schedule-change history for one Advance, in
+  chronological order; (`payrollEntryId`) for entry-level drill-down (Statement of Account)
+- **Cascade:** all FKs `RESTRICT`
+- **Module owner:** Advances
+- **Immutable, append-only — explicit invariant (strengthened 2026-07-08):** behaves exactly like
+  `EmployeeTransferHistory` (§8b) and `BalanceAdjustmentSettlement` (§14b): **no updates, no deletes,
+  only inserts.** A row, once written, is never edited or removed by any application code path — a
+  mistaken schedule change is corrected by recording a further change, never by altering or deleting
+  the row that recorded the mistake, exactly as those two precedent tables already work.
+- **Transactions required:** yes — recording a change is transactional with: zeroing the source
+  `PayrollEntry`'s `advanceDeduction`/`advanceId` (or `eidAdvanceDeduction`/`eidAdvanceId`) fields (an
+  ordinary Draft field edit, bumping that entry's existing `version`), updating
+  `Advance.currentScheduledPeriodId` to `toPeriodId`, the find-or-create of `toPeriodId`'s
+  `ScheduledPayrollPeriod` row if it didn't already exist (via Payroll Processing's owned find-or-create
+  function, §10a — Advances never writes to this table directly), this row's own insert, and the
+  corresponding `AuditLog` entry (`advance.deferred`) — all in one transaction
+- **Audit logging:** every creation is itself an audited event (`advance.deferred`) — distinct from,
+  and always followed later by, the one-time `advance.schedule_materialized` entry written when this
+  change's target finally arrives (§15's lifecycle chain, above; the materialization event itself is
+  not a row on this table, since it isn't a *change* to the schedule — it's confirmation that a
+  previously-recorded schedule was reached)
+- **Row count:** small — bounded by (number of Advances) × (typical reschedule count per advance,
+  expected to be low)
 
 ## 16. `AuditLog`
 
@@ -1387,6 +1610,16 @@ Employee (1) ───< Advance (many)
 Advance (1) ───< PayrollEntry (many)                [advanceId, optional]
 Advance (1) ───< PayrollEntry (many)                [eidAdvanceId, optional]
 
+PayrollCycle (0..1) ─── (1) ScheduledPayrollPeriod   [payrollCycleId, optional — §10a, added 2026-07-08]
+ScheduledPayrollPeriod (1) ───< Advance (many)       [originalScheduledPeriodId, optional — §10a/§15]
+ScheduledPayrollPeriod (1) ───< Advance (many)       [currentScheduledPeriodId, optional — §10a/§15]
+
+Advance (1) ───< AdvanceScheduleChange (many)                [advanceId — §15a, added 2026-07-08]
+PayrollEntry (1) ───< AdvanceScheduleChange (many)           [payrollEntryId — §15a]
+ScheduledPayrollPeriod (1) ───< AdvanceScheduleChange (many) [fromPeriodId — §15a]
+ScheduledPayrollPeriod (1) ───< AdvanceScheduleChange (many) [toPeriodId — §15a]
+User (1) ───< AdvanceScheduleChange (many)                   [changedById — §15a]
+
 User (1) ───< AuditLog (many)                        [actorUserId, optional]
 (polymorphic, no FK) AuditLog ···> Employee | PayrollEntry | Correction | ... [via entityType/entityId]
 
@@ -1438,12 +1671,18 @@ type row is created already in its final state and never transitions at all). **
 `PayrollUnitRelease` (§12b) is immutable from creation — a Unit's release for a cycle is never undone.
 `CorrectionRequest` (§13a) is immutable except for its single permitted `PENDING → APPROVED` or
 `PENDING → REJECTED` transition. `CorrectionPayment` (§14a) is immutable from creation.
-`BalanceAdjustmentSettlement` (§14b) is immutable from creation.
+`BalanceAdjustmentSettlement` (§14b) is immutable from creation. **Added 2026-07-08:**
+`ScheduledPayrollPeriod` (§10a) is immutable except for its single permitted resolution transition
+(`payrollCycleId`/`resolvedAt`, `NULL → NOT NULL`, exactly once) — `year`/`month` themselves never
+change after creation, full stop, and the row itself is never deleted once any payroll obligation
+references it, even after its `PayrollCycle` completes and archives (§10a's Deletion note).
 
 ### Append-only tables
 `Correction`, `AuditLog`, `BackupPackage`, `BackupPackageFile`, `EmployeeTransferHistory` (added
 2026-07-03, session 2 — §8b). **Added 2026-07-05:** `PayrollUnitRelease` (§12b),
-`BalanceAdjustmentSettlement` (§14b), `CorrectionPayment` (§14a). **The one deliberate exception:**
+`BalanceAdjustmentSettlement` (§14b), `CorrectionPayment` (§14a). **Added 2026-07-08:**
+`AdvanceScheduleChange` (§15a) — no updates, no deletes, only inserts, same convention as
+`EmployeeTransferHistory`/`BalanceAdjustmentSettlement`. **The one deliberate exception:**
 `PayrollUnitReadiness` (§12b) is **not** append-only — un-marking Ready **deletes** the row, since it
 is a purely informational, current-state workflow signal with no historical-preservation requirement,
 unlike every other table in this list.
@@ -1481,11 +1720,24 @@ unlike every other table in this list.
   `BackupPackage` row referencing it, so a crash mid-process leaves an orphaned file rather than a DB
   row pointing at a file that doesn't exist)
 - `Advance.outstandingBalance` decrement + the `PayrollEntry` save that recorded the linked deduction
-- New cycle creation: previous cycle's archive transition (above) + `PayrollCycle` insert + bulk
-  `PayrollEntry` insert (each with its own single, freshly-seeded `PayrollEntryWorkLine`, per §12a's
-  carry-forward rule — never inheriting a prior cycle's split structure) for every active employee
-  plus any employee (active or departed) with a `PENDING` `BalanceAdjustment`
-  (`docs/architecture/data-and-storage.md` §4) + `AuditLog` insert — all one transaction
+- New cycle creation: previous cycle's archive transition (above) + `PayrollCycle` insert +
+  `ScheduledPayrollPeriod` resolution if a pending period matches this cycle's `(year, month)` (§10a) +
+  bulk `PayrollEntry` insert (each with its own single, freshly-seeded `PayrollEntryWorkLine`, per
+  §12a's carry-forward rule — never inheriting a prior cycle's split structure) for every active
+  employee plus any employee (active or departed) selected by **any registered Outstanding Payroll
+  Obligation provider** (`docs/architecture/data-and-storage.md` §4 — today, Balance Adjustments'
+  `PENDING`-adjustment check and Advances' resolved-schedule check) + each provider's own **Payroll
+  Materialization Hook**, where it has one, each invoked independent of the others with no assumed
+  order (Advances populates `advanceDeduction`/`advanceId` on the entries its check matched and writes
+  `advance.schedule_materialized`; Balance Adjustments has no creation-time materialization step,
+  unchanged) + `AuditLog` insert — all one transaction
+- **Added 2026-07-08:** an Advance schedule change (deferral): zeroing the source `PayrollEntry`'s
+  `advanceDeduction`/`advanceId` (or eid- equivalent) fields + `Advance.currentScheduledPeriodId`
+  update + find-or-create of the target `ScheduledPayrollPeriod` (via Payroll Processing's owned
+  function, never a direct write from Advances — §10a's ownership boundary) + `AdvanceScheduleChange`
+  insert (§15a) + `AuditLog` insert (`advance.deferred`), all together — distinct from the later,
+  separate transaction (above) that eventually materializes this schedule and writes
+  `advance.schedule_materialized`
 - `Employee` create/update + `AuditLog` insert (generic diff, or a distinct `employee.left` entry when
   `dateOfLeaving` is set)
 
@@ -1511,7 +1763,11 @@ edit, deletion attempt — same pattern as `ProjectSite`, §8a), `CompanySetting
 **Added 2026-07-05:** `PayrollUnitRelease` (creation — `payroll_unit.released`), `PayrollUnitReadiness`
 (marking and un-marking — `payroll_unit.marked_ready` / `.unmarked_ready`), `CorrectionRequest`
 (creation, approval, rejection), `CorrectionPayment` (creation — `correction_payment.paid`), a Late
-Entry's one-off release (`payroll.late_released`, carrying `lateReason`).
+Entry's one-off release (`payroll.late_released`, carrying `lateReason`). **Added 2026-07-08:**
+`AdvanceScheduleChange` (creation — `advance.deferred`, §15a), the accompanying
+`payroll_entry.advance_deferred` entry for the `PayrollEntry` field change it causes, and — written
+separately, later, by the Advances Payroll Materialization Hook — `advance.schedule_materialized` the
+moment a scheduled deduction actually lands in a `PayrollEntry` (§15's full lifecycle chain).
 
 ### Values that must never be duplicated (single source of truth)
 - Net salary and every `calcNet` intermediate — always computed from `PayrollEntry` (and, for a
@@ -1527,6 +1783,11 @@ Entry's one-off release (`payroll.late_released`, carrying `lateReason`).
   (`PayrollEntry.advanceId`/`.eidAdvanceId`) at entry time, never re-inferred later from "whichever
   advance is currently active," which could point at the wrong advance by the time a correction
   happens (§12, §15)
+- **Added 2026-07-08:** an Advance's scheduled deduction target — `Advance.currentScheduledPeriodId`
+  is the single live pointer (BR-ADV-005); a deferral moves it, it is never duplicated into a second
+  pointer or a second row. A future payroll period itself is represented exactly once, in
+  `ScheduledPayrollPeriod` (§10a) — never as a second, ad hoc `(year, month)` representation on any
+  consuming table
 - A combined Bank Sheet/Cash Sheet payment amount is computed once, server-side, from
   `PayrollEntry.netSalary` plus settling `BalanceAdjustment`s — never independently re-entered or
   re-derived per document (Payslip and Statement of Account show the same figures broken out, not
@@ -1581,6 +1842,14 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
   `PayrollEntry` data read-only.
 - **ESS Portal** — needs only a new `Role` row (e.g. `EMPLOYEE`) and corresponding `Permission` rows;
   no new payroll tables required, since it consumes existing read paths scoped to one employee.
+- **Added 2026-07-08 — any future Outstanding Payroll Obligation** (e.g. a Loans, Recoveries, or Bonus
+  Deferral module — `docs/architecture/data-and-storage.md` §4, `docs/architecture/overview.md`
+  Extensibility): needs only its own table(s) plus, if it must reference a not-yet-existing future
+  cycle, a foreign key into the existing `ScheduledPayrollPeriod` (§10a) — never a new `(year, month)`
+  representation of its own. It registers its own carry-forward predicate and (optionally) its own
+  Payroll Materialization Hook with Payroll Processing's cycle bootstrap — independent of, and never
+  ordered relative to, any other provider's predicate/hook — with no change to `PayrollCycle`'s schema
+  or state machine, and no change to any other obligation provider's tables.
 
 ## 25. Migration Strategy
 
@@ -1611,6 +1880,15 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
   describes, `advanceId`/`eidAdvanceId` are deferred to a Phase 4 migration (they FK to `Advance`,
   which Phase 4 builds — see §12's matching 2026-07-07 revision note); `BalanceAdjustment.adjustmentTypeId`
   is unaffected and remains part of whichever migration Phase 6 adds `BalanceAdjustment` in.
+- **Added 2026-07-08, pre-Checkpoint-2 architecture amendment:** `ScheduledPayrollPeriod` (§10a),
+  `Advance.originalScheduledPeriodId`/`.currentScheduledPeriodId` (§15), and `AdvanceScheduleChange`
+  (§15a) are all designed *before* `Advance` has ever been migrated — since Phase 4 hasn't built it
+  yet, these land together in Phase 4's initial `Advance` migration from day one. This is the clean
+  case: no destructive change, no retrofit of an already-shipped table. `ScheduledPayrollPeriod` has no
+  dependency on `Advance` (it only depends on the already-shipped `PayrollCycle`), so it could in
+  principle migrate earlier than Phase 4 if a future obligation provider needs it sooner — but there is
+  no such consumer today, so it is scheduled alongside its first real consumer, per Principle 8 (build
+  additively, not ahead of an actual need).
 - Any future migration touching `PayrollEntry`, `Correction`, `BalanceAdjustment`, or `AuditLog`
   should get an explicit review pass given their financial/audit criticality, per Principle 4.
 

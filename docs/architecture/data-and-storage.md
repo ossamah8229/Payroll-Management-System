@@ -144,6 +144,25 @@ Archived (Locked)
     after a Unit was marked Ready, the system shows Finance a "modified since marked ready" notice
     (computed on read, not stored) without ever auto-clearing the flag.
   - Reports (Dashboard, Fines & EOBI Report, progress bars) continue updating live as figures change.
+  - **Advance Deduction Deferral (added 2026-07-08, pre-Checkpoint-2 architecture amendment).** Before
+    an entry is released, Payroll Staff (site-scoped) or Master User may defer that entry's linked
+    Advance deduction to a chosen future Draft payroll cycle — frozen as BR-ADV-001 through BR-ADV-006,
+    `docs/architecture/database-schema.md` §15. This reuses the entry's existing edit permission and
+    site-scoping; no new permission exists for it, and Finance (release-only, no payroll-edit
+    capability) cannot perform it. Mechanically, in one transaction: the entry's
+    `advanceDeduction`/`advanceId` (or `eidAdvanceDeduction`/`eidAdvanceId`) fields are zeroed (an
+    ordinary Draft field edit, bumping the entry's existing `version`), the linked `Advance`'s
+    `currentScheduledPeriodId` is moved to the chosen future
+    `ScheduledPayrollPeriod` (`database-schema.md` §10a — found or created for that target month via
+    Payroll Processing's own owned find-or-create function, never a direct write from Advances, and
+    never an existing `PayrollCycle` row, since only the current cycle is ever `Draft`), and an
+    `AdvanceScheduleChange` row (`database-schema.md` §15a) records the mandatory reason plus who/when.
+    A target must be strictly later than the current cycle — **not** limited to "next" or "one after
+    next" (BR-ADV-003) — and, since released payroll is never modified (BR-ADV-002/Principle 9), this
+    action is only ever available on an unreleased entry in the current `Draft` cycle to begin with;
+    there is no mechanism to reach into a different cycle's entry to defer it. See "Outstanding Payroll
+    Obligations," below, for how a deferred deduction is later picked back up once its target cycle is
+    created.
 
 - **Released** — the cycle as a whole has been finalized by an explicit Master User action
   ("Finalize Payroll Cycle"), not automatically and not as a side effect of any other action.
@@ -203,22 +222,82 @@ Archived (Locked)
 
 Only one cycle is ever in `Draft` state at a time.
 
+### Outstanding Payroll Obligations — the new-cycle carry-forward seam
+
+**Added 2026-07-08, pre-Checkpoint-2 architecture amendment**, generalizing what this section
+previously stated as a single, Balance-Adjustment-specific rule. Payroll Processing's new-cycle
+bootstrap must never contain hardcoded knowledge of any other module's tables (the same discipline
+`docs/architecture/overview.md`'s Extensibility section already applies to Biometric Attendance and
+Leave Management — a future module integrates at a defined seam, never by editing Payroll Processing's
+internals). Carry-forward is therefore expressed as an abstraction, not a name-checked list:
+
+> An **Outstanding Payroll Obligation** is anything a module registers as needing a future
+> `PayrollEntry` to settle, pay, or apply itself against. Each owning module supplies, for this seam:
+> (1) a **carry-forward predicate** — does employee X have an obligation that requires an entry in the
+> cycle now being created; and, optionally, (2) a **Payroll Materialization Hook** — given a newly
+> created entry, materialize whatever that obligation type contributes to it (renamed 2026-07-08 from
+> an earlier "population hook" working name — the responsibility is materializing a payroll obligation
+> into a `PayrollEntry`, not merely populating data, and this name stays accurate as further obligation
+> types are added).
+
+Payroll Processing's bootstrap **orchestrates only**: it never inspects `BalanceAdjustment` or
+`Advance` (or any future obligation module's tables) directly. It invokes every registered provider's
+predicate to decide which departed employees to include, then — after every entry for the new cycle
+exists — invokes every registered provider's Payroll Materialization Hook, where one exists. Each
+module owns its own business rules for what "outstanding" means and what materializing an obligation
+looks like; Payroll Processing owns only the orchestration described here.
+
+**Provider independence (added 2026-07-08):** Payroll Processing must never rely on the order in which
+providers are evaluated or invoked. Every registered predicate and every registered Payroll
+Materialization Hook must be independent and safe to run in any order, or concurrently — a provider
+must never assume another provider has already run, or will run before or after it, within the same
+bootstrap. If a genuine ordering dependency between two obligation types is ever discovered, it must be
+resolved by an explicit architecture decision (e.g. a documented, named ordering rule), never by
+depending on whatever order registration happens to produce today. This is what keeps a future
+obligation type a pure addition rather than a source of subtle coupling to whichever providers already
+exist.
+
+**Today's two registered providers:**
+
+1. **Balance Adjustments** — predicate: at least one `PENDING BalanceAdjustment` for this employee.
+   No Payroll Materialization Hook: settlement is a release-time concern (`docs/architecture/
+   post-release-corrections.md`), unchanged by this amendment — the entry is created with all
+   earning/attendance fields at zero and is visually flagged in the UI as a computed "Final
+   Settlement" indicator (`docs/design-system.md`), so it never reads as an active employee's ordinary
+   monthly pay, exactly as before.
+2. **Advances** — predicate: an `ACTIVE Advance` whose `currentScheduledPeriodId`
+   (`docs/architecture/database-schema.md` §15) resolves to the cycle now being created. Payroll
+   Materialization Hook: populate that entry's `advanceDeduction`/`advanceId` (or eid- equivalent) from
+   the advance's schedule, advance `currentScheduledPeriodId` to the following month as the new default
+   target (or clear it to null if this installment brings the advance to `PAID_OFF`), and write the
+   `advance.schedule_materialized` audit entry (`docs/architecture/database-schema.md` §15) — distinct
+   from `advance.deferred`, marking the moment a previously-deferred (or ordinary) schedule actually
+   lands in a real `PayrollEntry`, not merely that it moved.
+
+A future obligation type (a Loans, Recoveries, or Bonus Deferral module, say) plugs into this same seam
+by registering its own predicate and, if needed, its own Payroll Materialization Hook — never by
+Payroll Processing being edited to know about it, and never by assuming its own execution order
+relative to any other provider.
+
 ### New Cycle Creation & Employee Selection
 
 Creating a new cycle requires the current cycle to already be `Released` (above) and, in one
-transaction: transitions the current cycle to `Archived`, generates its backup package (§5), and
-creates the new `Draft` cycle's `PayrollEntry` rows.
+transaction, in this order:
 
-**Which employees get a new `PayrollEntry`:** the union of (a) every currently active employee
-(`dateOfLeaving IS NULL`), and (b) any employee — active or departed — who has at least one `PENDING`
-`BalanceAdjustment`. (b) exists specifically so a departed employee's pending balance is never
-stranded: since Balance Adjustments settle automatically only through a Draft cycle's `PayrollEntry`
-(`docs/architecture/post-release-corrections.md`), a departed employee with an outstanding balance
-must still receive a `PayrollEntry` in the new cycle — with all earning/attendance fields at zero — so
-the automatic settlement pipeline can pay it out through the ordinary release action, exactly as for
-any other employee. Such an entry is visually flagged in the UI (a computed "Final Settlement"
-indicator, not a stored field — see `docs/design-system.md`) so it never reads as an active
-employee's ordinary monthly pay.
+1. Transitions the current cycle to `Archived` and generates its backup package (§5).
+2. Creates the new `PayrollCycle` row (`Draft`).
+3. Resolves any `ScheduledPayrollPeriod` matching this new cycle's `(year, month)`
+   (`docs/architecture/database-schema.md` §10a) — a single, generic step, with no knowledge of which
+   module(s), if any, reference that period.
+4. Selects which employees get a new `PayrollEntry`: the union of (a) every currently active employee
+   (`dateOfLeaving IS NULL`), and (b) every employee — active or departed — selected by **any
+   registered Outstanding Payroll Obligation provider's** carry-forward predicate (above). Payroll
+   Processing never cares which module owns a given obligation; it only evaluates the union of
+   whatever predicates are registered.
+5. Bulk-creates the new cycle's `PayrollEntry` rows (each with its own single, freshly-seeded
+   `PayrollEntryWorkLine`, per `database-schema.md` §12a's carry-forward rule).
+6. Invokes every registered provider's Payroll Materialization Hook, where one exists, against the
+   newly-created entries — each invocation independent of the others (no assumed ordering, above).
 
 Carried-forward fields for continuing employees (gross pay, cycle days, OT/leave rate overrides, EOBI
 amount/applicability, site/bank/designation as of the source cycle) follow the same copy-at-creation

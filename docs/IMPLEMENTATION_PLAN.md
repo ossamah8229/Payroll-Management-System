@@ -718,6 +718,45 @@ model in `docs/architecture/database-schema.md` §15 except where flagged as new
   need to retype the same amount every month by hand.
   **Proposed schema addition for Phase 4** (not yet implemented): `Advance.scheduledInstallmentAmount`
   (numeric, nullable — null means no standing schedule, e.g. a one-off full-deduction advance).
+- **Advance Deduction Deferral — added 2026-07-08, pre-Phase-3-Checkpoint-2 architecture amendment
+  (frozen, not yet implemented).** Before an entry is released, Payroll Staff (site-scoped) or Master
+  User may defer that entry's scheduled deduction to any future Draft payroll cycle — not limited to
+  "next" or "one after next" — frozen as BR-ADV-001 through BR-ADV-006
+  (`docs/architecture/database-schema.md` §15). This phase's schema work adds, alongside the `Advance`
+  migration already planned above:
+  - **`ScheduledPayrollPeriod`** (`database-schema.md` §10a) — the canonical, single representation of
+    a calendar payroll period that may not yet have a materialized `PayrollCycle`; resolved exactly
+    once, by Payroll Processing's cycle-bootstrap, when the matching cycle is eventually created.
+    **Owned exclusively by Payroll Processing, not Advances** (§10a's ownership boundary, added
+    2026-07-09): Advances (and any future Outstanding Payroll Obligation provider) may only reference
+    this table via foreign key — the deferral action's find-or-create call goes through Payroll
+    Processing's own exposed function, never a direct write from Advances' own code.
+  - **`Advance.originalScheduledPeriodId`** (immutable, set once — BR-ADV-001) and
+    **`.currentScheduledPeriodId`** (the live, single pointer a deferral moves — BR-ADV-005), both FK
+    → `ScheduledPayrollPeriod`.
+  - **`AdvanceScheduleChange`** (`database-schema.md` §15a) — append-only (no updates, no deletes,
+    only inserts, same convention as `EmployeeTransferHistory`/`BalanceAdjustmentSettlement`) history
+    of every deferral: mandatory reason, deferred-by/deferred-at, and the from/to
+    `ScheduledPayrollPeriod` (BR-ADV-004).
+  - The deferral action itself: zero the entry's `advanceDeduction`/`advanceId` (or eid- equivalent),
+    move `Advance.currentScheduledPeriodId`, insert the `AdvanceScheduleChange` row, all in one
+    transaction with the `advance.deferred`/`payroll_entry.advance_deferred` `AuditLog` entries. Reuses
+    Payroll Entry's existing edit permission and site-scoping — no new permission. Target must be
+    strictly future (BR-ADV-006); enforced at the application layer, not a database check constraint,
+    since expressing it as one would require denormalizing `(year, month)` back onto
+    `AdvanceScheduleChange`, defeating the point of `ScheduledPayrollPeriod` — see §15a's note.
+  - **A second, distinct audit event — `advance.schedule_materialized`** — is written later, separately,
+    the moment this (possibly several-times-deferred) schedule finally lands in a real `PayrollEntry`
+    (Phase 5's cycle bootstrap, below), completing the auditable chain: Advance created → deferred →
+    deferred again (optional) → schedule materialized → fully recovered (`database-schema.md` §15).
+  - **Advances becomes this phase's first registered Outstanding Payroll Obligation provider**
+    (`docs/architecture/data-and-storage.md` §4, `docs/architecture/overview.md` Extensibility): its
+    carry-forward predicate (an `ACTIVE` advance whose schedule resolves to the new cycle) and Payroll
+    Materialization Hook (materializing that cycle's deduction and writing
+    `advance.schedule_materialized`) plug into Payroll Processing's generic cycle-bootstrap seam —
+    Phase 5 below is where that seam itself is built, since it's part of the new-cycle-creation
+    transaction, not this phase's own work. Like every registered provider, it must be independent of
+    and never assume any ordering relative to other providers (e.g. Balance Adjustments).
 - **Cash Advances** — advance disbursement to an employee with no bank account on file, parallel to
   the existing Cash Receiving Sheet concept for salary. **New scope**: the current `Advance` model
   tracks a balance but not a disbursement *event* or its payment method (cash vs. bank), so this
@@ -769,6 +808,19 @@ Sheet generation event (coarser)? See `docs/PROJECT_PROGRESS.md` §3 item 7.
 - Advance auto-linking test: a new deduction links to the correct `ACTIVE` advance; attempting to
   create a second `ACTIVE` advance of the same type for one employee is rejected by the partial unique
   index.
+- **Added 2026-07-08 — Advance Deduction Deferral tests (BR-ADV-001–006):** `originalScheduledPeriodId`
+  never changes across multiple deferrals of the same advance; `currentScheduledPeriodId` is always
+  exactly one value, overwritten (not appended) by each deferral; deferring to a past or current-cycle
+  target is rejected; deferring an already-released entry is rejected; a blank/whitespace-only reason
+  is rejected; deferring zeroes the source entry's `advanceDeduction`/`advanceId` (or eid- equivalent)
+  and bumps its `version`. **Concurrency:** two deferrals targeting the same future month, submitted at
+  the same time (possibly for different advances), must resolve to exactly one shared
+  `ScheduledPayrollPeriod` row, never two. **Resolution:** creating the `PayrollCycle` for a pending
+  period's `(year, month)` sets `payrollCycleId`/`resolvedAt` exactly once and cannot be set a second
+  time even by a direct write, and its `year`/`month` are confirmed immutable across that same write.
+  **Append-only test:** a direct `UPDATE` or `DELETE` against `AdvanceScheduleChange` at the service
+  layer has no code path to reach — verified the same way this project already verifies
+  `EmployeeTransferHistory`'s append-only convention.
 
 **Definition of Done:** a full release cycle — a Finance user releases one Project Unit, generates its
 Bank Sheet and Cash Receiving Sheet as PDF and Excel, generates a payslip for a released employee —
@@ -782,11 +834,19 @@ released Unit is released via its own one-off action with a mandatory reason and
 ### Phase 5 — Cycle Finalization, Archiving, and Backups
 
 **Builds:** the explicit "Finalize Cycle" action with its no-override precondition
-(`docs/architecture/data-and-storage.md` §4); the new-cycle-creation transaction (archive the outgoing
-cycle, generate its backup package, create the new Draft's `PayrollEntry` rows for active employees
-plus any employee with a `PENDING` Balance Adjustment); the Backup Package generator (Payroll/Bank
-Sheets/Receivings CSV + `metadata.json`, versioned, written through `StorageProvider`); the Payroll
-Cycle Selector (browse any historical cycle, always reading PostgreSQL, never a backup file).
+(`docs/architecture/data-and-storage.md` §4); the new-cycle-creation transaction — archive the outgoing
+cycle, generate its backup package, resolve any `ScheduledPayrollPeriod` matching the new cycle
+(`docs/architecture/database-schema.md` §10a, **added 2026-07-08**), create the new Draft's
+`PayrollEntry` rows for every active employee plus every employee selected by a registered
+**Outstanding Payroll Obligation** provider's carry-forward predicate, then invoke every registered
+provider's **Payroll Materialization Hook** — each invoked independent of the others, with no assumed
+order between providers — (**generalized 2026-07-08** from this bullet's original,
+Balance-Adjustment-specific wording — see `docs/architecture/data-and-storage.md` §4 and
+`docs/architecture/overview.md` Extensibility; today's two providers are Balance Adjustments and, once
+Phase 4 exists, Advances, whose hook writes `advance.schedule_materialized`) — the Backup Package
+generator (Payroll/Bank Sheets/Receivings CSV +
+`metadata.json`, versioned, written through `StorageProvider`); the Payroll Cycle Selector (browse any
+historical cycle, always reading PostgreSQL, never a backup file).
 
 **Depends on:** Phase 4 (Release must exist for the finalization precondition to be meaningful).
 
@@ -799,7 +859,21 @@ Cycle Selector (browse any historical cycle, always reading PostgreSQL, never a 
 - New-cycle-creation transaction test: verifies the all-or-nothing behavior (archive + backup +
   new-cycle creation succeed together or not at all); a deliberately-departed employee with a
   `PENDING` Balance Adjustment is confirmed to receive a new `PayrollEntry` in the next cycle, flagged
-  as a Final Settlement.
+  as a Final Settlement. **Added 2026-07-08 — generalized Outstanding Payroll Obligation test:** a
+  deliberately-departed employee is separately confirmed to receive a new `PayrollEntry` via the
+  Advances provider alone (a scheduled deduction resolving to the new cycle, no `BalanceAdjustment`
+  present), proving the two providers are evaluated independently, not a single hardcoded combined
+  check; a pending, not-yet-resolved `ScheduledPayrollPeriod` is confirmed to resolve
+  (`payrollCycleId`/`resolvedAt` set exactly once) the moment its target month's cycle is created, and
+  its `year`/`month` are confirmed unchanged before and after resolution. **Order-independence test:**
+  running the registered providers in a shuffled/reversed order produces an identical set of
+  carried-forward employees and identical entry contents — bootstrap's result must not depend on
+  registration order. **Materialization audit test:** the moment a deferred advance's target cycle is
+  created, exactly one `advance.schedule_materialized` entry is written (distinct from any
+  `advance.deferred` entries already on record for that advance), completing the auditable chain
+  end to end. **Deletion-prevention test:** a direct attempt to delete a `ScheduledPayrollPeriod` still
+  referenced by an `Advance` or `AdvanceScheduleChange` row is rejected at the database level, whether
+  or not its `PayrollCycle` has since archived.
 - Backup package test: generated CSVs match what the in-app Bank Sheet/Cash Sheet showed at the moment
   of archiving, byte-for-byte on the figures; regenerating a backup for an already-archived cycle
   (triggered by a later correction, tested together with Phase 6) increments `Backup Version` rather

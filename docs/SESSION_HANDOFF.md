@@ -11,17 +11,27 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `55eda58`** — "feat(payroll): implement Phase 3 Checkpoint 1 backend
-  CRUD". Full lineage: `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish
-  pass) → `11cdc9d` (Phase 2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture
-  review) → `74c124e` (further doc status update) → `0d9ea33` (Checkpoint 0) → `c60094c`
-  (Checkpoint 1) → `70a45ad` (Checkpoint 2) → `b27f559` (Checkpoint 2 doc close) → `ed4ed1f`
-  (**database-verification debt closed**, 2026-07-04) → `33f2b18` (Checkpoint 3) → `28d4192`
-  (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) → `0ca9a8f` (doc-only commit hash
-  record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture freeze, doc-only) → `aefa64f`
-  (Phase 3 Checkpoint 0 implementation) → `d9c3184` (doc-only commit hash record) → `55eda58`
-  (Phase 3 Checkpoint 1 implementation). **This session's own doc-only commit hash record lands on
-  top — check `git log -1` for the exact hash.**
+- **Latest committed commit: check `git log -1`** — this session's own single documentation-only
+  commit, freezing the Advance Deduction Deferral architecture (see below). Full prior lineage:
+  `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
+  2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
+  status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
+  `b27f559` (Checkpoint 2 doc close) → `ed4ed1f` (**database-verification debt closed**, 2026-07-04)
+  → `33f2b18` (Checkpoint 3) → `28d4192` (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) →
+  `0ca9a8f` (doc-only commit hash record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture
+  freeze, doc-only) → `aefa64f` (Phase 3 Checkpoint 0 implementation) → `d9c3184` (doc-only commit
+  hash record) → `55eda58` (Phase 3 Checkpoint 1 implementation) → **[this session]** (Advance
+  Deduction Deferral architecture amendment, doc-only, frozen 2026-07-09).
+- **The Advance Deduction Deferral architecture is now FROZEN (2026-07-09, architecture-only session,
+  no application code).** New business rule: authorized users may defer an Advance's scheduled
+  deduction to any future Draft payroll cycle before release (BR-ADV-001 through BR-ADV-006,
+  `docs/architecture/database-schema.md` §15). Two new tables (`ScheduledPayrollPeriod`, §10a;
+  `AdvanceScheduleChange`, §15a) and two new `Advance` columns are speced, plus the generalized
+  **Outstanding Payroll Obligations** extension seam on Payroll Processing's cycle bootstrap
+  (`docs/architecture/data-and-storage.md` §4, `docs/architecture/overview.md` Extensibility). Full
+  decision record: `docs/PROJECT_PROGRESS.md` §1's "Advance Deduction Deferral" subsection. **Do not
+  reopen or redesign this without a genuine implementation blocker or a new business requirement** —
+  Phase 4 should implement directly against this frozen documentation.
 - **Phase 3 Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD, RBAC/
   site-scoping, audit logging) is reviewed, approved, and COMMITTED** as `55eda58`. Two business
   decisions were frozen as part of this review — the **Payroll Bootstrap Rule** (continuing
@@ -627,6 +637,31 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
     Do not narrow it back to exclude 2900 without also changing that test convention.
   - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 1" subsection.
     **Checkpoint 2 still requires its own separate, explicit authorization.**
+- **New 2026-07-09, final architecture decisions — Advance Deduction Deferral, do not re-litigate:**
+  - BR-ADV-001 through BR-ADV-006 (`docs/architecture/database-schema.md` §15) are frozen business
+    rules. An Advance's scheduled deduction may be deferred, before release, to any future Draft
+    payroll cycle — not limited to "next" or "one after next" — by Payroll Staff (site-scoped) or
+    Master User, with a mandatory reason, permanently recorded.
+  - **`ScheduledPayrollPeriod`** (§10a) is the single, canonical representation of a not-yet-existing
+    future payroll period — never a raw `(year, month)` scalar pair on any other table. It is
+    **infrastructure owned exclusively by Payroll Processing**: domain modules (Advances) may only
+    reference it by foreign key and must go through Payroll Processing's own exposed find-or-create
+    function — never a direct write. Do not reintroduce year/month scalars on `Advance` or any future
+    obligation provider's tables to work around this.
+  - **`AdvanceScheduleChange`** (§15a) is append-only (no updates, no deletes, only inserts) — named
+    for recording schedule *changes*, not the schedule itself (that's `Advance.currentScheduledPeriodId`).
+    Do not rename it back to something deferral-specific if a future "bring forward" rule arrives —
+    extend it additively instead.
+  - **Outstanding Payroll Obligations** (`docs/architecture/data-and-storage.md` §4,
+    `docs/architecture/overview.md` Extensibility) is the generalized new-cycle carry-forward seam.
+    Payroll Processing's bootstrap must never contain obligation-specific (e.g. `BalanceAdjustment`- or
+    `Advance`-specific) knowledge, and registered providers must never be order-dependent. A future
+    obligation type registers its own predicate/**Payroll Materialization Hook** — do not hardcode a
+    new provider's checks directly into Payroll Processing's bootstrap logic.
+  - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Advance Deduction Deferral" subsection.
+    **This architecture is frozen — do not reopen or redesign it unless implementation reveals a
+    genuine blocker or a new business requirement is introduced.** Phase 4 implements directly against
+    it. Phase 3 Checkpoint 2 is unaffected and still requires its own separate authorization.
 
 ## 4. Current frozen architecture (reference index)
 
@@ -638,17 +673,22 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   Payroll Entry (+ Payroll Entry Work Lines) → Payroll Processing → Release (**now per Project Unit,
   2026-07-05**) → Bank Sheets/Cash Receiving, with CorrectionRequest → Corrections/Balance Adjustments
   as the highest-risk branch. Major Modules table includes **Project Units** as its own module and
-  reflects Finance's new role in Release Salary.
-- `docs/architecture/database-schema.md` — **full 25-table schema as of 2026-07-05** (18 original +
-  `ProjectUnit`/`PayrollEntryWorkLine`, 2026-07-03 + `PayrollUnitRelease`/`PayrollUnitReadiness`/
-  `CorrectionRequest`/`CorrectionPayment`/`BalanceAdjustmentSettlement`, 2026-07-05; Phase 1 + Phase 2
-  together implement a subset of it; see §1 of `docs/PROJECT_PROGRESS.md`). §26 item 6 (CNIC
-  duplicate-detection) is resolved, no longer pending.
+  reflects Finance's new role in Release Salary. **As of 2026-07-09**, also includes a dedicated
+  **Advances** module row (Advance Deduction Deferral) and a new "Outstanding Payroll Obligations"
+  Extensibility bullet documenting the generalized, order-independent carry-forward seam.
+- `docs/architecture/database-schema.md` — **27-table schema as of 2026-07-09** (25 as of 2026-07-05 +
+  `ScheduledPayrollPeriod`/`AdvanceScheduleChange`, 2026-07-09; Phase 1 + Phase 2 together implement a
+  subset of it; see §1 of `docs/PROJECT_PROGRESS.md`). §26 item 6 (CNIC duplicate-detection) is
+  resolved, no longer pending. `Advance` (§15) now carries `originalScheduledPeriodId`/
+  `currentScheduledPeriodId` and the frozen BR-ADV-001–006 rule set, none of it in
+  `backend/prisma/schema.prisma` yet (Phase 4 work).
 - `docs/architecture/authentication.md` — session-based auth, CSRF double-submit, RBAC +
   site-scoping as independent middleware layers. **Now three roles as of 2026-07-05**: Master User,
   Payroll Staff, and the new site-scoped **Finance** role (its own permission set documented in full).
   Multi-unit attendance splitting is still always intra-site, so no unit-level RBAC concept was
-  introduced for that reason — unchanged since 2026-07-03.
+  introduced for that reason — unchanged since 2026-07-03. **As of 2026-07-09**, also documents that
+  Advance Deduction Deferral reuses the existing payroll-edit permission/site-scoping — no new
+  permission was introduced, and Finance still cannot perform it.
 - `docs/architecture/post-release-corrections.md` — the baseline-reconstruction/replay algorithm
   (unaffected by 2026-07-05's changes — always operates on the resulting `Correction` regardless of
   which path produced it), deliberately scheduled late (Phase 6) per the plan. **As of 2026-07-05**,
@@ -657,7 +697,9 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
 - `docs/architecture/data-and-storage.md` — `StorageProvider` abstraction, Finalize Cycle
   precondition (wording unchanged by 2026-07-05's per-Unit release move), Backup Package versioning.
   **As of 2026-07-05**, §4 also documents the per-Unit release mechanism, the simplified one-clause
-  correction trigger, and the Late Entry exception.
+  correction trigger, and the Late Entry exception. **As of 2026-07-09**, §4 also documents the Advance
+  Deduction Deferral workflow and the generalized, order-independent Outstanding Payroll Obligations
+  new-cycle carry-forward seam (replacing the old Balance-Adjustment-specific wording).
 - `docs/design-system.md` — tokens (color/type/spacing/radius), layout patterns, the shared component
   inventory the frontend must reuse rather than re-implement per page, and, **as of 2026-07-03, §4's
   `DD-MM-YYYY` date-display convention** (alongside the existing `en-US` number-format convention).

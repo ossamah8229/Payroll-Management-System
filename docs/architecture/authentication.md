@@ -75,7 +75,11 @@ Site-scoped (below), read-mostly, and deliberately narrow:
   `payroll:mark-ready` (cannot mark or un-mark a Unit's `PayrollUnitReadiness` — that stays Payroll
   Staff's/Master User's own signal to Finance, not something Finance sets for itself), and no
   `corrections:approve`/`corrections:reject` (Finance never decides a `CorrectionRequest`, per the
-  same separation-of-duties reasoning above).
+  same separation-of-duties reasoning above). **Added 2026-07-08:** the same withholding covers
+  Advance Deduction Deferral (`docs/architecture/data-and-storage.md` §4,
+  `docs/architecture/database-schema.md` §15/§15a) — deferring a scheduled deduction is a payroll-edit
+  action (it mutates a `PayrollEntry` field), not a release action, so it requires the payroll-edit
+  permission Finance does not hold.
 
 ## Site-Based Permissions
 
@@ -95,7 +99,10 @@ approved decision: there is no global employee or payroll access for either role
 - **Create Employees** — a new employee record's `siteId` must be one of the creating user's assigned
   sites; a Payroll Staff user cannot create an employee at a site they aren't assigned to.
 - **Payroll Entry, Advances** — unchanged: scoped to assigned sites, Payroll-Staff-editable, as
-  previously documented.
+  previously documented. **Added 2026-07-08:** Advance Deduction Deferral is exercised through the
+  same Payroll-Entry-edit permission and site scope — no new permission was introduced for it, and no
+  separate scoping dimension exists beyond the entry's own site, matching how Work Line splitting
+  (§12a) needed no unit-level RBAC of its own either.
 - **Release** — revised 2026-07-05: scoped to assigned sites, but now executed by **Finance**, not
   Payroll Staff (who never held `payroll:release`) — see "Finance's permission set," above. Master
   User retains unrestricted release access on top, same as every other capability.
