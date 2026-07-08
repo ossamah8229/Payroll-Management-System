@@ -438,8 +438,9 @@ committing**:
   shared `calcNet` — COMPLETE, 2026-07-07.** See below.
 - **Checkpoint 1 — Cycle bootstrap/creation + Payroll Entry/Work Line backend CRUD, RBAC/
   site-scoping, audit logging — COMPLETE, 2026-07-07.** See below.
-- Checkpoint 2 — Payroll Entry grid frontend (TanStack Table + Virtual, inline editing,
-  autosave/conflict UX, Serial Number/Remarks/live-totals columns).
+- **Checkpoint 2 — Payroll Entry grid frontend (TanStack Table + Virtual, inline editing,
+  autosave/conflict UX, Serial Number/Remarks/live-totals columns) — IMPLEMENTED AND VERIFIED,
+  2026-07-09; not yet committed, awaiting review.** See below.
 - Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants).
 - Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar.
 - Checkpoint 5 — Payroll Entry CSV/Excel import/export.
@@ -611,6 +612,93 @@ committing**:
   editable field, Statements, Bank Sheets, Cash Receiving Sheets, imports/exports, Reports,
   Payslips, or any frontend/UI of any kind were introduced — all explicitly out of scope per this
   checkpoint's authorization and deferred to their own later checkpoints/phases.
+
+**Checkpoint 2 — Payroll Entry grid frontend — IMPLEMENTED AND VERIFIED, 2026-07-09 (not yet
+committed — awaiting explicit review/approval per this checkpoint's own instruction)**
+- **`frontend/src/components/payroll-entry/`** (new): `PayrollEntryGrid` — `@tanstack/react-table`
+  drives column/header structure and the row model; `@tanstack/react-virtual` virtualizes the body
+  over that row model (tech-stack.md's stated reasoning for choosing both). A single scroll
+  container holds a sticky group-label row ("Bank Details", "EOBI"), a sticky column-header row,
+  the virtualized body, and a sticky totals row together — all three stay pixel- and scroll-aligned
+  because they share one horizontally-scrolling ancestor; the header/totals are pinned only on the
+  vertical axis via `position: sticky`, not scrolled in a separate element.
+- **Every Phase 3 `PayrollEntry`/primary-`PayrollEntryWorkLine` column** (`columns.ts`, single
+  source of column widths shared by header/body/totals): Serial Number, Employee Code, Employee
+  Name, Designation, Site (read-only), Bank/Branch Code/Account No./Account Title, Gross Pay,
+  Working Days, OT Hours, OT Rate, Cycle Days, Leave Days, Leave Rate, Allowance, EOBI
+  Amount/Applicable, Advance Deduction, Eid Advance Deduction, Fine, Hold, Remarks, Net Salary.
+  Cycle Days and Leave Days were added beyond the checkpoint's own illustrative column list, since
+  both are real, editable, `calcNet`-feeding architecture fields (§12/§12a) — omitting them would
+  have left no way to correct a value `calcNet` actually depends on.
+- **One implementation per row, not per cell**: `usePayrollEntryEditor` (new hook) owns local draft
+  overlays, live `calcNet` recomputation (shared `calcNet` exclusively — no reimplementation
+  anywhere in the frontend), debounced autosave, and optimistic-locking conflict handling for one
+  `PayrollEntry` (+ its primary Work Line). TanStack Table's per-cell functional renderer model
+  doesn't fit a design where 20+ cells share one row-level save transaction, so column defs drive
+  the header only; the body renders one custom `PayrollEntryRow` component per row.
+- **Autosave**: 600ms debounce after the last keystroke in a row, then one PATCH per touched store
+  (`PayrollEntry` fields, primary `PayrollEntryWorkLine` fields) chained so the work-line PATCH uses
+  the entry PATCH's freshly-returned `version`, never the pre-request one. A save in flight when
+  further edits arrive queues exactly one more save on completion, never drops or races two
+  concurrent saves to the same row. Per-row status (dirty/saving/saved/error/conflict) shown as a
+  compact icon beside the Serial Number, doubling as the retry/reload-row affordance.
+- **Optimistic-locking conflict handling** (docs/architecture/database-schema.md §22): a 409 marks
+  the row `conflict`, disables further edits on it, and preserves the user's unsaved local draft
+  (visible, not discarded) until they explicitly click the conflict icon, which discards the draft
+  and re-fetches that one entry fresh. Any other failure (network/5xx) auto-retries up to 3 times
+  with backoff, plus a manual retry via the same icon — an edit is never silently dropped.
+- **Live totals**: a small external store (`live-totals-store.ts`, `useSyncExternalStore`) each row
+  reports its current effective numeric values to on every change (not just on save), so the sticky
+  totals row updates as-you-type without forcing a re-render of every other row in the grid. Sums
+  every user-entered numeric column (nulls/"auto" excluded from that column's sum, not counted as
+  zero) plus the Net Salary grand total, computed by summing each row's own `calcNet` result.
+- **Keyboard navigation**: Up/Down/Enter move focus between the same column in adjacent rows,
+  including across the virtualizer's mount/unmount boundary (scrolls the target into view first,
+  then focuses once React renders it); Tab/Shift+Tab already work natively across columns.
+- **`shared/src/lib/number.ts`** (new): `formatMoney`/`formatNumber` — the `en-US`-grouped,
+  `PKR`-prefixed-for-currency-only formatting utility `docs/design-system.md` §4 and
+  `docs/architecture/folder-structure.md` both anticipated but that no prior phase had actually
+  built yet; used identically by the grid and its totals row, one implementation.
+- **`frontend/src/components/ui/toggle-switch.tsx`** (new): the pill on/off toggle
+  `docs/design-system.md` §3 calls for (Hold, EOBI Applicable) — didn't exist yet, built once,
+  shared by both usages in this grid.
+- **A small, explicitly-flagged addition beyond the literal grid**: a "Start New Payroll Cycle"
+  action (year/month modal, Master-User-only via the existing `payroll-cycle:manage` permission)
+  was added to the Payroll Entry page's header, backed entirely by Checkpoint 1's already-built
+  `createPayrollCycle`. Without it, the grid has nothing to render in a fresh environment and this
+  checkpoint's own deliverable couldn't be demonstrated end-to-end; it does not add any Finalize/
+  Release/Archive affordance, which remain later phases' concern.
+- **RBAC**: no new permission model — reuses the existing `payroll:entry` permission and the
+  backend's own site-scoping verbatim; the frontend renders exactly what the already-scoped list
+  endpoint returns and never re-implements a site check client-side.
+- **Explicitly out of scope, none introduced**: Split by Project Unit / multi-work-line editor,
+  bulk operations, import/export, Release workflow, the Finance role, Corrections, Balance
+  Adjustments, Advances, Advance Deferral, `ScheduledPayrollPeriod`, Bank Sheet, Cheque Reference,
+  Statement of Account, and performance optimization beyond normal frontend practice (page-to-
+  completion fetch of a paginated endpoint, not a windowed/incremental one — Checkpoint 6's own
+  10,000-employee-floor validation is unaffected and still to come).
+- **Verification**: `npm run typecheck`/`lint`/`build` clean across all three workspaces. Backend
+  suite re-run unchanged (160/160 passing) to confirm nothing broke. **No frontend unit-test
+  framework exists in this project yet** (no prior phase added one; this checkpoint didn't either,
+  consistent with the established practice of relying on typecheck/lint/build + Playwright for
+  frontend verification) — "frontend tests (if applicable)" was therefore not applicable. Real-stack
+  Playwright verification (live browser → Vite → Express → PostgreSQL, `embedded-postgres` in the
+  session scratchpad): logged in, created a Draft cycle, added three test employees/entries via the
+  API (a fresh environment starts with zero of either), then in the browser — edited Gross Pay,
+  Working Days, and Remarks inline; confirmed Net Salary and the totals row recomputed live via
+  `calcNet`; toggled Hold; reloaded the page and confirmed every edit had actually persisted
+  server-side (proving autosave, not just local UI state); and separately simulated a genuine
+  concurrent edit via a direct API call while the browser held a now-stale cached version, confirmed
+  the conflict icon appeared with the row's inputs disabled and the user's own pending edit still
+  visible (not silently discarded), and confirmed clicking it correctly reloaded the row to the
+  other edit's real server value. Zero console/page errors throughout (one pre-existing, expected
+  401 from the session-bootstrap check before login, already documented behavior unrelated to this
+  checkpoint). One real inconsistency was found and fixed during this pass: the totals row initially
+  gave "Leave Rate" a `PKR` prefix while "OT Rate" (the same kind of value) had none — corrected so
+  only genuine payment amounts carry the currency prefix, rates and counts do not.
+- **Scope discipline maintained**: no code path in this checkpoint mutates `ScheduledPayrollPeriod`,
+  `Advance`, or any Balance-Adjustment/Correction table — the grid touches only `PayrollEntry` and
+  its primary `PayrollEntryWorkLine`, exactly as Checkpoint 1's backend already scoped them.
 
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always

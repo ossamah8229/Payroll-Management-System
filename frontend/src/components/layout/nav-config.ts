@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Building2, LayoutDashboard, UserCog, Users } from 'lucide-react';
+import { Building2, ClipboardList, LayoutDashboard, UserCog, Users } from 'lucide-react';
 import type { PermissionKey } from '@payroll/shared';
 
 export interface NavItem {
@@ -26,6 +26,12 @@ export const navSections: NavSection[] = [
   {
     label: 'Overview',
     items: [{ label: 'Dashboard', to: '/', icon: LayoutDashboard }],
+  },
+  {
+    label: 'Payroll',
+    items: [
+      { label: 'Payroll Entry', to: '/payroll-entry', icon: ClipboardList, requiredPermission: 'payroll:entry' },
+    ],
   },
   {
     label: 'Employees',

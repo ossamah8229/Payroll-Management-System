@@ -11,8 +11,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: check `git log -1`** — this session's own single documentation-only
-  commit, freezing the Advance Deduction Deferral architecture (see below). Full prior lineage:
+- **Latest committed commit: check `git log -1`** — this session's own implementation commit for
+  Phase 3 Checkpoint 2. Full prior lineage:
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -20,8 +20,18 @@ be enough to resume correctly without re-deriving context from scratch — per
   → `33f2b18` (Checkpoint 3) → `28d4192` (doc-only commit hash record) → `e26fe8c` (Checkpoint 4) →
   `0ca9a8f` (doc-only commit hash record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture
   freeze, doc-only) → `aefa64f` (Phase 3 Checkpoint 0 implementation) → `d9c3184` (doc-only commit
-  hash record) → `55eda58` (Phase 3 Checkpoint 1 implementation) → **[this session]** (Advance
-  Deduction Deferral architecture amendment, doc-only, frozen 2026-07-09).
+  hash record) → `55eda58` (Phase 3 Checkpoint 1 implementation) → `0d54a97` (Advance Deduction
+  Deferral architecture amendment, doc-only, frozen 2026-07-09) → **[this session]** (Phase 3
+  Checkpoint 2 implementation, reviewed and committed). **This session's own doc-only commit hash
+  record lands on top — check `git log -1` for the exact hash.**
+- **Phase 3 Checkpoint 2 (Payroll Entry grid frontend) is reviewed, approved, verified, and
+  COMMITTED.** A pre-commit verification pass found and fixed three genuine defects within scope: a
+  numeric-input crash (unparseable text crashed the live `calcNet` preview — no error boundary
+  existed anywhere in the app), the sticky totals row only summing currently-mounted/virtualized-
+  visible rows (undercounting at scale), and a Cycle Days validation inconsistency (invalid
+  keystrokes were silently discarded rather than flagged). All three are fixed; full record:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 2" and "Pre-Commit Final Verification Pass"
+  subsections. **Checkpoint 2 is complete and closed.**
 - **The Advance Deduction Deferral architecture is now FROZEN (2026-07-09, architecture-only session,
   no application code).** New business rule: authorized users may defer an Advance's scheduled
   deduction to any future Draft payroll cycle before release (BR-ADV-001 through BR-ADV-006,

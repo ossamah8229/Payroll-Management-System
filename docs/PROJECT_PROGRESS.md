@@ -1,29 +1,33 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-09 (a dedicated, documentation-only architecture session — the Advance Deduction
-Deferral pre-Checkpoint-2 amendment — run between the 2026-07-07 Checkpoint 1 session and the
-not-yet-started Checkpoint 2). See the "Advance Deduction Deferral" entry in §1, below. Prior entries
+**Date:** 2026-07-09 (two sessions today — the Advance Deduction Deferral architecture amendment,
+committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**).
+See the "Phase 3, Checkpoint 2" and "Advance Deduction Deferral" entries in §1, below. Prior entries
 (2026-07-07 and earlier) are preserved unchanged below this point.
-**Latest committed commit:** this session's own single documentation-only commit — **check `git log
--1` for the exact hash** (session lineage up to and including the prior session: `2e804d4` closed
-Phase 1 → `674ab04` landed Phase 2's substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final
-visual consistency audit → `11cdc9d` Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3
-architecture review → `74c124e` further doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 →
-`c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc
-close → `ed4ed1f` database-verification debt closed (2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3
-→ `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5 Checkpoint 4 → `0ca9a8f` doc-only
-commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3 architecture freeze, doc-only → `aefa64f`
-Phase 3 Checkpoint 0 implementation → `d9c3184` doc-only commit hash record → `55eda58` Phase 3
-Checkpoint 1 implementation → **[this session's hash]** Advance Deduction Deferral architecture
-amendment, doc-only, frozen).
+**Latest committed commit:** this session's own implementation commit — **check `git log -1` for the
+exact hash** (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build
+→ `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
+documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
+`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2
+→ `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed (2026-07-04) →
+`33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5
+Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3
+architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation → `d9c3184` doc-only
+commit hash record → `55eda58` Phase 3 Checkpoint 1 implementation → `0d54a97` Advance Deduction
+Deferral architecture amendment, doc-only, frozen → **[this session]** Phase 3 Checkpoint 2 (Payroll
+Entry grid frontend) implementation, reviewed and committed. **This session's own doc-only commit
+hash record (below) lands on top — check `git log -1` for the exact hash.**
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoints 0 and 1 remain committed and closed, exactly
-as before this session.** This was an architecture-only session — no implementation, no Prisma, no
-migrations, no application code. It froze the **Advance Deduction Deferral** architecture (BR-ADV-001
-through BR-ADV-006, `ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized Outstanding
-Payroll Obligations seam) ahead of Phase 4, so that frozen design is ready and waiting once Phase 4
-implementation begins. See §1's new "Advance Deduction Deferral" entry for the full decision record.
-**Checkpoint 2 has NOT started, is entirely unaffected by this session, and still requires its own
+**Current implementation phase:** **Phase 3 Checkpoints 0, 1, and now 2 are all committed and
+closed.** This same day's first session was architecture-only — no implementation, no Prisma, no
+migrations, no application code — and froze the **Advance Deduction Deferral** architecture
+(BR-ADV-001 through BR-ADV-006, `ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized
+Outstanding Payroll Obligations seam) ahead of Phase 4, committed as `0d54a97`. **A second, explicitly
+authorized session then implemented Phase 3 Checkpoint 2** (the Payroll Entry grid frontend) on top
+of that commit, underwent an explicit verification pass (three genuine defects found and fixed — a
+numeric-input crash, a totals-row aggregation bug at scale, and a Cycle Days validation
+inconsistency — see §1's "Pre-Commit Final Verification Pass" entry), was reviewed and approved, and
+is now **committed and closed**. **Checkpoints 3–6 have NOT started and each still requires its own
 explicit authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
@@ -801,6 +805,212 @@ Phase 3 section for the full checkpoint breakdown this session established (Chec
 - **Scope discipline maintained**: no routes, no service layer, no frontend component, no
   cycle-bootstrap action, and no `AuditLog`/RBAC changes were introduced — all explicitly deferred to
   Checkpoint 1 onward, per the approved checkpoint scope.
+
+### Phase 3, Checkpoint 2 — Pre-Commit Final Verification Pass — 2026-07-09 (not yet committed)
+
+A dedicated verification-only pass requested before authorizing the commit, explicitly scoped to
+"verify and report, do not modify architecture or expand scope unless you discover a genuine
+defect." Three genuine defects were found via targeted real-stack Playwright testing (not
+speculative — each is demonstrated below) and fixed within that same scope; everything else was
+confirmed already correct and is documented as-is, with no code change.
+
+**1. Numeric editing UX — defect found and fixed (severity: crash).** Typing any unparseable value
+(`""`, `"-"`, `"."`, `"abc"`) into any numeric cell crashed the entire app to a blank white screen —
+confirmed via Playwright (`pageerror: [DecimalError] Invalid argument: abc`, empty document body,
+no error boundary anywhere in the app to contain it). Root cause: the live `calcNet` preview
+recomputed on every keystroke via a bare `useMemo`, and `calcNet`'s underlying `decimal.js` throws
+synchronously on an unparseable string.
+- **Fix:** wrapped the live calc in try/catch, falling back to the entry's last-saved (always-valid,
+  per the database's own numeric constraints) figures whenever the current draft doesn't parse
+  (`use-payroll-entry-editor.ts`).
+- **Fix:** added `frontend/src/components/payroll-entry/numeric-validation.ts` (`isValidDecimalDraft`,
+  `parseValidCycleDays`, reusing the shared `decimalString` Zod schema — newly exported from
+  `@payroll/shared` — so the frontend's notion of "valid" never drifts from the backend's) and used
+  it to filter invalid/incomplete values out of what `commit()` ever sends, so an incomplete value is
+  never autosaved and never produces a wasted request.
+- **Fix (related sub-bug, same root cause):** Cycle Days validated inside its `onChange` handler and
+  silently dropped invalid keystrokes, which made the field appear to randomly revert while
+  retyping. Changed to the same "type freely, validate at commit time" pattern as every other
+  numeric field (`cycleDaysInputValue`, `use-payroll-entry-editor.ts`).
+- Added a visual `invalid` (red-bordered, `aria-invalid`) state to `InlineNumberCell` so an
+  unparseable value is visibly flagged while never blocking further typing.
+- Re-verified live: empty/`-`/`.`/`0.`/`abc`/delete-and-retype all correctly flagged invalid, zero
+  crashes, zero invalid autosaves; typing a valid value afterward saves and persists normally;
+  nullable fields (OT Rate, Leave Rate) correctly treat empty as valid, not invalid.
+
+**2. Keyboard workflow — documented, no defect.** ArrowUp/ArrowDown/Enter move focus within the same
+column to the adjacent row, clamped at the first/last row (no wraparound, confirmed via Playwright:
+ArrowUp at row 0 and ArrowDown at the last row both correctly no-op). ArrowLeft/ArrowRight are not
+intercepted — native text-caret movement only. Tab/Shift+Tab use native browser focus order, which
+correctly skips every read-only cell (Employee Code, Name, Site, Net Salary), moving from the last
+editable column of one row (Remarks) to the first editable column of the next (Designation), and
+back — confirmed via Playwright's `document.activeElement` inspection at every boundary. **Known,
+accepted limitation, not fixed:** Tab relies on native DOM order, and the virtualizer only mounts a
+window of rows at a time — tabbing toward a row far outside that window (unlike Up/Down/Enter, which
+explicitly scroll the target into view first) may exit the grid or land unpredictably. This is the
+same tradeoff every DOM-virtualized grid has unless it implements a custom roving-tabindex system,
+which was judged out of this pass's scope (a genuine UX enhancement, not a defect fix).
+
+**3. Row ordering — confirmed deterministic, no defect.** Every entry list is ordered by
+`sortOrder` ascending, both server-side (`listPayrollEntries`'s `orderBy`) and client-side (no
+sorting/reordering is applied on top — `PayrollEntryGrid` renders `entries` in the order received).
+Every mutation path (`replaceEntry`, `reloadPayrollEntry`) updates the array via `.map()`, which
+preserves position; nothing in this checkpoint's surface can change `sortOrder` (no drag-reorder UI
+exists — that's a later checkpoint). Confirmed live: the same three employees appeared in the same
+position before editing, immediately after an autosave, and across two independent full-page
+reloads.
+
+**4. Pending autosave on tab-close/refresh/navigation — confirmed and documented as an accepted
+limitation, not fixed.** No `beforeunload` guard exists anywhere in the app. Verified live: typing a
+value and navigating away immediately (well inside the 600ms debounce window, no wait at all) loses
+the edit silently — reloading the page showed the field back at its last-saved value, with no
+browser warning ever shown. An edit is safe exactly once its debounce fires and the PATCH completes
+(≈600ms+round-trip after the last keystroke); before that, closing the tab, refreshing, or
+navigating away can lose it. This is reported here rather than fixed, since a `beforeunload` guard
+would be a genuine, reasonable enhancement but is additive scope beyond "verify and report" — left
+for explicit authorization rather than added unprompted.
+
+**5. Bulk/rapid editing — confirmed correct, no defect.** Five different fields on one row (Gross
+Pay, Working Days, Remarks, Hold, Allowance) edited back-to-back with zero waiting between them.
+Network log showed exactly two PATCH requests (entry-level fields coalesced into one, the work-line
+field into a second, chained using the *first* request's returned `version`, never the stale
+pre-request one) — no overlapping in-flight requests, no 409s, no non-2xx responses. Final persisted
+values (confirmed via full page reload) matched the last-typed value for every field, and the
+totals row reflected the changes correctly throughout.
+
+**6. Performance baseline — documentation only, no optimization performed.** Bulk-seeded 500
+additional employees/entries directly via Prisma (503 entries total) into the existing Draft cycle.
+At this scale: grid interactive ~550-580ms after navigating to the page; exactly ~28-30 row elements
+ever present in the DOM regardless of scroll position (virtualization confirmed working); scroll-to-
+bottom-and-settle ~300ms; a click+edit on a cell ~60-70ms. **Comfortably usable well past 500 rows on
+this observation** — no slowdown, jank, or unresponsiveness observed at 503 rows on ordinary
+developer hardware. This is a single-scale spot-check, not the rigorous 10,000-employee-floor
+validation Checkpoint 6 owns, and no code was changed as a result.
+
+**Defect found *during* this baseline check (not part of the original 8 items, but surfaced by
+testing at scale): the sticky totals row only summed currently-*mounted* (virtualized-visible) rows,
+undercounting everything scrolled out of view** — at 503 rows the totals row showed "Σ28 employees"
+instead of 503, because the live-totals store's only population mechanism was each row's own mount
+effect. **Fixed:** `LiveTotalsStore` now distinguishes actively-mounted rows (whose live, not-yet-
+saved edits should win) from everything else (seeded/refreshed from the `entries` array's own
+server-cache figures via a new `setBase`, called whenever that array changes); a row unmounting now
+hands back a fresh server-truth snapshot (`unmount`, using the new `computeServerSnapshot` helper in
+`calc-input.ts`) instead of being dropped from the total entirely. Re-verified at 503 rows: totals
+row correctly reads "Σ503 employees" with an internally-consistent grand total, and all five earlier
+scenarios (numeric edge cases, conflict recovery) were re-run afterward with no regression.
+
+**Process note, not a product defect:** this pass's own Playwright verification created real,
+persistent data (a Project Site/Unit, several employees, a Draft cycle) in the shared scratchpad
+PostgreSQL instance that `backend/tests` also runs against. Running the backend suite without
+resetting the database afterward produced 16 unrelated-looking failures (a stray Draft cycle
+blocking the fixture suite's own cycle-creation test, a foreign-key mismatch from a leftover
+site/unit). The database was reset (drop/recreate/migrate/seed) and the suite re-confirmed
+**160/160 passing** — recorded here so a future session understands this was test-data hygiene
+during manual verification, not a Checkpoint 2 regression. Backend code was not touched this
+session.
+
+**Verification results after all fixes above:** `typecheck`/`lint`/`build` clean across all three
+workspaces; **160/160 backend tests passing** against a freshly reset database; all six items
+re-confirmed live via Playwright with the fixes in place, plus a final clean-database smoke test
+(fresh site/employee/cycle created via API, edited in the grid, persisted after reload, zero
+console/page errors).
+
+**Re-confirmed in a second, fresh verification pass immediately before commit** (full typecheck/
+lint/build, a clean database reset, 160/160 backend tests, and Playwright re-run against the exact
+working tree being committed — the numeric-crash fix, the Cycle Days fix, the totals-at-scale fix,
+and optimistic-locking conflict recovery were each independently re-exercised and all passed with
+zero regressions). A repository hygiene sweep confirmed no debug `console.log`s, no TODO/FIXME
+markers, no scratch/temporary files, and no unintended working-tree changes beyond this checkpoint's
+own 15 files.
+
+**Checkpoint 2 is APPROVED and this implementation is now committed** — see the commit hash recorded
+at the top of this file and in `docs/SESSION_HANDOFF.md`.
+
+### Phase 3, Checkpoint 2 — Payroll Entry Grid Frontend — COMPLETE AND CLOSED, 2026-07-09
+
+Executed after the Advance Deduction Deferral architecture amendment (below) was frozen and
+committed (`0d54a97`), against that frozen documentation plus Checkpoint 1's already-built backend.
+Explicitly authorized as **frontend only** — "do not perform any architecture review or redesign
+unless you encounter a genuine implementation blocker" was honored throughout; no blocker was hit.
+Reviewed, the three defect fixes above were explicitly accepted as in-scope implementation
+corrections, a final pre-commit hygiene/verification pass was run clean, and this checkpoint is now
+**approved, committed, and closed** — see the commit hash recorded at the top of this file.
+
+**Baseline re-established before any change:** confirmed `main` at `0d54a97`, clean working tree;
+re-provisioned embedded PostgreSQL in the session scratchpad (same recipe as prior sessions —
+`@embedded-postgres/darwin-x64`, since this machine reported x64 this session, not arm64); all 8
+existing migrations applied cleanly to a fresh database; seed script run twice back-to-back and
+confirmed idempotent (second run: "Master Admin account already exists," no duplicate-row errors);
+**160/160 backend tests passing** before any Checkpoint 2 code was written.
+
+**Implementation note (clarification only, no architecture change):** Checkpoint 2 intentionally
+loads the backend's paginated Payroll Entry API to completion on the client (paging through
+200-row responses into one flat array for the virtualizer to render). Incremental/windowed-fetch
+loading — where the client only ever requests the rows near the current scroll position, rather
+than the whole cycle — is intentionally deferred to Phase 3 Checkpoint 6 (Performance & Scale),
+which owns validating and, if needed, optimizing behavior at the 10,000-employee design floor.
+
+**Built:**
+- `frontend/src/hooks/use-payroll-cycles.ts`, `use-payroll-entries.ts`, `use-payroll-entry-editor.ts`
+  (new) — data layer: cycle listing/creation, paginated-entry-fetch-to-completion (the backend caps
+  a single request at 200 rows; the hook pages through to a flat, sortOrder-ordered array, which is
+  what a client-side-virtualized grid needs — ordinary client paging-to-completion, not the
+  windowed/incremental fetch Checkpoint 6 owns), and the per-row autosave/conflict state machine.
+- `frontend/src/components/payroll-entry/` (new directory) — `PayrollEntryGrid` (TanStack Table for
+  column/header structure + the row model, TanStack Virtual virtualizing the body over it),
+  `PayrollEntryRow` (one component per row, one `usePayrollEntryEditor` instance per row — TanStack
+  Table's per-cell renderer model doesn't fit a row where 20+ cells share one save transaction),
+  `PayrollEntryTotalsRow` (subscribes to a small external store so it updates live without
+  re-rendering every other row per keystroke), `columns.ts` (single source of column widths shared
+  by header/body/totals), `calc-input.ts` (builds shared `calcNet`'s input from stored figures
+  overlaid with local pending edits — `calcNet` itself is never reimplemented), `inline-cells.tsx`,
+  `save-status-indicator.tsx`, `use-grid-keyboard-nav.ts`, `new-cycle-modal.tsx`.
+- `frontend/src/components/ui/toggle-switch.tsx` (new) and `shared/src/lib/number.ts` (new,
+  `formatMoney`/`formatNumber`) — both already called for by `docs/design-system.md`/
+  `docs/architecture/folder-structure.md` but never actually built by any prior phase.
+- `frontend/src/routes/payroll-entry-page.tsx` (new route, `/payroll-entry`) — loading/empty/error
+  states, wired into `App.tsx` and a new "Payroll" nav section (`nav-config.ts`).
+- Every Phase 3 `PayrollEntry`/primary-work-line column is present (see the parallel
+  `docs/IMPLEMENTATION_PLAN.md` Checkpoint 2 entry for the full list) — including Cycle Days and
+  Leave Days, which weren't in the checkpoint instruction's own illustrative list but are real,
+  editable, `calcNet`-feeding architecture fields (§12/§12a) that would otherwise have had no
+  correction path in the grid.
+- A small, explicitly-flagged addition: a "Start New Payroll Cycle" modal (Master-User-only, reusing
+  Checkpoint 1's `createPayrollCycle` verbatim) — without it the grid has nothing to render in a
+  fresh environment, and no later checkpoint's scope covers it either.
+
+**Verification:**
+- `npm run typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`. Backend suite
+  re-run unchanged, **160/160 passing**. No frontend unit-test framework exists in this project (no
+  prior phase added one) — "frontend tests (if applicable)" was not applicable, consistent with this
+  project's established reliance on typecheck/lint/build + Playwright for frontend verification.
+- **Real-stack Playwright verification**, live browser → Vite dev server → Express → the
+  session's real PostgreSQL (no `chromium-cli` available in this environment — drove Playwright's
+  `chromium` launcher directly instead, per the `run` skill's documented fallback). Logged in as the
+  seeded Master Admin; a fresh database has zero employees and zero cycles, so a Project
+  Site/Unit/three Employees were created via the API and a Draft cycle via the UI's own new action;
+  confirmed the grid renders with sticky grouped/column headers and a sticky totals row; edited
+  Gross Pay, Working Days, and Remarks inline and watched Net Salary and the totals row recompute
+  live; toggled Hold; reloaded the page and confirmed every edit had actually persisted server-side
+  (proving the autosave round-trip, not just optimistic local state); and separately simulated a
+  genuine concurrent edit via a direct API PATCH while the browser held a now-stale cached version —
+  confirmed the conflict indicator appeared, the row's inputs disabled themselves, the user's own
+  unsaved edit stayed visible (not discarded), and clicking the conflict icon correctly reloaded the
+  row to the other edit's real value. Zero console/page errors other than one pre-existing, expected
+  401 from the session-bootstrap check that fires before login (documented behavior, unrelated to
+  this checkpoint).
+- **One real inconsistency found and fixed during verification**: the totals row initially rendered
+  "Leave Rate" with a `PKR` prefix while "OT Rate" — the same kind of value — had none; corrected so
+  only genuine payment-amount columns carry the currency prefix, consistent with
+  `docs/design-system.md` §4.
+
+**Scope discipline maintained**: no code path touches `ScheduledPayrollPeriod`, `Advance`, or any
+Balance-Adjustment/Correction table; no Split-by-Unit, bulk operations, import/export, Release,
+Finance role, Bank Sheet, Cheque Reference, Statement of Account, or beyond-normal-practice
+performance work was introduced — all explicitly out of scope per this checkpoint's authorization.
+
+**Not committed.** Awaiting explicit review and approval before any `git commit`, per this
+checkpoint's own instruction.
 
 ### Advance Deduction Deferral — Pre-Checkpoint-2 Architecture Amendment — FROZEN, 2026-07-09 (architecture only, no application code)
 

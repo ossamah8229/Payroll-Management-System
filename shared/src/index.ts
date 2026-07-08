@@ -51,9 +51,12 @@ export type {
 
 export type { SessionUser } from './types/session-user';
 
+export { decimalString } from './schemas/common';
+
 export { formatDate, isoDateToUtcDate, parseDateInput, toIsoDateOnly } from './lib/date';
 export { pluralize } from './lib/text';
 export { normalizeCnic } from './lib/cnic';
+export { formatMoney, formatNumber } from './lib/number';
 export { calcNet } from './lib/calc-net';
 export type {
   CalcNetResult,
