@@ -11,8 +11,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: check `git log -1`** — this session's own implementation commit for
-  Phase 3 Checkpoint 2. Full prior lineage:
+- **Latest committed commit: `e072da5`** — "feat(payroll): implement Phase 3 Checkpoint 2 Payroll
+  Entry grid frontend". Full prior lineage:
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -21,9 +21,8 @@ be enough to resume correctly without re-deriving context from scratch — per
   `0ca9a8f` (doc-only commit hash record, closing Phase 2.5) → `1c4d61f` (Phase 3 architecture
   freeze, doc-only) → `aefa64f` (Phase 3 Checkpoint 0 implementation) → `d9c3184` (doc-only commit
   hash record) → `55eda58` (Phase 3 Checkpoint 1 implementation) → `0d54a97` (Advance Deduction
-  Deferral architecture amendment, doc-only, frozen 2026-07-09) → **[this session]** (Phase 3
-  Checkpoint 2 implementation, reviewed and committed). **This session's own doc-only commit hash
-  record lands on top — check `git log -1` for the exact hash.**
+  Deferral architecture amendment, doc-only, frozen 2026-07-09) → `e072da5` (Phase 3 Checkpoint 2
+  implementation, reviewed and committed).
 - **Phase 3 Checkpoint 2 (Payroll Entry grid frontend) is reviewed, approved, verified, and
   COMMITTED.** A pre-commit verification pass found and fixed three genuine defects within scope: a
   numeric-input crash (unparseable text crashed the live `calcNet` preview — no error boundary

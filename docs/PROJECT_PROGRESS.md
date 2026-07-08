@@ -4,19 +4,19 @@
 committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**).
 See the "Phase 3, Checkpoint 2" and "Advance Deduction Deferral" entries in §1, below. Prior entries
 (2026-07-07 and earlier) are preserved unchanged below this point.
-**Latest committed commit:** this session's own implementation commit — **check `git log -1` for the
-exact hash** (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive build
-→ `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2 checkpoint
-documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc status update →
-`0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad` Phase 2.5 Checkpoint 2
-→ `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt closed (2026-07-04) →
-`33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record → `e26fe8c` Phase 2.5
-Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 → `1c4d61f` Phase 3
-architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation → `d9c3184` doc-only
-commit hash record → `55eda58` Phase 3 Checkpoint 1 implementation → `0d54a97` Advance Deduction
-Deferral architecture amendment, doc-only, frozen → **[this session]** Phase 3 Checkpoint 2 (Payroll
-Entry grid frontend) implementation, reviewed and committed. **This session's own doc-only commit
-hash record (below) lands on top — check `git log -1` for the exact hash.**
+**Latest committed commit:** `e072da5` — "feat(payroll): implement Phase 3 Checkpoint 2 Payroll Entry
+grid frontend" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive
+build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2
+checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc
+status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
+Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt
+closed (2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record →
+`e26fe8c` Phase 2.5 Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 →
+`1c4d61f` Phase 3 architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation →
+`d9c3184` doc-only commit hash record → `55eda58` Phase 3 Checkpoint 1 implementation → `0d54a97`
+Advance Deduction Deferral architecture amendment, doc-only, frozen → `e072da5` Phase 3 Checkpoint 2
+(Payroll Entry grid frontend) implementation, reviewed and committed). **This session's own doc-only
+commit hash record (below) lands on top — check `git log -1` for the exact hash.**
 **Branch:** `main`
 **Current implementation phase:** **Phase 3 Checkpoints 0, 1, and now 2 are all committed and
 closed.** This same day's first session was architecture-only — no implementation, no Prisma, no
@@ -806,7 +806,7 @@ Phase 3 section for the full checkpoint breakdown this session established (Chec
   cycle-bootstrap action, and no `AuditLog`/RBAC changes were introduced — all explicitly deferred to
   Checkpoint 1 onward, per the approved checkpoint scope.
 
-### Phase 3, Checkpoint 2 — Pre-Commit Final Verification Pass — 2026-07-09 (not yet committed)
+### Phase 3, Checkpoint 2 — Pre-Commit Final Verification Pass — 2026-07-09 (committed as `e072da5`)
 
 A dedicated verification-only pass requested before authorizing the commit, explicitly scoped to
 "verify and report, do not modify architecture or expand scope unless you discover a genuine
@@ -1009,8 +1009,7 @@ Balance-Adjustment/Correction table; no Split-by-Unit, bulk operations, import/e
 Finance role, Bank Sheet, Cheque Reference, Statement of Account, or beyond-normal-practice
 performance work was introduced — all explicitly out of scope per this checkpoint's authorization.
 
-**Not committed.** Awaiting explicit review and approval before any `git commit`, per this
-checkpoint's own instruction.
+**Committed as `e072da5`** — reviewed and approved, per this checkpoint's own instruction.
 
 ### Advance Deduction Deferral — Pre-Checkpoint-2 Architecture Amendment — FROZEN, 2026-07-09 (architecture only, no application code)
 

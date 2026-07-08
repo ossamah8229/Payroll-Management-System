@@ -439,8 +439,8 @@ committing**:
 - **Checkpoint 1 — Cycle bootstrap/creation + Payroll Entry/Work Line backend CRUD, RBAC/
   site-scoping, audit logging — COMPLETE, 2026-07-07.** See below.
 - **Checkpoint 2 — Payroll Entry grid frontend (TanStack Table + Virtual, inline editing,
-  autosave/conflict UX, Serial Number/Remarks/live-totals columns) — IMPLEMENTED AND VERIFIED,
-  2026-07-09; not yet committed, awaiting review.** See below.
+  autosave/conflict UX, Serial Number/Remarks/live-totals columns) — COMPLETE, 2026-07-09.**
+  See below.
 - Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants).
 - Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar.
 - Checkpoint 5 — Payroll Entry CSV/Excel import/export.
@@ -613,8 +613,8 @@ committing**:
   Payslips, or any frontend/UI of any kind were introduced — all explicitly out of scope per this
   checkpoint's authorization and deferred to their own later checkpoints/phases.
 
-**Checkpoint 2 — Payroll Entry grid frontend — IMPLEMENTED AND VERIFIED, 2026-07-09 (not yet
-committed — awaiting explicit review/approval per this checkpoint's own instruction)**
+**Checkpoint 2 — Payroll Entry grid frontend — COMPLETE, 2026-07-09 (reviewed, verified, and
+committed as `e072da5`)**
 - **`frontend/src/components/payroll-entry/`** (new): `PayrollEntryGrid` — `@tanstack/react-table`
   drives column/header structure and the row model; `@tanstack/react-virtual` virtualizes the body
   over that row model (tech-stack.md's stated reasoning for choosing both). A single scroll
