@@ -10,9 +10,9 @@ import { prisma } from '../src/lib/prisma';
  * that must survive a test run.
  *
  * AuditLog rows are deliberately NOT deleted: the table is append-only, enforced by a database
- * trigger that rejects DELETE outright (docs/architecture/data-and-storage.md §3) — deleting a
+ * trigger that rejects DELETE outright (docs/architecture/system-conventions.md §3) — deleting a
  * test User instead nulls those rows' actorUserId via the FK's documented ON DELETE SET NULL
- * action (docs/architecture/database-schema.md §16). Test assertions against AuditLog are
+ * action (docs/architecture/database/audit-log.md §16). Test assertions against AuditLog are
  * therefore scoped to the specific entityId each test created, never to an action name alone.
  * EmployeeTransferHistory is append-only by application-layer convention only (§8b — no DB
  * trigger), so test cleanup deleting its rows is the "direct database intervention" that

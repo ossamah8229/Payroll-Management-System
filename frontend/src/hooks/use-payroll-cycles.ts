@@ -35,7 +35,7 @@ const MONTH_NAMES = [
   'December',
 ];
 
-/** Computed display label, never stored (docs/architecture/database-schema.md §22: "PayrollCycle
+/** Computed display label, never stored (docs/architecture/database/schema-invariants.md §22: "PayrollCycle
  * display label... computed from year/month, never stored"). */
 export function formatCycleLabel(cycle: Pick<PayrollCycle, 'year' | 'month'>): string {
   return `${MONTH_NAMES[cycle.month - 1]} ${cycle.year}`;
@@ -51,7 +51,7 @@ export function usePayrollCycles() {
 
 /**
  * The cycle Payroll Entry operates against. Only one cycle is ever `DRAFT` at a time
- * (docs/architecture/data-and-storage.md §4) — that is always the editable one. If none is Draft
+ * (docs/architecture/workflows/payroll-lifecycle.md §4) — that is always the editable one. If none is Draft
  * (e.g. a brand-new install with zero cycles ever created), `cycle` is `undefined` and the page
  * shows its empty state rather than falling back to a non-Draft cycle, since nothing in this
  * checkpoint's scope can ever render a released/archived cycle as anything but read-only, and this

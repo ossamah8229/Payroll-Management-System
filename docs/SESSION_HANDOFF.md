@@ -34,10 +34,10 @@ be enough to resume correctly without re-deriving context from scratch — per
 - **The Advance Deduction Deferral architecture is now FROZEN (2026-07-09, architecture-only session,
   no application code).** New business rule: authorized users may defer an Advance's scheduled
   deduction to any future Draft payroll cycle before release (BR-ADV-001 through BR-ADV-006,
-  `docs/architecture/database-schema.md` §15). Two new tables (`ScheduledPayrollPeriod`, §10a;
+  `database/advances.md` §15). Two new tables (`ScheduledPayrollPeriod`, §10a;
   `AdvanceScheduleChange`, §15a) and two new `Advance` columns are speced, plus the generalized
   **Outstanding Payroll Obligations** extension seam on Payroll Processing's cycle bootstrap
-  (`docs/architecture/data-and-storage.md` §4, `docs/architecture/overview.md` Extensibility). Full
+  (`docs/architecture/workflows/outstanding-obligations.md`, `docs/architecture/overview.md` Extensibility). Full
   decision record: `docs/PROJECT_PROGRESS.md` §1's "Advance Deduction Deferral" subsection. **Do not
   reopen or redesign this without a genuine implementation blocker or a new business requirement** —
   Phase 4 should implement directly against this frozen documentation.
@@ -62,7 +62,7 @@ be enough to resume correctly without re-deriving context from scratch — per
   Corrections/Balance Adjustments design now frozen into `docs/architecture/*.md` and
   `docs/IMPLEMENTATION_PLAN.md`. Full decision record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3
   Architecture Review" subsection. Checkpoint 0 implemented against that frozen design, with two
-  explicitly approved deviations recorded in `database-schema.md` §12/§25's dated revision notes
+  explicitly approved deviations recorded in `database/payroll-entry.md` §12 and `database/schema-invariants.md` §25's dated revision notes
   (the `advanceId`/`eidAdvanceId` deferral to Phase 4, and the new `PayrollEntry.remarks` column)
   and one in `overview.md` (`calcNet`'s implementation living in `shared/`, not backend-only).
   Checkpoint 1 implements CRUD/RBAC against that same frozen design and Checkpoint 0's schema, with
@@ -186,7 +186,7 @@ be enough to resume correctly without re-deriving context from scratch — per
 dashboard greeting, fixed an Employee Registry table header/value alignment mismatch, added
 `ProjectSite.address` (a scoped, explicitly user-authorized exception to this pass's own
 no-schema-changes rule — see `docs/PROJECT_PROGRESS.md` §3 item 8 and
-`docs/architecture/database-schema.md` §8's revision note), added a Company Logo placeholder section
+`database/sites-and-units.md` §8's revision note), added a Company Logo placeholder section
 to Settings and a matching logo slot on the login page (both UI-only, still blocked on
 `StorageProvider`), improved Settings page spacing/hierarchy, standardized the seed script's company
 name to "Broom Services Private Limited", and standardized `Button` height to match `Input`. A new
@@ -222,8 +222,8 @@ placeholders, Settings layout, company name, button/input heights, plus this aud
 committed together as `89ac6ff` ("feat(ui): Phase 2 UI polish and UX improvements") after explicit
 user approval — the commit message the user asked for at the start of the pass. The user then
 explicitly stated **"Phase 2 is now complete"** and requested this formal checkpoint (this
-documentation update), on the same conditional basis as Phase 1's closure (§4's DB-backed-
-verification caveat carried forward as a tracked open item, not a blocker). **Phase 3 has not started
+documentation update), on the same conditional basis as Phase 1's closure (`docs/PROJECT_PROGRESS.md`
+§4's DB-backed-verification caveat carried forward as a tracked open item, not a blocker). **Phase 3 has not started
 and must not begin without the user's explicit instruction next session.**
 
 ### What was completed this session (2026-07-03 to 2026-07-04)
@@ -276,10 +276,10 @@ sequence: `migrate deploy` (all six migrations applied to a fresh DB, unmodified
 **The first live run failed and surfaced four real defects, all fixed the same session** (full
 detail: `docs/PROJECT_PROGRESS.md` §1 "Database verification"):
 1. The Audit Log immutability trigger blocked the FK's own `ON DELETE SET NULL` — any `User` with
-   audit history was undeletable, contradicting `database-schema.md` §16. Fixed by a new migration,
+   audit history was undeletable, contradicting `database/audit-log.md` §16. Fixed by a new migration,
    `20260704180000_audit_log_allow_fk_actor_set_null` (permits exactly that one column transition,
-   rejects everything else); dated revision notes added to `database-schema.md` §16 and
-   `data-and-storage.md` §3.
+   rejects everything else); dated revision notes added to `database/audit-log.md` §16 and
+   `docs/architecture/system-conventions.md` §3.
 2. Every `Employee` date write 500'd against real Postgres (Prisma `@db.Date` rejects the bare
    `YYYY-MM-DD` strings the Zod schemas produce) — create-with-DOB, mark-as-left, transfer
    `effectiveDate`, and import DOB/DOJ/DOL were all affected. Fixed via a new shared
@@ -344,7 +344,7 @@ negative balances settling differently (immediate/deferred, or installment recov
 **Full decision record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection** —
 not duplicated here in full; the highlights any future session needs to know before touching Phase 3:
 
-- **Release moves to Project Unit granularity** (`PayrollUnitRelease`, `database-schema.md` §12b),
+- **Release moves to Project Unit granularity** (`PayrollUnitRelease`, `database/release.md` §12b),
   executed by a new **Finance** role, not Payroll Staff. `PayrollEntry.released` keeps its existing
   shape but is now *derived* — an entry releases only once every Project Unit its work lines touch has
   released, so a multi-unit split employee (Phase 2.5's own capability) still resolves to exactly one
@@ -355,13 +355,13 @@ not duplicated here in full; the highlights any future session needs to know bef
   convention.
 - **The correction trigger simplifies to one clause**: `PayrollEntry.released = true` (previously two
   clauses — released OR cycle-not-Draft — now redundant since Cycle status is itself derived).
-- **`CorrectionRequest`** (§13a) — any authorized payroll user may propose a correction; only a Master
+- **`CorrectionRequest`** (`database/corrections.md §13a`) — any authorized payroll user may propose a correction; only a Master
   User may approve (producing a `Correction`) or reject it. A Master User correcting personally still
   bypasses this table entirely, unchanged from before this session.
 - **`BalanceAdjustment` gains immediate/deferred timing** (`PAYABLE`, via a new `CorrectionPayment`
-  table for the no-open-entry case, §14a) **and installment recovery** (`RECOVERY`, via
+  table for the no-open-entry case, `database/balance-adjustments.md §14a`) **and installment recovery** (`RECOVERY`, via
   `recoveryInstallmentAmount`/`remainingAmount` and a new append-only `BalanceAdjustmentSettlement`
-  history table, §14b, mirroring `Advance.scheduledInstallmentAmount`'s and
+  history table, `database/balance-adjustments.md §14b`, mirroring `Advance.scheduledInstallmentAmount`'s and
   `EmployeeTransferHistory`'s already-established patterns respectively).
 - **Late Entry exception**: an entry created after its Unit already released needs its own one-off
   release (`PayrollEntry.lateReason`, a single field — "is this entry late" is derived, never stored).
@@ -378,7 +378,7 @@ not duplicated here in full; the highlights any future session needs to know bef
 **Net schema growth:** 5 new tables, 2 new enums, 4 new columns across `PayrollEntry`/
 `BalanceAdjustment` — bringing the documented schema to 25 tables. **None of this exists in
 `backend/prisma/schema.prisma` yet** — it's a design specification, same as the rest of
-`database-schema.md`, waiting for Phase 3 implementation.
+`docs/architecture/database/`, waiting for Phase 3 implementation.
 
 **Files touched:** `docs/architecture/database-schema.md`, `data-and-storage.md`,
 `post-release-corrections.md`, `authentication.md`, `overview.md`, `docs/IMPLEMENTATION_PLAN.md`
@@ -415,7 +415,7 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   `20260704180000_audit_log_allow_fk_actor_set_null`) must never be dropped or worked around.
   **The 2026-07-04 amendment is not a weakening**: it permits exactly one UPDATE shape — the
   `actorUserId` NOT NULL → NULL transition the FK's documented `ON DELETE SET NULL` action produces
-  (`database-schema.md` §16's revision note) — and still rejects every other UPDATE and all DELETEs,
+  (`database/audit-log.md` §16's revision note) — and still rejects every other UPDATE and all DELETEs,
   verified live. Do not widen it further.
 - **New rule (2026-07-04): every Prisma write to a `@db.Date` column goes through
   `isoDateToUtcDate()`** (`shared/src/lib/date.ts`) — Prisma rejects the bare `YYYY-MM-DD` strings
@@ -476,12 +476,12 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   - **CNIC duplicate handling is now finalized (2026-07-03, session 2) — no longer pending.** CNIC
     stays globally unique with no override mechanism; duplicate `Employee` records are never
     permitted; rehires go exclusively through a new Reactivate Employee action that updates the
-    existing row in place. See `docs/architecture/database-schema.md` §26 item 6 (rewritten as a final
+    existing row in place. See `database/schema-invariants.md` §26 item 6 (rewritten as a final
     decision) and `docs/PROJECT_PROGRESS.md` §3 item 22. **Per standing instruction, the concrete
     implementation (exact endpoint shapes, fields touched, audit contents) still gets presented for
     approval before Checkpoint 4's code is written** — the policy is settled, the implementation still
     gets a design-review gate.
-  - **`EmployeeTransferHistory`** (new table, `docs/architecture/database-schema.md` §8b) — one row
+  - **`EmployeeTransferHistory`** (new table, `database/employee.md` §8b) — one row
     per Employee site/unit transfer (`effectiveDate`, `transferredByUserId`, optional `reason`/
     `remarks`, `createdAt`), append-only except by direct database intervention, no UI in Phase 2.5.
     Employee transfers also write a dedicated `employee.transferred` `AuditLog` entry, not the generic
@@ -541,7 +541,7 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
     clear frontend's `.tsbuildinfo` files before trusting `npm run typecheck --workspace frontend`.**
 - **New 2026-07-05, Phase 3 Architecture Review — final decisions, do not re-litigate:**
   - **Release granularity is per Project Unit, not per Site/Cycle.** `PayrollUnitRelease`
-    (`database-schema.md` §12b) is the release event; `PayrollEntry.released` is derived from it,
+    (`database/release.md` §12b) is the release event; `PayrollEntry.released` is derived from it,
     releasing an entry only once *every* Project Unit its work lines touch has released. Do not
     reintroduce a direct per-employee "release" write path, and do not collapse a multi-unit entry's
     release back to "whichever unit releases first" — it must wait for all of them, preserving one
@@ -557,7 +557,7 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   - **The correction trigger is now one clause**: `PayrollEntry.released = true`. Do not reintroduce
     the old two-clause "OR cycle no longer Draft" form — it's now redundant by construction, since
     Cycle status is itself derived from Unit releases.
-  - **`CorrectionRequest` (§13a) is the only path for a non-Master-User-initiated correction.** A
+  - **`CorrectionRequest` (`database/corrections.md §13a`) is the only path for a non-Master-User-initiated correction.** A
     Master User correcting directly still bypasses it entirely — do not force every correction through
     the request table regardless of who's making it.
   - **`BalanceAdjustment.paymentTiming`/`recoveryInstallmentAmount`/`remainingAmount` are additive.**
@@ -578,7 +578,7 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
     migration (they FK to `Advance`, which Phase 4 builds). Do not add them to a Checkpoint 1–6
     migration — they land specifically when Phase 4 introduces `Advance`.
   - **`PayrollEntry.remarks` (nullable text) exists**, an approved addition beyond
-    `database-schema.md` §12's original design — ordinarily Draft-editable, frozen into the permanent
+    `database/payroll-entry.md` §12's original design — ordinarily Draft-editable, frozen into the permanent
     snapshot once released, intended as the Payroll Entry grid's last column (a later checkpoint's UI
     work, not yet built).
   - **`calcNet`'s implementation lives in `shared/src/lib/calc-net.ts`**, not backend-only — exported
@@ -632,7 +632,7 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
     system-lifecycle action, not Payroll Staff's routine data entry. Do not grant it to Payroll
     Staff or fold it into `PERMISSIONS.PAYROLL_ENTRY`.
   - **Work-line mutations never get their own `AuditLog` action type.** Adding/updating/deleting a
-    `PayrollEntryWorkLine` is folded into a `payroll_entry.updated` entry (§22's explicit
+    `PayrollEntryWorkLine` is folded into a `payroll_entry.updated` entry (`database/schema-invariants.md §22`'s explicit
     instruction) — do not introduce a `payroll_entry_work_line.*` action.
   - **`deletePayrollEntry` is permitted only while unreleased and the cycle is still Draft** — this
     is Draft data entry, not yet "historical payroll," so Principle 2 does not block it. Do not
@@ -647,21 +647,21 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 1" subsection.
     **Checkpoint 2 still requires its own separate, explicit authorization.**
 - **New 2026-07-09, final architecture decisions — Advance Deduction Deferral, do not re-litigate:**
-  - BR-ADV-001 through BR-ADV-006 (`docs/architecture/database-schema.md` §15) are frozen business
+  - BR-ADV-001 through BR-ADV-006 (`database/advances.md` §15) are frozen business
     rules. An Advance's scheduled deduction may be deferred, before release, to any future Draft
     payroll cycle — not limited to "next" or "one after next" — by Payroll Staff (site-scoped) or
     Master User, with a mandatory reason, permanently recorded.
-  - **`ScheduledPayrollPeriod`** (§10a) is the single, canonical representation of a not-yet-existing
+  - **`ScheduledPayrollPeriod`** (`database/payroll-cycle.md §10a`) is the single, canonical representation of a not-yet-existing
     future payroll period — never a raw `(year, month)` scalar pair on any other table. It is
     **infrastructure owned exclusively by Payroll Processing**: domain modules (Advances) may only
     reference it by foreign key and must go through Payroll Processing's own exposed find-or-create
     function — never a direct write. Do not reintroduce year/month scalars on `Advance` or any future
     obligation provider's tables to work around this.
-  - **`AdvanceScheduleChange`** (§15a) is append-only (no updates, no deletes, only inserts) — named
+  - **`AdvanceScheduleChange`** (`database/advances.md §15a`) is append-only (no updates, no deletes, only inserts) — named
     for recording schedule *changes*, not the schedule itself (that's `Advance.currentScheduledPeriodId`).
     Do not rename it back to something deferral-specific if a future "bring forward" rule arrives —
     extend it additively instead.
-  - **Outstanding Payroll Obligations** (`docs/architecture/data-and-storage.md` §4,
+  - **Outstanding Payroll Obligations** (`docs/architecture/workflows/outstanding-obligations.md`,
     `docs/architecture/overview.md` Extensibility) is the generalized new-cycle carry-forward seam.
     Payroll Processing's bootstrap must never contain obligation-specific (e.g. `BalanceAdjustment`- or
     `Advance`-specific) knowledge, and registered providers must never be order-dependent. A future
@@ -685,10 +685,11 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   reflects Finance's new role in Release Salary. **As of 2026-07-09**, also includes a dedicated
   **Advances** module row (Advance Deduction Deferral) and a new "Outstanding Payroll Obligations"
   Extensibility bullet documenting the generalized, order-independent carry-forward seam.
-- `docs/architecture/database-schema.md` — **27-table schema as of 2026-07-09** (25 as of 2026-07-05 +
+- `docs/architecture/database/` (formal schema specification — see `database/README.md` for the
+  per-file index) — **27-table schema as of 2026-07-09** (25 as of 2026-07-05 +
   `ScheduledPayrollPeriod`/`AdvanceScheduleChange`, 2026-07-09; Phase 1 + Phase 2 together implement a
-  subset of it; see §1 of `docs/PROJECT_PROGRESS.md`). §26 item 6 (CNIC duplicate-detection) is
-  resolved, no longer pending. `Advance` (§15) now carries `originalScheduledPeriodId`/
+  subset of it; see §1 of `docs/PROJECT_PROGRESS.md`). `database/schema-invariants.md §26` item 6 (CNIC duplicate-detection) is
+  resolved, no longer pending. `Advance` (`database/advances.md §15`) now carries `originalScheduledPeriodId`/
   `currentScheduledPeriodId` and the frozen BR-ADV-001–006 rule set, none of it in
   `backend/prisma/schema.prisma` yet (Phase 4 work).
 - `docs/architecture/authentication.md` — session-based auth, CSRF double-submit, RBAC +
@@ -698,12 +699,13 @@ cycles — `docs/PROJECT_PROGRESS.md` §3) are untouched, still open on their ow
   introduced for that reason — unchanged since 2026-07-03. **As of 2026-07-09**, also documents that
   Advance Deduction Deferral reuses the existing payroll-edit permission/site-scoping — no new
   permission was introduced, and Finance still cannot perform it.
-- `docs/architecture/post-release-corrections.md` — the baseline-reconstruction/replay algorithm
+- `docs/architecture/workflows/corrections-and-balance-adjustments.md` — the baseline-reconstruction/replay algorithm
   (unaffected by 2026-07-05's changes — always operates on the resulting `Correction` regardless of
   which path produced it), deliberately scheduled late (Phase 6) per the plan. **As of 2026-07-05**,
   also covers the `CorrectionRequest` request/approval/rejection split, immediate/deferred `PAYABLE`
   settlement, and installment `RECOVERY` settlement.
-- `docs/architecture/data-and-storage.md` — `StorageProvider` abstraction, Finalize Cycle
+- `docs/architecture/system-conventions.md` (`StorageProvider` abstraction) and
+  `docs/architecture/workflows/payroll-lifecycle.md` — Finalize Cycle
   precondition (wording unchanged by 2026-07-05's per-Unit release move), Backup Package versioning.
   **As of 2026-07-05**, §4 also documents the per-Unit release mechanism, the simplified one-clause
   correction trigger, and the Late Entry exception. **As of 2026-07-09**, §4 also documents the Advance
@@ -806,7 +808,7 @@ NOT started.**
 6. Decide how Broom Services' own disbursement source bank account(s) should be modeled
    (`docs/PROJECT_PROGRESS.md` §3 item 7) — before Phase 4 schema work begins. **Unaffected by
    Checkpoints 0–1** — this is about the source account for disbursements, a separate concern.
-7. Confirm the two still-open design assumptions from `docs/architecture/database-schema.md` §26:
+7. Confirm the two still-open design assumptions from `database/schema-invariants.md` §26:
    calendar-month-only cycles (Checkpoint 0 assumed this holds — `PayrollCycle.year`/`.month` has no
    other period-length concept — but it remains formally unconfirmed with the client),
    at-most-one-`ACTIVE`-`Advance`-per-type before Phase 4.
@@ -828,14 +830,14 @@ NOT started.**
   anticipated and was handled: four real defects were found and fixed (see §2's 2026-07-04 entry),
   one of them via a new migration — existing migrations were not edited.
 - **Resolved**: the Bank/AdjustmentType/CompanySettings scope question, the two Employee Registry
-  §26 items, the `ProjectSite.defaultBankId` removal, the `StorageProvider` deferral timing (confirmed:
+  `database/schema-invariants.md §26` items, the `ProjectSite.defaultBankId` removal, the `StorageProvider` deferral timing (confirmed:
   before Phase 5), `ProjectSite.address` (added, scoped exception), the company name ("Broom Services
   Private Limited"), and the deployment-portability nuance (single-company, but not
   hosting-provider-specific) — see `docs/PROJECT_PROGRESS.md` §3.
 - **Still unresolved, carried forward**: the import-template redundant-column assumption (§3 item 5,
   likely resolved as a side effect of Checkpoint 3's `ProjectUnit` remap but not yet confirmed with
   the client), Broom Services' own disbursement source account modeling (§3 item 7, including its two
-  sub-questions — needed before Phase 4 schema work), and the two open `database-schema.md` §26
+  sub-questions — needed before Phase 4 schema work), and the two open `database/schema-invariants.md` §26
   design assumptions (calendar-month-only cycles, at-most-one-`ACTIVE`-`Advance`-per-type). **The
   CNIC duplicate-handling decision (§26 item 6) is no longer on this list — it was finalized
   2026-07-03/04**: CNIC stays globally unique with no override, and rehires go through a Reactivate

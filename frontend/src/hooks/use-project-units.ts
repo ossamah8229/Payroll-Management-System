@@ -4,7 +4,7 @@ import { apiRequest } from '@/lib/api-client';
 
 /** The operational sub-division of a ProjectSite an employee is deputed to (a specific branch,
  * department, section, etc.) — always displayed using the owning site's own `unitLabel`, never
- * the literal word "Unit" (docs/architecture/database-schema.md §8a). */
+ * the literal word "Unit" (docs/architecture/database/sites-and-units.md §8a). */
 export interface ProjectUnit {
   id: string;
   siteId: string;

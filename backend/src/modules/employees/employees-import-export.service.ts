@@ -20,7 +20,7 @@ import {
  * real client files (reference/PROJECT_SPEC.md, "Official Data Template") — this exact header set
  * is required, not a house style.
  *
- * **Column mapping finalized in Phase 2.5 Checkpoint 3** (docs/architecture/database-schema.md
+ * **Column mapping finalized in Phase 2.5 Checkpoint 3** (docs/architecture/database/sites-and-units.md
  * §8's revision note: these columns map onto `ProjectUnit` fields, not `ProjectSite` ones):
  * - `Project` → the employee's `ProjectSite.name` (unchanged).
  * - `Area` → the employee's `ProjectUnit.name` — the operational Branch/Department/Section.
@@ -278,7 +278,7 @@ function resolveRowUnit(
  * A single summary audit log entry is written for the whole operation rather than one per row, to
  * keep the audit log readable for a bulk action instead of spammed with hundreds of near-identical
  * entries — with one deliberate exception: an update that changes an employee's site/unit is a
- * *transfer* (docs/architecture/database-schema.md §8b/§9, a business event in its own right) and
+ * *transfer* (docs/architecture/database/employee.md §8b/§9, a business event in its own right) and
  * writes its `EmployeeTransferHistory` row plus dedicated `employee.transferred` audit entry via
  * the same shared `recordEmployeeTransfer()` the ordinary update path uses, atomically with the
  * row update. Transfers are never folded into a generic/summary-only path, per the 2026-07-03
@@ -373,7 +373,7 @@ export async function importEmployees(
         if (existing.dateOfLeaving && dateOfLeaving === null) {
           // A departed employee reappearing with a blank DOL column is a rehire. Route through the
           // same Reactivate workflow every other reactivation path uses — single source of truth,
-          // docs/architecture/database-schema.md §26 item 6 — rather than a bare field update, so
+          // docs/architecture/database/schema-invariants.md §26 item 6 — rather than a bare field update, so
           // the employee.reactivated audit entry (and, when site/unit also changed, the
           // EmployeeTransferHistory row + employee.transferred entry) fire identically regardless
           // of whether the reactivation came from the UI or an import. Leave-via-import stays out

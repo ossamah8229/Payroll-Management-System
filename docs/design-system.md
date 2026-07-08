@@ -142,7 +142,7 @@ inputs.
 | **Floating action button (FAB)** | `.quick-add-btn` | Circular, accent-colored, bottom-right, hover tooltip. Reserved for the single highest-frequency creation action per page (Quick Add Employee). |
 | **Correction diff / compare** | `.correction-compare` | 3-column (old → new) layout with strikethrough old value and colored new value; a dedicated, distinctive component only used in the Correction Workflow — do not generalize it into a generic "diff" component used elsewhere, its visual weight is intentionally reserved for this one high-stakes flow. |
 | **Ledger / statement table** | `.statement-table` | Standard accounting convention: credit green right-aligned, debit red right-aligned, bold running balance. Correction-originated rows get a highlighted (amber-tinted) row background and a 🔧 marker — history entries that came from a correction should always be visually distinguishable from ordinary entries. |
-| **Printable document** | `.payslip-preview`, `.cash-sheet` | Bordered "paper" card, serif type, tight print-style grid layout, totals row bolded with a top border. These should be built as dedicated print/PDF templates (rendered server-side via Puppeteer), sharing structure but **not** the app's Tailwind component library — they follow print-document conventions, not app UI conventions. The Payslip template needs a slot for an optional **Balance Settlement** line (Balance Salary Payable / Salary Recovery, with its remark) — see `docs/architecture/post-release-corrections.md` — since a settling Balance Adjustment is paid as part of one combined bank/cash amount but must still be shown as its own line item here. |
+| **Printable document** | `.payslip-preview`, `.cash-sheet` | Bordered "paper" card, serif type, tight print-style grid layout, totals row bolded with a top border. These should be built as dedicated print/PDF templates (rendered server-side via Puppeteer), sharing structure but **not** the app's Tailwind component library — they follow print-document conventions, not app UI conventions. The Payslip template needs a slot for an optional **Balance Settlement** line (Balance Salary Payable / Salary Recovery, with its remark) — see `docs/architecture/workflows/corrections-and-balance-adjustments.md` — since a settling Balance Adjustment is paid as part of one combined bank/cash amount but must still be shown as its own line item here. |
 | **Slide-out panel** | `.team-panel` (Chat/To-Do) | Fixed-width (340px) right-edge panel, tabbed body, independent scroll region. Explicitly lower priority per the spec — build last. |
 | **Empty state** | e.g. Payslip/Employee profile placeholder | Centered icon + one-line message, used any time a list/detail view has nothing selected or nothing to show. Keep this one consistent pattern everywhere rather than ad hoc "No data" text. |
 
@@ -186,7 +186,7 @@ inputs.
   Sheets and Cash Receiving Sheets show exactly one row/amount per employee (net salary ± any
   settling Balance Adjustment) — the breakdown is shown separately on the Payslip and the Statement
   of Account, never as a second row in the same payment sheet. See
-  `docs/architecture/post-release-corrections.md`.
+  `docs/architecture/workflows/corrections-and-balance-adjustments.md`.
 - **A departed employee appearing in payroll solely to settle a pending balance is visually flagged**
   — a computed "Final Settlement" badge (derived from `Employee.dateOfLeaving`, not a stored field),
   so it never reads as an ordinary active employee's monthly pay.

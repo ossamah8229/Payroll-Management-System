@@ -19,7 +19,7 @@ export interface PayrollEntryWorkLine {
   updatedAt: string;
 }
 
-/** One employee's monthly payroll figures for one cycle (docs/architecture/database-schema.md
+/** One employee's monthly payroll figures for one cycle (docs/architecture/database/payroll-entry.md
  * §12/§12a) — `calc` is always the shared `calcNet` result for this entry's currently-stored
  * figures, computed server-side by `computeEntryCalc` (backend/src/modules/payroll-entry/
  * payroll-entry.service.ts); the frontend never recomputes it differently, only recomputes the
@@ -60,7 +60,7 @@ export interface PayrollEntry {
 }
 
 /** A `PayrollEntry` is editable only while unreleased and its cycle is still Draft
- * (docs/architecture/database-schema.md §12) — `hold` has no bearing on this. Mirrors the
+ * (docs/architecture/database/payroll-entry.md §12) — `hold` has no bearing on this. Mirrors the
  * backend's own `assertEntryEditable` (payroll-entry.service.ts) so the UI never offers an edit
  * affordance the server would reject. */
 export function isEntryEditable(entry: Pick<PayrollEntry, 'released'>, cycleStatus: string): boolean {
@@ -165,7 +165,7 @@ export function useUpdateWorkLine(cycleId: string) {
 }
 
 /** Re-fetches a single entry fresh from the server and replaces it in the cache — the "Reload row"
- * recovery action after a 409 optimistic-locking conflict (docs/architecture/database-schema.md
+ * recovery action after a 409 optimistic-locking conflict (docs/architecture/database/schema-invariants.md
  * §22) discards whatever local draft was pending and restores the row to the current server truth. */
 export async function reloadPayrollEntry(queryClient: QueryClient, cycleId: string, entryId: string) {
   const { entry } = await apiRequest<{ entry: PayrollEntry }>(`/api/v1/payroll-entries/${entryId}`);

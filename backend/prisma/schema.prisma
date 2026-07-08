@@ -4,7 +4,7 @@
 // Phase 2 master data (Bank, Employee, AdjustmentType, CompanySettings) + Phase 2.5 (ProjectUnit,
 // Employee.unitId, EmployeeTransferHistory) + Phase 3 Checkpoint 0 (PayrollCycle, PayrollEntry,
 // PayrollEntryWorkLine — schema/migration only, no routes/services yet) — see
-// docs/architecture/database-schema.md for the full design and docs/IMPLEMENTATION_PLAN.md for
+// docs/architecture/database/ for the full design and docs/IMPLEMENTATION_PLAN.md for
 // phase sequencing.
 //
 // ProjectSite deliberately has no relationship to Bank. Project Sites are physical client work
@@ -14,23 +14,23 @@
 // (Employee.bankId); Broom Services' own source account(s) for disbursement are a distinct concept
 // not yet modeled anywhere in this schema — see docs/PROJECT_PROGRESS.md for the open item.
 //
-// Every other table in database-schema.md (Correction, BalanceAdjustment, Advance, BackupPackage,
+// Every other table in docs/architecture/database/ (Correction, BalanceAdjustment, Advance, BackupPackage,
 // BackupPackageFile, PayrollUnitRelease, PayrollUnitReadiness, CorrectionRequest,
 // CorrectionPayment, BalanceAdjustmentSettlement) is deferred to the phase that actually builds
 // the module owning it, added via a new additive migration at that time — per Principle 8 (prefer
 // additive schema evolution) and docs/IMPLEMENTATION_PLAN.md's phase breakdown.
 //
 // PayrollEntry.advanceId/.eidAdvanceId are deliberately NOT included here even though
-// database-schema.md §12 specifies them: both are FKs to Advance, which Phase 4 builds. Adding
+// docs/architecture/database/payroll-entry.md §12 specifies them: both are FKs to Advance, which Phase 4 builds. Adding
 // them now would require either a premature Advance stub or an FK to a nonexistent table, so per
 // explicit Phase 3 Checkpoint 0 sign-off (docs/PROJECT_PROGRESS.md), both nullable columns and
 // their indexes are deferred to a Phase 4 additive migration. PayrollEntry.remarks is the one
-// column present here that is NOT in database-schema.md §12 as originally frozen — also an
-// explicit, approved Checkpoint 0 addition (see database-schema.md §12's dated revision note).
-// Nothing else here contradicts database-schema.md; it is a strict subset, sequenced
+// column present here that is NOT in docs/architecture/database/payroll-entry.md §12 as originally frozen — also an
+// explicit, approved Checkpoint 0 addition (see docs/architecture/database/payroll-entry.md §12's dated revision note).
+// Nothing else here contradicts docs/architecture/database/; it is a strict subset, sequenced
 // deliberately.
 //
-// Naming: model and field names match database-schema.md exactly (PascalCase models, camelCase
+// Naming: model and field names match docs/architecture/database/ exactly (PascalCase models, camelCase
 // fields) with no @map/@@map renaming to snake_case — that document never specifies a snake_case
 // physical naming convention, and Prisma handles camelCase columns natively (it quotes
 // identifiers in generated SQL), so introducing snake_case here would have been an unrequested
@@ -45,7 +45,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Closed, code-coupled set (docs/architecture/database-schema.md §1) — how an employee's gross
+/// Closed, code-coupled set (docs/architecture/database/conventions-and-enums.md §1) — how an employee's gross
 /// pay is computed (calcNet, Phase 3) differs structurally by pay type, so a new value would
 /// require a code change regardless of schema representation.
 enum PayType {
@@ -141,7 +141,7 @@ model Bank {
 
 /// Project site master data — a pure client/location record (name, address; no banking
 /// properties, no operational-unit properties of its own — see the file-level note above and
-/// database-schema.md §8's 2026-07-03 revision note). `branchCode` removed 2026-07-03: a site's
+/// docs/architecture/database/sites-and-units.md §8's 2026-07-03 revision note). `branchCode` removed 2026-07-03: a site's
 /// operational sub-divisions are no longer a single flat field here — see `ProjectUnit` below.
 /// Delete is blocked at the application layer while any Employee or ProjectUnit still references
 /// it (checked before delete), with `Employee.siteId`/`ProjectUnit.siteId` as ON DELETE RESTRICT
@@ -149,12 +149,12 @@ model Bank {
 model ProjectSite {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name      String   @unique @db.VarChar(160)
-  /// Physical work-location address (2026-07-02 addition — see database-schema.md §8 revision note).
+  /// Physical work-location address (2026-07-02 addition — see docs/architecture/database/sites-and-units.md §8 revision note).
   address   String?  @db.VarChar(300)
   /// The term this site's own business uses for its operational sub-divisions (e.g. "Branch",
   /// "Department", "Section") — drives every place the UI names a ProjectUnit for this site; free
   /// text, not an enum, so a client's own vocabulary is never blocked by a missing picklist value
-  /// (Principle 8). Added 2026-07-03 — see database-schema.md §8.
+  /// (Principle 8). Added 2026-07-03 — see docs/architecture/database/sites-and-units.md §8.
   unitLabel String   @default("Branch") @db.VarChar(40)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
@@ -169,7 +169,7 @@ model ProjectSite {
 }
 
 /// The operational sub-division of a ProjectSite that an employee is actually deputed to — a
-/// specific bank branch, mall department, retail section, etc. (docs/architecture/database-schema.md
+/// specific bank branch, mall department, retail section, etc. (docs/architecture/database/sites-and-units.md
 /// §8a). Internally a single generic model regardless of what a given client calls it; the UI
 /// always displays the owning site's own `unitLabel` in place of the literal word "Unit". Added
 /// 2026-07-03 (Phase 2.5, Checkpoint 1), replacing the removed `ProjectSite.branchCode`. Delete is
@@ -197,14 +197,14 @@ model ProjectUnit {
   // Checkpoint 2, and PayrollEntryWorkLine.unitId, added in Phase 3 Checkpoint 0) can declare a
   // composite foreign key against it — this is what makes "the unit must belong to the same site
   // as the referencing row" a database-level guarantee rather than an application-layer check
-  // alone (database-schema.md §8a/§9/§12a).
+  // alone (docs/architecture/database/sites-and-units.md §8a and docs/architecture/database/employee.md §9 and docs/architecture/database/payroll-entry.md §12a).
   @@unique([siteId, name])
   @@unique([id, siteId])
   @@index([siteId])
 }
 
 /// Identity, employment, and bank details for a person on payroll — the Employee Registry
-/// (docs/architecture/database-schema.md §9). Master record of *who* someone is, independent of
+/// (docs/architecture/database/employee.md §9). Master record of *who* someone is, independent of
 /// any single month's payroll figures (Principle 1: PayrollEntry owns the monthly figures).
 /// Never hard-deleted — `dateOfLeaving` presence marks an employee as having left.
 /// **`unitId` added 2026-07-03 (Phase 2.5, Checkpoint 2)**: an employee's *current default* Project
@@ -248,14 +248,14 @@ model Employee {
 
   // Partial unique indexes (WHERE ... IS NOT NULL) and the CNIC numeric-pattern check constraint
   // are not expressible via Prisma's schema DSL — both are added by raw SQL in the migration
-  // (docs/architecture/database-schema.md §9).
+  // (docs/architecture/database/employee.md §9).
   @@index([siteId])
   @@index([unitId])
   @@index([bankId])
 }
 
 /// Dedicated, append-only record of every Employee site/unit transfer
-/// (docs/architecture/database-schema.md §8b) — added 2026-07-03 (Phase 2.5, Checkpoint 2),
+/// (docs/architecture/database/employee.md §8b) — added 2026-07-03 (Phase 2.5, Checkpoint 2),
 /// alongside the finalized CNIC/Reactivate decision. Mirrors the existing `BalanceAdjustment`-vs-
 /// `AuditLog` pattern: the generic `AuditLog` already captures a `employee.transferred` action for
 /// the cross-entity audit trail, but a future Transfer History screen needs typed, directly
@@ -357,8 +357,8 @@ model CompanySettings {
   updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
 }
 
-/// Closed, code-coupled set (docs/architecture/database-schema.md §1) — the cycle lifecycle
-/// state machine (docs/architecture/data-and-storage.md §4) everything else keys off.
+/// Closed, code-coupled set (docs/architecture/database/conventions-and-enums.md §1) — the cycle lifecycle
+/// state machine (docs/architecture/workflows/payroll-lifecycle.md §4) everything else keys off.
 enum PayrollCycleStatus {
   DRAFT
   RELEASED
@@ -366,7 +366,7 @@ enum PayrollCycleStatus {
 }
 
 /// One calendar month's payroll processing run and its lifecycle state
-/// (docs/architecture/database-schema.md §10). Phase 3 Checkpoint 0 adds only this schema — the
+/// (docs/architecture/database/payroll-cycle.md §10). Phase 3 Checkpoint 0 adds only this schema — the
 /// explicit "Start First Payroll Cycle" bootstrap action, "Finalize Cycle", and archiving are all
 /// later-checkpoint/phase work (docs/IMPLEMENTATION_PLAN.md). `month BETWEEN 1 AND 12` and the
 /// partial index `WHERE status = 'DRAFT'` (§10 — "the hot 'which cycle is Draft' lookup") are
@@ -396,7 +396,7 @@ model PayrollCycle {
 }
 
 /// The single editable record of one employee's monthly payroll figures for one cycle — the
-/// system's single source of truth (Principle 1, docs/architecture/database-schema.md §12).
+/// system's single source of truth (Principle 1, docs/architecture/database/payroll-entry.md §12).
 /// Attendance (`days`/`otHours`/`otRate`/`cycleDays`) lives exclusively on the child
 /// `PayrollEntryWorkLine` — every entry has at least one line, always (§12a).
 ///
@@ -406,7 +406,7 @@ model PayrollCycle {
 /// (2) `remarks` IS included even though §12's original column list doesn't have it — an
 /// approved addition, editable while the entry is editable, frozen into the permanent snapshot
 /// once released, same as every other field (see this file's revision note and
-/// `docs/architecture/database-schema.md` §12's own dated note).
+/// `docs/architecture/database/payroll-entry.md` §12's own dated note).
 ///
 /// The numeric `>= 0` check constraints, `released = true ⇒ releasedAt/releasedBy NOT NULL`, and
 /// `lateReason IS NOT NULL ⇒ released = true` are Prisma-DSL-inexpressible and added by raw SQL
@@ -435,7 +435,7 @@ model PayrollEntry {
   releasedAt          DateTime? @db.Timestamptz(6)
   releasedBy          String?   @db.Uuid
   lateReason          String?
-  /// Approved Phase 3 Checkpoint 0 addition — not in database-schema.md §12 as originally
+  /// Approved Phase 3 Checkpoint 0 addition — not in docs/architecture/database/payroll-entry.md §12 as originally
   /// frozen. Editable while the entry is editable; frozen into the permanent snapshot once
   /// released, exactly like every other Draft-editable field.
   remarks             String?
@@ -463,7 +463,7 @@ model PayrollEntry {
 }
 
 /// One employee's attendance at one specific `ProjectUnit`, for one `PayrollEntry`
-/// (docs/architecture/database-schema.md §12a) — always at least one per entry, never zero,
+/// (docs/architecture/database/payroll-entry.md §12a) — always at least one per entry, never zero,
 /// never optional (enforced transactionally at write time in Checkpoint 1, not by this schema
 /// alone). `siteId` here is a denormalized copy of the parent `PayrollEntry.siteId` at
 /// line-creation time, present purely so `unitId` can be composite-FK'd against it — it is not

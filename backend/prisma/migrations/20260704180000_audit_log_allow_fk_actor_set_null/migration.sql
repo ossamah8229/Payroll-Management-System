@@ -1,5 +1,5 @@
 -- Audit Log immutability, corrected for the actorUserId ON DELETE SET NULL FK action
--- (docs/architecture/database-schema.md §16, docs/architecture/data-and-storage.md §3).
+-- (docs/architecture/database/audit-log.md §16, docs/architecture/system-conventions.md §3).
 --
 -- Found during the first-ever live-database verification (2026-07-04): the original
 -- reject_audit_log_mutation() (20260701164509_audit_log_immutability) raised on *every* UPDATE,

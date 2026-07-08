@@ -11,7 +11,7 @@ export interface PayrollColumnDef {
 
 /**
  * Every Payroll Entry column defined by the frozen architecture (docs/architecture/
- * database-schema.md §12/§12a) that this checkpoint's grid exposes. A fixed-width column model
+ * database/payroll-entry.md §12/§12a) that this checkpoint's grid exposes. A fixed-width column model
  * (rather than CSS table auto-layout) is what keeps the sticky header, virtualized body, and
  * sticky totals row's columns pixel-aligned with each other — all three render from this same
  * array, so there is exactly one place column widths are defined.

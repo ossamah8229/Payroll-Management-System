@@ -12,7 +12,7 @@ const MONEY_COLUMNS = new Set(['grossPay', 'allowance', 'eobiAmount', 'advanceDe
  * re-renders on every row edit without requiring the parent grid (all other rows) to re-render
  * too. Every user-entered numeric column gets a live sum; Net Salary is the grand total, computed
  * from the same per-row `calcNet` results the grid itself displays (docs/architecture/
- * database-schema.md §12) — never a second, independently-derived total.
+ * database/payroll-entry.md §12) — never a second, independently-derived total.
  */
 export function PayrollEntryTotalsRow({ store }: { store: LiveTotalsStore }) {
   const totals = useSyncExternalStore(store.subscribe, store.getTotals, store.getTotals);

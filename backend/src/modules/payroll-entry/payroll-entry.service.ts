@@ -53,7 +53,7 @@ function withCalc(entry: EntryWithWorkLines) {
 
 /**
  * A `PayrollEntry` is mutable only while `released = false` AND its parent cycle is still `DRAFT`
- * (docs/architecture/database-schema.md §12) — `hold` has no bearing on this. There is
+ * (docs/architecture/database/payroll-entry.md §12) — `hold` has no bearing on this. There is
  * deliberately no route in this checkpoint that can ever set `released = true` (Release is Phase
  * 4), so in practice this guard only ever trips on a non-`DRAFT` cycle today; it is still written
  * against the full, general rule so it needs no revisiting once Release exists.

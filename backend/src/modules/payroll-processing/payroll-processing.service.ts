@@ -7,7 +7,7 @@ import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 
 /**
- * Payroll Processing — owns the `PayrollCycle` lifecycle (docs/architecture/database-schema.md
+ * Payroll Processing — owns the `PayrollCycle` lifecycle (docs/architecture/database/payroll-cycle.md
  * §10). Phase 3 Checkpoint 1 scope: cycle *creation* only (bootstrap and carry-forward). Finalize
  * Cycle, Release, Archiving, and Backup Package generation are explicitly NOT implemented here —
  * see this module's `createPayrollCycle` doc comment for the precise, approved scope boundary.
@@ -43,7 +43,7 @@ export async function getPayrollCycle(id: string) {
  *
  * **Explicit, approved scope boundary (Phase 3 Checkpoint 1) — what this function deliberately
  * does NOT do, and why:** the frozen architecture's *full* "new cycle creation" transaction
- * (docs/architecture/data-and-storage.md §4) additionally requires the outgoing cycle to already
+ * (docs/architecture/workflows/payroll-lifecycle.md §4) additionally requires the outgoing cycle to already
  * be `RELEASED`, archives it, generates a `BackupPackage`, and includes departed employees with a
  * `PENDING` `BalanceAdjustment` — that is explicitly Phase 5's job (`docs/IMPLEMENTATION_PLAN.md`
  * Phase 5), and depends on Finalize Cycle/Release (Phase 4), `BackupPackage`/`StorageProvider`

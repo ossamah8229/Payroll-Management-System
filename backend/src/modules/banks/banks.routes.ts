@@ -3,7 +3,7 @@ import { requireAuth } from '../../common/middleware/attach-user';
 import { prisma } from '../../lib/prisma';
 
 /**
- * Read-only — banks are seeded reference data (docs/architecture/database-schema.md §7, "single
+ * Read-only — banks are seeded reference data (docs/architecture/database/employee.md §7, "single
  * digits" row count), not a CRUD module of their own in the plan. Any authenticated user can list
  * them; they're needed to populate Project Site and Employee bank-selection dropdowns.
  */

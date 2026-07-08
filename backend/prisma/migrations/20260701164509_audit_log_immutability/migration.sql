@@ -1,5 +1,5 @@
 -- Audit Log immutability — database-level defense in depth
--- (docs/architecture/data-and-storage.md §3, docs/architecture/database-schema.md §16).
+-- (docs/architecture/system-conventions.md §3, docs/architecture/database/audit-log.md §16).
 --
 -- The application layer never updates or deletes an AuditLog row (see
 -- backend/src/modules/audit-log/audit-log.service.ts, which exposes only an insert). This
@@ -8,7 +8,7 @@
 -- violate the guarantee.
 --
 -- The table name is quoted ("AuditLog") because the Prisma schema uses no @@map — the physical
--- table name is the exact, case-sensitive model name, matching database-schema.md's naming
+-- table name is the exact, case-sensitive model name, matching docs/architecture/database/'s naming
 -- exactly rather than converting to snake_case (see the note at the top of schema.prisma).
 --
 -- This is a separate migration from the initial schema (rather than folded into it) because it's

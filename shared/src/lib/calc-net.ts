@@ -1,5 +1,5 @@
 /**
- * The single source of truth for net-salary calculation (docs/architecture/database-schema.md
+ * The single source of truth for net-salary calculation (docs/architecture/database/payroll-entry.md
  * §12/§12a, Principle 5 — deterministic and reproducible calculations). Used identically by
  * backend Payroll Processing, the frontend's live grid totals, import/export, reports, and
  * (Phase 6) correction preview — there must never be a second implementation of this formula.
@@ -49,7 +49,7 @@ export interface PayrollEntryCalcInput {
   advanceDeduction: MoneyInput;
   eidAdvanceDeduction: MoneyInput;
   fine: MoneyInput;
-  /** Always at least one line (docs/architecture/database-schema.md §12a) — calcNet does not
+  /** Always at least one line (docs/architecture/database/payroll-entry.md §12a) — calcNet does not
    * special-case a single-line entry; it is simply the case where every sum below has one term. */
   workLines: PayrollWorkLineCalcInput[];
 }
@@ -113,7 +113,7 @@ function assertHasWorkLines(workLines: PayrollWorkLineCalcInput[]): asserts work
 
 /**
  * Computes a PayrollEntry's net salary and every named intermediate figure from
- * docs/architecture/database-schema.md §12, summed across the entry's work lines (§12a). Pure —
+ * docs/architecture/database/payroll-entry.md §12, summed across the entry's work lines (§12a). Pure —
  * no I/O, no DB access; the caller is responsible for loading the entry and its work lines first.
  */
 export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {

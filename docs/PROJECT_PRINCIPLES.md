@@ -19,7 +19,7 @@ screens can disagree about an employee's net salary is a system nobody can trust
 ### 2. Historical payroll must never be overwritten
 
 Once a payroll cycle exists, its data is permanent. A new cycle is a new set of records, not an edit
-of the old one. Locking a cycle (see `docs/architecture/data-and-storage.md`) makes this
+of the old one. Locking a cycle (see `docs/architecture/workflows/payroll-lifecycle.md`) makes this
 structural, not just a convention — the application must refuse to overwrite locked data, full stop.
 
 **Why:** ~1,500 employees, high turnover, monthly deadlines — the client needs to be able to answer
@@ -80,7 +80,7 @@ UI is bypassed entirely (direct API calls, scripts, etc.).
 
 **Concrete instance (added 2026-07-03):** a `PayrollEntryWorkLine` may only reference a `ProjectUnit`
 under the same `ProjectSite` as its parent `PayrollEntry` — an employee's Work Lines can never span
-more than one Project Site within a single cycle (`docs/architecture/database-schema.md` §12a). This
+more than one Project Site within a single cycle (`docs/architecture/database/payroll-entry.md` §12a). This
 is what lets multi-unit attendance splitting (relief staff, temporary deputations) work without ever
 requiring a cross-site access exception — the rule is enforced both by a database-level composite
 foreign key and by application validation, not by convention alone.
@@ -105,8 +105,8 @@ at the moment of release.
 **Why:** release means funds have already moved. "Editing" a released salary after the fact would
 mean the system's record of what was paid no longer matches what was actually paid — the single
 most damaging kind of inconsistency a payroll system can have. This principle is what the
-`Released` and `Archived` payroll cycle states (`docs/architecture/data-and-storage.md`) and the
-balance-based correction model (`docs/architecture/post-release-corrections.md`) exist to enforce.
+`Released` and `Archived` payroll cycle states (`docs/architecture/workflows/payroll-lifecycle.md`) and the
+balance-based correction model (`docs/architecture/workflows/corrections-and-balance-adjustments.md`) exist to enforce.
 
 ### 10. The system must comfortably scale well beyond current headcount
 
@@ -134,6 +134,7 @@ design floor, not in place of it.
 
 ---
 
-Related documents: `docs/architecture/data-and-storage.md` (how Principles 2, 3, 6, 8, 9 are
-structurally enforced), `docs/architecture/post-release-corrections.md` (how Principles 1, 2, 3, 6, 9
+Related documents: `docs/architecture/system-conventions.md` and
+`docs/architecture/workflows/payroll-lifecycle.md` (how Principles 2, 3, 6, 8, 9 are
+structurally enforced), `docs/architecture/workflows/corrections-and-balance-adjustments.md` (how Principles 1, 2, 3, 6, 9
 apply specifically to corrections made after a salary has been released).

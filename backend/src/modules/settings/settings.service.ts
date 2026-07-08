@@ -2,7 +2,7 @@ import type { UpdateCompanySettingsInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { notFound } from '../../common/http-error';
 
-/** Fixed, well-known PK — must match the row the seed script creates (docs/architecture/database-schema.md §19). */
+/** Fixed, well-known PK — must match the row the seed script creates (docs/architecture/database/access-control.md §19). */
 const COMPANY_SETTINGS_ID = '00000000-0000-0000-0000-000000000001';
 
 export async function getCompanySettings() {

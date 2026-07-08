@@ -54,7 +54,7 @@ export async function updateProjectSite(id: string, input: UpdateProjectSiteInpu
 
 /**
  * Delete is blocked while any employee is still assigned to this site, or any `ProjectUnit` still
- * belongs to it (`PROJECT_SPEC.md`, docs/architecture/database-schema.md §8's 2026-07-03 revision
+ * belongs to it (`PROJECT_SPEC.md`, docs/architecture/database/sites-and-units.md §8's 2026-07-03 revision
  * note) — checked here at the application layer for a clean error message, backed by
  * `Employee.siteId`'s and `ProjectUnit.siteId`'s `ON DELETE RESTRICT` as database-level backstops
  * that hold even if this check is ever bypassed by a bug or a raw query. A site must have both its

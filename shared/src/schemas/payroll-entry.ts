@@ -3,7 +3,7 @@ import { decimalString, emptyToNull, optionalTrimmedString } from './common';
 
 /**
  * The initial work line(s) supplied at `PayrollEntry` creation time (docs/architecture/
- * database-schema.md §12a). `unitId` is optional here specifically — if omitted, the service
+ * database/payroll-entry.md §12a). `unitId` is optional here specifically — if omitted, the service
  * seeds it from the employee's own current default unit (`Employee.unitId`), the common case;
  * supplying it explicitly is only needed for the unusual case of seeding a first line at a
  * *different* unit than the employee's default. `days`/`otHours`/`cycleDays` default to the
@@ -50,7 +50,7 @@ export type CreatePayrollEntryInput = z.infer<typeof createPayrollEntrySchema>;
  * edit.
  *
  * `version` is mandatory — the optimistic-locking token the caller must echo back from whatever
- * read produced the value being edited (docs/architecture/database-schema.md §22).
+ * read produced the value being edited (docs/architecture/database/schema-invariants.md §22).
  */
 export const updatePayrollEntrySchema = z.object({
   version: z.number().int(),

@@ -24,5 +24,5 @@ export const notFound = (message = 'Resource not found') => new HttpError(404, m
 export const badRequest = (message: string) => new HttpError(400, message, 'BAD_REQUEST');
 
 /** A resource-state conflict — a stale optimistic-locking `version` (docs/architecture/
- * database-schema.md §22) or a business-rule collision (e.g. a Draft cycle already exists). */
+ * database/schema-invariants.md §22) or a business-rule collision (e.g. a Draft cycle already exists). */
 export const conflict = (message: string) => new HttpError(409, message, 'CONFLICT');

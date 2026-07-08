@@ -4,7 +4,7 @@ import { badRequest, notFound } from '../../common/http-error';
 import { getProjectSite } from '../project-sites/project-sites.service';
 
 /**
- * Dedicated master-data module for `ProjectUnit` (docs/architecture/database-schema.md §8a) — not
+ * Dedicated master-data module for `ProjectUnit` (docs/architecture/database/sites-and-units.md §8a) — not
  * folded into the Project Sites module's own CRUD, per the 2026-07-03 architecture decision.
  * Site-level access control (Master Admin unrestricted, Payroll Staff scoped to their assigned
  * sites) is enforced at the route layer via `requireSiteAccess`, the same middleware
@@ -57,7 +57,7 @@ export async function updateProjectUnit(id: string, input: UpdateProjectUnitInpu
 
 /**
  * Delete is blocked while any Employee or PayrollEntryWorkLine still references this unit
- * (docs/architecture/database-schema.md §8a) — same defense-in-depth pattern as every other
+ * (docs/architecture/database/sites-and-units.md §8a) — same defense-in-depth pattern as every other
  * referenced-master-data delete in this schema (app-layer check here, `ON DELETE RESTRICT` as the
  * database-level backstop). The `Employee.unitId` half of this guard is now live (Phase 2.5,
  * Checkpoint 2); the `PayrollEntryWorkLine.unitId` half lands in Phase 3 and belongs here too once

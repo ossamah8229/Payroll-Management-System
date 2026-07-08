@@ -1,5 +1,13 @@
 # Technology Stack
 
+**Owner module(s):** All modules (cross-cutting technology choices)
+
+**Contains:** Backend, frontend, and cross-cutting technology stack, with rationale for each choice
+and rejected alternatives
+
+**Sections:** — (narrative document, not part of the §-numbered schema/workflow set) · Database
+index: `database/README.md`
+
 Final, approved stack for the Payroll Management System, with the reasoning behind each choice.
 This is a single-tenant, high-trust financial system with a small internal user base — today's actual
 headcount is ~1,500 employees, but per Principle 10 (`docs/PROJECT_PRINCIPLES.md`, added 2026-07-03)
@@ -20,7 +28,7 @@ schemas with the frontend.
 
 **Prisma**
 Type-safe query builder and migration tool for PostgreSQL. Selected specifically because the
-correction/balance-adjustment workflow (`docs/architecture/post-release-corrections.md`) requires
+correction/balance-adjustment workflow (`docs/architecture/workflows/corrections-and-balance-adjustments.md`) requires
 multi-table writes that must succeed or fail together — Prisma's transaction API makes "write the
 correction, write the balance adjustment, write the audit log entry, or none of the above" a natural
 pattern to enforce, and its migration history gives the additive-schema-evolution principle
@@ -31,7 +39,7 @@ The data here is inherently relational — employees, payroll cycles, entries, c
 audit log all reference each other, and referential integrity plus transactions matter for financial
 correctness in a way a document store doesn't naturally provide. Performance stays a non-issue up to
 the 10,000-employee design floor (Principle 10) as long as the known-necessary indexes (CNIC,
-employee id, site id, unit id, cycle id) exist — `docs/architecture/database-schema.md` §23 details
+employee id, site id, unit id, cycle id) exist — `database/schema-invariants.md` §23 details
 the specific query shapes this is designed around.
 
 ## Frontend

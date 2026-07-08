@@ -1,6 +1,7 @@
 /**
- * Field-level diffing for an `AuditLog` entry's `metadata` (docs/architecture/database-schema.md
- * §9/§22 — every mutation's audit entry carries a diff of what actually changed). The single
+ * Field-level diffing for an `AuditLog` entry's `metadata` (docs/architecture/database/employee.md
+ * §9, docs/architecture/database/schema-invariants.md §22 — every mutation's audit entry carries a
+ * diff of what actually changed). The single
  * implementation of this concern — first written for Employee updates, and reused as-is by
  * Payroll Entry (Phase 3) rather than being redefined a second time.
  */

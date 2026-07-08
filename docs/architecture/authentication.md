@@ -1,5 +1,13 @@
 # Authentication & Access Control
 
+**Owner module(s):** Authentication
+
+**Contains:** Session strategy, password hashing, RBAC rationale, site-based permission scoping, CSRF
+protection, session expiration, future Redis migration strategy
+
+**Sections:** — (narrative document, not part of the §-numbered schema/workflow set) · Database
+index: `database/README.md` (see `database/access-control.md` for the RBAC schema)
+
 ## Session Strategy: express-session + PostgreSQL
 
 Authentication uses **express-session** with **connect-pg-simple** as the session store, persisting
@@ -39,7 +47,7 @@ codebase. A permission is checked per route (e.g. `payroll:release`, `sites:mana
 `corrections:approve`), and a role is just a named bundle of permissions.
 
 **Why Finance was added, not folded into an existing role:** the new per-Project-Unit release model
-(`docs/architecture/data-and-storage.md` §4) introduced a distinct capability — executing a Unit's
+(`docs/architecture/workflows/payroll-lifecycle.md` §4) introduced a distinct capability — executing a Unit's
 release once client funding is confirmed — that is neither Payroll Staff's data-entry role nor Master
 User's governance/correction-approval role. Modeling it as its own role (rather than, say, a
 `payroll:release` permission bolted onto Payroll Staff) keeps the same clean separation this system
@@ -66,9 +74,9 @@ Site-scoped (below), read-mostly, and deliberately narrow:
   Ready-for-Release status for their assigned sites. Finance can see what it's about to release, but
   cannot edit any payroll field.
 - **`payroll:release`** — execute a Project Unit's release (`PayrollUnitRelease`,
-  `docs/architecture/database-schema.md` §12b), a Late Entry's own one-off release, and execute an
-  approved `CorrectionPayment` (§14a). Also held by Master User (unrestricted, all sites); **not**
-  held by Payroll Staff.
+  `database/release.md` §12b), a Late Entry's own one-off release, and execute an
+  approved `CorrectionPayment` (`database/balance-adjustments.md` §14a). Also held by Master User
+  (unrestricted, all sites); **not** held by Payroll Staff.
 - **`bank-sheets:view`** / **`cash-receiving:view`** — view/download the resulting documents for their
   assigned sites, to actually process the payment.
 - **Explicitly withheld:** no payroll-edit permission (cannot change any `PayrollEntry` field), no
@@ -76,8 +84,8 @@ Site-scoped (below), read-mostly, and deliberately narrow:
   Staff's/Master User's own signal to Finance, not something Finance sets for itself), and no
   `corrections:approve`/`corrections:reject` (Finance never decides a `CorrectionRequest`, per the
   same separation-of-duties reasoning above). **Added 2026-07-08:** the same withholding covers
-  Advance Deduction Deferral (`docs/architecture/data-and-storage.md` §4,
-  `docs/architecture/database-schema.md` §15/§15a) — deferring a scheduled deduction is a payroll-edit
+  Advance Deduction Deferral (`docs/architecture/workflows/payroll-lifecycle.md` §4,
+  `database/advances.md` §15/§15a) — deferring a scheduled deduction is a payroll-edit
   action (it mutates a `PayrollEntry` field), not a release action, so it requires the payroll-edit
   permission Finance does not hold.
 
@@ -114,7 +122,7 @@ Receiving, reports) is applied against **`PayrollEntry.siteId`** — the site re
 cycle's entry — not `Employee.siteId`. This is deliberate and holds for both the current and any
 historical cycle: an employee's *current* site (used for Employee Registry scoping, above) and the
 *site a given month's payroll entry was recorded under* are tracked separately and can differ after a
-transfer (see `docs/architecture/data-and-storage.md` on `PayrollEntry`'s copied-not-linked site
+transfer (see `database/payroll-entry.md` §12 on `PayrollEntry`'s copied-not-linked site
 field). Using `PayrollEntry.siteId` for payroll-data scoping means a transfer never causes an
 already-open entry to unexpectedly appear or disappear from a Payroll Staff or Finance user's view
 mid-session. **A `PayrollUnitRelease`/`PayrollUnitReadiness` row (added 2026-07-05) is scoped by its

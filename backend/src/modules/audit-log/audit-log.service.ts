@@ -13,7 +13,7 @@ export interface RecordAuditLogInput {
 
 /**
  * The **only** way any code in this application writes to the audit log — an insert, nothing
- * else (docs/architecture/data-and-storage.md §3). There is deliberately no `update`/`delete`
+ * else (docs/architecture/system-conventions.md §3). There is deliberately no `update`/`delete`
  * export from this module; that absence is the application-layer half of the immutability
  * guarantee. The database-level half (a trigger rejecting UPDATE/DELETE outright) is the
  * defense-in-depth backstop — see prisma/sql/audit_log_immutability.sql.

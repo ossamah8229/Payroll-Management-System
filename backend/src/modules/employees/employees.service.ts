@@ -29,7 +29,7 @@ export function assertSiteAccess(user: SessionUser, siteId: string): void {
 }
 
 /**
- * Application-layer half of the composite-FK guarantee (docs/architecture/database-schema.md §9):
+ * Application-layer half of the composite-FK guarantee (docs/architecture/database/employee.md §9):
  * a clean 400 here for a mismatched unit/site pair, rather than surfacing a raw Postgres foreign
  * key violation to the operator. The database's own `(unitId, siteId) -> ProjectUnit(id, siteId)`
  * constraint remains the real backstop — this check is a defense-in-depth companion to it, not a
@@ -88,7 +88,7 @@ export async function findEmployeeByCnic(
 }
 
 /**
- * Debounced pre-submit duplicate-check lookup (docs/architecture/database-schema.md §26 item 6) —
+ * Debounced pre-submit duplicate-check lookup (docs/architecture/database/schema-invariants.md §26 item 6) —
  * lets an operator learn about a CNIC collision, and which employee owns it, before hitting a raw
  * 409 on submit. RBAC-aware: a Payroll Staff caller learns *that* a duplicate exists (so they know
  * to stop and involve a Master Admin) but never the identity/site of an employee outside their own
@@ -211,7 +211,7 @@ export async function createEmployee(currentUser: SessionUser, input: CreateEmpl
 /**
  * Records an Employee site/unit transfer inside an already-open transaction: the
  * `EmployeeTransferHistory` row and the dedicated `employee.transferred` `AuditLog` entry, always
- * together (docs/architecture/database-schema.md §8b/§9). This is the single implementation of
+ * together (docs/architecture/database/employee.md §8b/§9). This is the single implementation of
  * that invariant — the ordinary update path (`updateEmployee`) and the CSV/Excel import path
  * (Phase 2.5 Checkpoint 3, the first import that can change an employee's site/unit) both call
  * it. The caller owns the `Employee` row update itself and the enclosing transaction; this only
@@ -312,7 +312,7 @@ function mapUpdateInputToData(input: UpdateEmployeeInput): Prisma.EmployeeUnchec
 
 /**
  * Whenever this update changes `siteId` and/or `unitId`, that is a *transfer*
- * (docs/architecture/database-schema.md §9/§8b) — detected implicitly by comparing the employee's
+ * (docs/architecture/database/employee.md §9/§8b) — detected implicitly by comparing the employee's
  * current site/unit against the submitted one, not via a separate endpoint. A transfer writes the
  * `Employee` update, an `EmployeeTransferHistory` row, and a dedicated `employee.transferred`
  * `AuditLog` entry (never the generic `employee.updated` entry for those two fields specifically)
@@ -412,7 +412,7 @@ export async function markEmployeeLeft(currentUser: SessionUser, id: string, inp
 }
 
 /**
- * The Reactivate Employee action (docs/architecture/database-schema.md §26 item 6, finalized
+ * The Reactivate Employee action (docs/architecture/database/schema-invariants.md §26 item 6, finalized
  * 2026-07-03/04) — the *only* path in the system that clears `dateOfLeaving`. CNIC stays globally
  * unique with no override: a rehire is never a second `Employee` row, it is this same existing row
  * reactivated in place, so every historical `PayrollEntry` keeps referencing the one, unchanged

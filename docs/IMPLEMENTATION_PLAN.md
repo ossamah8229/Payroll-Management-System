@@ -26,7 +26,7 @@ Three principles govern the sequencing below, all inherited directly from the fr
    *Corrections → Balance Adjustments* — is layered on top of it. Building the branch first would mean
    testing it against a moving trunk.
 3. **The hardest correctness problem (the Correction baseline-replay algorithm,
-   `docs/architecture/post-release-corrections.md`) is scheduled deliberately late, once everything it
+   `docs/architecture/workflows/corrections-and-balance-adjustments.md`) is scheduled deliberately late, once everything it
    depends on is stable** — not deferred out of avoidance, but sequenced so it's tested against a
    trustworthy foundation rather than a still-changing one.
 
@@ -61,7 +61,8 @@ staging deploy.
 
 ### Phase 1 — Auth, RBAC, and the Audit Log (foundational)
 
-**Builds:** Prisma schema for the auth/RBAC/audit subset of `docs/architecture/database-schema.md`
+**Builds:** Prisma schema for the auth/RBAC subset of `database/access-control.md` and the audit
+subset of `database/audit-log.md`
 in one initial migration — `Role`, `Permission`, `RolePermission`, `User`, `ProjectSite` (minimal:
 id/name/branchCode/isActive only), `UserSiteAssignment`, `AuditLog`; seed
 script (two roles + permissions, one Master User account); `express-session` + `connect-pg-simple` +
@@ -108,7 +109,7 @@ every module built after it.
 seed rows (three banks, seven `AdjustmentType` rows, singleton `CompanySettings`) — this is the
 Phase 1 seed-scope item deferred here per the resolved scope note (`docs/PROJECT_PROGRESS.md`
 §3.1). `Bank` has no relationship to `ProjectSite` — Project Sites are physical client work
-locations only, with no banking properties (see `docs/architecture/database-schema.md` §8's
+locations only, with no banking properties (see `database/sites-and-units.md` §8's
 2026-07-02 revision note; a `ProjectSite.defaultBankId` field was briefly added and then removed
 before this phase's commit, having incorrectly conflated a site's client identity with banking
 data). Project Sites CRUD (delete
@@ -144,7 +145,7 @@ user's session genuinely cannot see or touch employees/sites outside that assign
 amendments added 2026-07-03 (session 2) after explicit user approval of the phase plan** — Checkpoint
 0 (shared date/UI foundation), three-layer Site/Unit import validation, dedicated transfer audit
 entries, the finalized CNIC decision, and the new `EmployeeTransferHistory` table
-(`docs/architecture/database-schema.md` §8b). Phase 2 as actually built (`docs/PROJECT_PROGRESS.md`)
+(`database/employee.md` §8b). Phase 2 as actually built (`docs/PROJECT_PROGRESS.md`)
 shipped `ProjectSite` with a flat `branchCode` and no Project Unit concept — a business-model gap
 discovered only after Phase 2's conditional close, the same way `ProjectSite.defaultBankId` was
 discovered and corrected within Phase 2 itself. Unlike that earlier correction, this one lands *after*
@@ -190,7 +191,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
 - No schema or migration changes in this checkpoint — shared package and frontend component work only.
 
 **Checkpoint 1 — `ProjectUnit` schema, migration, and dedicated module — COMPLETE, 2026-07-03**
-- An additive migration introducing `ProjectUnit` (`docs/architecture/database-schema.md` §8a) and
+- An additive migration introducing `ProjectUnit` (`database/sites-and-units.md` §8a) and
   removing `ProjectSite.branchCode` (§8's revision note — this project's first genuinely destructive
   migration, low-risk only because it's never been applied to a live database). Generated via
   `prisma migrate diff` against the schema files directly (no live database needed for this), then
@@ -226,7 +227,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   `docs/PROJECT_PROGRESS.md`'s Checkpoint 1 entry and `docs/SESSION_HANDOFF.md` §3.
 
 **Checkpoint 2 — `Employee.unitId`, composite FK, transfer audit trail, `EmployeeTransferHistory` — COMPLETE, 2026-07-04**
-- `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (§9) — added NOT NULL with no
+- `Employee.unitId`, composite-FK'd against `ProjectUnit(id, siteId)` (`database/employee.md §9`) — added NOT NULL with no
   default (same convention as `siteId`), safe only because no live database has ever applied a
   migration in this environment. A new reusable `SiteUnitSelect` component
   (`frontend/src/components/ui/site-unit-select.tsx`) gives the Employee Registry create/edit forms
@@ -240,7 +241,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   introduced, consistent with the 2026-07-03 architecture decision that a Project Unit belongs to
   exactly one Project Site, so site-level access already covers it.
 - A new, lightweight, append-only **`EmployeeTransferHistory`** table
-  (`docs/architecture/database-schema.md` §8b — new): `id`, `employeeId` FK → `Employee`, `fromSiteId`/
+  (`database/employee.md` §8b — new): `id`, `employeeId` FK → `Employee`, `fromSiteId`/
   `toSiteId` FK → `ProjectSite`, `fromUnitId`/`toUnitId` FK → `ProjectUnit`, `effectiveDate` (the date
   the transfer actually took effect in the business — deliberately distinct from `createdAt`, since HR
   may enter a transfer days or weeks after it happened), `transferredByUserId` FK → `User`, `reason`
@@ -262,7 +263,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   this specific change. An edit that changes *only* other fields (designation, bank details, etc.)
   continues to produce the existing generic `employee.updated` entry, unchanged.
 - All three writes happen in one database transaction, per this schema's established
-  multi-statement-transaction convention (§22): `updateEmployee()` now takes a `RequestMeta`
+  multi-statement-transaction convention (`database/schema-invariants.md §22`): `updateEmployee()` now takes a `RequestMeta`
   (ip/user-agent) parameter and performs its own audit logging inside `prisma.$transaction(...)`,
   rather than the route handler logging a separate, non-atomic `employee.updated` entry after the
   fact (the pre-Checkpoint-2 pattern) — this closes a real atomicity gap the explicit "atomic in a
@@ -298,7 +299,7 @@ enforced at checkpoint granularity here rather than only at the end of the whole
   there is exactly one implementation of that invariant).
 - **Every imported row's Project Unit must belong to the row's selected Project Site, enforced at three
   independent layers** (defense in depth, matching this schema's established pattern for the Work Line
-  same-site rule, §12a):
+  same-site rule, `database/payroll-entry.md §12a`):
   1. **Import layer** — a row-level pre-check during CSV/Excel parsing resolves the named Site and
      Unit and rejects the row with a clear per-row error (not a whole-file failure) if the resolved
      Unit does not belong to the resolved Site.
@@ -311,14 +312,14 @@ enforced at checkpoint granularity here rather than only at the end of the whole
 
 **Checkpoint 4 — CNIC: finalized policy, normalization, duplicate-check, Reactivate workflow — COMPLETE, 2026-07-05**
 - **The duplicate-handling policy is now finalized** (this session): CNIC remains globally unique
-  (`docs/architecture/database-schema.md` §9's existing partial-unique constraint — no change to the
+  (`database/employee.md` §9's existing partial-unique constraint — no change to the
   constraint itself); duplicate `Employee` records are never permitted, with no override mechanism of
   any kind; a rehire is handled exclusively through a new **Reactivate Employee** action, symmetric to
   the existing "Mark as Left" (`POST /:id/leave`), that clears `dateOfLeaving` and updates the
   employee's current employment details (site, unit, designation, bank details, etc.) on their
   **existing** `Employee` row — never creating a second row for the same CNIC, so every historical
   `PayrollEntry` continues to reference the one, unchanged `employeeId` (Principle 2). This resolves
-  `docs/architecture/database-schema.md` §26 item 6 as a final decision, no longer a recommendation
+  `database/schema-invariants.md` §26 item 6 as a final decision, no longer a recommendation
   pending sign-off.
 - If a reactivation also changes the employee's site and/or unit relative to what they had when they
   left, that edit **also** goes through Checkpoint 2's transfer path (`EmployeeTransferHistory` row +
@@ -420,8 +421,8 @@ live, and Phase 3 can begin against a schema that already has `ProjectUnit` in p
 
 **Note (2026-07-05):** a full Phase 3 architecture review (this document's own process, not yet
 implementation) froze the release/correction model this phase's schema work must be built against —
-see `docs/architecture/data-and-storage.md` §4, `docs/architecture/post-release-corrections.md`, and
-`docs/architecture/database-schema.md` §12/§12b/§13a/§14/§14a/§14b. The concrete consequence for this
+see `docs/architecture/workflows/payroll-lifecycle.md` §4, `docs/architecture/workflows/corrections-and-balance-adjustments.md`, and
+`database/payroll-entry.md` §12 and `database/release.md` §12b and `database/corrections.md` §13a and `database/balance-adjustments.md` §14/§14a/§14b. The concrete consequence for this
 phase specifically: `PayrollEntry` now includes a `lateReason` column (§12) as part of its own schema,
 even though the mechanism that uses it — a Late Entry's one-off release — is Phase 4's Release Salary
 work, not this phase's. This phase does not implement release, Correction Requests, or Balance
@@ -448,12 +449,12 @@ committing**:
   🛑 review checkpoint (below).
 
 **Checkpoint 0 — Schema foundation — COMPLETE, 2026-07-07**
-- Prisma schema: `PayrollCycleStatus` enum; `PayrollCycle` (§10); `PayrollEntry` (§12) and
+- Prisma schema: `PayrollCycleStatus` enum; `PayrollCycle` (`database/payroll-cycle.md §10`); `PayrollEntry` (`database/payroll-entry.md §12`) and
   `PayrollEntryWorkLine` (§12a) — one migration, `20260707120000_payroll_cycle_and_entry`, applied
   cleanly to a fresh database. Every check constraint and the `PayrollCycle` `WHERE status = 'DRAFT'`
   partial index that Prisma's schema DSL can't express are hand-added raw SQL in the same migration,
   the same pattern as `Employee`'s CNIC check constraint (Phase 2).
-- **Two approved deviations from `database-schema.md` §12 as it stood before this checkpoint** (both
+- **Two approved deviations from `database/payroll-entry.md` §12 as it stood before this checkpoint** (both
   presented for explicit sign-off before implementation, per this project's standing practice — see
   `docs/PROJECT_PROGRESS.md` for the full decision record and §12's own dated revision notes):
   (1) `advanceId`/`eidAdvanceId` are deferred to a Phase 4 migration — both FK to `Advance`, which
@@ -514,7 +515,7 @@ committing**:
 - **`payroll-processing` module** (`backend/src/modules/payroll-processing/`): `createPayrollCycle` —
   one implementation for both the very first cycle (no cycles exist) and every subsequent one,
   since the entry-seeding logic Phase 3 owns is identical either way. Enforces the one
-  phase-independent invariant that's actually timeless (§10): only one `PayrollCycle` may be
+  phase-independent invariant that's actually timeless (`database/payroll-cycle.md §10`): only one `PayrollCycle` may be
   `DRAFT` at a time; a duplicate `(year, month)` is also rejected with a clean 409 ahead of the
   raw unique-constraint violation. **Explicit, approved scope boundary — what this checkpoint's
   cycle creation deliberately does NOT do**: it does not require the outgoing cycle to be
@@ -530,7 +531,7 @@ committing**:
   `eobiApplicable`/`leaveRate` and the new line's `cycleDays`/`otRate` are always carried forward
   from that employee's most recent prior entry, never copied from `Employee`'s own record — payroll
   values represent payroll history and stay stable across cycles until intentionally changed in
-  Payroll Entry itself (`Employee.grossPay` is documented, §9, as a "template value only").
+  Payroll Entry itself (`Employee.grossPay` is documented, `database/employee.md §9`, as a "template value only").
   Conversely, `designation`/bank fields and the new line's `unitId` (Primary Project Unit) always
   refresh from `Employee`'s CURRENT record instead — Employee master data should always reflect the
   employee's latest assignment/banking information — which is also what keeps a genuine cross-site
@@ -554,7 +555,7 @@ committing**:
   path (list/get) so a returned entry's `netSalary` is always the same computation, never
   reimplemented per route. Full CRUD: `createPayrollEntry` (copies `Employee`'s current record,
   never caller-supplied overrides, always creates its first `PayrollEntryWorkLine` in the same
-  transaction — §12a's "never zero lines" invariant); `updatePayrollEntry` (optimistic locking via
+  transaction — `database/payroll-entry.md §12a`'s "never zero lines" invariant); `updatePayrollEntry` (optimistic locking via
   `updateMany({ where: { id, version } })`, a stale version rejected with a new 409 `conflict()`
   helper, not silently overwritten); `deletePayrollEntry` (only while unreleased and the cycle is
   still Draft — this is Draft data entry, not yet "historical payroll," so Principle 2 doesn't
@@ -562,7 +563,7 @@ committing**:
   capability behind "Split by {unitLabel}" (its UI is Checkpoint 3's, not built here): work lines
   carry no `version` of their own, so every mutation bumps the parent `PayrollEntry.version` inside
   the same transaction, and every change is folded into a `payroll_entry.updated` audit entry
-  (§22: "work-line attendance changes... captured in the same field-level diff"), never a separate
+  (`database/schema-invariants.md §22`: "work-line attendance changes... captured in the same field-level diff"), never a separate
   `PayrollEntryWorkLine`-typed action. Deleting the last remaining work line is rejected.
 - **RBAC**: reuses `PERMISSIONS.PAYROLL_ENTRY` (already seeded, already granted to Payroll Staff
   since Phase 1's front-loaded permission list) for all Payroll Entry/Work Line routes; a new
@@ -628,7 +629,7 @@ committed as `e072da5`)**
   Working Days, OT Hours, OT Rate, Cycle Days, Leave Days, Leave Rate, Allowance, EOBI
   Amount/Applicable, Advance Deduction, Eid Advance Deduction, Fine, Hold, Remarks, Net Salary.
   Cycle Days and Leave Days were added beyond the checkpoint's own illustrative column list, since
-  both are real, editable, `calcNet`-feeding architecture fields (§12/§12a) — omitting them would
+  both are real, editable, `calcNet`-feeding architecture fields (`database/payroll-entry.md §12/§12a`) — omitting them would
   have left no way to correct a value `calcNet` actually depends on.
 - **One implementation per row, not per cell**: `usePayrollEntryEditor` (new hook) owns local draft
   overlays, live `calcNet` recomputation (shared `calcNet` exclusively — no reimplementation
@@ -642,7 +643,7 @@ committed as `e072da5`)**
   further edits arrive queues exactly one more save on completion, never drops or races two
   concurrent saves to the same row. Per-row status (dirty/saving/saved/error/conflict) shown as a
   compact icon beside the Serial Number, doubling as the retry/reload-row affordance.
-- **Optimistic-locking conflict handling** (docs/architecture/database-schema.md §22): a 409 marks
+- **Optimistic-locking conflict handling** (`database/schema-invariants.md` §22): a 409 marks
   the row `conflict`, disables further edits on it, and preserves the user's unsaved local draft
   (visible, not discarded) until they explicitly click the conflict icon, which discards the draft
   and re-fetches that one entry fresh. Any other failure (network/5xx) auto-retries up to 3 times
@@ -703,7 +704,7 @@ committed as `e072da5`)**
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always
 at least one, so there is one calculation path, not a split/non-split branch
-(`docs/architecture/database-schema.md` §12/§12a); the Payroll Entry grid backend (paginated/filterable
+(`database/payroll-entry.md` §12/§12a); the Payroll Entry grid backend (paginated/filterable
 query keyed by `(cycleId, siteId)`, joined to each entry's work line(s)) and frontend (TanStack Table +
 TanStack Virtual for the grid, inline-editable cells matching `docs/design-system.md`); the
 **"Split by {unitLabel}"** action (labeled per the entry's site's own terminology) for the occasional
@@ -763,8 +764,8 @@ Release, Bank Sheets, or Corrections on top of it.
 
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
-superseded by the frozen design in `docs/architecture/data-and-storage.md` §4 and
-`docs/architecture/database-schema.md` §12b — release is no longer a Site-scoped bulk action, it's an
+superseded by the frozen design in `docs/architecture/workflows/payroll-lifecycle.md` §4 and
+`database/release.md` §12b — release is no longer a Site-scoped bulk action, it's an
 independent per-Project-Unit action executed by the new **Finance** role
 (`docs/architecture/authentication.md`), not by Payroll Staff.
 
@@ -784,7 +785,7 @@ release event, not only per whole-Cycle release**, since different Units can rel
 days; Payslip generation (PDF).
 
 **Advances module, explicitly expanded 2026-07-02** (terms below map to the existing `Advance`
-model in `docs/architecture/database-schema.md` §15 except where flagged as new or open):
+model in `database/advances.md` §15 except where flagged as new or open):
 
 - **Advance Requests** — recording a new `LOAN` or `EID_ADVANCE` (matches the existing spec's
   "Record Advance" action, done directly by Payroll Staff per `reference/PROJECT_SPEC.md`'s role
@@ -810,9 +811,9 @@ model in `docs/architecture/database-schema.md` §15 except where flagged as new
   (frozen, not yet implemented).** Before an entry is released, Payroll Staff (site-scoped) or Master
   User may defer that entry's scheduled deduction to any future Draft payroll cycle — not limited to
   "next" or "one after next" — frozen as BR-ADV-001 through BR-ADV-006
-  (`docs/architecture/database-schema.md` §15). This phase's schema work adds, alongside the `Advance`
+  (`database/advances.md` §15). This phase's schema work adds, alongside the `Advance`
   migration already planned above:
-  - **`ScheduledPayrollPeriod`** (`database-schema.md` §10a) — the canonical, single representation of
+  - **`ScheduledPayrollPeriod`** (`database/payroll-cycle.md` §10a) — the canonical, single representation of
     a calendar payroll period that may not yet have a materialized `PayrollCycle`; resolved exactly
     once, by Payroll Processing's cycle-bootstrap, when the matching cycle is eventually created.
     **Owned exclusively by Payroll Processing, not Advances** (§10a's ownership boundary, added
@@ -822,7 +823,7 @@ model in `docs/architecture/database-schema.md` §15 except where flagged as new
   - **`Advance.originalScheduledPeriodId`** (immutable, set once — BR-ADV-001) and
     **`.currentScheduledPeriodId`** (the live, single pointer a deferral moves — BR-ADV-005), both FK
     → `ScheduledPayrollPeriod`.
-  - **`AdvanceScheduleChange`** (`database-schema.md` §15a) — append-only (no updates, no deletes,
+  - **`AdvanceScheduleChange`** (`database/advances.md` §15a) — append-only (no updates, no deletes,
     only inserts, same convention as `EmployeeTransferHistory`/`BalanceAdjustmentSettlement`) history
     of every deferral: mandatory reason, deferred-by/deferred-at, and the from/to
     `ScheduledPayrollPeriod` (BR-ADV-004).
@@ -836,9 +837,9 @@ model in `docs/architecture/database-schema.md` §15 except where flagged as new
   - **A second, distinct audit event — `advance.schedule_materialized`** — is written later, separately,
     the moment this (possibly several-times-deferred) schedule finally lands in a real `PayrollEntry`
     (Phase 5's cycle bootstrap, below), completing the auditable chain: Advance created → deferred →
-    deferred again (optional) → schedule materialized → fully recovered (`database-schema.md` §15).
+    deferred again (optional) → schedule materialized → fully recovered (`database/advances.md` §15).
   - **Advances becomes this phase's first registered Outstanding Payroll Obligation provider**
-    (`docs/architecture/data-and-storage.md` §4, `docs/architecture/overview.md` Extensibility): its
+    (`docs/architecture/workflows/outstanding-obligations.md`, `docs/architecture/overview.md` Extensibility): its
     carry-forward predicate (an `ACTIVE` advance whose schedule resolves to the new cycle) and Payroll
     Materialization Hook (materializing that cycle's deduction and writing
     `advance.schedule_materialized`) plug into Payroll Processing's generic cycle-bootstrap seam —
@@ -857,7 +858,7 @@ model in `docs/architecture/database-schema.md` §15 except where flagged as new
 **Company Bank Account design note (added 2026-07-02, pending user approval — not yet implemented):**
 Broom Services owns multiple bank accounts used as the *source* of salary/advance disbursements,
 separate from `Employee.bankId` (an employee's own receiving account) and never attached to
-`ProjectSite` (confirmed 2026-07-02 — see `docs/architecture/database-schema.md` §8's revision
+`ProjectSite` (confirmed 2026-07-02 — see `database/sites-and-units.md` §8's revision
 note). A `CompanyBankAccount` lookup table is proposed for Phase 4 schema work: `id`, `bankId` (FK →
 `Bank`), `accountNumber`, `accountTitle`, a human-readable `label`, `branchCode`, `isActive`,
 `isDefault`. Two open sub-questions need an answer before this is finalized: (1) is disbursement
@@ -922,14 +923,14 @@ released Unit is released via its own one-off action with a mandatory reason and
 ### Phase 5 — Cycle Finalization, Archiving, and Backups
 
 **Builds:** the explicit "Finalize Cycle" action with its no-override precondition
-(`docs/architecture/data-and-storage.md` §4); the new-cycle-creation transaction — archive the outgoing
+(`docs/architecture/workflows/payroll-lifecycle.md` §4); the new-cycle-creation transaction — archive the outgoing
 cycle, generate its backup package, resolve any `ScheduledPayrollPeriod` matching the new cycle
-(`docs/architecture/database-schema.md` §10a, **added 2026-07-08**), create the new Draft's
+(`database/payroll-cycle.md` §10a, **added 2026-07-08**), create the new Draft's
 `PayrollEntry` rows for every active employee plus every employee selected by a registered
 **Outstanding Payroll Obligation** provider's carry-forward predicate, then invoke every registered
 provider's **Payroll Materialization Hook** — each invoked independent of the others, with no assumed
 order between providers — (**generalized 2026-07-08** from this bullet's original,
-Balance-Adjustment-specific wording — see `docs/architecture/data-and-storage.md` §4 and
+Balance-Adjustment-specific wording — see `docs/architecture/workflows/outstanding-obligations.md` and
 `docs/architecture/overview.md` Extensibility; today's two providers are Balance Adjustments and, once
 Phase 4 exists, Advances, whose hook writes `advance.schedule_materialized`) — the Backup Package
 generator (Payroll/Bank Sheets/Receivings CSV +
@@ -983,8 +984,8 @@ to be trusted first.
 
 **Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
 `PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,
-simpler single-shot model — see `docs/architecture/post-release-corrections.md` and
-`docs/architecture/database-schema.md` §13a/§14/§14a/§14b for the frozen design this phase now
+simpler single-shot model — see `docs/architecture/workflows/corrections-and-balance-adjustments.md` and
+`database/corrections.md` §13a and `database/balance-adjustments.md` §14/§14a/§14b for the frozen design this phase now
 implements against.
 
 **Builds:** the Correction workflow (before/after preview, mandatory reason + standardized Adjustment
@@ -992,7 +993,7 @@ Type); **`CorrectionRequest`** (new) — any authorized payroll user may propose
 sits `PENDING` until a Master User approves (producing a `Correction`) or rejects it (mandatory
 rejection reason, no `Correction` created); a Master User may still correct directly, bypassing the
 request entirely, with no separate approval step, exactly as before this revision. The
-**baseline-reconstruction/replay algorithm** (`docs/architecture/post-release-corrections.md`) exactly
+**baseline-reconstruction/replay algorithm** (`docs/architecture/workflows/corrections-and-balance-adjustments.md`) exactly
 as specified — this is the most implementation-sensitive piece of logic in the entire system,
 unaffected by the request/approval split (it always operates on the resulting `Correction`, regardless
 of which path produced it); the Balance Adjustment automatic settlement pipeline, including the
@@ -1213,8 +1214,8 @@ frontend is built against it (per the overall strategy above).
 | Correction baseline-replay algorithm implemented incorrectly | Wrong financial balances, discovered late | Property-style randomized test suite (Phase 6), dedicated review checkpoint before proceeding to Phase 7 |
 | RBAC/site-scoping bypass via a missed route or a raw query | A Payroll Staff user sees/edits data outside their sites — a real security incident | Boundary tests introduced in Phase 2 and re-run in full in Phase 9; middleware applied at the router level, not per-handler, to minimize the chance a route is missed |
 | Payroll Entry grid performs poorly at scale (today's ~1,500 rows, or Principle 10's 10,000-employee design floor) | The client's explicitly named top concern ("cannot have any crashes or lapses") | Virtualization built in from the start of Phase 3, performance-tested at both scales within that same phase rather than deferred |
-| Cycle archiving/backup failure blocks month-end close | A real business deadline (bank sheets/cheques go out on schedule) is missed | Phase 5 tests the all-or-nothing transaction explicitly; per `docs/architecture/database-schema.md` §22, cycle archiving is not coupled to backup file success in a way that can stall the transition — this needs to be re-verified during Phase 5, not assumed |
-| Open design assumptions (`docs/architecture/database-schema.md` §26 items 2, 4, 5 — CNIC/employeeCode nullability, free-text designation/religion, calendar-month-only cycles) surface a real mismatch with client expectations | Rework of Employee Registry (Phase 2) or Payroll Processing (Phase 3) | Confirm these specific open items with the client before Phase 2 and Phase 3 begin, respectively — not discovered mid-build |
+| Cycle archiving/backup failure blocks month-end close | A real business deadline (bank sheets/cheques go out on schedule) is missed | Phase 5 tests the all-or-nothing transaction explicitly; per `database/schema-invariants.md` §22, cycle archiving is not coupled to backup file success in a way that can stall the transition — this needs to be re-verified during Phase 5, not assumed |
+| Open design assumptions (`database/schema-invariants.md` §26 items 2, 4, 5 — CNIC/employeeCode nullability, free-text designation/religion, calendar-month-only cycles) surface a real mismatch with client expectations | Rework of Employee Registry (Phase 2) or Payroll Processing (Phase 3) | Confirm these specific open items with the client before Phase 2 and Phase 3 begin, respectively — not discovered mid-build |
 | Scope creep on Team Collaboration or cosmetic polish before the core payroll path is solid | Delays the client's actual priority | Enforced by phase ordering — Phase 8 cannot start before Phase 7 is done, and the spec's own prioritization is the justification if this is ever challenged |
 | Client UAT surfaces a business-rule gap late (Phase 9) | Rework after "feature complete" | Where practical, informal client review is pulled earlier (explicitly suggested at the end of Phase 4, once real documents are being generated) rather than deferred entirely to Phase 9 |
 

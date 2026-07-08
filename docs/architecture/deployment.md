@@ -1,5 +1,12 @@
 # Deployment Strategy
 
+**Owner module(s):** All modules (cross-cutting deployment/infrastructure)
+
+**Contains:** Railway vs. Render comparison, deployment topology, backup strategy in production
+
+**Sections:** — (narrative document, not part of the §-numbered schema/workflow set) · Database
+index: `database/README.md`
+
 ## Comparison: Railway vs Render
 
 | Criterion | Railway | Render |
@@ -17,7 +24,7 @@
 requirements:
 
 - **Backup maturity matters more here than elsewhere.** This system's own architecture (Archived
-  cycles, backup packages, `docs/architecture/data-and-storage.md`) treats payroll data as
+  cycles, backup packages, `docs/architecture/workflows/payroll-lifecycle.md`) treats payroll data as
   effectively irreplaceable. Render's more mature automated-backup and point-in-time-recovery story
   on managed Postgres is a direct match for that requirement; Railway's is comparatively less
   configurable.
@@ -39,9 +46,10 @@ requirements:
 - **Backend** — Render Web Service running the Express API.
 - **Frontend** — Render Static Site serving the built Vite/React bundle (CDN-backed, automatic SSL).
 - **Database** — Render managed PostgreSQL, PITR-enabled tier given the financial-data criticality
-  established in `docs/architecture/data-and-storage.md`.
+  established in `docs/architecture/system-conventions.md` and
+  `docs/architecture/workflows/payroll-lifecycle.md`.
 - **File storage** — local filesystem in development; a cloud object storage provider in production,
-  selected behind the `StorageProvider` abstraction (`docs/architecture/data-and-storage.md` §2) —
+  selected behind the `StorageProvider` abstraction (`docs/architecture/system-conventions.md` §2) —
   this choice is independent of the Render/Railway decision and does not block it.
 - **Staging environment** — a separate Render environment (its own web service, static site, and
   database) seeded from anonymized/synthetic data, deployed from a staging branch; production deploys
@@ -54,7 +62,8 @@ requirements:
 ## Backup Strategy in Production
 
 In addition to Render's managed Postgres backups (daily + PITR), the application-level backup
-packages described in `docs/architecture/data-and-storage.md` (generated automatically when a cycle
-is archived) provide a second, independent, human-inspectable safety net — CSV/metadata exports
+packages described in `docs/architecture/workflows/payroll-lifecycle.md` §5 (generated automatically
+when a cycle is archived) provide a second, independent, human-inspectable safety net — CSV/metadata
+exports
 distinct from a full database snapshot, useful for disaster recovery, audits, and giving the client
 an offline copy without requiring a database restore.

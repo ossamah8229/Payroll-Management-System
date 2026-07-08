@@ -95,7 +95,7 @@ export interface CnicAvailability {
   } | null;
 }
 
-/** The one place the frontend calls the duplicate-check endpoint (docs/architecture/database-schema.md
+/** The one place the frontend calls the duplicate-check endpoint (docs/architecture/database/schema-invariants.md
  * §26 item 6) — the CNIC field's debounced check and any future consumer share this fetcher rather
  * than each building their own query string/response handling. */
 export function checkCnicAvailability(cnic: string, excludeEmployeeId?: string): Promise<CnicAvailability> {

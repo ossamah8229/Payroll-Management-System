@@ -50,7 +50,7 @@ export function buildCalcInput(
   primaryLineOverrides: WorkLineCalcOverrides = {},
 ): PayrollEntryCalcInput {
   // Guaranteed by the architecture — every PayrollEntry always has at least one WorkLine
-  // (docs/architecture/database-schema.md §12a) — mirrors calcNet's own `assertHasWorkLines`.
+  // (docs/architecture/database/payroll-entry.md §12a) — mirrors calcNet's own `assertHasWorkLines`.
   const [primary, ...rest] = entry.workLines;
   if (!primary) {
     throw new Error('buildCalcInput: a PayrollEntry must have at least one PayrollEntryWorkLine');

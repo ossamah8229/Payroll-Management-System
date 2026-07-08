@@ -1,5 +1,5 @@
 -- Phase 2.5, Checkpoint 1 (docs/IMPLEMENTATION_PLAN.md) — introduces ProjectUnit
--- (docs/architecture/database-schema.md §8a) and removes ProjectSite.branchCode (§8's revision
+-- (docs/architecture/database/sites-and-units.md §8a) and removes ProjectSite.branchCode (§8's revision
 -- note). This is the project's first genuinely destructive migration (dropping a column in use
 -- by the Prisma schema) — low practical risk only because, per docs/PROJECT_PROGRESS.md and
 -- docs/SESSION_HANDOFF.md, no Postgres instance has ever applied any prior migration in this
@@ -34,7 +34,7 @@ CREATE UNIQUE INDEX "ProjectUnit_siteId_name_key" ON "ProjectUnit"("siteId", "na
 -- Composite-FK-support index, not a business uniqueness rule — lets Checkpoint 2's
 -- Employee.unitId and Phase 3's PayrollEntryWorkLine.unitId declare
 -- (unitId, siteId) -> ProjectUnit(id, siteId) as a database-level guarantee
--- (docs/architecture/database-schema.md §8a).
+-- (docs/architecture/database/sites-and-units.md §8a).
 CREATE UNIQUE INDEX "ProjectUnit_id_siteId_key" ON "ProjectUnit"("id", "siteId");
 
 -- AddForeignKey

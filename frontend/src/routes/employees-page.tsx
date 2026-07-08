@@ -87,7 +87,7 @@ function EmployeeFormModal({
 
   const [cnicAvailability, setCnicAvailability] = useState<CnicAvailability | undefined>(undefined);
 
-  // Debounced pre-submit duplicate-check (docs/architecture/database-schema.md §26 item 6) — only
+  // Debounced pre-submit duplicate-check (docs/architecture/database/schema-invariants.md §26 item 6) — only
   // fires once the field holds a complete, normalized 13-digit CNIC, and is skipped entirely when
   // editing an employee whose CNIC hasn't changed (excludeId also guards against a same-record
   // false positive if it has).
@@ -427,7 +427,7 @@ function MarkLeftModal({
 }
 
 /**
- * The Reactivate Employee action (docs/architecture/database-schema.md §26 item 6) — symmetric to
+ * The Reactivate Employee action (docs/architecture/database/schema-invariants.md §26 item 6) — symmetric to
  * `MarkLeftModal` above. Fetches the full current record (rather than relying on whatever partial
  * detail the CNIC duplicate-check surfaced) so every current-employment field can be reviewed and,
  * if needed, updated in the same call that clears `dateOfLeaving`, via the single `reactivateEmployee`

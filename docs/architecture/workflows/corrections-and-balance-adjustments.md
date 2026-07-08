@@ -1,4 +1,19 @@
-# Post-Release Correction Rule
+# Corrections & Balance Adjustments Workflow
+
+**Owner module(s):** Corrections; Balance Adjustments
+
+**Contains:** The post-release correction workflow in full — when it applies, the request/approval
+split, the settlement rule, standardized Adjustment Types, baseline reconstruction for sequential
+corrections, the automatic settlement pipeline, document representation, and interaction with Advances
+
+**Sections:** no §-numbered content of its own (a prose workflow narrative, moved unchanged from the
+former `post-release-corrections.md`) · Full database index: `database/README.md`
+
+For the schema this workflow governs, see `database/corrections.md` (`AdjustmentType`, `Correction`,
+`CorrectionRequest`) and `database/balance-adjustments.md` (`BalanceAdjustment`, `CorrectionPayment`,
+`BalanceAdjustmentSettlement`) — this file is the workflow narrative only; it does not restate their
+column lists. Per the Documentation Ownership Rule (`docs/architecture/folder-structure.md`), the
+schema is authoritative in those files, not here.
 
 This refines and supersedes the correction-workflow mechanics described in `PROJECT_SPEC.md` and the
 prototype. The prototype's approach (silently bump next month's `allowance` or `advance` field by the
@@ -13,33 +28,34 @@ was actually paid is a fact of record, not a draft.
 
 ## When this applies
 
-Stated once, authoritatively, in `docs/architecture/data-and-storage.md` §4, and never rephrased
-differently anywhere in this document set:
+Stated once, authoritatively, in `docs/architecture/workflows/payroll-lifecycle.md §4`, and never
+rephrased differently anywhere in this document set:
 
 > **A `PayrollEntry` requires the Correction workflow whenever `PayrollEntry.released = true`.**
 
 **Simplified 2026-07-05 (Phase 3 architecture review)** from the original two-clause "individually
 released, OR its parent `PayrollCycle` is no longer in Draft" — release now happens at Project Unit
-granularity (`data-and-storage.md` §4), and `PayrollCycle.status` is itself derived from every Unit
-having released or been held, so it can never diverge from entry-level `released` any more. Everything
-below applies whenever `released = true` holds, regardless of whether that happened via the ordinary
-per-Unit sweep or a Late Entry's own one-off release (`database-schema.md` §12b).
+granularity (`docs/architecture/workflows/payroll-lifecycle.md §4`), and `PayrollCycle.status` is
+itself derived from every Unit having released or been held, so it can never diverge from entry-level
+`released` any more. Everything below applies whenever `released = true` holds, regardless of whether
+that happened via the ordinary per-Unit sweep or a Late Entry's own one-off release
+(`database/release.md §12b`).
 
 ## Correction Requests — proposing vs. deciding a correction
 
 **Added 2026-07-05.** A new business rule separates *who may propose* a correction from *who may
 decide* one: "correction requests may be initiated by any authorized payroll user, but approval
 belongs to the Master User." Two paths now exist, both producing an identical `Correction` row
-(`database-schema.md` §13):
+(`database/corrections.md §13`):
 
 1. **Direct correction** — unchanged from before this session. A Master User corrects a released
    entry personally. Because they *are* the approver, no separate request/approval step applies — this
    was always true of pre-release edits (any payroll manager may freely edit until release) and is now
    stated explicitly for the post-release case too: **"if the Master User makes the correction
    personally, no separate approval workflow is required."**
-2. **Correction Request** (new, `CorrectionRequest`, `database-schema.md` §13a) — any other authorized
-   payroll user proposes a field, a new value, an Adjustment Type, and a mandatory reason. It sits
-   `PENDING` until a Master User reviews it:
+2. **Correction Request** (new, `CorrectionRequest`, `database/corrections.md §13a`) — any other
+   authorized payroll user proposes a field, a new value, an Adjustment Type, and a mandatory reason.
+   It sits `PENDING` until a Master User reviews it:
    - **Approve** — the Master User may adjust the proposed field/value/Adjustment Type before
      confirming; approval creates the `Correction` (+ its `BalanceAdjustment`, below) in the same
      transaction as marking the request `APPROVED` and linking it to the resulting `Correction`.
@@ -47,7 +63,7 @@ belongs to the Master User." Two paths now exist, both producing an identical `C
      "reason mandatory" convention applied to the correction itself); no `Correction` or
      `BalanceAdjustment` is created, and the underlying `PayrollEntry` is untouched.
    Either outcome is a permanent, audited record — a `CorrectionRequest` is never edited or deleted
-   once decided (`database-schema.md` §13a).
+   once decided (`database/corrections.md §13a`).
 
 Everything below — the baseline-reconstruction algorithm, standardized Adjustment Types, the
 Automatic Settlement Workflow, Bank Sheet/Payslip representation — applies identically to a
@@ -149,8 +165,7 @@ This reconstruction is deliberately stateless and recomputed from the full corre
 time, rather than incrementally maintained or cached anywhere — it can always be independently
 verified by replaying from scratch, which is what "deterministic and reproducible" (Principle 5)
 requires for a mechanism this central to correctness. `Correction (payrollEntryId, field,
-approvedAt DESC)` is indexed to make this replay cheap (see `docs/architecture/database-schema.md`
-§13).
+approvedAt DESC)` is indexed to make this replay cheap (see `database/corrections.md §13`).
 
 ## Automatic Settlement Workflow
 
@@ -202,23 +217,24 @@ Concretely:
   Unit contributing to their payroll hasn't released yet this cycle), the balance folds into that
   entry's eventual payment, same mechanism as `DEFERRED` just resolved against the current cycle
   instead of waiting for the next one. Otherwise, a standalone `CorrectionPayment`
-  (`database-schema.md` §14a) is created immediately, `BalanceAdjustment.status → SETTLED` right away
-  (`settledInCycleId` stays null — settlement happened outside any cycle), with its own Bank/Cash
-  document, full audit trail, and Statement of Account visibility. **Released `PayrollEntry` rows are
-  never modified by this — an `IMMEDIATE` payment is always a new record, never a reopening.**
+  (`database/balance-adjustments.md §14a`) is created immediately, `BalanceAdjustment.status →
+  SETTLED` right away (`settledInCycleId` stays null — settlement happened outside any cycle), with
+  its own Bank/Cash document, full audit trail, and Statement of Account visibility. **Released
+  `PayrollEntry` rows are never modified by this — an `IMMEDIATE` payment is always a new record,
+  never a reopening.**
 - **`RECOVERY`** (installment-capable as of 2026-07-05) — created `PENDING`, `remainingAmount` starts
   at the full `amount`. Each future Draft cycle's release checks for `PENDING` `RECOVERY` adjustments
   against that employee and applies `min(recoveryInstallmentAmount ?? remainingAmount, remainingAmount)`
   as a deduction merged into that release's payment amount (same "merged, never a second transfer"
-  rule as `PAYABLE`), logging a `BalanceAdjustmentSettlement` row (`database-schema.md` §14b) for that
-  cycle's applied amount and decrementing `remainingAmount`. If `remainingAmount` reaches `0`, the
-  adjustment becomes `SETTLED` (`settledInCycleId` = that cycle); otherwise it stays `PENDING` and the
-  same automatic mechanism applies again next cycle, with no further human action required.
-  `recoveryInstallmentAmount` defaults to `NULL` (recover the full remaining amount in one cycle — the
-  original, unchanged behavior) and is Master-User-editable at any time before full settlement, exactly
-  like `Advance.scheduledInstallmentAmount`'s already-established editable-schedule pattern
-  (`docs/IMPLEMENTATION_PLAN.md` Phase 4) — editing the schedule is itself a distinct, audited action,
-  never a silent recalculation.
+  rule as `PAYABLE`), logging a `BalanceAdjustmentSettlement` row (`database/balance-adjustments.md
+  §14b`) for that cycle's applied amount and decrementing `remainingAmount`. If `remainingAmount`
+  reaches `0`, the adjustment becomes `SETTLED` (`settledInCycleId` = that cycle); otherwise it stays
+  `PENDING` and the same automatic mechanism applies again next cycle, with no further human action
+  required. `recoveryInstallmentAmount` defaults to `NULL` (recover the full remaining amount in one
+  cycle — the original, unchanged behavior) and is Master-User-editable at any time before full
+  settlement, exactly like `Advance.scheduledInstallmentAmount`'s already-established editable-schedule
+  pattern (`docs/IMPLEMENTATION_PLAN.md` Phase 4) — editing the schedule is itself a distinct, audited
+  action, never a silent recalculation.
 - If, for some reason, an employee with a `PENDING` Balance Adjustment (`DEFERRED` `PAYABLE` or any
   stage of a `RECOVERY` installment) is **held** rather than released in a given cycle, that
   adjustment's settlement for this cycle is simply skipped — no `BalanceAdjustmentSettlement` row is
@@ -244,10 +260,10 @@ line items to the same account in one batch isn't a reliable operation to depend
 
 **Revised 2026-07-05 — an `IMMEDIATE` `PAYABLE` with no open entry to fold into is the one exception,
 by design, not a violation of the rule above:** it settles via a standalone `CorrectionPayment`
-(`database-schema.md` §14a), which is not part of any ordinary cycle's Bank Sheet/Cash Sheet at all —
-it's its own one-off document, precisely because there is no ordinary release happening for that
-employee to merge into (every entry they currently have is already released, per Principle 9, and is
-never reopened). The "never two rows in one release" rule is about not splitting *one release's*
+(`database/balance-adjustments.md §14a`), which is not part of any ordinary cycle's Bank Sheet/Cash
+Sheet at all — it's its own one-off document, precisely because there is no ordinary release happening
+for that employee to merge into (every entry they currently have is already released, per Principle 9,
+and is never reopened). The "never two rows in one release" rule is about not splitting *one release's*
 payment into two transfers; a `CorrectionPayment` isn't part of any release, so there's nothing it
 could split.
 
@@ -267,8 +283,8 @@ could split.
 - **Statement of Account** — shows the Correction and its resulting Balance Adjustment as fully
   separate ledger entries, exactly as already described (§7, above) — unaffected by how the payment
   itself is transferred. For an installment `RECOVERY`, shows each `BalanceAdjustmentSettlement` row
-  (`database-schema.md` §14b) as its own dated line, so the employee's ledger reads as a clean
-  per-cycle recovery history rather than one opaque total.
+  (`database/balance-adjustments.md §14b`) as its own dated line, so the employee's ledger reads as a
+  clean per-cycle recovery history rather than one opaque total.
 
 There must never be two bank transfers, two cheques, or two payment rows for the same employee within
 one ordinary cycle release. The Bank Sheet/Cash Sheet total must still exactly equal what is actually
@@ -284,7 +300,7 @@ same transaction as the correction's approval — otherwise the advance balance 
 what the corrected records say was actually recovered, which would violate Principle 6.
 
 This is possible without ambiguity because `PayrollEntry.advanceId` / `.eidAdvanceId` (see
-`docs/architecture/database-schema.md` §12) record, at the time the deduction was originally entered,
+`database/payroll-entry.md §12`) record, at the time the deduction was originally entered,
 *exactly* which `Advance` row it applied to — not inferred again later from "whichever advance is
 currently active" (which could by now be a different advance, if the original one was since paid off
 and a new one taken out). When such a correction is approved:
@@ -305,30 +321,13 @@ and a new one taken out). When such a correction is approved:
 
 The prototype's mechanism — silently adding the diff into next month's `allow` or `adv` field — is
 replaced with an explicit, first-class balance record (`BalanceAdjustment`, always exactly one per
-approved correction — including the zero-difference `NONE` case, above) carrying at minimum:
-
-- Reference to the originating `Correction` (one-to-one)
-- Reference to the source cycle (the cycle the correction was made against — this may be `Released`
-  or `Archived`, or a still-`Draft` cycle in which the specific entry was individually released) and
-  employee
-- Amount and type (`PAYABLE` / `RECOVERY` / `NONE`)
-- Its own `adjustmentTypeId`, a direct, denormalized copy of the originating `Correction`'s
-  standardized Adjustment Type — stored directly on `BalanceAdjustment`, not looked up via a join,
-  consistent with how `employeeId` and the source cycle are already denormalized on this same row —
-  plus the free-text remark, carried from the originating `Correction`
-- Status (`PENDING` → `SETTLED`), transitioned automatically per the Automatic Settlement Workflow
-  above — never set manually (a `NONE`-type row is created already `SETTLED`)
-- The cycle in which it was settled (`settledInCycleId`), populated automatically at release (null
-  for a `NONE`-type row, or for an `IMMEDIATE` `PAYABLE` settled via a standalone `CorrectionPayment`
-  outside any cycle — added 2026-07-05)
-- The display remark (§6, above)
-- **Added 2026-07-05:** `paymentTiming` (`IMMEDIATE`/`DEFERRED`, `PAYABLE`-only, chosen at approval);
-  `recoveryInstallmentAmount`/`remainingAmount` (`RECOVERY`-only, enabling multi-cycle installment
-  recovery instead of only a single-cycle full deduction) — see `database-schema.md` §14. Two new
-  companion tables round out the model: `CorrectionRequest` (§13a, the pending-approval predecessor to
-  a `Correction`) and `CorrectionPayment` (§14a, the standalone artifact for an `IMMEDIATE` `PAYABLE`
-  with no open entry) and `BalanceAdjustmentSettlement` (§14b, the per-cycle installment history for a
-  `RECOVERY`).
+approved correction — including the zero-difference `NONE` case, above), together with its companion
+tables `CorrectionRequest` (the pending-approval predecessor to a `Correction`), `CorrectionPayment`
+(the standalone artifact for an `IMMEDIATE` `PAYABLE` with no open entry to fold into), and
+`BalanceAdjustmentSettlement` (the per-cycle installment history for a `RECOVERY`). **For the exact
+column list, types, and constraints, see `database/balance-adjustments.md §14–§14b` and
+`database/corrections.md §13a`** — that is the authoritative schema; it is intentionally not restated
+here, per the Documentation Ownership Rule (`docs/architecture/folder-structure.md`).
 
 This keeps the balance a distinct, queryable, auditable object — rather than an invisible bump to an
 ordinary earnings/deductions field that would be indistinguishable from a normal allowance or advance

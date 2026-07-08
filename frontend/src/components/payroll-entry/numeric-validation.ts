@@ -15,7 +15,7 @@ export function isValidDecimalDraft(value: string, nullable: boolean): boolean {
   return decimalString.safeParse(value).success;
 }
 
-/** Cycle Days is a plain integer 1–31 (docs/architecture/database-schema.md §12a), not a decimal
+/** Cycle Days is a plain integer 1–31 (docs/architecture/database/payroll-entry.md §12a), not a decimal
  * string — validated and parsed together so an incomplete/out-of-range value is never sent, the
  * same "gate at commit time, never at keystroke" pattern as the decimal fields use. */
 export function parseValidCycleDays(value: string): number | undefined {

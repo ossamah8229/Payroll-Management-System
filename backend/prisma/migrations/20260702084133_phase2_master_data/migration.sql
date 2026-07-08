@@ -72,7 +72,7 @@ CREATE TABLE "CompanySettings" (
 CREATE UNIQUE INDEX "Bank_code_key" ON "Bank"("code");
 
 -- CreateIndex
--- Partial unique indexes: nullable-but-unique-when-present, per database-schema.md §9/§26 item 2.
+-- Partial unique indexes: nullable-but-unique-when-present, per docs/architecture/database/employee.md §9 and docs/architecture/database/schema-invariants.md §26 item 2.
 CREATE UNIQUE INDEX "Employee_cnic_key" ON "Employee"("cnic") WHERE "cnic" IS NOT NULL;
 
 -- CreateIndex

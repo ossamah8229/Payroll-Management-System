@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * Creates a Payroll Cycle — either the very first one ever (no existing cycles) or a subsequent
- * one (docs/architecture/data-and-storage.md §4, docs/IMPLEMENTATION_PLAN.md Phase 3 Checkpoint 1).
+ * one (docs/architecture/workflows/payroll-lifecycle.md §4, docs/IMPLEMENTATION_PLAN.md Phase 3 Checkpoint 1).
  * The caller supplies which calendar month this cycle represents; the service layer determines
  * whether this is a bootstrap or a carry-forward creation by looking at what already exists — the
  * request shape is identical either way.

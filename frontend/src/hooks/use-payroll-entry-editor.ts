@@ -54,7 +54,7 @@ function backoffMs(attempt: number): number {
   return Math.min(1000 * 2 ** (attempt - 1), 8000);
 }
 
-/** True 409 conflict — someone else changed this row first (docs/architecture/database-schema.md
+/** True 409 conflict — someone else changed this row first (docs/architecture/database/schema-invariants.md
  * §22 optimistic locking) — vs. any other failure, which gets auto-retried instead. */
 function isConflict(error: unknown): boolean {
   return error instanceof ApiError && error.status === 409;
@@ -103,7 +103,7 @@ function sanitizeWorkLineDraft(draft: WorkLineDraft): Partial<UpdateWorkLineInpu
  * Per-row editing/autosave state machine — one instance per `PayrollEntryRow`. Owns: local draft
  * overlays for entry-level and primary-work-line fields, live `calcNet` recomputation (shared
  * library only, never reimplemented), debounced autosave, optimistic-locking conflict handling,
- * and error retry with backoff. See docs/architecture/database-schema.md §22 for the version-based
+ * and error retry with backoff. See docs/architecture/database/schema-invariants.md §22 for the version-based
  * locking contract this mirrors.
  */
 export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycleStatus: string) {

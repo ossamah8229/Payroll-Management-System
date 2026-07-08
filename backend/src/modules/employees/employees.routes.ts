@@ -196,7 +196,7 @@ employeesRouter.post('/:id/leave', requirePermission(PERMISSIONS.EMPLOYEES_EDIT)
     const input = markEmployeeLeftSchema.parse(req.body);
     const employee = await markEmployeeLeft(req.currentUser!, id, input);
 
-    // Distinct from `employee.updated` per docs/architecture/database-schema.md §9 — a
+    // Distinct from `employee.updated` per docs/architecture/database/employee.md §9 — a
     // dateOfLeaving change is a business event in its own right, not an incidental field edit.
     await recordAuditLog({
       actorUserId: req.currentUser!.id,

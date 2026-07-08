@@ -133,7 +133,7 @@ ALTER TABLE "PayrollEntryWorkLine" ADD CONSTRAINT "PayrollEntryWorkLine_payrollE
 ALTER TABLE "PayrollEntryWorkLine" ADD CONSTRAINT "PayrollEntryWorkLine_unitId_siteId_fkey" FOREIGN KEY ("unitId", "siteId") REFERENCES "ProjectUnit"("id", "siteId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- Hand-added below: check constraints and the partial index Prisma's schema DSL cannot express
--- (docs/architecture/database-schema.md §10/§12/§12a), same pattern as Employee's CNIC check
+-- (docs/architecture/database/payroll-cycle.md §10 and docs/architecture/database/payroll-entry.md §12/§12a), same pattern as Employee's CNIC check
 -- constraint and partial-unique indexes (Phase 2 migration).
 
 -- CheckConstraint: PayrollCycle.month must be a valid calendar month (§10).

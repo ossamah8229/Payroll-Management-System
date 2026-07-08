@@ -1,5 +1,5 @@
 -- Phase 2.5, Checkpoint 2 (docs/IMPLEMENTATION_PLAN.md) — adds Employee.unitId (composite-FK'd
--- against ProjectUnit(id, siteId), docs/architecture/database-schema.md §9) and the new,
+-- against ProjectUnit(id, siteId), docs/architecture/database/employee.md §9) and the new,
 -- append-only EmployeeTransferHistory table (§8b). Employee.unitId is added NOT NULL with no
 -- default, mirroring how Employee.siteId has always been required — safe here only because, per
 -- docs/PROJECT_PROGRESS.md and docs/SESSION_HANDOFF.md, no Postgres instance has ever applied any
@@ -45,7 +45,7 @@ CREATE INDEX "Employee_unitId_idx" ON "Employee"("unitId");
 
 -- AddForeignKey
 -- The composite FK that makes "an employee's unit must belong to their own site" a database-level
--- guarantee, not just an application-layer check (docs/architecture/database-schema.md §9).
+-- guarantee, not just an application-layer check (docs/architecture/database/employee.md §9).
 ALTER TABLE "Employee" ADD CONSTRAINT "Employee_unitId_siteId_fkey" FOREIGN KEY ("unitId", "siteId") REFERENCES "ProjectUnit"("id", "siteId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey

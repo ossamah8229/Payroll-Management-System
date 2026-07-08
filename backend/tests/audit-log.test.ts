@@ -2,7 +2,7 @@ import { prisma } from '../src/lib/prisma';
 import { recordAuditLog } from '../src/modules/audit-log/audit-log.service';
 
 /**
- * The Audit Log immutability guarantee (docs/architecture/data-and-storage.md §3) is enforced at
+ * The Audit Log immutability guarantee (docs/architecture/system-conventions.md §3) is enforced at
  * two independent layers: the application never exposes an update/delete path (there is simply no
  * such export from audit-log.service.ts — nothing to test there beyond "the function doesn't
  * exist"), and the database itself rejects UPDATE/DELETE via a trigger, tested directly here by

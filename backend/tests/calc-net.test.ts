@@ -2,7 +2,7 @@ import { calcNet, type PayrollEntryCalcInput } from '@payroll/shared';
 
 /**
  * Pure unit tests, no database involved — `calcNet` (shared/src/lib/calc-net.ts) is the single
- * source of truth for net-salary calculation (docs/architecture/database-schema.md §12/§12a,
+ * source of truth for net-salary calculation (docs/architecture/database/payroll-entry.md §12/§12a,
  * Principle 5) and must be exercised directly, the same way `date-utils.test.ts` exercises the
  * shared date utilities.
  */
