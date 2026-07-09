@@ -11,8 +11,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `70a52da`** — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site
-  filtering and Copy to All". Full prior lineage:
+- **Latest committed commit: `b4c1d21`** — "feat(payroll): implement Phase 3 Checkpoint 5 payroll
+  entry import/export". Full prior lineage:
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -25,7 +25,17 @@ be enough to resume correctly without re-deriving context from scratch — per
   implementation, reviewed and committed) → `3479bff` (doc-only commit hash record, closing
   Checkpoint 2) → `6be6e68` (Phase 3 Checkpoint 3 Split by Unit workflow implementation, reviewed,
   verified, and committed) → `70a52da` (Phase 3 Checkpoint 4 multi-site filtering and Copy to All
-  implementation, reviewed, verified, and committed).
+  implementation, reviewed, verified, and committed) → `b4c1d21` (Phase 3 Checkpoint 5 Payroll Entry
+  CSV/Excel import/export implementation, reviewed, verified, and committed).
+- **Phase 3 Checkpoint 5 (Payroll Entry CSV/Excel import/export) is reviewed, approved, verified, and
+  COMMITTED as `b4c1d21`.** A read-only architecture review preceded implementation and surfaced one
+  three-option design fork plus four further open questions, all frozen by explicit user decision
+  before any code was written — see `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 5" entry
+  for the full decision record; the frozen decisions are repeated in §3 below, permanently binding on
+  any future session that touches this code. Verified: `typecheck`/`lint`/`build` clean across all
+  three workspaces; **175/175 backend tests** (165 prior + 10 new,
+  `backend/tests/payroll-entry-import-export.test.ts`) against live PostgreSQL; a real-stack
+  Playwright pass, **13/13 checks**. **Checkpoint 5 is complete and closed.**
 - **Phase 3 Checkpoint 2 (Payroll Entry grid frontend) is reviewed, approved, verified, and
   COMMITTED.** A pre-commit verification pass found and fixed three genuine defects within scope: a
   numeric-input crash (unparseable text crashed the live `calcNet` preview — no error boundary
@@ -724,6 +734,44 @@ three process docs) preceded the commit.
     **This architecture is frozen — do not reopen or redesign it unless implementation reveals a
     genuine blocker or a new business requirement is introduced.** Phase 4 implements directly against
     it. Phase 3 Checkpoint 2 is unaffected and still requires its own separate authorization.
+- **New 2026-07-09, Phase 3 Checkpoint 5 — implementation decisions, do not re-litigate (implemented,
+  verified, and COMMITTED as `b4c1d21` — see §1 above):**
+  - **The Payroll Entry import/export file format is permanently flat, representing only an entry's
+    primary work line ("Option C").** Do not add a Unit/Branch column or multi-row-per-employee
+    semantics to represent a split entry's non-primary lines — that was explicitly considered
+    ("Option B") and rejected, since it would reopen Checkpoint 4's own frozen "Copy to All touches
+    the primary line only" precedent. A split employee's non-primary lines remain reachable
+    exclusively through the grid's Split by {unitLabel} modal; the limitation is a UI note, not a
+    format concern.
+  - **Import matches an existing `PayrollEntry` by `Employee Code` and/or `CNIC`** — both supported,
+    neither one alone sufficient by design (CNIC is optional per Phase 2.5 Checkpoint 4). Do not
+    narrow this back to CNIC-only.
+  - **Import is permanently update-only.** It must never create a `PayrollEntry` or
+    `PayrollEntryWorkLine`, never bootstrap an employee into a cycle, never modify `siteId` or
+    `released`/`releasedAt`/`releasedBy`. A row identifying no matching entry in the target cycle is
+    skipped and reported — do not add an "auto-create" fallback later without a fresh, explicit
+    decision.
+  - **Import does not require or check a per-row `version`** — it follows Checkpoint 4's
+    administrative-bulk-operation precedent (no pre-check, but every written row still increments
+    `version` so a concurrently-open grid row correctly 409s on its own next save). Do not add a
+    `version` column to the spreadsheet format to "fix" this; it was a deliberate choice, not an
+    oversight.
+  - **Both import and export write their own summary `AuditLog` entry** (`payroll_entry.import`,
+    `payroll_entry.export`) — a deliberate, approved deviation from Employee Registry's own export
+    (which logs nothing). Do not remove the export-side audit entry to "match" that precedent.
+  - **No new RBAC permission was introduced** — both routes reuse the single existing
+    `PERMISSIONS.PAYROLL_ENTRY`. Do not split this module into separate view/create permissions the
+    way Employee Registry has, without a fresh, explicit decision.
+  - **`backend/src/common/import-export.ts`** now holds the one shared CSV/XLSX-to-table parsing
+    implementation (`parseTableFromFile`) both Employee Registry's and Payroll Entry's importers call
+    — do not reintroduce a second, duplicate implementation of that logic in a future importer;
+    extend/reuse this one.
+  - **`mapUpdateInputToEntryData`, `mapUpdateInputToWorkLineData`, and `assertEntryEditable`**
+    (`backend/src/modules/payroll-entry/payroll-entry.service.ts`) are now exported and reused by the
+    import path — the single implementation of "which fields does an edit touch" and "is this entry
+    locked," respectively. Do not reintroduce a second copy of either mapping or the lock check in
+    any future Payroll Entry code path (e.g. a future bulk-correction or reporting feature).
+  - **Full decision record:** `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 5" subsection.
 
 ## 4. Current frozen architecture (reference index)
 

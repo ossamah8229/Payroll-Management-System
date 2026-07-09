@@ -446,7 +446,8 @@ committing**:
   — COMPLETE, 2026-07-09, COMMITTED as `6be6e68`.** See below.
 - **Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar — COMPLETE, 2026-07-09,
   COMMITTED as `70a52da`.** See below.
-- Checkpoint 5 — Payroll Entry CSV/Excel import/export.
+- **Checkpoint 5 — Payroll Entry CSV/Excel import/export — COMPLETE, 2026-07-09, COMMITTED as
+  `b4c1d21`.** See below.
 - Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor + this phase's own
   🛑 review checkpoint (below).
 
@@ -937,6 +938,103 @@ COMMITTED as `6be6e68`)**
   TODO/dead-code checks, a fresh typecheck/lint/build, backend tests re-confirmed at 165/165 and the
   Playwright pass re-confirmed at 15/15 against a freshly re-provisioned database) found no defects.
 
+**Checkpoint 5 — Payroll Entry CSV/Excel import/export — COMPLETE, 2026-07-09, COMMITTED as
+`b4c1d21`**
+- **A dedicated read-only architecture review preceded implementation** (this session), covering
+  what Checkpoints 0–4 had already built, the reusable Employee Registry import/export
+  infrastructure, and the reference prototype/`reference/PROJECT_SPEC.md`'s own (pre-Project-Unit,
+  pre-Work-Line) Payroll Entry template. The review surfaced one genuinely open design question —
+  whether the flat, single-row-per-employee template (which predates `PayrollEntryWorkLine`
+  entirely) should grow a Unit column and multi-row-per-employee semantics to represent a split
+  entry's non-primary lines — and presented three options. **Approved decision ("Option C"): the
+  format stays flat and represents only an entry's primary work line**, mirroring Checkpoint 4's own
+  frozen "Copy to All touches the primary line only" precedent exactly, rather than reopening it. A
+  split entry's non-primary lines remain reachable exclusively through the grid's Split by
+  {unitLabel} modal; the limitation is surfaced as UI copy, not a file-format change. This
+  supersedes this document's own stale "one row per work line" note further below (Phase 3's
+  original `Builds:` paragraph, written before Phase 2.5 introduced `PayrollEntryWorkLine`) — that
+  sentence is corrected in place, not left contradicting this decision.
+- **Approved decisions frozen ahead of implementation, all now built exactly as specified**: (1)
+  **match keys are Employee Code and/or CNIC**, not CNIC alone (the frozen spec's original, single
+  key) — CNIC is optional since Phase 2.5 Checkpoint 4, so CNIC-only matching cannot address every
+  employee; both provided keys must agree on the same employee, or the row is an error, mirroring
+  `resolveRowUnit`'s own two-key defense-in-depth pattern. (2) **Import is update-only** — never
+  creates a `PayrollEntry`/`PayrollEntryWorkLine`, never bootstraps an employee into the cycle, never
+  touches `siteId` (permanently non-editable, unchanged) or `released`/`releasedAt`/`releasedBy` (the
+  exported `Released` column is read-only/informational, never parsed back into a write); a row
+  naming no known entry in the target cycle is skipped and reported, never silently created. (3)
+  **Optimistic locking follows the Checkpoint 4 administrative-bulk-operation precedent** — no
+  `version` column in the file, no per-row version check, but every successfully updated row still
+  increments `PayrollEntry.version`, so a row concurrently open in the grid correctly 409s on its own
+  next save. (4) **One summary `AuditLog` entry per operation** — `payroll_entry.import` and
+  `payroll_entry.export` (export logging its own summary entry is a deliberate, approved deviation
+  from Employee Registry's export, which logs nothing) — never one row per imported entry.
+- **`backend/src/common/import-export.ts`** (new) — `parseTableFromFile()`, the CSV/XLSX-to-table
+  half of every import parser in this codebase, extracted unchanged from
+  `employees-import-export.service.ts` (which now calls it instead of inlining the same ~25 lines a
+  second time) so Payroll Entry's own, differently-headered importer reuses it rather than
+  duplicating it — per the standing "grep for duplicates on new shared utility" rule. Also hosts the
+  shared `ImportRowError` shape both importers' `ImportResult` types now use.
+- **`backend/src/modules/payroll-entry/payroll-entry-import-export.service.ts`** (new) —
+  `PAYROLL_ENTRY_TEMPLATE_HEADERS` (`CNIC, Employee Code, Name, Site, Designation, Gross Pay, Days,
+  OT Hrs, OT Rate, Allowance, Leave, Leave Rate, Cycle Days, EOBI Amount, EOBI On, Advance,
+  Eid Advance, Fine, Hold, Released` — `reference/PROJECT_SPEC.md`'s own list, plus the approved
+  `Employee Code` addition); `exportPayrollEntriesToCsv`/`Xlsx` (one row per entry, primary line
+  only, `siteIds`-filterable exactly like Employee Registry's export); `parsePayrollEntryImportFile`;
+  `importPayrollEntries` (update-only, per-row independent validate/authorize/assert-editable/
+  update-or-skip, exactly mirroring Employee Registry's own per-row loop rather than a bulk SQL
+  engine — these rows are heterogeneous per-employee edits, not a uniform criteria-scoped sweep, so
+  the row-by-row model is the right fit here even though `bulkUpdatePayrollEntries` uses a single
+  `updateMany`). Field validation reuses `updatePayrollEntrySchema`/`updateWorkLineSchema` (minus
+  `version`) rather than redefining the same rules; the field→Prisma-payload mapping reuses two
+  functions newly exported from `payroll-entry.service.ts` for this purpose —
+  `mapUpdateInputToEntryData` (already existed, now exported) and `mapUpdateInputToWorkLineData`
+  (extracted from `updateWorkLine`'s previously-inline mapping, which now calls it too) — the exact
+  same mappings the ordinary single-row PATCH routes use, so there is exactly one implementation of
+  "which fields does an entry/work-line edit touch," not two. `assertEntryEditable` (already existed)
+  is also now exported and reused verbatim for the released-row/non-Draft-cycle rejection, rather
+  than reimplemented.
+- **Routes**: `GET /api/v1/payroll-cycles/:cycleId/entries/export` and
+  `POST /api/v1/payroll-cycles/:cycleId/entries/import` (multer, 10MB limit, same convention as
+  Employee Registry), both nested on the existing `payrollCycleEntriesRouter` alongside `/bulk`. Both
+  gated on the single existing `PERMISSIONS.PAYROLL_ENTRY` — **no new permission introduced**, per the
+  approved RBAC decision; this module never split view/create the way Employee Registry did.
+- **Frontend**: `downloadPayrollEntryExport()`/`useImportPayrollEntries()` (`use-payroll-entries.ts`),
+  mirroring `use-employees.ts`'s own export/import hooks; `api-client.ts`'s cookie reader is now
+  exported (`readCookie`) so both hooks share one CSRF-cookie-reading implementation instead of each
+  redefining it. Export CSV/Export Excel/Import buttons added to the Payroll Entry page's toolbar (a
+  new `ImportResultModal`, symmetric to Employee Registry's own, with no "created" count since import
+  is update-only); a UI note — "N employee(s) have attendance split across more than one location
+  this cycle — CSV/Excel import and export only cover each employee's primary line..." — is shown
+  above the grid whenever any currently-filtered entry has more than one work line, fulfilling the
+  approved Option C's "communicate the limitation via UI copy" requirement without touching the file
+  format itself.
+- **Verification** (this session, real-stack — live Postgres via `embedded-postgres`, live backend +
+  frontend dev servers, real Chromium via Playwright): `typecheck`/`lint`/`build` clean across all
+  three workspaces (same 4 pre-existing warnings, none new). **10 new backend tests, full suite
+  175/175** against a freshly re-provisioned database (CSV import, XLSX import, export header/
+  round-trip, Employee-Code-only matching, CNIC-only matching including a dashed-CNIC normalization
+  case, a released-row skip reusing `assertEntryEditable`, a whole-request 400 against a non-Draft
+  cycle, a manipulated-site RBAC rejection via a direct API call — the C11 boundary-test pattern — an
+  unknown-employee/no-entry-in-cycle skip, and one summary `AuditLog` entry per import and per
+  export). A real-stack Playwright pass (**13/13 checks**) drove the actual UI: exported CSV's header
+  row matches the template exactly; a split employee's row appears in the export (primary line only);
+  Excel export downloads; a CSV import updates the matched row and reports a clear per-row reason for
+  the unmatched one; the imported value is confirmed persisted server-side after a full page reload
+  (not just local UI state); a genuine XLSX round-trip (re-importing the just-downloaded `.xlsx`
+  export) succeeds through the real ExcelJS parsing path; the split-entry UI note renders correctly;
+  and — the explicit regression requirement — Checkpoint 2's ordinary inline autosave was re-verified
+  working unchanged (a plain entry's Gross Pay edited via the grid and confirmed persisted
+  server-side) after all of the above. Zero unexpected browser console errors (the one pre-existing,
+  documented pre-login 401 excepted, per every prior checkpoint's own convention).
+- **Explicitly out of scope, none introduced**: any Unit/multi-row representation in the file format
+  (Option C, above), Release, Corrections, Balance Adjustments, Advances FKs, and Checkpoint 6's own
+  10,000-employee performance/concurrency floor validation.
+- **Committed as `b4c1d21`** — implementation complete, independently verified end to end
+  (typecheck/lint/build, 175/175 backend tests, 13/13 Playwright checks), reviewed, and approved
+  before commit, per this project's standing per-checkpoint gate. **Checkpoint 5 is complete and
+  closed.**
+
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always
 at least one, so there is one calculation path, not a split/non-split branch
@@ -951,8 +1049,11 @@ autosave pattern that surfaces a conflict rather than silently overwriting; the 
 filter component; the "Copy to All" bulk-apply toolbar (applies to `PayrollEntry`-level fields; a
 work line's `cycleDays`/`otRate` are copied per-line since they can legitimately differ by unit);
 Payroll Entry CSV/Excel import/export (rejecting rows for already-released employees, per the original
-spec, with a per-row skip report; the export format needs a column scheme for the occasional
-multi-line employee — e.g. one row per work line — not just one row per employee).
+spec, with a per-row skip report — built and shipped in Checkpoint 5; **superseded note**: the "one
+row per work line" idea floated here was superseded by Checkpoint 5's approved "Option C" — the
+format stays flat, one row per employee, representing only the primary work line, with the
+occasional split employee's non-primary lines managed exclusively through the grid's Split by
+{unitLabel} modal instead, per the frozen 2026-07-09 decision above).
 
 **Depends on:** Phase 2 (Employee Registry, Sites) and **Phase 2.5** (Project Units, `Employee.unitId`
 — `PayrollEntryWorkLine.unitId` cannot be built without it).
@@ -980,7 +1081,10 @@ flags as the most likely source of a real-world performance complaint if done na
   at once at either scale; this is validated here, not deferred to Phase 9, because it's cheapest to
   fix while the grid is freshly built.
 - Import/export tests mirroring Phase 2's, plus the "skip already-released rows, report the skip
-  count" behavior specifically, and a multi-line-employee import/export round trip.
+  count" behavior specifically — built in Checkpoint 5. (A "multi-line-employee import/export round
+  trip" was originally anticipated here; superseded by Checkpoint 5's approved Option C, which
+  deliberately represents only a split entry's primary line in the file — see that checkpoint's
+  as-built entry above.)
 
 **Definition of Done:** a full synthetic Draft cycle at both ~1,500 and 10,000 employees can be
 created, edited across multiple simulated concurrent sessions without data loss, filtered by site,

@@ -1,16 +1,18 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-09 (four sessions today — the Advance Deduction Deferral architecture amendment,
+**Date:** 2026-07-09 (five sessions today — the Advance Deduction Deferral architecture amendment,
 committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**,
 followed by a design-review-then-implementation session for Phase 3 Checkpoint 3, implemented,
 verified, re-verified in a dedicated final architectural pass, and **committed**, followed by a
 read-only Checkpoint 4 architecture review, a two-question architecture investigation with frozen
-decisions, then Checkpoint 4's implementation, verification, and **committed**). See the
-"Phase 3, Checkpoint 2", "Phase 3, Checkpoint 3", "Phase 3, Checkpoint 4", and "Advance Deduction
-Deferral" entries in §1, below. Prior entries (2026-07-07 and earlier) are preserved unchanged below
-this point.
-**Latest committed commit:** `70a52da` — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site
-filtering and Copy to All" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
+decisions, then Checkpoint 4's implementation, verification, and **committed**, followed by a
+read-only Checkpoint 5 architecture review, four frozen decisions, then Checkpoint 5's
+implementation, verification, and **committed**). See the
+"Phase 3, Checkpoint 2", "Phase 3, Checkpoint 3", "Phase 3, Checkpoint 4", "Phase 3, Checkpoint 5",
+and "Advance Deduction Deferral" entries in §1, below. Prior entries (2026-07-07 and earlier) are
+preserved unchanged below this point.
+**Latest committed commit:** `b4c1d21` — "feat(payroll): implement Phase 3 Checkpoint 5 payroll entry
+import/export" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
 substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d`
 Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further
 doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
@@ -23,33 +25,40 @@ Advance Deduction Deferral architecture amendment, doc-only, frozen → `e072da5
 (Payroll Entry grid frontend) implementation, reviewed and committed → `3479bff` doc-only commit hash
 record, closing Checkpoint 2 → `6be6e68` Phase 3 Checkpoint 3 (Split by Unit workflow) implementation,
 reviewed, verified, and committed → `70a52da` Phase 3 Checkpoint 4 (multi-site filtering and Copy to
-All) implementation, reviewed, verified, and committed). **This session's own doc-only commit hash
-record (below) lands on top — check `git log -1` for the exact hash.**
+All) implementation, reviewed, verified, and committed → `b4c1d21` Phase 3 Checkpoint 5 (Payroll
+Entry CSV/Excel import/export) implementation, reviewed, verified, and committed).
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoints 0, 1, 2, 3, and now 4 are all committed and
-closed.** This same day's first session was architecture-only — no implementation, no Prisma, no
-migrations, no application code — and froze the **Advance Deduction Deferral** architecture
-(BR-ADV-001 through BR-ADV-006, `ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized
-Outstanding Payroll Obligations seam) ahead of Phase 4, committed as `0d54a97`. **A second, explicitly
-authorized session then implemented Phase 3 Checkpoint 2** (the Payroll Entry grid frontend) on top
-of that commit, underwent an explicit verification pass (three genuine defects found and fixed — a
-numeric-input crash, a totals-row aggregation bug at scale, and a Cycle Days validation
-inconsistency — see §1's "Pre-Commit Final Verification Pass" entry), was reviewed and approved, and
-is now **committed and closed**. **A third session then ran a dedicated, explicitly design-only
-review first** (four UI/UX alternatives compared, a Modal-based Split editor approved with eight
-required implementation decisions — see §1's "Phase 3, Checkpoint 3" entry), implemented Checkpoint 3
-("Split by {unitLabel}") against that approved design, and — following an explicit request for a
-final architectural verification of the autosave-batching/queueing model before commit — ran a
-dedicated network-capture Playwright stress test that found and fixed one further real bug (a
-totals-row column-misalignment) before being reviewed, approved, and **committed as `6be6e68`**. **A
-fourth session then ran a read-only Checkpoint 4 architecture review, followed by an explicit
-two-question architecture investigation** (whether a new backend bulk-update endpoint was genuinely
-required, and whether "Copy to All" should apply to a split entry's primary line only or every
-line — see §1's "Phase 3, Checkpoint 4" entry for both answers and their evidence) **with the
-resulting decisions frozen, then implemented and verified Checkpoint 4 against them, and — following
-a final repository-wide verification pass that found no defects — reviewed, approved, and committed
-as `70a52da`.** **Checkpoints 5–6 have NOT started and each still requires its own explicit
-authorization.**
+**Current implementation phase:** **Phase 3 Checkpoints 0, 1, 2, 3, 4, and now 5 are all committed
+and closed.** This same day's
+first session was architecture-only — no implementation, no Prisma, no migrations, no application
+code — and froze the **Advance Deduction Deferral** architecture (BR-ADV-001 through BR-ADV-006,
+`ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized Outstanding Payroll Obligations
+seam) ahead of Phase 4, committed as `0d54a97`. **A second, explicitly authorized session then
+implemented Phase 3 Checkpoint 2** (the Payroll Entry grid frontend) on top of that commit, underwent
+an explicit verification pass (three genuine defects found and fixed — a numeric-input crash, a
+totals-row aggregation bug at scale, and a Cycle Days validation inconsistency — see §1's "Pre-Commit
+Final Verification Pass" entry), was reviewed and approved, and is now **committed and closed**. **A
+third session then ran a dedicated, explicitly design-only review first** (four UI/UX alternatives
+compared, a Modal-based Split editor approved with eight required implementation decisions — see
+§1's "Phase 3, Checkpoint 3" entry), implemented Checkpoint 3 ("Split by {unitLabel}") against that
+approved design, and — following an explicit request for a final architectural verification of the
+autosave-batching/queueing model before commit — ran a dedicated network-capture Playwright stress
+test that found and fixed one further real bug (a totals-row column-misalignment) before being
+reviewed, approved, and **committed as `6be6e68`**. **A fourth session then ran a read-only
+Checkpoint 4 architecture review, followed by an explicit two-question architecture investigation**
+(whether a new backend bulk-update endpoint was genuinely required, and whether "Copy to All" should
+apply to a split entry's primary line only or every line — see §1's "Phase 3, Checkpoint 4" entry
+for both answers and their evidence) **with the resulting decisions frozen, then implemented and
+verified Checkpoint 4 against them, and — following a final repository-wide verification pass that
+found no defects — reviewed, approved, and committed as `70a52da`.** **A fifth session then ran a
+read-only Checkpoint 5 architecture review** (Payroll Entry CSV/Excel import/export), surfacing one
+three-option design fork (the file format's relationship to `PayrollEntryWorkLine`) and four further
+open questions (match keys, import semantics, optimistic-locking treatment, audit-logging scope),
+**all frozen by explicit user decision before implementation — see §1's "Phase 3, Checkpoint 5"
+entry** — then implemented Checkpoint 5 against those frozen decisions, verified it end to end
+(typecheck/lint/build, 175/175 backend tests, 13/13 real-stack Playwright checks), and — following
+review and approval — **committed as `b4c1d21`. Phase 3 Checkpoint 5 is now complete and closed.
+Checkpoint 6 has NOT started and still requires its own explicit authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -1411,6 +1420,126 @@ explicit instruction — before any implementation began:
 - **Committed as `70a52da`** — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site filtering and
   Copy to All". **Phase 3 Checkpoint 4 is now complete and closed.**
 
+### Phase 3, Checkpoint 5 — Payroll Entry CSV/Excel import/export — COMPLETE, 2026-07-09 (COMMITTED as `b4c1d21`)
+
+A dedicated read-only architecture review preceded implementation (per the user's own explicit
+process for this project), covering what Checkpoints 0–4 already built, the reusable Employee
+Registry import/export infrastructure, the frozen `PayrollEntry`/`PayrollEntryWorkLine` schema, and
+`reference/PROJECT_SPEC.md`'s own Payroll Entry template — which the review flagged as predating
+Phase 2.5 entirely (written before `ProjectUnit`, `PayrollEntryWorkLine`, optimistic locking, or
+derived `released` existed). The review presented the resulting design gap as three concrete
+options rather than silently resolving it, and surfaced four further open implementation questions
+(match keys, import semantics, optimistic-locking treatment, audit-logging scope). All were
+answered and frozen by the user before any code was written:
+
+- **Wire format — "Option C" (frozen, do not re-litigate)**: the format stays flat, one row per
+  employee, representing only an entry's **primary** work line — the same "primary line only" rule
+  Checkpoint 4's "Copy to All" already froze for bulk mutations, extended here rather than reopened.
+  A split employee's non-primary lines are never represented in the file and are never touched by
+  import; they remain reachable exclusively through the grid's Split by {unitLabel} modal. The
+  limitation is communicated via UI copy (a note shown above the grid whenever any currently-visible
+  entry has more than one work line), not by growing the file format with a Unit column and
+  multi-row-per-employee semantics (the rejected "Option B").
+- **Match keys — Employee Code and CNIC, both supported**, not CNIC alone (the frozen spec's
+  original single key, which cannot address an employee with no CNIC on file — optional since Phase
+  2.5 Checkpoint 4). Both keys, if both provided, must resolve to the same employee or the row is a
+  per-row error — the same two-key defense-in-depth pattern `resolveRowUnit` already uses for
+  Employee Registry import's own Branch-Code/Area resolution.
+- **Import semantics — update-only.** Never creates a `PayrollEntry` or `PayrollEntryWorkLine`,
+  never bootstraps an employee into the cycle, never modifies `siteId` (permanently non-editable,
+  unchanged since Checkpoint 1) or `released`/`releasedAt`/`releasedBy` (the exported `Released`
+  column is read-only/informational, never parsed back into a write). A row identifying no matching
+  entry in the target cycle is skipped and reported, exactly like every other per-row failure.
+- **Optimistic locking — the Checkpoint 4 administrative-bulk-operation precedent, extended, not a
+  new exception.** No `version` column in the spreadsheet, no per-row version pre-check; every
+  successfully updated row still increments `PayrollEntry.version`, so a row concurrently open in
+  the grid (an in-flight autosave, an open Split modal) correctly 409s on its own next save.
+- **Audit logging — one summary entry per operation, for *both* import and export** (`payroll_entry.import`,
+  `payroll_entry.export`) — never one row per imported entry. Export logging its own summary entry is
+  a deliberate, explicitly-requested deviation from Employee Registry's own export (which logs
+  nothing) — noted here as an intentional inconsistency with that precedent, not an oversight.
+
+**As built:**
+- **`backend/src/common/import-export.ts`** (new) — `parseTableFromFile()`, extracted unchanged from
+  `employees-import-export.service.ts`'s own CSV/XLSX-to-`string[][]`-table logic (the same ExcelJS/
+  csv-parse handling, including the `Date`-cell-to-ISO conversion), so Payroll Entry's own,
+  differently-headered importer reuses it instead of duplicating it — the standing "grep for
+  duplicates on new shared utility" rule applied proactively. `employees-import-export.service.ts`
+  was refactored to call this shared helper too (behavior unchanged, confirmed by the full Employee
+  Registry test suite still passing). Also hosts the shared `ImportRowError` type both importers'
+  `ImportResult` shapes now use.
+- **`backend/src/modules/payroll-entry/payroll-entry-import-export.service.ts`** (new) —
+  `PAYROLL_ENTRY_TEMPLATE_HEADERS` (`CNIC, Employee Code, Name, Site, Designation, Gross Pay, Days,
+  OT Hrs, OT Rate, Allowance, Leave, Leave Rate, Cycle Days, EOBI Amount, EOBI On, Advance, Eid
+  Advance, Fine, Hold, Released`); `exportPayrollEntriesToCsv`/`Xlsx` (`siteIds`-filterable, one row
+  per entry, primary line only); `parsePayrollEntryImportFile`; `importPayrollEntries` — a per-row
+  loop (parse → resolve entry by Employee Code/CNIC → `assertSiteAccess` → `assertEntryEditable` →
+  validate via `updatePayrollEntrySchema`/`updateWorkLineSchema` minus `version` → write via
+  `mapUpdateInputToEntryData`/`mapUpdateInputToWorkLineData` → increment `version` → next row),
+  deliberately mirroring Employee Registry's own per-row-independent-try/catch import loop rather
+  than `bulkUpdatePayrollEntries`'s single `updateMany` — these rows are heterogeneous per-employee
+  edits, not a uniform criteria-scoped sweep, so the row-by-row model is architecturally the right
+  fit here even though it's a different shape than Checkpoint 4's own bulk endpoint.
+- **Two small, safe extractions from `payroll-entry.service.ts`, reused rather than duplicated**:
+  `mapUpdateInputToEntryData` (already existed, just exported) and `mapUpdateInputToWorkLineData`
+  (newly extracted from `updateWorkLine`'s previously-inline field-mapping object, which now calls
+  it too — behavior byte-identical, confirmed by the full existing `payroll-entry.test.ts` suite
+  still passing unchanged). `assertEntryEditable` (already existed) is also now exported and reused
+  verbatim for the released-row/non-Draft-cycle rejection — no reimplementation of that rule.
+- **Routes**: `GET /api/v1/payroll-cycles/:cycleId/entries/export` and
+  `POST /api/v1/payroll-cycles/:cycleId/entries/import`, nested on the existing
+  `payrollCycleEntriesRouter` alongside `/bulk` (multer, 10MB limit, matching Employee Registry's own
+  convention). Both gated on the single pre-existing `PERMISSIONS.PAYROLL_ENTRY` — **no new
+  permission was introduced**, per the approved RBAC decision.
+- **Frontend**: `downloadPayrollEntryExport()`/`useImportPayrollEntries()`
+  (`frontend/src/hooks/use-payroll-entries.ts`), mirroring `use-employees.ts`'s own export/import
+  hooks exactly. `frontend/src/lib/api-client.ts`'s private cookie-reader was exported (`readCookie`)
+  so both employee and payroll-entry import hooks share one CSRF-cookie-reading implementation
+  instead of each redefining the same three-line regex a second/third time.
+  `frontend/src/routes/payroll-entry-page.tsx` gained Export CSV/Export Excel/Import buttons in its
+  toolbar, a new `ImportResultModal` (symmetric to Employee Registry's own, minus the "created" count
+  since this import is update-only), and the split-entry UI note described above (computed
+  client-side from the already-loaded `entries` array's own `workLines.length`, no new backend
+  endpoint needed for that count).
+- **Tests**: `backend/tests/payroll-entry-import-export.test.ts` (new) — CSV import, XLSX import,
+  export header-row/round-trip, Employee-Code-only matching, CNIC-only matching (including a
+  dashed-CNIC normalization case via the shared `normalizeCnic`), a released-row skip (reusing
+  `assertEntryEditable`, asserted to leave the entry's real value untouched), a whole-request 400
+  against a non-Draft cycle, a manipulated-site RBAC rejection via a direct API call (the C11
+  boundary-test pattern, reused for this new surface), an unknown-employee/no-entry-in-cycle skip,
+  and one summary `AuditLog` entry per import and per export (each independently asserted). **One
+  real test-authoring bug found and fixed while writing these** (not a product defect): an initial
+  dashed-CNIC fixture string decomposed to 14 digits instead of the fixture employee's real 13-digit
+  CNIC once the dashes were stripped — a test-data arithmetic error, caught immediately by the test
+  itself failing with "0 updated" instead of "1 updated," fixed by correcting the dashed grouping to
+  decompose to the exact same 13 digits. **Full suite: 175/175 against live PostgreSQL** (165 prior +
+  10 new).
+- **Verification**: `typecheck`/`lint`/`build` clean across all three workspaces (frontend
+  `.tsbuildinfo` cleared first, per the standing `@payroll/shared`-change lesson; same 4 pre-existing
+  `react-refresh` warnings, none new — none of Checkpoint 5's own new/edited files appear in the lint
+  output). A real-stack Playwright pass (live browser → Vite → Express → PostgreSQL via
+  `embedded-postgres`, **13/13 checks**) drove the actual UI end to end: exported CSV's header row
+  matches the template exactly; a split employee's row appears in the export showing only its
+  primary line; Excel export downloads and is non-empty; a CSV import updates the matched row (a
+  Gross Pay/Days/OT Hrs/Allowance change) and reports "1 updated / 1 skipped" with the exact per-row
+  skip reason for the unmatched CNIC; the imported value was confirmed **persisted server-side** via
+  a direct API call after a full page reload, not just asserted from rendered grid text; a genuine
+  XLSX round-trip (re-importing the just-downloaded `.xlsx` export unmodified) succeeded through the
+  real ExcelJS parsing path and reported updates, not an error; the split-entry UI note rendered
+  correctly for a deliberately-split fixture employee; and — the explicit regression requirement —
+  Checkpoint 2's ordinary inline-autosave path was re-exercised (a plain, unrelated entry's Gross Pay
+  edited directly in the grid) and confirmed to still persist correctly after all of the above. Zero
+  unexpected browser console errors throughout (the one pre-existing, documented pre-login 401
+  excepted, per every prior checkpoint's own established convention for this).
+- **Explicitly out of scope, none introduced**: any Unit/multi-row representation in the file format
+  (the rejected Option B), Release, Corrections, Balance Adjustments, Advance FKs, and Checkpoint 6's
+  own 10,000-employee performance/concurrency floor validation.
+- **Committed as `b4c1d21`** — "feat(payroll): implement Phase 3 Checkpoint 5 payroll entry
+  import/export", after review and explicit approval, following independent end-to-end verification
+  (typecheck/lint/build clean, 175/175 backend tests, 13/13 real-stack Playwright checks) — the same
+  per-checkpoint discipline every prior checkpoint in this phase has followed. **Phase 3 Checkpoint 5
+  is now complete and closed.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -1420,7 +1549,7 @@ explicit instruction — before any implementation began:
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoint 0 (schema foundation) and Checkpoint 1 (cycle bootstrap/creation, Payroll Entry/Work Line backend CRUD) are both COMPLETE and committed — see §1. Checkpoints 2–6 not started, each requiring its own go-ahead per this project's standing per-checkpoint practice |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoints 0–5 (schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export) are all COMPLETE and committed — see §1. Checkpoint 6 (10,000-employee performance/concurrency floor + this phase's own review checkpoint) not started, requiring its own go-ahead per this project's standing per-checkpoint practice |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
