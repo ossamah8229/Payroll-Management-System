@@ -442,7 +442,8 @@ committing**:
 - **Checkpoint 2 — Payroll Entry grid frontend (TanStack Table + Virtual, inline editing,
   autosave/conflict UX, Serial Number/Remarks/live-totals columns) — COMPLETE, 2026-07-09.**
   See below.
-- Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants).
+- **Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants)
+  — COMPLETE, 2026-07-09, COMMITTED as `6be6e68`.** See below.
 - Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar.
 - Checkpoint 5 — Payroll Entry CSV/Excel import/export.
 - Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor + this phase's own
@@ -700,6 +701,144 @@ committed as `e072da5`)**
 - **Scope discipline maintained**: no code path in this checkpoint mutates `ScheduledPayrollPeriod`,
   `Advance`, or any Balance-Adjustment/Correction table — the grid touches only `PayrollEntry` and
   its primary `PayrollEntryWorkLine`, exactly as Checkpoint 1's backend already scoped them.
+
+**Checkpoint 3 — "Split by {unitLabel}" workflow — COMPLETE, 2026-07-09 (implemented, verified, and
+COMMITTED as `6be6e68`)**
+- **A dedicated design review preceded implementation** (2026-07-09, no code written until
+  approved): four UI/UX alternatives were compared against the grid's fixed-height virtualization,
+  the existing autosave/version-lock model, and Checkpoint 2's editing experience. The user approved
+  a **Modal-based Split editor** (Option B) with eight required implementation decisions, all
+  honored as described below — most importantly: **the modal must not introduce a separate Save/
+  Cancel workflow; it is another editing surface for the same `PayrollEntry`, sharing the grid's
+  existing debounced-autosave/optimistic-locking queue, not a second editing system.**
+- **No backend or shared-schema changes were needed.** Checkpoint 1 had already built full Work
+  Line CRUD (`addWorkLine`/`updateWorkLine`/`deleteWorkLine`, `payroll-entry.service.ts`) and its
+  Zod schemas (`shared/src/schemas/payroll-entry.ts`) — this checkpoint is its first frontend
+  caller. No new backend endpoint or schema was added, per the checkpoint's own "avoid new backend
+  endpoints unless a genuine gap is discovered" scope — none was found.
+- **`usePayrollEntryEditor` (`frontend/src/hooks/use-payroll-entry-editor.ts`) generalized from a
+  single primary-work-line draft to an arbitrary-line-count model**: `workLineDraft` (one object)
+  became `lineDrafts` (a map keyed by work-line id); `commit()` now sequentially flushes the entry's
+  dirty fields, then every dirty line's fields, all through the *same* `savingRef`/`pendingRef`
+  gate and one chained `version` — so a field edited inline in the grid and a field edited a moment
+  later in the modal are queued through one commit loop, never two independent ones racing for the
+  same entry's optimistic-locking token. New `setLineField(lineId, key, value)` (debounced, mirrors
+  every existing field editor); `addLine`/`deleteLine` are immediate, non-debounced mutations —
+  consistent with how every other structural action in this app persists instantly rather than
+  staging behind a separate Save step, and still routed through the identical `savingRef` gate so
+  they can never race a pending field-edit flush. `setWorkLineField`/`effectiveLine`/
+  `cycleDaysInputValue` are kept as backward-compatible aliases onto the primary line, so the grid's
+  own inline Days/OT Hours/OT Rate/Cycle Days cells are **unchanged and still directly editable even
+  once an entry is split** — since both surfaces now read/write the identical shared draft state,
+  there is no data-drift risk from having two live-editable surfaces for the same field, an
+  improvement over what the pre-approval design review had flagged as a concern.
+- **`buildCalcInput` (`calc-input.ts`) generalized** from a single `primaryLineOverrides` parameter
+  to `lineOverrides: Record<lineId, WorkLineCalcOverrides>`, mapping over every one of an entry's
+  work lines rather than just the first. This is what makes editing a *non-primary* line inside the
+  modal live-update the grid row's own Net Salary cell and the sticky totals row in real time,
+  through the exact same shared `calcNet` call the primary line's inline editing already used —
+  verified in this session's Playwright pass (a non-primary line's Days edit changed the row's live
+  Net Salary before any autosave round-trip completed).
+- **New `SplitWorkLinesModal`** (`frontend/src/components/payroll-entry/split-work-lines-modal.tsx`):
+  follows this codebase's established list/delete-confirmation `Modal` pattern (the Manage Units
+  panel, `project-sites-page.tsx`) rather than a new confirmation mechanism. Renders every work line
+  with its own Unit/Days/OT Hours/OT Rate/Cycle Days inputs (the same `InlineNumberCell`/
+  `InlineSelectCell` components the grid uses); the lowest-`sortOrder` line is always labeled
+  **Primary**, with a visible note that it determines the Leave Rate fallback basis — the operator
+  never has to infer this from `sortOrder`. The "add a {unitLabel}" picker and each line's own Unit
+  select are both scoped to the entry's fixed `siteId` (`useProjectUnits(entry.siteId)`) and exclude
+  units already used by another line on the same entry — cross-site selection and duplicate-unit
+  selection are structurally impossible via the UI, not merely rejected after the fact. Deleting a
+  line requires an explicit confirmation view first (Cancel/danger "Remove line", matching the
+  Manage Units panel's own visual convention); deleting the last remaining line is disabled
+  client-side (with the same reasoning the backend's own 400 gives), a defense-in-depth mirror of
+  `deleteWorkLine`'s server-side guard.
+- **New `useAddWorkLine`/`useDeleteWorkLine` hooks** (`frontend/src/hooks/use-payroll-entries.ts`),
+  mirroring the existing `useUpdateWorkLine`'s cache-merge pattern exactly — both mutations return
+  the full updated entry (fresh `version`, every line), merged into the React Query cache the same
+  way every other work-line mutation already is.
+- **Entry point — a textual badge, not an icon**, per explicit instruction: a new `units` grid
+  column (between Gross Pay and Working Days, `columns.ts`) renders `"{n} {unitLabel or
+  pluralize(unitLabel)}"` (e.g. "1 Branch" / "2 Branches"), reusing the existing `pluralize()`
+  utility rather than the literal word "Unit" — consistent with this project's standing "no
+  hardcoded unit terminology" discipline (the Manage Units panel, `SiteUnitSelect`). Not included in
+  `NAVIGABLE_COLUMN_IDS`: it's a button, not a data-entry field, so Up/Down column-hopping doesn't
+  apply to it; it still reaches focus via native Tab order and activates via Enter/Space, avoiding a
+  conflict with the grid's own delegated Enter-moves-to-next-row handler.
+- **Verification** (this session, real-stack — live Postgres via `embedded-postgres` in the session
+  scratchpad, live backend + frontend dev servers, real Chromium via Playwright, no mocks):
+  `typecheck`/`lint`/`build` clean across all three workspaces (same 4 pre-existing
+  `react-refresh/only-export-components` warnings, none new). **Backend suite unchanged at
+  160/160** (no backend files were touched). A dedicated Playwright script drove the real UI through
+  every item this checkpoint's plan named: adding a second and then confirming no further line can
+  be added once a two-unit site's units are exhausted; editing multiple lines; deleting a line via
+  the confirm/cancel flow; deleting the last remaining line correctly disabled; duplicate-unit
+  selection structurally prevented (per-line and add-line pickers both exclude already-used units);
+  cross-site units never offered; the Primary line clearly labeled; Net Salary recalculating live
+  from a non-primary line's edit; the change persisting server-side after autosave; the badge and
+  line count surviving a full page reload; a genuine simulated concurrent edit correctly producing a
+  409 the UI surfaces with a Reload affordance that recovers cleanly; Tab order moving correctly
+  from a line's Unit select to its Days field. **23 of 24 explicit checks passed**; the one
+  "failure" was the browser's own automatic console logging of two *deliberately provoked* non-2xx
+  network responses (a pre-login 401, the same already-documented harmless pattern Checkpoint 2's
+  own verification recorded, and the 409 this very test exists to trigger) — not an application
+  error, the same class of expected/documented console noise as Checkpoint 2's verification, not a
+  new defect.
+- **One real bug found and fixed during this session's own verification, not shipped**: the
+  "no more units to add" message initially read "Every branches at this site is already on this
+  entry" (`pluralize(unitLabel)` applied where the sentence grammatically needs the singular —
+  "Every branch," not "Every branches"). Fixed to use the singular `unitLabel` directly; the other
+  nearby usage of the plural form ("attributed across one or more branches") was already correct and
+  left unchanged.
+- **A second real bug found and fixed during a dedicated final architectural verification pass**
+  (2026-07-09, requested before commit): the new `units` column was inserted into `PAYROLL_COLUMNS`
+  (`columns.ts`) but `payroll-entry-totals-row.tsx` — the sticky totals row — renders one
+  hardcoded `<div role="cell">` per column, and was never updated with a matching empty cell. Every
+  totals-row value from Working Days onward was therefore silently shifted one column left relative
+  to its header, a genuine misalignment. Fixed by inserting the missing empty cell in the same
+  position as `columns.ts`'s own insertion; re-verified visually via Playwright screenshot showing
+  every summed value (Gross Pay, Working Days, OT Hours, Cycle Days, …) correctly under its own
+  header again. **Lesson recorded for future column additions**: `columns.ts`'s own column array is
+  the single declared source of widths/order, but the totals row's cell markup is not generated from
+  it — any future column insertion must also touch `payroll-entry-totals-row.tsx` by hand until that
+  row is refactored to render generically from `PAYROLL_COLUMNS` (not done here — out of scope for a
+  one-line insertion fix).
+- **Final architectural verification, requested and performed before commit (2026-07-09)** — a
+  dedicated real-stack Playwright stress test (network-request-level capture, not just UI
+  assertions) confirmed the autosave/version-locking architecture holds under concurrent and rapid
+  editing: (1) **batching** — editing 4 fields across 2 different work lines within one 600ms
+  debounce window produced exactly one autosave cycle: 0 entry PATCHes, exactly 2 work-line PATCHes
+  (one per dirty line, each carrying every one of that line's changed fields in a single body, never
+  one request per field), sent strictly sequentially, the second correctly using the `version` the
+  first PATCH's response returned. (2) **queueing** — with `/api/v1/work-lines/**` PATCHes
+  artificially delayed 1800ms to force a genuine in-flight window, further edits made to two
+  different lines during that window were never sent as parallel requests; they queued and flushed
+  as two further sequential PATCHes once the in-flight one completed (three total, each ≥1500ms
+  apart, proving no overlap), and the final server state exactly matched the last-entered value for
+  every field, including the queued line's edit — no edit was lost or overwritten by a stale
+  in-flight request. (3) **rapid restructuring** — add line → edit two lines' fields → delete a line
+  (via the confirm flow) → keep editing the remaining lines, all within under a second of real
+  interaction time, produced zero 409s, zero 4xx/5xx of any kind, zero duplicate requests, and a
+  final server state matching every one of the UI's last-entered values. (4) **regression** — a
+  second, ordinary (non-split, single-line) entry on the same grid was edited exactly as in
+  Checkpoint 2 (inline Gross Pay/Working Days): still exactly one entry PATCH + one work-line PATCH
+  per autosave cycle, Up/Down keyboard navigation between rows still works, and the sticky totals row
+  (screenshot-verified) still sums and aligns correctly under every header — no behavioral or visual
+  regression from Checkpoint 2. Full network-level evidence (request bodies, timings, response
+  versions) reviewed for every scenario, not just pass/fail assertions.
+- **Explicitly out of scope, none introduced**: the multi-select site filter and "Copy to All" bulk
+  toolbar (Checkpoint 4), Payroll Entry CSV/Excel import/export (Checkpoint 5), the 10,000-employee
+  performance/concurrency validation (Checkpoint 6), and any Release/Finance/Corrections/Balance-
+  Adjustment/Advance code path — this checkpoint's mutations touch only `PayrollEntry` and its
+  `PayrollEntryWorkLine`s, exactly as Checkpoint 1 already scoped them. Line reordering (changing
+  which line is Primary) was deliberately not built — the modal only *displays* which line is
+  Primary; nothing in this checkpoint's authorization asked for a reorder affordance, and adding one
+  was judged out of scope rather than a silent gap.
+- **Committed as `6be6e68`** — "feat(payroll): implement Phase 3 Checkpoint 3 Split by Unit
+  workflow", after a dedicated final architectural verification pass (autosave batching, queueing
+  under an in-flight save, rapid restructuring, and Checkpoint 2 regression — see
+  `docs/PROJECT_PROGRESS.md`'s "Pre-Commit Final Verification Pass" subsection) found and fixed one
+  further real bug (the totals-row column-misalignment noted above) before commit.
 
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always

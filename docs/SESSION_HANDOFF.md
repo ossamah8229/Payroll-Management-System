@@ -11,8 +11,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `e072da5`** — "feat(payroll): implement Phase 3 Checkpoint 2 Payroll
-  Entry grid frontend". Full prior lineage:
+- **Latest committed commit: `6be6e68`** — "feat(payroll): implement Phase 3 Checkpoint 3 Split by
+  Unit workflow". Full prior lineage:
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -22,7 +22,9 @@ be enough to resume correctly without re-deriving context from scratch — per
   freeze, doc-only) → `aefa64f` (Phase 3 Checkpoint 0 implementation) → `d9c3184` (doc-only commit
   hash record) → `55eda58` (Phase 3 Checkpoint 1 implementation) → `0d54a97` (Advance Deduction
   Deferral architecture amendment, doc-only, frozen 2026-07-09) → `e072da5` (Phase 3 Checkpoint 2
-  implementation, reviewed and committed).
+  implementation, reviewed and committed) → `3479bff` (doc-only commit hash record, closing
+  Checkpoint 2) → `6be6e68` (Phase 3 Checkpoint 3 Split by Unit workflow implementation, reviewed,
+  verified, and committed).
 - **Phase 3 Checkpoint 2 (Payroll Entry grid frontend) is reviewed, approved, verified, and
   COMMITTED.** A pre-commit verification pass found and fixed three genuine defects within scope: a
   numeric-input crash (unparseable text crashed the live `calcNet` preview — no error boundary
@@ -31,6 +33,20 @@ be enough to resume correctly without re-deriving context from scratch — per
   keystrokes were silently discarded rather than flagged). All three are fixed; full record:
   `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 2" and "Pre-Commit Final Verification Pass"
   subsections. **Checkpoint 2 is complete and closed.**
+- **Phase 3 Checkpoint 3 ("Split by {unitLabel}" workflow) is reviewed, approved, verified, and
+  COMMITTED as `6be6e68`.** A dedicated design-only review preceded implementation and approved a
+  Modal-based Split editor (over three other compared alternatives) with eight required
+  implementation decisions — most importantly, that the modal shares the grid's existing debounced-
+  autosave/optimistic-locking commit queue rather than introducing a separate Save/Cancel workflow.
+  No backend or shared-schema changes were needed (Checkpoint 1 already built the Work Line CRUD
+  this checkpoint calls). Before commit, an explicit final architectural verification pass (network-
+  capture Playwright: autosave batching across multiple lines in one debounce window, queueing
+  during an in-flight save, a rapid add/edit/delete restructuring stress test, and a Checkpoint 2
+  regression check) found and fixed one further real bug — a totals-row column-misalignment from the
+  new `units` column. `typecheck`/`lint`/`build` clean; backend suite re-confirmed at 160/160 against
+  a freshly re-provisioned database. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3,
+  Checkpoint 3" and "Pre-Commit Final Verification Pass" subsections. **Checkpoint 3 is complete and
+  closed.**
 - **The Advance Deduction Deferral architecture is now FROZEN (2026-07-09, architecture-only session,
   no application code).** New business rule: authorized users may defer an Advance's scheduled
   deduction to any future Draft payroll cycle before release (BR-ADV-001 through BR-ADV-006,

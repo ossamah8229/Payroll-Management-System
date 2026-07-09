@@ -1,11 +1,13 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-09 (two sessions today — the Advance Deduction Deferral architecture amendment,
-committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**).
-See the "Phase 3, Checkpoint 2" and "Advance Deduction Deferral" entries in §1, below. Prior entries
-(2026-07-07 and earlier) are preserved unchanged below this point.
-**Latest committed commit:** `e072da5` — "feat(payroll): implement Phase 3 Checkpoint 2 Payroll Entry
-grid frontend" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive
+**Date:** 2026-07-09 (three sessions today — the Advance Deduction Deferral architecture amendment,
+committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**,
+followed by a design-review-then-implementation session for Phase 3 Checkpoint 3, implemented,
+verified, re-verified in a dedicated final architectural pass, and **committed**). See the "Phase 3,
+Checkpoint 2", "Phase 3, Checkpoint 3", and "Advance Deduction Deferral" entries in §1, below. Prior
+entries (2026-07-07 and earlier) are preserved unchanged below this point.
+**Latest committed commit:** `6be6e68` — "feat(payroll): implement Phase 3 Checkpoint 3 Split by Unit
+workflow" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive
 build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2
 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc
 status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
@@ -15,10 +17,12 @@ closed (2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only 
 `1c4d61f` Phase 3 architecture freeze, doc-only → `aefa64f` Phase 3 Checkpoint 0 implementation →
 `d9c3184` doc-only commit hash record → `55eda58` Phase 3 Checkpoint 1 implementation → `0d54a97`
 Advance Deduction Deferral architecture amendment, doc-only, frozen → `e072da5` Phase 3 Checkpoint 2
-(Payroll Entry grid frontend) implementation, reviewed and committed). **This session's own doc-only
-commit hash record (below) lands on top — check `git log -1` for the exact hash.**
+(Payroll Entry grid frontend) implementation, reviewed and committed → `3479bff` doc-only commit hash
+record, closing Checkpoint 2 → `6be6e68` Phase 3 Checkpoint 3 (Split by Unit workflow) implementation,
+reviewed, verified, and committed). **This session's own doc-only commit hash record (below) lands on
+top — check `git log -1` for the exact hash.**
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoints 0, 1, and now 2 are all committed and
+**Current implementation phase:** **Phase 3 Checkpoints 0, 1, 2, and now 3 are all committed and
 closed.** This same day's first session was architecture-only — no implementation, no Prisma, no
 migrations, no application code — and froze the **Advance Deduction Deferral** architecture
 (BR-ADV-001 through BR-ADV-006, `ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized
@@ -27,8 +31,14 @@ authorized session then implemented Phase 3 Checkpoint 2** (the Payroll Entry gr
 of that commit, underwent an explicit verification pass (three genuine defects found and fixed — a
 numeric-input crash, a totals-row aggregation bug at scale, and a Cycle Days validation
 inconsistency — see §1's "Pre-Commit Final Verification Pass" entry), was reviewed and approved, and
-is now **committed and closed**. **Checkpoints 3–6 have NOT started and each still requires its own
-explicit authorization.**
+is now **committed and closed**. **A third session then ran a dedicated, explicitly design-only
+review first** (four UI/UX alternatives compared, a Modal-based Split editor approved with eight
+required implementation decisions — see §1's "Phase 3, Checkpoint 3" entry), implemented Checkpoint 3
+("Split by {unitLabel}") against that approved design, and — following an explicit request for a
+final architectural verification of the autosave-batching/queueing model before commit — ran a
+dedicated network-capture Playwright stress test that found and fixed one further real bug (a
+totals-row column-misalignment) before being reviewed, approved, and **committed as `6be6e68`**.
+**Checkpoints 4–6 have NOT started and each still requires its own explicit authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -1193,6 +1203,115 @@ file had only `--` comment lines touched, never DDL (verified via diff before co
 workspaces (`backend`, `frontend`, `shared`) typecheck cleanly against the edited comments. A
 dedicated documentation-integrity audit pass (bare `§N` cross-reference review across
 `IMPLEMENTATION_PLAN.md`, `PROJECT_PROGRESS.md`, `SESSION_HANDOFF.md`) preceded this commit.
+
+### Phase 3, Checkpoint 3 — "Split by {unitLabel}" workflow — COMPLETE, 2026-07-09 (COMMITTED as `6be6e68`)
+
+A dedicated, explicitly design-only review ran first ("do not write any code yet" was the session's
+opening instruction), producing four compared UI/UX alternatives (inline expandable sub-rows, a
+Modal-based editor, a slide-over drawer, an inline popover) weighed against the grid's fixed-height
+virtualization, the existing autosave/optimistic-locking model, and consistency with Checkpoint 2's
+editing experience. **The user approved a Modal-based Split editor**, with eight required
+implementation decisions — most consequentially, that the modal must share the grid's existing
+debounced-autosave/version-locked commit queue rather than introduce a separate Save/Cancel
+workflow, since it is "another editing surface for the same Payroll Entry, not a different editing
+system." Implementation began only after this approval.
+
+- **No backend or shared-schema changes** — Checkpoint 1 had already built full Work Line CRUD
+  (`addWorkLine`/`updateWorkLine`/`deleteWorkLine`) and its Zod schemas; this checkpoint is their
+  first frontend caller. No gap was found, so no new endpoint was added.
+- **`usePayrollEntryEditor` generalized** from a single primary-work-line draft to a `lineDrafts` map
+  keyed by work-line id, with one shared `commit()` sequentially flushing entry fields then every
+  dirty line, all under the same `savingRef` gate and one chained `version` — so an edit made inline
+  in the grid and an edit made a moment later in the modal are never two independent commit loops
+  racing for the same lock. `addLine`/`deleteLine` are immediate, non-debounced mutations (matching
+  how every other structural action in this app persists instantly), still serialized through the
+  identical gate. The grid's existing primary-line cells are unchanged and remain directly editable
+  even once an entry is split, since both surfaces now share the identical draft state — no data-
+  drift risk, an improvement over a concern the pre-approval design review had flagged.
+- **`buildCalcInput` generalized** to accept overrides for every work line, not just the primary one
+  — a non-primary line edited in the modal live-updates the row's Net Salary and the sticky totals
+  row through the same shared `calcNet` call, verified in this session's Playwright pass.
+- **New `SplitWorkLinesModal`** follows the existing Manage Units panel's list/delete-confirmation
+  pattern. The lowest-`sortOrder` line is always visibly labeled **Primary**, with a note that it
+  drives the Leave Rate fallback basis (`database/payroll-entry.md §12`) — never left for the
+  operator to infer from `sortOrder`. Every unit picker (per-line, and "add a {unitLabel}") is
+  scoped to the entry's fixed `siteId` and excludes units already used by another line on the same
+  entry — cross-site selection and duplicate units are structurally impossible via the UI. Deleting
+  a line requires an explicit Cancel/danger-"Remove line" confirmation first; deleting the last
+  remaining line is disabled client-side, mirroring the backend's own guard.
+- **Entry point is a textual badge** ("1 Branch" / "2 Branches"), not an icon, reusing the existing
+  `pluralize()` utility rather than the literal word "Unit" — a new `units` grid column, deliberately
+  excluded from the grid's Up/Down keyboard-navigation column list since it is a button, not a
+  data-entry field.
+- **Verification (real-stack, this session)**: `typecheck`/`lint`/`build` clean across all three
+  workspaces; backend suite unchanged at **160/160** (no backend files touched); a real-stack
+  Playwright script (live Postgres, live backend + frontend dev servers, real Chromium) drove every
+  item the checkpoint's plan named — adding/deleting lines, the last-line-delete guard, duplicate-
+  and cross-site-unit prevention, the Primary line label, live Net Salary recalculation from a
+  non-primary line, autosave persistence surviving a full page reload, a genuine simulated
+  concurrent-edit conflict correctly surfaced and recovered from, and Tab order inside the modal.
+  **23 of 24 explicit checks passed**; the one "failure" was the browser's own automatic console
+  logging of two deliberately-provoked non-2xx responses (a pre-login 401 — the same already-
+  documented pattern from Checkpoint 2's own verification — and the 409 this test exists to
+  trigger), not an application defect.
+- **One real bug found and fixed during this session's own verification**: the "no units left to
+  add" message read "Every branches at this site is already on this entry" — `pluralize()` applied
+  where the sentence grammatically needs the singular. Fixed to "Every branch…"; re-verified.
+- **Explicitly out of scope**: the multi-select site filter/"Copy to All" toolbar (Checkpoint 4),
+  import/export (Checkpoint 5), the 10,000-employee performance validation (Checkpoint 6), and any
+  Release/Finance/Corrections/Balance-Adjustment/Advance code path. Line reordering (changing which
+  line is Primary) was deliberately not built — the modal only displays which line is Primary.
+- **Full decision record**: `docs/IMPLEMENTATION_PLAN.md`'s Phase 3 Checkpoint 3 subsection has the
+  complete architectural detail. **Committed as `6be6e68`** — "feat(payroll): implement Phase 3
+  Checkpoint 3 Split by Unit workflow" — after the final architectural verification pass below.
+
+### Phase 3, Checkpoint 3 — Pre-Commit Final Verification Pass — 2026-07-09
+
+Before staging or committing anything, a dedicated final architectural verification was requested
+and performed — network-request-level, not just UI-assertion-level — specifically targeting the
+autosave-batching/queueing design this checkpoint's `usePayrollEntryEditor` generalization relies on.
+
+**One further real bug found and fixed**: `payroll-entry-totals-row.tsx` renders one hardcoded
+`<div role="cell">` per column and was never updated when the new `units` column was inserted into
+`PAYROLL_COLUMNS` — every totals-row value from Working Days onward was silently shifted one column
+left of its header. Fixed by inserting the matching empty cell in the same position; re-verified
+visually (Playwright screenshot: every summed value correctly under its own header again). Recorded
+as a standing lesson: the totals row's cells are not generated from `PAYROLL_COLUMNS`, so any future
+column insertion must touch both files by hand.
+
+**Batching/queueing/concurrency, verified with real network captures (not inferred from reading the
+code):**
+- **Batching**: editing 4 fields across 2 different work lines within one 600ms debounce window
+  produced exactly one autosave cycle — 0 entry PATCHes, exactly 2 work-line PATCHes (one per dirty
+  line, each request carrying every one of that line's changed fields together, never one request
+  per field), sent strictly sequentially, the second correctly carrying the `version` the first
+  PATCH's response returned.
+- **Queueing during an in-flight save**: with work-line PATCHes artificially delayed 1800ms to force
+  a genuine in-flight window, further edits to two different lines made during that window were
+  never sent as parallel requests — they queued and flushed as two further sequential PATCHes once
+  the in-flight one completed (three total, each ≥1500ms apart, proving no overlap). Final server
+  state exactly matched the last value entered for every field, including the queued line's edit —
+  nothing lost, nothing overwritten by a stale in-flight response.
+- **Rapid restructuring stress test**: add a line → edit two lines' fields → delete a line (via the
+  confirm flow) → keep editing the remaining lines, all within under a second of real interaction
+  time — zero 409s, zero 4xx/5xx of any kind, zero duplicate requests, final server state matching
+  every one of the UI's last-entered values.
+- **Regression check**: a second, ordinary (non-split, single-line) entry on the same grid, edited
+  exactly as Checkpoint 2 originally verified (inline Gross Pay/Working Days) — still exactly one
+  entry PATCH + one work-line PATCH per autosave cycle, Up/Down keyboard navigation between rows
+  still works, and the sticky totals row (screenshot-verified) still sums and aligns correctly. No
+  behavioral or visual regression from Checkpoint 2.
+
+Optimistic locking was confirmed to still operate exclusively at the `PayrollEntry` level throughout
+— every PATCH in every scenario carried the parent entry's `version`, work lines never carried one of
+their own, exactly per `database/schema-invariants.md` §22, unchanged from Checkpoint 1's backend.
+
+**Backend suite re-run once more after the totals-row fix: 160/160, unchanged.**
+`typecheck`/`lint`/`build` re-verified clean across all three workspaces.
+
+**Committed as `6be6e68`** — "feat(payroll): implement Phase 3 Checkpoint 3 Split by Unit workflow" —
+after this final architectural verification pass and explicit approval. **Phase 3 Checkpoint 3 is
+now complete and closed.**
 
 ---
 
