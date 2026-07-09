@@ -7,7 +7,7 @@ import type {
   UpdatePayrollEntryInput,
   UpdateWorkLineInput,
 } from '@payroll/shared';
-import { apiRequest } from '@/lib/api-client';
+import { apiRequest, ApiError, readCookie } from '@/lib/api-client';
 import type { Employee } from '@/hooks/use-employees';
 import type { ProjectSite } from '@/hooks/use-project-sites';
 
@@ -238,6 +238,74 @@ export function useBulkUpdatePayrollEntries(cycleId: string) {
         method: 'PATCH',
         body: input,
       }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
+    },
+  });
+}
+
+/**
+ * Triggers a browser download of the Payroll Entry export (Phase 3 Checkpoint 5) — bypasses
+ * `apiRequest` since the response is a file, not JSON, mirroring `downloadEmployeeExport`
+ * (`use-employees.ts`) exactly. `siteIds` mirrors the grid's own multi-select site filter so
+ * "export what's currently filtered" and "export everything this cycle" are both one call.
+ */
+export async function downloadPayrollEntryExport(
+  cycleId: string,
+  format: 'csv' | 'xlsx',
+  siteIds?: string[],
+): Promise<void> {
+  const params = new URLSearchParams({ format });
+  if (siteIds?.length) params.set('siteIds', siteIds.join(','));
+
+  const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/entries/export?${params.toString()}`, {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'EXPORT_FAILED', 'Failed to export payroll entries');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `payroll-entry.${format}`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export interface PayrollEntryImportResult {
+  updated: number;
+  skipped: { row: number; reason: string }[];
+}
+
+/**
+ * Payroll Entry CSV/Excel import (Phase 3 Checkpoint 5) — **update-only**, mirroring
+ * `useImportEmployees` (`use-employees.ts`) exactly, scoped to one cycle. On success, invalidates
+ * the cycle's entries query (a full refetch, not a per-row merge — an import can touch far more
+ * rows than are ever mounted by the virtualizer at once, the same cache strategy
+ * `useBulkUpdatePayrollEntries` already uses for the same reason).
+ */
+export function useImportPayrollEntries(cycleId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const csrfToken = readCookie('csrf_token');
+
+      const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/entries/import`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfToken ? { 'x-csrf-token': csrfToken } : undefined,
+        body: formData,
+      });
+
+      const payload = await response.json().catch(() => undefined);
+      if (!response.ok) {
+        throw new ApiError(response.status, payload?.error?.code ?? 'IMPORT_FAILED', payload?.error?.message ?? 'Import failed');
+      }
+      return payload as PayrollEntryImportResult;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
     },

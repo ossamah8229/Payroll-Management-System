@@ -60,7 +60,7 @@ function withCalc(entry: EntryWithWorkLines) {
  * 4), so in practice this guard only ever trips on a non-`DRAFT` cycle today; it is still written
  * against the full, general rule so it needs no revisiting once Release exists.
  */
-function assertEntryEditable(entry: { released: boolean; cycle: { status: string } }): void {
+export function assertEntryEditable(entry: { released: boolean; cycle: { status: string } }): void {
   if (entry.released || entry.cycle.status !== 'DRAFT') {
     throw badRequest(
       'This payroll entry is locked and can no longer be edited directly — released payroll is immutable (Principle 9)',
@@ -261,8 +261,10 @@ export async function createPayrollEntry(
 }
 
 /** Fields on `UpdatePayrollEntryInput` that map 1:1 onto a Prisma update payload. `version` is
- * handled separately (the optimistic-locking guard), never written as an ordinary field. */
-function mapUpdateInputToEntryData(
+ * handled separately (the optimistic-locking guard), never written as an ordinary field. Exported
+ * so the Payroll Entry import path (Checkpoint 5) reuses this exact mapping rather than
+ * redefining it — one implementation of "which fields does an ordinary entry edit touch." */
+export function mapUpdateInputToEntryData(
   input: Omit<UpdatePayrollEntryInput, 'version'>,
 ): Prisma.PayrollEntryUncheckedUpdateInput {
   return {
@@ -447,6 +449,23 @@ export async function addWorkLine(
   });
 }
 
+/** Fields on `UpdateWorkLineInput` that map 1:1 onto a Prisma update payload — the work-line
+ * analogue of `mapUpdateInputToEntryData` above, extracted for the same reason: exported so the
+ * Payroll Entry import path (Checkpoint 5) reuses this exact mapping for a row's primary-line
+ * fields rather than redefining it. */
+export function mapUpdateInputToWorkLineData(
+  input: Omit<UpdateWorkLineInput, 'version'>,
+): Prisma.PayrollEntryWorkLineUncheckedUpdateInput {
+  return {
+    ...(input.unitId !== undefined && { unitId: input.unitId }),
+    ...(input.days !== undefined && { days: input.days }),
+    ...(input.otHours !== undefined && { otHours: input.otHours }),
+    ...(input.otRate !== undefined && { otRate: input.otRate }),
+    ...(input.cycleDays !== undefined && { cycleDays: input.cycleDays }),
+    ...(input.sortOrder !== undefined && { sortOrder: input.sortOrder }),
+  };
+}
+
 export async function updateWorkLine(
   currentUser: SessionUser,
   workLineId: string,
@@ -463,14 +482,7 @@ export async function updateWorkLine(
     await assertUnitBelongsToSite(nextUnitId, entry.siteId);
   }
 
-  const data: Prisma.PayrollEntryWorkLineUncheckedUpdateInput = {
-    ...(input.unitId !== undefined && { unitId: input.unitId }),
-    ...(input.days !== undefined && { days: input.days }),
-    ...(input.otHours !== undefined && { otHours: input.otHours }),
-    ...(input.otRate !== undefined && { otRate: input.otRate }),
-    ...(input.cycleDays !== undefined && { cycleDays: input.cycleDays }),
-    ...(input.sortOrder !== undefined && { sortOrder: input.sortOrder }),
-  };
+  const data = mapUpdateInputToWorkLineData(input);
   const changes = diffFields(
     line as unknown as Record<string, unknown>,
     data as unknown as Record<string, unknown>,

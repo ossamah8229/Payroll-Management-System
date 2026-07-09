@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import {
   addWorkLineSchema,
   bulkUpdatePayrollEntriesSchema,
@@ -10,6 +11,7 @@ import {
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
+import { recordAuditLog } from '../audit-log/audit-log.service';
 import {
   addWorkLine,
   bulkUpdatePayrollEntries,
@@ -21,10 +23,24 @@ import {
   updatePayrollEntry,
   updateWorkLine,
 } from './payroll-entry.service';
+import {
+  exportPayrollEntriesToCsv,
+  exportPayrollEntriesToXlsx,
+  importPayrollEntries,
+  parsePayrollEntryImportFile,
+} from './payroll-entry-import-export.service';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
   return id;
+}
+
+function parseSiteIdsQuery(raw: unknown): string[] | undefined {
+  if (!raw) return undefined;
+  const values = Array.isArray(raw) ? raw : [raw];
+  return values.flatMap((value) => String(value).split(',')).filter(Boolean);
 }
 
 function requireVersionQuery(raw: unknown): number {
@@ -89,6 +105,82 @@ payrollCycleEntriesRouter.patch(
         ipAddress: req.ip ?? null,
         userAgent: req.get('user-agent') ?? null,
       });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/** Payroll Entry CSV/Excel export (Phase 3 Checkpoint 5) — "export what's on screen," the same
+ * `siteIds` filter shape Employee Registry's export already uses. Gated on the one `payroll:entry`
+ * permission that already governs every other action on this router — no new permission
+ * introduced. Writes its own summary `AuditLog` entry (unlike Employee Registry's export, which
+ * doesn't — an explicit, approved deviation from that precedent for this checkpoint specifically). */
+payrollCycleEntriesRouter.get(
+  '/export',
+  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
+  async (req, res, next) => {
+    try {
+      const cycleId = requireIdParam(req.params.cycleId);
+      const format = req.query.format === 'xlsx' ? 'xlsx' : 'csv';
+      const siteIds = parseSiteIdsQuery(req.query.siteIds);
+
+      const { buffer, rowCount } =
+        format === 'xlsx'
+          ? await exportPayrollEntriesToXlsx(req.currentUser!, cycleId, siteIds)
+          : await exportPayrollEntriesToCsv(req.currentUser!, cycleId, siteIds);
+
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: 'payroll_entry.export',
+        entityType: 'PayrollEntry',
+        metadata: { cycleId, siteIds: siteIds ?? null, format, rowCount },
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+
+      const filename = `payroll-entry.${format}`;
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader(
+        'Content-Type',
+        format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+      );
+      res.status(200).send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/** Payroll Entry CSV/Excel import (Phase 3 Checkpoint 5) — **update-only** (never creates a
+ * `PayrollEntry`/`PayrollEntryWorkLine`, per the approved architecture); `importPayrollEntries`
+ * owns all per-row validation/authorization/editability checks and reports a per-row result. This
+ * route owns the one summary `AuditLog` entry for the whole operation, mirroring Employee
+ * Registry's `employee.import` precedent exactly. */
+payrollCycleEntriesRouter.post(
+  '/import',
+  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      const cycleId = requireIdParam(req.params.cycleId);
+      if (!req.file) {
+        throw badRequest('No file uploaded — expected a multipart field named "file"');
+      }
+
+      const rows = await parsePayrollEntryImportFile(req.file.buffer, req.file.originalname);
+      const result = await importPayrollEntries(req.currentUser!, cycleId, rows);
+
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: 'payroll_entry.import',
+        entityType: 'PayrollEntry',
+        metadata: { cycleId, updated: result.updated, skippedCount: result.skipped.length },
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+
       res.status(200).json(result);
     } catch (error) {
       next(error);

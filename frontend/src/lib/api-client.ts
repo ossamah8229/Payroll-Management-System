@@ -20,7 +20,10 @@ export class ApiError extends Error {
   }
 }
 
-function readCookie(name: string): string | undefined {
+/** Exported so callers that must bypass `apiRequest` (e.g. a multipart file upload, or triggering
+ * a file-download navigation) can still echo the CSRF cookie the same way — one implementation of
+ * "read this cookie," not one per caller. */
+export function readCookie(name: string): string | undefined {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
   return match?.[1] ? decodeURIComponent(match[1]) : undefined;
 }

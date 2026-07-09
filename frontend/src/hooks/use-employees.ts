@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreateEmployeeInput, MarkEmployeeLeftInput, UpdateEmployeeInput } from '@payroll/shared';
-import { apiRequest, ApiError } from '@/lib/api-client';
+import { apiRequest, ApiError, readCookie } from '@/lib/api-client';
 import type { ProjectSite } from '@/hooks/use-project-sites';
 import type { ProjectUnit } from '@/hooks/use-project-units';
 import type { Bank } from '@/hooks/use-banks';
@@ -137,18 +137,13 @@ export interface ImportResult {
   skipped: { row: number; reason: string }[];
 }
 
-function readCsrfCookie(): string | undefined {
-  const match = document.cookie.match(/(?:^|; )csrf_token=([^;]*)/);
-  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
-}
-
 export function useImportEmployees() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
-      const csrfToken = readCsrfCookie();
+      const csrfToken = readCookie('csrf_token');
 
       const response = await fetch('/api/v1/employees/import', {
         method: 'POST',

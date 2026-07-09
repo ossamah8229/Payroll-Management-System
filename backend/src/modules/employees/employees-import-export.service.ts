@@ -1,10 +1,10 @@
 import ExcelJS from 'exceljs';
-import { parse as parseCsvSync } from 'csv-parse/sync';
 import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
-import { createEmployeeSchema, formatDate, isoDateToUtcDate, pluralize, toIsoDateOnly } from '@payroll/shared';
+import { createEmployeeSchema, formatDate, isoDateToUtcDate, pluralize } from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
+import { parseTableFromFile, type ImportRowError } from '../../common/import-export';
 import {
   assertSiteAccess,
   assertUnitBelongsToSite,
@@ -147,37 +147,13 @@ function rowsFromTable(table: string[][]): ParsedRow[] {
   });
 }
 
-/** Parses an uploaded CSV or XLSX buffer into header-keyed rows, validating the header set first. */
+/** Parses an uploaded CSV or XLSX buffer into header-keyed rows, validating the header set first.
+ * The CSV/XLSX-to-table half is shared with every other importer in this codebase
+ * (`backend/src/common/import-export.ts`); header validation and column-keying stay here since
+ * they're specific to this template. */
 export async function parseEmployeeImportFile(buffer: Buffer, filename: string): Promise<ParsedRow[]> {
-  if (!filename.toLowerCase().endsWith('.xlsx')) {
-    const table = parseCsvSync(buffer, { skip_empty_lines: true }) as string[][];
-    return rowsFromTable(table);
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw badRequest('The uploaded workbook has no sheets');
-
-  const table: string[][] = [];
-  sheet.eachRow((row) => {
-    const cells: string[] = [];
-    row.eachCell({ includeEmpty: true }, (cell) => {
-      const value = cell.value;
-      if (value === null || value === undefined) cells.push('');
-      else if (value instanceof Date) cells.push(toIsoDateOnly(value));
-      else if (typeof value === 'object' && 'text' in value) cells.push(String((value as { text: unknown }).text));
-      else cells.push(String(value));
-    });
-    table.push(cells);
-  });
-
+  const table = await parseTableFromFile(buffer, filename);
   return rowsFromTable(table);
-}
-
-export interface ImportRowError {
-  row: number;
-  reason: string;
 }
 
 export interface ImportResult {
