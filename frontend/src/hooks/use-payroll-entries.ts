@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
-import type { CalcNetResult, UpdatePayrollEntryInput, UpdateWorkLineInput } from '@payroll/shared';
+import type { AddWorkLineInput, CalcNetResult, UpdatePayrollEntryInput, UpdateWorkLineInput } from '@payroll/shared';
 import { apiRequest } from '@/lib/api-client';
 import type { Employee } from '@/hooks/use-employees';
 import type { ProjectSite } from '@/hooks/use-project-sites';
@@ -157,6 +157,43 @@ export function useUpdateWorkLine(cycleId: string) {
       apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/work-lines/${id}`, {
         method: 'PATCH',
         body: input,
+      }),
+    onSuccess: (data) => {
+      replaceEntry(queryClient, cycleId, data.entry.id, data.entry);
+    },
+  });
+}
+
+/** The backend capability behind "Split by {unitLabel}" (docs/architecture/database/payroll-entry.md
+ * §12a) — adds a new `PayrollEntryWorkLine` to an already-existing entry. Already built server-side
+ * since Checkpoint 1 (`payroll-entry.service.ts`'s `addWorkLine`); this is Checkpoint 3's first
+ * frontend caller. Returns the full updated entry (fresh `version`, every line), merged into the
+ * cache exactly like every other work-line mutation. */
+export function useAddWorkLine(cycleId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ entryId, input }: { entryId: string; input: AddWorkLineInput }) =>
+      apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/payroll-entries/${entryId}/work-lines`, {
+        method: 'POST',
+        body: input,
+      }),
+    onSuccess: (data) => {
+      replaceEntry(queryClient, cycleId, data.entry.id, data.entry);
+    },
+  });
+}
+
+/** Removes a `PayrollEntryWorkLine` — rejected server-side (400) if it would leave the entry with
+ * zero lines (§12a); the Split by {unitLabel} modal also disables the affordance client-side for
+ * that case, so this 400 should be unreachable in practice, the same defense-in-depth pattern as
+ * every other client-side-mirrored server guard in this codebase. `version` locks against the
+ * *parent* entry, work lines have no version of their own (§22). */
+export function useDeleteWorkLine(cycleId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, version }: { id: string; version: number }) =>
+      apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/work-lines/${id}?version=${version}`, {
+        method: 'DELETE',
       }),
     onSuccess: (data) => {
       replaceEntry(queryClient, cycleId, data.entry.id, data.entry);

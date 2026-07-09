@@ -1,5 +1,5 @@
-import { memo, useEffect } from 'react';
-import { formatMoney } from '@payroll/shared';
+import { memo, useEffect, useState } from 'react';
+import { formatMoney, pluralize } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 import { ToggleSwitch } from '@/components/ui/toggle-switch';
 import type { Bank } from '@/hooks/use-banks';
@@ -7,6 +7,7 @@ import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import { gridNavProps, InlineNumberCell, InlineSelectCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
 import { SaveStatusIndicator } from './save-status-indicator';
+import { SplitWorkLinesModal } from './split-work-lines-modal';
 import { toNumberOrNull, type LiveTotalsStore } from './live-totals-store';
 import { computeServerSnapshot } from './calc-input';
 import { gridTemplateColumns } from './columns';
@@ -35,6 +36,9 @@ function PayrollEntryRowImpl({
 }: PayrollEntryRowProps) {
   const editor = usePayrollEntryEditor(entry, cycleId, cycleStatus);
   const { effectiveEntry, effectiveLine, cycleDaysInputValue, calc, status, errorMessage, editable } = editor;
+  const [isSplitOpen, setIsSplitOpen] = useState(false);
+  const unitLabel = entry.site.unitLabel;
+  const unitCount = entry.workLines.length;
 
   // Reports this row's live effective values to the totals store on every change (not just on
   // save) — this is what makes the sticky totals row "update live while editing" per the
@@ -83,6 +87,7 @@ function PayrollEntryRowImpl({
   const nav = (col: string) => gridNavProps(rowIndex, col);
 
   return (
+    <>
     <div
       role="row"
       style={{ ...style, gridTemplateColumns: gridTemplateColumns() }}
@@ -170,6 +175,19 @@ function PayrollEntryRowImpl({
           ariaLabel={`Gross pay for ${entry.employee.name}`}
         />
       </div>
+      <div role="cell" className="flex items-center justify-center">
+        <button
+          type="button"
+          onClick={() => setIsSplitOpen(true)}
+          className="rounded border border-border bg-surface px-2 py-1 text-[10.5px] font-medium text-text transition-colors hover:border-accent-mid hover:text-accent-mid"
+          aria-label={`Split by ${unitLabel} — ${entry.employee.name} — currently ${unitCount} ${
+            unitCount === 1 ? unitLabel : pluralize(unitLabel)
+          }`}
+        >
+          {unitCount} {unitCount === 1 ? unitLabel : pluralize(unitLabel)}
+        </button>
+      </div>
+
       <div role="cell">
         <InlineNumberCell
           value={effectiveLine.days}
@@ -324,6 +342,14 @@ function PayrollEntryRowImpl({
         </span>
       </ReadOnlyCell>
     </div>
+    <SplitWorkLinesModal
+      open={isSplitOpen}
+      onOpenChange={setIsSplitOpen}
+      entry={entry}
+      editor={editor}
+      unitLabel={unitLabel}
+    />
+    </>
   );
 }
 

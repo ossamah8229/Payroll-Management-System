@@ -42,6 +42,7 @@ export function PayrollEntryTotalsRow({ store }: { store: LiveTotalsStore }) {
       <div role="cell" className="px-1.5 py-2" />
       <div role="cell" className="px-1.5 py-2" />
       <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('grossPay')}</div>
+      <div role="cell" className="px-1.5 py-2" />
       <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('days')}</div>
       <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('otHours')}</div>
       <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('otRate')}</div>

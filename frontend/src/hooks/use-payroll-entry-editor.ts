@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { calcNet, type UpdatePayrollEntryInput, type UpdateWorkLineInput } from '@payroll/shared';
+import { calcNet, type AddWorkLineInput, type UpdatePayrollEntryInput, type UpdateWorkLineInput } from '@payroll/shared';
 import { ApiError } from '@/lib/api-client';
 import {
   isEntryEditable,
   reloadPayrollEntry,
+  useAddWorkLine,
+  useDeleteWorkLine,
   useUpdatePayrollEntry,
   useUpdateWorkLine,
   type PayrollEntry,
+  type PayrollEntryWorkLine,
 } from '@/hooks/use-payroll-entries';
 import { buildCalcInput } from '@/components/payroll-entry/calc-input';
 import { isValidDecimalDraft, parseValidCycleDays } from '@/components/payroll-entry/numeric-validation';
@@ -16,11 +19,11 @@ export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'conf
 
 type EntryDraft = Partial<Omit<UpdatePayrollEntryInput, 'version'>>;
 /** `cycleDays` is tracked as the raw typed string, not the wire-format number — parsed/validated
- * only at commit time (`sanitizeWorkLineDraft`, below), the same "let the user type freely, gate at
+ * only at commit time (`sanitizeLineDraft`, below), the same "let the user type freely, gate at
  * send time" pattern the decimal fields already use. Storing it as a number and validating inside
  * the `onChange` handler (this hook's original design) silently discarded invalid keystrokes,
  * which made the input appear to randomly revert while backspacing/retyping. */
-type WorkLineDraft = Partial<Pick<UpdateWorkLineInput, 'days' | 'otHours' | 'otRate'>> & {
+type LineDraft = Partial<Pick<UpdateWorkLineInput, 'unitId' | 'days' | 'otHours' | 'otRate'>> & {
   cycleDays?: string;
 };
 
@@ -40,7 +43,7 @@ const ENTRY_DECIMAL_FIELDS: { key: keyof EntryDraft; nullable: boolean }[] = [
 ];
 const ENTRY_DECIMAL_FIELD_KEYS = new Set(ENTRY_DECIMAL_FIELDS.map((f) => f.key));
 
-const WORK_LINE_DECIMAL_FIELDS: { key: 'days' | 'otHours' | 'otRate'; nullable: boolean }[] = [
+const LINE_DECIMAL_FIELDS: { key: 'days' | 'otHours' | 'otRate'; nullable: boolean }[] = [
   { key: 'days', nullable: false },
   { key: 'otHours', nullable: false },
   { key: 'otRate', nullable: true },
@@ -62,7 +65,7 @@ function isConflict(error: unknown): boolean {
 
 /** A 400 (Zod `VALIDATION_ERROR`) means the payload itself was rejected — retrying the exact same
  * value on a timer would just fail identically every time. This should be unreachable in practice
- * now that `sanitizeEntryDraft`/`sanitizeWorkLineDraft` filter out anything that wouldn't pass the
+ * now that `sanitizeEntryDraft`/`sanitizeLineDraft` filter out anything that wouldn't pass the
  * same validation before it's ever sent, but is kept as defense in depth: never burn the auto-retry
  * budget on a failure retrying cannot fix. */
 function isValidationError(error: unknown): boolean {
@@ -84,9 +87,10 @@ function sanitizeEntryDraft(draft: EntryDraft): Partial<Omit<UpdatePayrollEntryI
   return sendable;
 }
 
-function sanitizeWorkLineDraft(draft: WorkLineDraft): Partial<UpdateWorkLineInput> {
+function sanitizeLineDraft(draft: LineDraft): Partial<UpdateWorkLineInput> {
   const sendable: Partial<UpdateWorkLineInput> = {};
-  for (const field of WORK_LINE_DECIMAL_FIELDS) {
+  if (draft.unitId !== undefined) sendable.unitId = draft.unitId;
+  for (const field of LINE_DECIMAL_FIELDS) {
     const value = draft[field.key];
     if (value === undefined) continue;
     if (typeof value === 'string' && !isValidDecimalDraft(value, field.nullable)) continue;
@@ -99,29 +103,45 @@ function sanitizeWorkLineDraft(draft: WorkLineDraft): Partial<UpdateWorkLineInpu
   return sendable;
 }
 
+export interface EffectiveWorkLine extends PayrollEntryWorkLine {
+  /** The raw typed text for Cycle Days (see `LineDraft.cycleDays`'s comment) — every line exposes
+   * this the same way, not just the primary one, so the Split by {unitLabel} modal's inputs never
+   * silently revert mid-keystroke either. */
+  cycleDaysInputValue: string;
+}
+
 /**
- * Per-row editing/autosave state machine — one instance per `PayrollEntryRow`. Owns: local draft
- * overlays for entry-level and primary-work-line fields, live `calcNet` recomputation (shared
- * library only, never reimplemented), debounced autosave, optimistic-locking conflict handling,
- * and error retry with backoff. See docs/architecture/database/schema-invariants.md §22 for the version-based
- * locking contract this mirrors.
+ * Per-row editing/autosave state machine — one instance per `PayrollEntryRow`, shared verbatim by
+ * that row's inline cells *and* its "Split by {unitLabel}" modal when open (the modal is another
+ * editing surface for the same `PayrollEntry`, not a second editing system — decision recorded
+ * 2026-07-09). Owns: local draft overlays for entry-level fields and *every* work line (keyed by
+ * line id, not just the primary one), live `calcNet` recomputation (shared library only, never
+ * reimplemented), one debounced-autosave queue serializing entry-field and every line's edits
+ * through the same optimistic-locking `version` chain, structural add/delete-line actions routed
+ * through that identical queue, and error retry with backoff. See
+ * docs/architecture/database/schema-invariants.md §22 for the version-based locking contract this
+ * mirrors.
  */
 export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycleStatus: string) {
   const queryClient = useQueryClient();
   const updateEntry = useUpdatePayrollEntry(cycleId);
   const updateWorkLine = useUpdateWorkLine(cycleId);
+  const addWorkLineMutation = useAddWorkLine(cycleId);
+  const deleteWorkLineMutation = useDeleteWorkLine(cycleId);
 
   const [entryDraft, setEntryDraftState] = useState<EntryDraft>({});
-  const [workLineDraft, setWorkLineDraftState] = useState<WorkLineDraft>({});
+  const [lineDrafts, setLineDraftsState] = useState<Record<string, LineDraft>>({});
   const [status, setStatus] = useState<SaveStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   const entryDraftRef = useRef(entryDraft);
   entryDraftRef.current = entryDraft;
-  const workLineDraftRef = useRef(workLineDraft);
-  workLineDraftRef.current = workLineDraft;
+  const lineDraftsRef = useRef(lineDrafts);
+  lineDraftsRef.current = lineDrafts;
   const statusRef = useRef(status);
   statusRef.current = status;
+  const entryRef = useRef(entry);
+  entryRef.current = entry;
 
   const savingRef = useRef(false);
   const pendingRef = useRef(false);
@@ -147,40 +167,72 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
   // net salary instead of a blank screen until the draft becomes valid again.
   const calc = useMemo(() => {
     try {
-      return calcNet(buildCalcInput(entry, entryDraft, workLineDraft));
+      return calcNet(buildCalcInput(entry, entryDraft, lineDrafts));
     } catch {
       return calcNet(buildCalcInput(entry));
     }
-  }, [entry, entryDraft, workLineDraft]);
+  }, [entry, entryDraft, lineDrafts]);
 
-  const clearSavedKeys = useCallback(
-    <T extends Record<string, unknown>>(
-      setDraft: React.Dispatch<React.SetStateAction<T>>,
-      ref: React.MutableRefObject<T>,
-      sent: T,
-    ) => {
-      setDraft((current) => {
-        const next = { ...current };
-        for (const key of Object.keys(sent)) {
-          if (next[key as keyof T] === sent[key as keyof T]) {
-            delete next[key as keyof T];
-          }
+  const clearSavedEntryKeys = useCallback((sent: EntryDraft) => {
+    setEntryDraftState((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(sent)) {
+        if (next[key as keyof EntryDraft] === sent[key as keyof EntryDraft]) {
+          delete next[key as keyof EntryDraft];
         }
-        ref.current = next;
-        return next;
-      });
-    },
-    [],
-  );
+      }
+      entryDraftRef.current = next;
+      return next;
+    });
+  }, []);
 
+  const clearSavedLineKeys = useCallback((lineId: string, sent: LineDraft) => {
+    setLineDraftsState((current) => {
+      const currentLine = current[lineId];
+      if (!currentLine) return current;
+      const nextLine = { ...currentLine };
+      for (const key of Object.keys(sent) as (keyof LineDraft)[]) {
+        if (nextLine[key] === sent[key]) delete nextLine[key];
+      }
+      const next = { ...current };
+      if (Object.keys(nextLine).length === 0) {
+        delete next[lineId];
+      } else {
+        next[lineId] = nextLine;
+      }
+      lineDraftsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const dropLineDraft = useCallback((lineId: string) => {
+    setLineDraftsState((current) => {
+      if (!(lineId in current)) return current;
+      const next = { ...current };
+      delete next[lineId];
+      lineDraftsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  /** Sequential, version-chained flush of every dirty entry field + every dirty line's fields, all
+   * under one `savingRef` gate — this is what makes "the modal is another editing surface for the
+   * same entry" true in practice: an edit made inline in the grid and an edit made a second later
+   * in the modal are queued through this exact same function, never two independent commit loops
+   * racing each other for the same `version`. */
   const commit = useCallback(async () => {
     if (statusRef.current === 'conflict') return;
 
     const sentEntry = sanitizeEntryDraft(entryDraftRef.current);
-    const sentLine = sanitizeWorkLineDraft(workLineDraftRef.current);
+    const dirtyLineIds = entryRef.current.workLines
+      .map((line) => line.id)
+      .filter((id) => lineDraftsRef.current[id] !== undefined);
+    const sentLines = dirtyLineIds
+      .map((id) => ({ id, fields: sanitizeLineDraft(lineDraftsRef.current[id]!) }))
+      .filter(({ fields }) => Object.keys(fields).length > 0);
+
     const hasEntryChanges = Object.keys(sentEntry).length > 0;
-    const hasLineChanges = Object.keys(sentLine).length > 0;
-    if (!hasEntryChanges && !hasLineChanges) return;
+    if (!hasEntryChanges && sentLines.length === 0) return;
 
     if (savingRef.current) {
       pendingRef.current = true;
@@ -192,7 +244,7 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     setErrorMessage(undefined);
 
     try {
-      let version = entry.version;
+      let version = entryRef.current.version;
 
       if (hasEntryChanges) {
         const result = await updateEntry.mutateAsync({
@@ -200,32 +252,31 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
           input: { version, ...sentEntry },
         });
         version = result.entry.version;
-        clearSavedKeys(setEntryDraftState, entryDraftRef, sentEntry);
+        clearSavedEntryKeys(sentEntry);
       }
 
-      if (hasLineChanges) {
-        const primaryLineId = entry.workLines[0]!.id;
-        // Captured *before* the request goes out — `sentLine.cycleDays` is the parsed number the
-        // wire format needs, but the draft (and `clearSavedKeys`'s comparison) tracks the raw
+      for (const { id: lineId, fields } of sentLines) {
+        // Captured *before* the request goes out — `fields.cycleDays` is the parsed number the
+        // wire format needs, but the draft (and `clearSavedLineKeys`'s comparison) tracks the raw
         // string, so this is what "was the draft still exactly what we sent" must compare against.
-        // Reading it *after* the await instead would compare the ref to itself and always appear
-        // unchanged, even if the user typed something new while the request was in flight.
-        const rawCycleDaysAtSendTime = workLineDraftRef.current.cycleDays;
-        await updateWorkLine.mutateAsync({
-          id: primaryLineId,
-          input: { version, ...sentLine },
+        const rawCycleDaysAtSendTime = lineDraftsRef.current[lineId]?.cycleDays;
+        const result = await updateWorkLine.mutateAsync({
+          id: lineId,
+          input: { version, ...fields },
         });
-        const clearKeys: WorkLineDraft = {};
-        if (sentLine.days !== undefined) clearKeys.days = sentLine.days;
-        if (sentLine.otHours !== undefined) clearKeys.otHours = sentLine.otHours;
-        if (sentLine.otRate !== undefined) clearKeys.otRate = sentLine.otRate;
-        if (sentLine.cycleDays !== undefined) clearKeys.cycleDays = rawCycleDaysAtSendTime;
-        clearSavedKeys(setWorkLineDraftState, workLineDraftRef, clearKeys);
+        version = result.entry.version;
+        const clearKeys: LineDraft = {};
+        if (fields.unitId !== undefined) clearKeys.unitId = fields.unitId;
+        if (fields.days !== undefined) clearKeys.days = fields.days;
+        if (fields.otHours !== undefined) clearKeys.otHours = fields.otHours;
+        if (fields.otRate !== undefined) clearKeys.otRate = fields.otRate;
+        if (fields.cycleDays !== undefined) clearKeys.cycleDays = rawCycleDaysAtSendTime;
+        clearSavedLineKeys(lineId, clearKeys);
       }
 
       retryCountRef.current = 0;
       const stillDirty =
-        Object.keys(entryDraftRef.current).length > 0 || Object.keys(workLineDraftRef.current).length > 0;
+        Object.keys(entryDraftRef.current).length > 0 || Object.keys(lineDraftsRef.current).length > 0;
       if (stillDirty) {
         setStatus('dirty');
       } else {
@@ -257,7 +308,7 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
         void commit();
       }
     }
-  }, [entry.id, entry.version, entry.workLines, clearSavedKeys, updateEntry, updateWorkLine]);
+  }, [entry.id, updateEntry, updateWorkLine, clearSavedEntryKeys, clearSavedLineKeys]);
 
   const scheduleSave = useCallback(() => {
     setStatus((current) => (current === 'conflict' ? current : 'dirty'));
@@ -279,16 +330,27 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     [scheduleSave],
   );
 
-  const setWorkLineField = useCallback(
-    <K extends keyof WorkLineDraft>(key: K, value: WorkLineDraft[K]) => {
-      setWorkLineDraftState((prev) => {
-        const next = { ...prev, [key]: value };
-        workLineDraftRef.current = next;
+  const setLineField = useCallback(
+    <K extends keyof LineDraft>(lineId: string, key: K, value: LineDraft[K]) => {
+      setLineDraftsState((prev) => {
+        const next = { ...prev, [lineId]: { ...prev[lineId], [key]: value } };
+        lineDraftsRef.current = next;
         return next;
       });
       scheduleSave();
     },
     [scheduleSave],
+  );
+
+  const primaryLine = entry.workLines[0]!;
+
+  /** Backward-compatible alias for the grid's own inline cells, which only ever edit the primary
+   * line — equivalent to `setLineField(primaryLine.id, key, value)`. */
+  const setWorkLineField = useCallback(
+    <K extends keyof LineDraft>(key: K, value: LineDraft[K]) => {
+      setLineField(primaryLine.id, key, value);
+    },
+    [setLineField, primaryLine.id],
   );
 
   const retryNow = useCallback(() => {
@@ -305,42 +367,128 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     savingRef.current = false;
     pendingRef.current = false;
     setEntryDraftState({});
-    setWorkLineDraftState({});
+    setLineDraftsState({});
     entryDraftRef.current = {};
-    workLineDraftRef.current = {};
+    lineDraftsRef.current = {};
     setStatus('idle');
     setErrorMessage(undefined);
     await reloadPayrollEntry(queryClient, cycleId, entry.id);
   }, [cycleId, entry.id, queryClient]);
 
-  const primaryLine = entry.workLines[0]!;
+  /** Adds a new `PayrollEntryWorkLine` — a structural, immediate action (not a debounced field
+   * edit), consistent with how every other structural action in this app persists instantly rather
+   * than staging behind a separate Save step. Still goes through the same `savingRef` gate as
+   * `commit()` (guarded by the modal disabling the control while `status === 'saving'`), so it can
+   * never race a field-edit flush for the same entry's `version`. */
+  const addLine = useCallback(
+    async (input: Omit<AddWorkLineInput, 'version'>) => {
+      if (statusRef.current === 'conflict' || savingRef.current) return;
+      savingRef.current = true;
+      setStatus('saving');
+      setErrorMessage(undefined);
+      try {
+        await addWorkLineMutation.mutateAsync({
+          entryId: entry.id,
+          input: { version: entryRef.current.version, ...input },
+        });
+        retryCountRef.current = 0;
+        setStatus('saved');
+        savedResetTimerRef.current = setTimeout(() => {
+          setStatus((current) => (current === 'saved' ? 'idle' : current));
+        }, SAVED_INDICATOR_MS);
+      } catch (error) {
+        if (isConflict(error)) {
+          setStatus('conflict');
+          setErrorMessage('This entry was changed elsewhere — reload it to keep editing.');
+        } else {
+          setStatus('error');
+          setErrorMessage(error instanceof ApiError ? error.message : 'Adding the line failed — try again.');
+        }
+      } finally {
+        savingRef.current = false;
+        if (pendingRef.current) {
+          pendingRef.current = false;
+          void commit();
+        }
+      }
+    },
+    [entry.id, addWorkLineMutation, commit],
+  );
 
-  // `cycleDays` is exposed two ways: the raw typed text (for the input to bind to, so a
-  // transiently-invalid keystroke is never silently reverted) and a guaranteed-valid number
-  // (for `effectiveLine`, which feeds the live totals store and anything else expecting a real
-  // divisor) — see `buildCalcInput`'s matching fallback for why these must be allowed to diverge
-  // while the user is mid-typing.
-  const cycleDaysInputValue = workLineDraft.cycleDays ?? String(primaryLine.cycleDays);
-  const validDraftCycleDays =
-    workLineDraft.cycleDays !== undefined ? parseValidCycleDays(workLineDraft.cycleDays) : undefined;
+  /** Removes a work line — same immediate, non-debounced pattern as `addLine`. Clears any pending
+   * draft for that line first so a stale debounce timer can never fire a PATCH against a line that
+   * no longer exists. The last-remaining-line guard is enforced server-side (§12a); the modal also
+   * disables the affordance client-side so this is defense-in-depth, not the only guard. */
+  const deleteLine = useCallback(
+    async (lineId: string) => {
+      if (statusRef.current === 'conflict' || savingRef.current) return;
+      clearTimeout(saveTimerRef.current);
+      dropLineDraft(lineId);
+      savingRef.current = true;
+      setStatus('saving');
+      setErrorMessage(undefined);
+      try {
+        await deleteWorkLineMutation.mutateAsync({ id: lineId, version: entryRef.current.version });
+        retryCountRef.current = 0;
+        setStatus('saved');
+        savedResetTimerRef.current = setTimeout(() => {
+          setStatus((current) => (current === 'saved' ? 'idle' : current));
+        }, SAVED_INDICATOR_MS);
+      } catch (error) {
+        if (isConflict(error)) {
+          setStatus('conflict');
+          setErrorMessage('This entry was changed elsewhere — reload it to keep editing.');
+        } else {
+          setStatus('error');
+          setErrorMessage(error instanceof ApiError ? error.message : 'Deleting the line failed — try again.');
+        }
+      } finally {
+        savingRef.current = false;
+        if (pendingRef.current) {
+          pendingRef.current = false;
+          void commit();
+        }
+      }
+    },
+    [deleteWorkLineMutation, dropLineDraft, commit],
+  );
 
   const effectiveEntry = useMemo(() => ({ ...entry, ...entryDraft }), [entry, entryDraft]);
-  const effectiveLine = useMemo(
-    () => ({ ...primaryLine, ...workLineDraft, cycleDays: validDraftCycleDays ?? primaryLine.cycleDays }),
-    [primaryLine, workLineDraft, validDraftCycleDays],
+
+  const effectiveLines: EffectiveWorkLine[] = useMemo(
+    () =>
+      entry.workLines.map((line) => {
+        const draft = lineDrafts[line.id];
+        const validDraftCycleDays =
+          draft?.cycleDays !== undefined ? parseValidCycleDays(draft.cycleDays) : undefined;
+        return {
+          ...line,
+          ...draft,
+          cycleDays: validDraftCycleDays ?? line.cycleDays,
+          cycleDaysInputValue: draft?.cycleDays ?? String(line.cycleDays),
+        };
+      }),
+    [entry.workLines, lineDrafts],
   );
+
+  const effectiveLine = effectiveLines[0]!;
+  const cycleDaysInputValue = effectiveLine.cycleDaysInputValue;
 
   return {
     editable,
     effectiveEntry,
     effectiveLine,
+    effectiveLines,
     cycleDaysInputValue,
     calc,
     status,
     errorMessage,
-    hasUnsavedChanges: Object.keys(entryDraft).length > 0 || Object.keys(workLineDraft).length > 0,
+    hasUnsavedChanges: Object.keys(entryDraft).length > 0 || Object.keys(lineDrafts).length > 0,
     setEntryField,
     setWorkLineField,
+    setLineField,
+    addLine,
+    deleteLine,
     retryNow,
     reload,
   };

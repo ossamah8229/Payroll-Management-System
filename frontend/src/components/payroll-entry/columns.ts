@@ -27,6 +27,7 @@ export const PAYROLL_COLUMNS: PayrollColumnDef[] = [
   { id: 'accountNumber', label: 'Account No.', width: 130, group: 'Bank Details' },
   { id: 'accountTitle', label: 'Account Title', width: 140, group: 'Bank Details' },
   { id: 'grossPay', label: 'Gross Pay', width: 105, align: 'right' },
+  { id: 'units', label: 'Units', width: 100, align: 'center' },
   { id: 'days', label: 'Working Days', width: 95, align: 'right' },
   { id: 'otHours', label: 'OT Hours', width: 90, align: 'right' },
   { id: 'otRate', label: 'OT Rate', width: 90, align: 'right' },
