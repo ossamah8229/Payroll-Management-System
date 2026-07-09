@@ -11,8 +11,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `6be6e68`** — "feat(payroll): implement Phase 3 Checkpoint 3 Split by
-  Unit workflow". Full prior lineage:
+- **Latest committed commit: `70a52da`** — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site
+  filtering and Copy to All". Full prior lineage:
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -24,7 +24,8 @@ be enough to resume correctly without re-deriving context from scratch — per
   Deferral architecture amendment, doc-only, frozen 2026-07-09) → `e072da5` (Phase 3 Checkpoint 2
   implementation, reviewed and committed) → `3479bff` (doc-only commit hash record, closing
   Checkpoint 2) → `6be6e68` (Phase 3 Checkpoint 3 Split by Unit workflow implementation, reviewed,
-  verified, and committed).
+  verified, and committed) → `70a52da` (Phase 3 Checkpoint 4 multi-site filtering and Copy to All
+  implementation, reviewed, verified, and committed).
 - **Phase 3 Checkpoint 2 (Payroll Entry grid frontend) is reviewed, approved, verified, and
   COMMITTED.** A pre-commit verification pass found and fixed three genuine defects within scope: a
   numeric-input crash (unparseable text crashed the live `calcNet` preview — no error boundary
@@ -47,6 +48,28 @@ be enough to resume correctly without re-deriving context from scratch — per
   a freshly re-provisioned database. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3,
   Checkpoint 3" and "Pre-Commit Final Verification Pass" subsections. **Checkpoint 3 is complete and
   closed.**
+- **Phase 3 Checkpoint 4 (multi-select site filter + "Copy to All") is reviewed, approved, verified,
+  and COMMITTED as `70a52da` (2026-07-09).** A read-only architecture review preceded implementation,
+  followed by a dedicated investigation answering two open questions with evidence from the actual
+  codebase (not assumption): a new backend bulk-update endpoint is required (`database/schema-invariants.md`
+  §23's standing "bulk writes over row-by-row loops" rule, the `employee.import` summary-audit
+  precedent, and a real O(N²) cache-merge cost the looping alternative would introduce); Copy to All
+  applies only to a split entry's **primary** work line (documentation was genuinely ambiguous on
+  this point — stated as such, not silently resolved — with primary-line-only frozen for consistency
+  with the grid's own existing inline columns). One new backend endpoint (`PATCH
+  /api/v1/payroll-cycles/:cycleId/entries/bulk`, one transaction, one summary audit entry, a
+  deliberate and documented exception to per-row optimistic locking for this endpoint only); the site
+  filter itself needed no backend change (pure in-memory filtering of the already-fully-fetched
+  entries array). New reusable `MultiSelectFilter` (`frontend/src/components/ui/multi-select-filter.tsx`,
+  no Payroll-Entry-specific logic, per spec item 10's stated future reuse in Release Salary/Fines
+  report) and `CopyToAllToolbar`. `typecheck`/`lint`/`build` clean; **5 new backend tests, full suite
+  165/165** against a freshly re-provisioned database; a real-stack Playwright pass, **15/15 checks**,
+  covering the filter, primary-line-only bulk targeting on a genuinely split entry, cross-site
+  isolation, and explicit Checkpoint 2/3 regression checks. A final repository-wide verification pass
+  (diff scope, merge markers, TODO/debug-logging sweeps, a fresh typecheck/lint/build, and both the
+  backend suite and Playwright pass re-confirmed against a freshly re-provisioned database) found no
+  defects before commit. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 3, Checkpoint 4"
+  subsection. **Checkpoint 4 is complete and closed.**
 - **The Advance Deduction Deferral architecture is now FROZEN (2026-07-09, architecture-only session,
   no application code).** New business rule: authorized users may defer an Advance's scheduled
   deduction to any future Draft payroll cycle before release (BR-ADV-001 through BR-ADV-006,

@@ -444,7 +444,8 @@ committing**:
   See below.
 - **Checkpoint 3 — "Split by {unitLabel}" workflow (multi-work-line UI + transactional invariants)
   — COMPLETE, 2026-07-09, COMMITTED as `6be6e68`.** See below.
-- Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar.
+- **Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar — COMPLETE, 2026-07-09,
+  COMMITTED as `70a52da`.** See below.
 - Checkpoint 5 — Payroll Entry CSV/Excel import/export.
 - Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor + this phase's own
   🛑 review checkpoint (below).
@@ -839,6 +840,102 @@ COMMITTED as `6be6e68`)**
   under an in-flight save, rapid restructuring, and Checkpoint 2 regression — see
   `docs/PROJECT_PROGRESS.md`'s "Pre-Commit Final Verification Pass" subsection) found and fixed one
   further real bug (the totals-row column-misalignment noted above) before commit.
+
+**Checkpoint 4 — Multi-select site filter + "Copy to All" bulk toolbar — COMPLETE, 2026-07-09
+(implemented, verified, and COMMITTED as `70a52da`)**
+- **A dedicated architecture investigation preceded implementation** (2026-07-09, no code written
+  until findings were presented and decisions frozen): resolved two open questions from the prior
+  read-only Checkpoint 4 review. (1) **A new backend bulk-update endpoint is required** — direct
+  evidence from `database/schema-invariants.md` §23's standing rule ("bulk writes over row-by-row
+  loops... even though [the affected set] is typically small," illustrated by the `PayrollUnitRelease`
+  sweep precedent), the `employee.import` audit entry's existing one-summary-row-per-bulk-action
+  precedent (`employees.routes.ts`), and a concrete O(N²) React-Query-cache-merge cost that looping
+  `useUpdatePayrollEntry`/`useUpdateWorkLine` from the frontend would introduce. (2) **Copy to All
+  applies only to each entry's primary work line** — the frozen decision, chosen for strict
+  consistency with the grid's own inline Cycle Days/OT Rate columns (which have only ever meant "the
+  primary line" since Checkpoint 2) and to keep Split by {unitLabel}'s non-primary lines reachable
+  only through their own modal, never as a side effect of a broad bulk action.
+- **No shared-schema database changes** — Checkpoint 4 introduces no new Prisma model or migration,
+  only a new Zod request schema. `bulkUpdatePayrollEntriesSchema` (`shared/src/schemas/payroll-entry.ts`)
+  is a discriminated union on `field` (`leaveRate`/`otRate`: `decimalString`, reused verbatim from the
+  single-entity schemas; `cycleDays`: the same `1–31` integer range), with a mandatory non-empty
+  `siteIds` array — a bulk mutation's scope must always be an explicit, deliberate selection, never
+  implicitly "every employee in the cycle," even though the grid itself may display every site when
+  unfiltered.
+- **New `bulkUpdatePayrollEntries`** (`backend/src/modules/payroll-entry/payroll-entry.service.ts`),
+  routed as `PATCH /api/v1/payroll-cycles/:cycleId/entries/bulk` (nested under the same cycle-scoped
+  router as list/create, gated by the existing `PERMISSIONS.PAYROLL_ENTRY` — no new permission).
+  Rejects the whole request with 400 if the cycle is no longer Draft (checked once, reusing
+  `getPayrollCycle` from `payroll-processing.service.ts`, rather than per-row); validates every
+  requested `siteId` via the existing `assertSiteAccess`, once per site, not once per entry. Resolves
+  the matching entry set with one query (also fetching each entry's primary line id via `take: 1`
+  ordered by `sortOrder`), filters out already-released entries app-side (mirroring
+  `assertEntryEditable`'s rule without erroring the whole batch over one locked row), then executes
+  **exactly one `updateMany`** — either on `PayrollEntry` (`leaveRate`) or on `PayrollEntryWorkLine`
+  scoped to the resolved primary-line ids (`cycleDays`/`otRate`) — plus a second `updateMany`
+  incrementing every affected entry's `version`, both inside one transaction. **Deliberate, documented
+  exception to this module's otherwise-universal per-row optimistic locking**: no caller-supplied
+  `version` is taken or checked per row (this is a criteria-scoped administrative sweep, the same
+  class of operation as the `PayrollUnitRelease` sweep — not a targeted edit of a row the caller just
+  read); each row's `version` still increments, so a row concurrently open in a Split by {unitLabel}
+  modal or another operator's in-flight autosave correctly 409s on its own *next* save against the
+  now-stale version it holds. Writes exactly **one summary `AuditLog` entry** (`payroll_entry.bulk_updated`,
+  `entityId: null`, `metadata: { cycleId, siteIds, field, value, matchedCount, appliedCount }`) —
+  never one row per affected entry, matching `employee.import`'s existing precedent.
+- **New, reusable `MultiSelectFilter`** (`frontend/src/components/ui/multi-select-filter.tsx`) —
+  deliberately domain-agnostic (`options`/`selectedIds`/`onChange`/`label` props only, no
+  Payroll-Entry-specific text or logic), per `reference/PROJECT_SPEC.md` item 10 naming Release
+  Salary and the Fines/EOBI report as later callers of this exact same filter. Built on a new
+  `DropdownMenuCheckboxItem` primitive added to the existing `dropdown-menu.tsx` (Radix
+  `CheckboxItem`, `onSelect` calls `preventDefault()` so the panel stays open across repeated
+  toggles — a real behavioral difference from the existing action-menu `DropdownMenuItem`, which
+  closes on select by design). An empty selection means "no filter — show everything," matching the
+  backend's own existing convention for an omitted `siteId` query param.
+- **Frontend filtering is pure client-side, in-memory** (`payroll-entry-page.tsx`): `usePayrollEntries`
+  already fetches every entry the current user can see for the cycle (Checkpoint 2's own design), so
+  the site filter is a memoized `Array.filter()` over that already-loaded array — no new network
+  request, no backend change needed for this half of the checkpoint, confirming the read-only
+  investigation's conclusion. The filtered array is what's passed to `PayrollEntryGrid`, which also
+  correctly scopes the sticky totals row to the filtered subset for free (`LiveTotalsStore.setBase`
+  already took an explicit array argument, not an implicit global).
+- **New `CopyToAllToolbar`** (`frontend/src/components/payroll-entry/copy-to-all-toolbar.tsx`) —
+  three independent field/value pairs (Cycle Days, OT Rate, Leave Rate), matching
+  `reference/payroll_prototype.html`'s original reference implementation. Disabled whenever no site
+  is selected in the filter (client-side mirror of the schema's non-empty-`siteIds` requirement);
+  each field's own "Copy to All" button additionally requires a currently-valid typed value, reusing
+  `isValidDecimalDraft`/`parseValidCycleDays` — the exact same validation the grid's own inline cells
+  already apply, not a second implementation. Feedback uses the existing `sonner` toast mechanism
+  (`toast.success`/`toast.error`, matching `new-cycle-modal.tsx`'s established pattern), reporting
+  "Applied to N of M employee(s)" from the endpoint's own summary response.
+- **New `useBulkUpdatePayrollEntries`** (`frontend/src/hooks/use-payroll-entries.ts`) — on success,
+  invalidates the cycle's entries query (a full refetch), deliberately not a manual per-row cache
+  merge: a bulk action can touch far more entries than the virtualizer ever mounts at once, so there
+  is no bounded row set to merge the way `useUpdatePayrollEntry`/`useUpdateWorkLine`'s `replaceEntry`
+  does for a single row.
+- **Verification** (this session, real-stack — live Postgres via `embedded-postgres`, live backend +
+  frontend dev servers, real Chromium via Playwright): `typecheck`/`lint`/`build` clean across all
+  three workspaces (same 4 pre-existing warnings, none new). **5 new backend tests, full suite
+  165/165** against a freshly re-provisioned database (RBAC boundary on `siteIds`; primary-line-only
+  targeting proven against a genuinely split entry, asserting the secondary line's `cycleDays` is
+  byte-identical to its seeded value; entry-level `leaveRate` bulk write scoped correctly to the
+  selected site only; a released entry correctly skipped — `matchedCount` including it,
+  `appliedCount` excluding it — without failing the batch; a non-Draft cycle rejecting the whole
+  request outright). A real-stack Playwright pass (**15/15 checks**) drove the actual UI: selecting a
+  site narrows the grid and the totals row together (confirmed via the "N employees" total, not just
+  visually); Copy to All correctly disabled with no site selected, and separately still disabled with
+  a site selected but no value typed (both gates independently verified); a bulk apply on a
+  genuinely split entry updated only its primary line's `cycleDays` server-side, leaving the
+  secondary line's seeded value untouched; a second site's entry, deliberately outside the selected
+  filter, was confirmed completely untouched by the same bulk request; clearing the filter restored
+  every site's employees; and — the explicit regression requirement — Checkpoint 2's ordinary inline
+  autosave and Checkpoint 3's Split by {unitLabel} badge/line-count both re-verified working
+  unchanged after these changes.
+- **Explicitly out of scope, none introduced**: search, drag-to-reorder, the Release workflow,
+  CSV/Excel import/export (Checkpoint 5), and anything from Phase 4 onward.
+- **Committed as `70a52da`** — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site filtering
+  and Copy to All", after a repository-wide final verification pass (diff-scope review, merge-marker/
+  TODO/dead-code checks, a fresh typecheck/lint/build, backend tests re-confirmed at 165/165 and the
+  Playwright pass re-confirmed at 15/15 against a freshly re-provisioned database) found no defects.
 
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always

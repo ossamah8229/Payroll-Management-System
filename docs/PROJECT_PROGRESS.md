@@ -1,16 +1,19 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-09 (three sessions today — the Advance Deduction Deferral architecture amendment,
+**Date:** 2026-07-09 (four sessions today — the Advance Deduction Deferral architecture amendment,
 committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**,
 followed by a design-review-then-implementation session for Phase 3 Checkpoint 3, implemented,
-verified, re-verified in a dedicated final architectural pass, and **committed**). See the "Phase 3,
-Checkpoint 2", "Phase 3, Checkpoint 3", and "Advance Deduction Deferral" entries in §1, below. Prior
-entries (2026-07-07 and earlier) are preserved unchanged below this point.
-**Latest committed commit:** `6be6e68` — "feat(payroll): implement Phase 3 Checkpoint 3 Split by Unit
-workflow" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's substantive
-build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d` Phase 2
-checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further doc
-status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
+verified, re-verified in a dedicated final architectural pass, and **committed**, followed by a
+read-only Checkpoint 4 architecture review, a two-question architecture investigation with frozen
+decisions, then Checkpoint 4's implementation, verification, and **committed**). See the
+"Phase 3, Checkpoint 2", "Phase 3, Checkpoint 3", "Phase 3, Checkpoint 4", and "Advance Deduction
+Deferral" entries in §1, below. Prior entries (2026-07-07 and earlier) are preserved unchanged below
+this point.
+**Latest committed commit:** `70a52da` — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site
+filtering and Copy to All" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
+substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d`
+Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further
+doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
 Phase 2.5 Checkpoint 2 → `b27f559` Checkpoint 2 doc close → `ed4ed1f` database-verification debt
 closed (2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only commit hash record →
 `e26fe8c` Phase 2.5 Checkpoint 4 → `0ca9a8f` doc-only commit hash record, closing Phase 2.5 →
@@ -19,10 +22,11 @@ closed (2026-07-04) → `33f2b18` Phase 2.5 Checkpoint 3 → `28d4192` doc-only 
 Advance Deduction Deferral architecture amendment, doc-only, frozen → `e072da5` Phase 3 Checkpoint 2
 (Payroll Entry grid frontend) implementation, reviewed and committed → `3479bff` doc-only commit hash
 record, closing Checkpoint 2 → `6be6e68` Phase 3 Checkpoint 3 (Split by Unit workflow) implementation,
-reviewed, verified, and committed). **This session's own doc-only commit hash record (below) lands on
-top — check `git log -1` for the exact hash.**
+reviewed, verified, and committed → `70a52da` Phase 3 Checkpoint 4 (multi-site filtering and Copy to
+All) implementation, reviewed, verified, and committed). **This session's own doc-only commit hash
+record (below) lands on top — check `git log -1` for the exact hash.**
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoints 0, 1, 2, and now 3 are all committed and
+**Current implementation phase:** **Phase 3 Checkpoints 0, 1, 2, 3, and now 4 are all committed and
 closed.** This same day's first session was architecture-only — no implementation, no Prisma, no
 migrations, no application code — and froze the **Advance Deduction Deferral** architecture
 (BR-ADV-001 through BR-ADV-006, `ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized
@@ -37,8 +41,15 @@ required implementation decisions — see §1's "Phase 3, Checkpoint 3" entry), 
 ("Split by {unitLabel}") against that approved design, and — following an explicit request for a
 final architectural verification of the autosave-batching/queueing model before commit — ran a
 dedicated network-capture Playwright stress test that found and fixed one further real bug (a
-totals-row column-misalignment) before being reviewed, approved, and **committed as `6be6e68`**.
-**Checkpoints 4–6 have NOT started and each still requires its own explicit authorization.**
+totals-row column-misalignment) before being reviewed, approved, and **committed as `6be6e68`**. **A
+fourth session then ran a read-only Checkpoint 4 architecture review, followed by an explicit
+two-question architecture investigation** (whether a new backend bulk-update endpoint was genuinely
+required, and whether "Copy to All" should apply to a split entry's primary line only or every
+line — see §1's "Phase 3, Checkpoint 4" entry for both answers and their evidence) **with the
+resulting decisions frozen, then implemented and verified Checkpoint 4 against them, and — following
+a final repository-wide verification pass that found no defects — reviewed, approved, and committed
+as `70a52da`.** **Checkpoints 5–6 have NOT started and each still requires its own explicit
+authorization.**
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -1312,6 +1323,93 @@ their own, exactly per `database/schema-invariants.md` §22, unchanged from Chec
 **Committed as `6be6e68`** — "feat(payroll): implement Phase 3 Checkpoint 3 Split by Unit workflow" —
 after this final architectural verification pass and explicit approval. **Phase 3 Checkpoint 3 is
 now complete and closed.**
+
+### Phase 3, Checkpoint 4 — Multi-select site filter + "Copy to All" — COMPLETE, 2026-07-09 (COMMITTED as `70a52da`)
+
+A read-only architecture review ran first (no code), producing a plan for the site filter and Copy
+to All plus two explicitly open architectural questions. A **second, dedicated investigation session**
+then answered both — "do not guess, base the conclusion only on the current codebase" was the
+explicit instruction — before any implementation began:
+
+1. **Is a new backend bulk-update endpoint actually required?** Yes — confirmed by direct evidence,
+   not inference: `database/schema-invariants.md` §23's standing rule ("bulk writes over row-by-row
+   loops... even though [the affected set] is typically small," illustrated by the mandatory
+   `PayrollUnitRelease` sweep precedent — a single `UPDATE ... WHERE`, never a loop, even for a
+   typically-small affected set); the `employee.import` audit entry's already-shipped
+   one-summary-row-per-bulk-action precedent (`employees.routes.ts:81-92` — `entityId: null`,
+   counts in `metadata`); and a concrete O(N²) React-Query cache-merge cost that looping the
+   existing single-entity mutations from the frontend would introduce (`replaceEntry` scans the full
+   cached array per call).
+2. **Does Copy to All apply to a split entry's primary line only, or every line?** Genuinely
+   ambiguous in the documentation — `IMPLEMENTATION_PLAN.md`'s own "copied per-line since they can
+   legitimately differ by unit" phrasing is defensibly readable either way, and `database/payroll-entry.md`
+   §12a's "site/unit-typical" framing of `cycleDays` doesn't resolve it either. Stated as ambiguous,
+   not silently resolved, with a recommendation: **primary line only**, frozen as the decision —
+   strict consistency with the grid's own inline Cycle Days/OT Rate columns (primary-line-only since
+   Checkpoint 2) outweighs the alternative, and non-primary lines stay reachable exclusively through
+   the Split by {unitLabel} modal, never touched as a side effect of a broad action.
+
+**Implementation**, exactly following the frozen decisions:
+- **No backend endpoint reuse-by-looping anywhere** — one new `PATCH
+  /api/v1/payroll-cycles/:cycleId/entries/bulk`, one new `bulkUpdatePayrollEntries` service function,
+  one transaction, one `updateMany` (two when a work-line write also needs its parent entries'
+  `version` bumped), one summary audit entry. RBAC reuses the existing `assertSiteAccess` per
+  requested site (not per entry) and the existing `PERMISSIONS.PAYROLL_ENTRY` — no new permission.
+  **Deliberate, documented exception to per-row optimistic locking**: this endpoint does not take or
+  check a caller-supplied `version` per row (a criteria-scoped administrative sweep, not a targeted
+  edit of a row the caller just read) — each row's `version` still increments, so a genuinely
+  concurrent edit elsewhere still correctly 409s on its own next save.
+- **The site filter needed no backend change at all**, confirming the read-only review's conclusion:
+  `usePayrollEntries` already fetches every entry the user can see for the cycle, so filtering is a
+  memoized in-memory `Array.filter()`, and the sticky totals row is scoped to the filtered set for
+  free (`LiveTotalsStore.setBase` already took an explicit array, not a global).
+- **New, genuinely reusable `MultiSelectFilter`** (`frontend/src/components/ui/multi-select-filter.tsx`)
+  — no Payroll-Entry-specific text or logic, per `reference/PROJECT_SPEC.md` item 10's naming of
+  Release Salary and the Fines/EOBI report as future callers of this same component. Built on a new
+  `DropdownMenuCheckboxItem` primitive (existing `dropdown-menu.tsx`, extended rather than
+  duplicated) whose `onSelect` stays open across repeated toggles, unlike the existing action-menu
+  `DropdownMenuItem`.
+- **New `CopyToAllToolbar`** — three field/value pairs (Cycle Days, OT Rate, Leave Rate) matching
+  `reference/payroll_prototype.html`'s original reference design, reusing the grid's own
+  `isValidDecimalDraft`/`parseValidCycleDays` validation and the existing `sonner` toast mechanism
+  for feedback (`new-cycle-modal.tsx`'s established pattern) — no new feedback/validation mechanism
+  invented.
+- **Cache strategy is a full refetch on bulk success** (`useBulkUpdatePayrollEntries` invalidates the
+  cycle's entries query), deliberately not a manual per-row merge — a bulk action can touch far more
+  rows than the virtualizer ever mounts, so there's no bounded set to merge the way the single-row
+  mutations' `replaceEntry` already does.
+- **Verification (real-stack, this session)**: `typecheck`/`lint`/`build` clean across all three
+  workspaces. **5 new backend tests, full suite 165/165** against a freshly re-provisioned database
+  (RBAC boundary on `siteIds`; primary-line-only targeting proven against a genuinely split entry —
+  the secondary line's `cycleDays` asserted byte-identical to its seeded value, never touched;
+  entry-level `leaveRate` scoped correctly to the selected site only; a released entry correctly
+  skipped — counted in `matchedCount`, excluded from `appliedCount` — without failing the whole
+  batch; a non-Draft cycle rejecting the entire request). A real-stack Playwright pass, **15/15
+  checks**, drove the real UI: site selection narrowing the grid and the totals row together
+  (confirmed via the literal "N employees" total); Copy to All correctly gated by two independent
+  conditions (a site selected, and a valid value typed — both verified separately); a bulk apply on
+  a genuinely split entry updating only its primary line, server-side-confirmed; a second site's
+  entry, deliberately outside the filter, confirmed completely untouched by the same request;
+  clearing the filter restoring every site; and explicit regression checks — Checkpoint 2's ordinary
+  inline autosave and Checkpoint 3's Split by {unitLabel} badge/line-count both re-verified working
+  unchanged.
+- **Two benign test-harness bugs found and fixed during verification, not product defects**: (1) an
+  early Playwright assertion checked a "Copy to All" button's disabled state before a value had been
+  typed into its input, incorrectly reading the button's *correct* value-empty disabled state as a
+  site-filter failure — fixed by checking both gates (site selected; site selected + valid value)
+  separately, both now passing. (2) the same shared-dev-database test/Playwright-fixture contamination
+  pattern already documented in Checkpoint 3's own verification recurred (this session's own manual
+  API-driven fixtures colliding with the automated suite's own fixtures) — resolved the same way, by
+  re-provisioning a pristine database for the final confirmation run.
+- **Explicitly out of scope, none introduced**: search, drag-to-reorder, the Release workflow,
+  CSV/Excel import/export (Checkpoint 5), and anything from Phase 4 onward.
+- **A final repository-wide verification pass preceded commit** (2026-07-09, explicitly requested):
+  diff-scope review confirming only the intended files changed; merge-marker, TODO/FIXME, and
+  debug-logging sweeps (none found); a fresh `typecheck`/`lint`/`build`; the backend suite and the
+  real-stack Playwright pass both re-confirmed clean against a freshly re-provisioned database; and a
+  spot-check of the documentation diff against the actual shipped code for accuracy. No defects found.
+- **Committed as `70a52da`** — "feat(payroll): implement Phase 3 Checkpoint 4 multi-site filtering and
+  Copy to All". **Phase 3 Checkpoint 4 is now complete and closed.**
 
 ---
 
