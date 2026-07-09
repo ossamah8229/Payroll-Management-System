@@ -333,4 +333,178 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     const finalCount = await prisma.payrollEntryWorkLine.count({ where: { payrollEntryId: entryId } });
     expect(finalCount).toBe(1);
   });
+
+  describe('"Copy to All" bulk update (Phase 3 Checkpoint 4)', () => {
+    it('bulk-applies leaveRate (entry-level) only to entries within the selected sites, in one summary audit entry', async () => {
+      const admin = await masterAdminAgent('bulk-leave-rate@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Bulk A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Bulk B');
+      const cycle = await makeDraftCycle(admin, 9);
+      const employeeA = await makeEmployee(siteA.id, unitA.id, 'Bulk Employee A');
+      const employeeB = await makeEmployee(siteB.id, unitB.id, 'Bulk Employee B');
+
+      const entryA = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeId: employeeA.id });
+      const entryB = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeId: employeeB.id });
+
+      const auditCountBefore = await prisma.auditLog.count({ where: { action: 'payroll_entry.bulk_updated' } });
+
+      const bulk = await admin.agent
+        .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteIds: [siteA.id], field: 'leaveRate', value: '1200.00' });
+
+      expect(bulk.status).toBe(200);
+      expect(bulk.body).toEqual({ matchedCount: 1, appliedCount: 1 });
+
+      const refreshedA = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryA.body.entry.id } });
+      const refreshedB = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryB.body.entry.id } });
+      expect(refreshedA.leaveRate?.toString()).toBe('1200');
+      expect(refreshedA.version).toBe(entryA.body.entry.version + 1);
+      // The other site was never included in `siteIds` — must be completely untouched.
+      expect(refreshedB.leaveRate).toBeNull();
+      expect(refreshedB.version).toBe(entryB.body.entry.version);
+
+      // Exactly one summary audit entry for the whole bulk action — never one per affected entry.
+      const auditCountAfter = await prisma.auditLog.count({ where: { action: 'payroll_entry.bulk_updated' } });
+      expect(auditCountAfter - auditCountBefore).toBe(1);
+      const auditEntry = await prisma.auditLog.findFirst({
+        where: { action: 'payroll_entry.bulk_updated' },
+        orderBy: { occurredAt: 'desc' },
+      });
+      expect(auditEntry?.entityId).toBeNull();
+      expect(auditEntry?.metadata).toMatchObject({ appliedCount: 1, matchedCount: 1, field: 'leaveRate' });
+    });
+
+    it('bulk-applies cycleDays/otRate only to each entry\'s primary work line, never a split entry\'s secondary line', async () => {
+      const admin = await masterAdminAgent('bulk-primary-line@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Bulk Split');
+      const secondUnit = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Bulk Second Unit', code: 'U-2' } });
+      const cycle = await makeDraftCycle(admin, 10);
+      const employee = await makeEmployee(site.id, unit.id, 'Bulk Split Employee');
+
+      const created = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeId: employee.id });
+      const entryId = created.body.entry.id;
+
+      // Split this entry across a second unit, matching Checkpoint 3's own backend capability.
+      const split = await admin.agent
+        .post(`/api/v1/payroll-entries/${entryId}/work-lines`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ version: created.body.entry.version, unitId: secondUnit.id, cycleDays: 30 });
+      expect(split.status).toBe(201);
+      const primaryLineId = split.body.entry.workLines[0].id;
+      const secondaryLineId = split.body.entry.workLines[1].id;
+
+      const bulk = await admin.agent
+        .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteIds: [site.id], field: 'cycleDays', value: 26 });
+
+      expect(bulk.status).toBe(200);
+      expect(bulk.body).toEqual({ matchedCount: 1, appliedCount: 1 });
+
+      const primaryLine = await prisma.payrollEntryWorkLine.findUniqueOrThrow({ where: { id: primaryLineId } });
+      const secondaryLine = await prisma.payrollEntryWorkLine.findUniqueOrThrow({ where: { id: secondaryLineId } });
+      expect(primaryLine.cycleDays).toBe(26);
+      // The non-primary line — only ever reachable through the Split by Unit modal — must be
+      // completely untouched by the bulk action.
+      expect(secondaryLine.cycleDays).toBe(30);
+    });
+
+    it('site-scopes the bulk endpoint — a site outside the caller\'s assignment is rejected before any write', async () => {
+      const admin = await masterAdminAgent('bulk-rbac-admin@test.local');
+      const { site: assignedSite } = await makeSiteWithUnit('Test Site Bulk RBAC Assigned');
+      const { site: otherSite, unit: otherUnit } = await makeSiteWithUnit('Test Site Bulk RBAC Other');
+      const cycle = await makeDraftCycle(admin, 11);
+      const employee = await makeEmployee(otherSite.id, otherUnit.id, 'Bulk RBAC Employee');
+      const entry = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeId: employee.id });
+
+      const staff = await payrollStaffAgent('bulk-rbac-staff@test.local', [assignedSite.id]);
+      const bulk = await staff.agent
+        .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+        .set('x-csrf-token', staff.csrfToken)
+        .send({ siteIds: [otherSite.id], field: 'leaveRate', value: '500.00' });
+
+      expect(bulk.status).toBe(403);
+      const untouched = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.body.entry.id } });
+      expect(untouched.leaveRate).toBeNull();
+      expect(untouched.version).toBe(entry.body.entry.version);
+    });
+
+    it('rejects a bulk update when the cycle is no longer Draft, and skips a released entry within an otherwise-Draft cycle', async () => {
+      const admin = await masterAdminAgent('bulk-locked@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Bulk Locked');
+      const cycle = await makeDraftCycle(admin, 12);
+      const employeeReleased = await makeEmployee(site.id, unit.id, 'Bulk Released Employee');
+      const employeeOpen = await makeEmployee(site.id, unit.id, 'Bulk Open Employee');
+
+      const releasedEntry = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeId: employeeReleased.id });
+      const openEntry = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeId: employeeOpen.id });
+
+      // No Release workflow exists yet — simulate one entry already released directly, the same
+      // pattern the single-entity immutability test above uses.
+      await prisma.payrollEntry.update({
+        where: { id: releasedEntry.body.entry.id },
+        data: { released: true, releasedAt: new Date(), releasedBy: admin.userId },
+      });
+
+      const bulkWhileOpen = await admin.agent
+        .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteIds: [site.id], field: 'otRate', value: '150.00' });
+      expect(bulkWhileOpen.status).toBe(200);
+      // Both entries match the site filter, but only the still-open one is actually editable.
+      expect(bulkWhileOpen.body).toEqual({ matchedCount: 2, appliedCount: 1 });
+
+      const stillReleased = await prisma.payrollEntry.findUniqueOrThrow({
+        where: { id: releasedEntry.body.entry.id },
+      });
+      expect(stillReleased.version).toBe(releasedEntry.body.entry.version);
+
+      // Now lock the whole cycle — the bulk request must be rejected outright, not partially applied.
+      await prisma.payrollCycle.update({ where: { id: cycle.id }, data: { status: 'RELEASED' } });
+      const bulkAfterCycleLocked = await admin.agent
+        .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteIds: [site.id], field: 'otRate', value: '175.00' });
+      expect(bulkAfterCycleLocked.status).toBe(400);
+
+      const untouchedOpenLine = await prisma.payrollEntryWorkLine.findFirstOrThrow({
+        where: { payrollEntryId: openEntry.body.entry.id },
+      });
+      expect(untouchedOpenLine.otRate?.toString()).toBe('150');
+    });
+
+    it('rejects a bulk request with no payroll:entry permission', async () => {
+      const admin = await masterAdminAgent('bulk-no-perm-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Bulk No Perm');
+      const cycle = await makeDraftCycle(admin, 1);
+      await makeEmployee(site.id, unit.id, 'Bulk No Perm Employee');
+
+      const noPerm = await noPayrollPermissionAgent('bulk-no-perm-staff@test.local', [site.id]);
+      const bulk = await noPerm.agent
+        .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+        .set('x-csrf-token', noPerm.csrfToken)
+        .send({ siteIds: [site.id], field: 'leaveRate', value: '500.00' });
+
+      expect(bulk.status).toBe(403);
+    });
+  });
 });

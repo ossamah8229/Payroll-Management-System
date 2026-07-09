@@ -1,6 +1,12 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
-import type { AddWorkLineInput, CalcNetResult, UpdatePayrollEntryInput, UpdateWorkLineInput } from '@payroll/shared';
+import type {
+  AddWorkLineInput,
+  BulkUpdatePayrollEntriesInput,
+  CalcNetResult,
+  UpdatePayrollEntryInput,
+  UpdateWorkLineInput,
+} from '@payroll/shared';
 import { apiRequest } from '@/lib/api-client';
 import type { Employee } from '@/hooks/use-employees';
 import type { ProjectSite } from '@/hooks/use-project-sites';
@@ -210,4 +216,30 @@ export async function reloadPayrollEntry(queryClient: QueryClient, cycleId: stri
     previous?.map((existing) => (existing.id === entryId ? entry : existing)),
   );
   return entry;
+}
+
+export interface BulkUpdatePayrollEntriesResult {
+  matchedCount: number;
+  appliedCount: number;
+}
+
+/**
+ * "Copy to All" (Phase 3 Checkpoint 4) — a single bulk request, never a loop of individual
+ * mutations (`docs/architecture/database/schema-invariants.md` §23). Cache strategy is deliberately
+ * a full refetch on success, not a manual per-row merge: a bulk action can touch far more entries
+ * than are ever mounted by the virtualizer at once, so there is no bounded set of rows to merge
+ * (unlike `useUpdatePayrollEntry`/`useUpdateWorkLine`'s single-row `replaceEntry`).
+ */
+export function useBulkUpdatePayrollEntries(cycleId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BulkUpdatePayrollEntriesInput) =>
+      apiRequest<BulkUpdatePayrollEntriesResult>(`/api/v1/payroll-cycles/${cycleId}/entries/bulk`, {
+        method: 'PATCH',
+        body: input,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
+    },
+  });
 }

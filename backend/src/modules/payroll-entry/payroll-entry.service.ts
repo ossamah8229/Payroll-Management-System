@@ -1,6 +1,7 @@
 import type { Prisma, PayrollEntry, PayrollEntryWorkLine } from '@prisma/client';
 import type {
   AddWorkLineInput,
+  BulkUpdatePayrollEntriesInput,
   CreatePayrollEntryInput,
   SessionUser,
   UpdatePayrollEntryInput,
@@ -13,6 +14,7 @@ import { diffFields } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess, assertUnitBelongsToSite, isMasterAdmin } from '../employees/employees.service';
+import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 50;
@@ -559,4 +561,110 @@ export async function deleteWorkLine(
     });
     return withCalc(updated);
   });
+}
+
+export interface BulkUpdatePayrollEntriesResult {
+  matchedCount: number;
+  appliedCount: number;
+}
+
+/**
+ * "Copy to All" (Phase 3 Checkpoint 4) — pushes one value to every currently-filtered entry in one
+ * request, following `database/schema-invariants.md` §23's standing rule ("bulk writes over
+ * row-by-row loops... even though [the affected set] is typically small") rather than looping the
+ * single-entity `updatePayrollEntry`/`updateWorkLine` mutations above. `leaveRate` (a `PayrollEntry`
+ * column) is written directly; `otRate`/`cycleDays` (`PayrollEntryWorkLine` columns) are written
+ * only to each matched entry's **primary** line (lowest `sortOrder`) — non-primary lines are
+ * intentionally reachable only through the Split by {unitLabel} modal (Checkpoint 3), never through
+ * this bulk action (frozen 2026-07-09 decision, `database/payroll-entry.md` §12a).
+ *
+ * **Deliberate exception to this module's otherwise-universal per-row optimistic locking**: unlike
+ * every single-entity mutation above, this does not take or check a caller-supplied `version` per
+ * row — it is a criteria-scoped administrative sweep (matching the same class of operation as the
+ * `PayrollUnitRelease` sweep, `database/schema-invariants.md §23`), not a targeted edit of a row the
+ * caller just read. Each affected entry's `version` is still incremented as part of the write, so
+ * any row concurrently open elsewhere (e.g. a Split by {unitLabel} modal, or another operator's
+ * in-flight autosave) correctly 409s on its own *next* save against the now-stale version it holds —
+ * this bulk action never silently loses a genuinely concurrent single-row edit, it just doesn't
+ * pre-check one on the way in.
+ *
+ * Writes exactly one summary `AuditLog` entry (no `entityId` — matches `employee.import`'s existing
+ * bulk-audit precedent, `employees.routes.ts`), never one row per affected entry.
+ */
+export async function bulkUpdatePayrollEntries(
+  currentUser: SessionUser,
+  cycleId: string,
+  input: BulkUpdatePayrollEntriesInput,
+  requestMeta: RequestMeta,
+): Promise<BulkUpdatePayrollEntriesResult> {
+  const cycle = await getPayrollCycle(cycleId);
+  if (cycle.status !== 'DRAFT') {
+    throw badRequest('Cannot bulk-edit payroll entries in a cycle that is not in Draft');
+  }
+
+  for (const siteId of input.siteIds) {
+    assertSiteAccess(currentUser, siteId);
+  }
+
+  const matched = await prisma.payrollEntry.findMany({
+    where: { cycleId, siteId: { in: input.siteIds } },
+    select: {
+      id: true,
+      released: true,
+      workLines: { orderBy: { sortOrder: 'asc' }, take: 1, select: { id: true } },
+    },
+  });
+  // A released entry is locked exactly like a single-entity edit would reject it
+  // (`assertEntryEditable`) — skipped here rather than failing the whole batch over it.
+  const editable = matched.filter((entry) => !entry.released);
+
+  let appliedCount = 0;
+
+  if (editable.length > 0) {
+    const entryIds = editable.map((entry) => entry.id);
+
+    await prisma.$transaction(async (tx) => {
+      if (input.field === 'leaveRate') {
+        const result = await tx.payrollEntry.updateMany({
+          where: { id: { in: entryIds } },
+          data: { leaveRate: input.value, version: { increment: 1 } },
+        });
+        appliedCount = result.count;
+      } else {
+        // Guaranteed by the architecture — every PayrollEntry always has at least one WorkLine
+        // (database/payroll-entry.md §12a) — so `workLines[0]` is always the primary line here.
+        const primaryLineIds = editable.map((entry) => entry.workLines[0]!.id);
+        await tx.payrollEntryWorkLine.updateMany({
+          where: { id: { in: primaryLineIds } },
+          data: input.field === 'cycleDays' ? { cycleDays: input.value } : { otRate: input.value },
+        });
+        const result = await tx.payrollEntry.updateMany({
+          where: { id: { in: entryIds } },
+          data: { version: { increment: 1 } },
+        });
+        appliedCount = result.count;
+      }
+
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'payroll_entry.bulk_updated',
+          entityType: 'PayrollEntry',
+          metadata: {
+            cycleId,
+            siteIds: input.siteIds,
+            field: input.field,
+            value: input.value,
+            matchedCount: matched.length,
+            appliedCount,
+          },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    });
+  }
+
+  return { matchedCount: matched.length, appliedCount };
 }

@@ -105,3 +105,39 @@ export const updateWorkLineSchema = z.object({
 });
 
 export type UpdateWorkLineInput = z.infer<typeof updateWorkLineSchema>;
+
+/**
+ * "Copy to All" (Phase 3 Checkpoint 4, `docs/architecture/database/schema-invariants.md` §23's
+ * "bulk writes over row-by-row loops" rule) — pushes one value to every currently-filtered
+ * employee's Payroll Entry in one request, never a loop of individual PATCHes. `siteIds` is
+ * mandatory and non-empty by design: even though the grid itself may display "every site" when no
+ * filter is applied, a bulk mutation's scope must always be an explicit, deliberate selection —
+ * never implicitly "every employee in the cycle."
+ *
+ * A discriminated union on `field` because the three copyable fields have genuinely different wire
+ * types (`leaveRate`/`otRate` are decimal strings; `cycleDays` is a plain 1–31 integer) — the same
+ * types `updatePayrollEntrySchema`/`updateWorkLineSchema` already enforce for these exact fields,
+ * reused here rather than redefined. `leaveRate` lives on `PayrollEntry` itself; `otRate`/
+ * `cycleDays` live on `PayrollEntryWorkLine` and are applied to each entry's *primary* line only
+ * (lowest `sortOrder`) — non-primary lines are intentionally reachable only through the Split by
+ * {unitLabel} modal (Checkpoint 3), never through a bulk action.
+ */
+export const bulkUpdatePayrollEntriesSchema = z.discriminatedUnion('field', [
+  z.object({
+    siteIds: z.array(z.string().uuid()).min(1, 'Select at least one site'),
+    field: z.literal('leaveRate'),
+    value: decimalString,
+  }),
+  z.object({
+    siteIds: z.array(z.string().uuid()).min(1, 'Select at least one site'),
+    field: z.literal('otRate'),
+    value: decimalString,
+  }),
+  z.object({
+    siteIds: z.array(z.string().uuid()).min(1, 'Select at least one site'),
+    field: z.literal('cycleDays'),
+    value: z.number().int().min(1).max(31),
+  }),
+]);
+
+export type BulkUpdatePayrollEntriesInput = z.infer<typeof bulkUpdatePayrollEntriesSchema>;

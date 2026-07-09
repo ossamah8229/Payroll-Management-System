@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   addWorkLineSchema,
+  bulkUpdatePayrollEntriesSchema,
   createPayrollEntrySchema,
   PERMISSIONS,
   updatePayrollEntrySchema,
@@ -11,6 +12,7 @@ import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import {
   addWorkLine,
+  bulkUpdatePayrollEntries,
   createPayrollEntry,
   deletePayrollEntry,
   deleteWorkLine,
@@ -71,6 +73,28 @@ payrollCycleEntriesRouter.post('/', requirePermission(PERMISSIONS.PAYROLL_ENTRY)
     next(error);
   }
 });
+
+/** "Copy to All" (Phase 3 Checkpoint 4) — one bulk request, never a loop of individual PATCHes
+ * (`database/schema-invariants.md` §23). Nested under the same cycle-scoped router as list/create
+ * above, since it's another cycle-scoped Payroll Entry action, not a standalone resource. */
+payrollCycleEntriesRouter.patch(
+  '/bulk',
+  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
+  async (req, res, next) => {
+    try {
+      const cycleId = requireIdParam(req.params.cycleId);
+      const input = bulkUpdatePayrollEntriesSchema.parse(req.body);
+      // bulkUpdatePayrollEntries owns its own single summary audit entry inside its transaction.
+      const result = await bulkUpdatePayrollEntries(req.currentUser!, cycleId, input, {
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 /** Mounted at /api/v1/payroll-entries and /api/v1/work-lines — individual resources addressed
  * directly by their own id, the same shape as Project Units' PATCH/DELETE routes. */

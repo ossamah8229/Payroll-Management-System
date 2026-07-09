@@ -1,5 +1,6 @@
 import * as React from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
+import { Check } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 const DropdownMenu = DropdownMenuPrimitive.Root;
@@ -49,6 +50,40 @@ const DropdownMenuItem = React.forwardRef<
 ));
 DropdownMenuItem.displayName = DropdownMenuPrimitive.Item.displayName;
 
+/**
+ * A checkbox item that keeps the menu open across repeated toggles — Radix's default `onSelect`
+ * behavior closes the menu on every selection, which is right for an action menu (Edit/Delete) but
+ * wrong for a multi-select filter (`MultiSelectFilter`, Phase 3 Checkpoint 4): an operator toggling
+ * three sites in a row shouldn't have the panel snap shut after the first click. First use of this
+ * primitive; existing `DropdownMenuItem` usages (row action menus) are unaffected.
+ */
+const DropdownMenuCheckboxItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem>
+>(({ className, children, onSelect, ...props }, ref) => (
+  <DropdownMenuPrimitive.CheckboxItem
+    ref={ref}
+    onSelect={(event) => {
+      event.preventDefault();
+      onSelect?.(event);
+    }}
+    className={cn(
+      'relative flex cursor-pointer select-none items-center gap-2 rounded py-1.5 pl-7 pr-2 text-xs text-text outline-none transition-colors',
+      'focus:bg-bg data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      className,
+    )}
+    {...props}
+  >
+    <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center rounded-sm border border-border-strong">
+      <DropdownMenuPrimitive.ItemIndicator>
+        <Check className="h-3 w-3 text-accent" aria-hidden />
+      </DropdownMenuPrimitive.ItemIndicator>
+    </span>
+    {children}
+  </DropdownMenuPrimitive.CheckboxItem>
+));
+DropdownMenuCheckboxItem.displayName = DropdownMenuPrimitive.CheckboxItem.displayName;
+
 const DropdownMenuLabel = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Label>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>
@@ -74,6 +109,7 @@ export {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
 };
