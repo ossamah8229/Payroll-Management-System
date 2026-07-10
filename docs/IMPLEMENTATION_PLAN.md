@@ -1190,8 +1190,63 @@ Confirmed correct rather than silently reinterpreted.
 closed. This is the single source of truth for the entire system (Principle 1) — everything in
 Phases 4–7 reads from what this phase produces. `calcNet` correctness (including the multi-line
 case) and the locking/autosave behavior are verified, including at the 10,000-employee design floor
-(Checkpoint 6) — Phase 4 (Release, Payment Artifacts, and Advances) may now begin, pending its own
-explicit authorization.
+(Checkpoint 6) — Phase 3.5 (Tasks Workspace) may now begin, pending its own explicit authorization;
+Phase 4 (Release, Payment Artifacts, and Advances) follows it, unchanged from its own already-frozen
+scope below.
+
+---
+
+### Phase 3.5 — Tasks Workspace
+
+**Added 2026-07-10, architecture-only, documentation revision — no code, no schema, no application
+logic written yet.** Inserted between Phase 3 and Phase 4 following the exact precedent Phase 2.5
+already set: a genuine, self-contained piece of work that needs its own gated checkpoints between two
+numbered phases, without being smuggled into either one's own scope. Phase 4 begins exactly as
+previously planned once this phase closes — nothing about Phase 4's own frozen architecture changes.
+
+**Permanently supersedes** the "Team Collaboration panel (Chat/To-Do)" concept previously planned for
+Phase 8 (`reference/PROJECT_SPEC.md`; `reference/payroll_prototype.html`'s Team Panel — both frozen,
+unedited historical reference; this document is the current authority). Chat is not deferred, it is
+**permanently removed** — there will never be chat, messaging, comments, discussion threads,
+attachments, subtasks, a Kanban view, or recurring tasks anywhere in this feature. The right-side
+slide-out panel (`docs/design-system.md`'s `.team-panel`) becomes a Tasks Workspace only, deliberately
+kept this lightweight.
+
+**Builds:** `Task` and `TaskNotification` (`database/tasks.md` §27–§27a); the `tasks:manage`
+permission (Master-User-only — create, assign, reassign, edit title/description/priority/due date,
+delete, cancel, reopen; an assignee needs no permission beyond authentication to view their own tasks
+and mark them complete); ownership-based visibility — Master User sees every task, the assignee sees
+only their own, no one else can see or query it (an explicit exception to this system's role/site RBAC
+shape, `docs/architecture/authentication.md` — not a variant of site-scoping, and site-scoping must
+never be added to this table); the three-status lifecycle (`TO_DO` → `COMPLETED`/`CANCELLED`,
+deliberately no `IN_PROGRESS`); three priorities (Low/Medium/High); an optional due date, no
+recurrence; persisted notifications for exactly three events (assigned, reassigned, completed) with
+due-today/overdue computed live, never stored, delivered via ordinary polling (no WebSockets/SSE);
+sorting by Due Date, Priority, or Recently Assigned; the repurposed right-side panel UI (task list,
+notification badge, filters, a Create Task dialog, a reassignment action, one-click mark-complete).
+
+**Depends on:** nothing structurally new — Authentication/RBAC (Phase 1) and the `User` table are the
+only prerequisites, both already built. Genuinely orthogonal to Phase 4's Release/Bank Sheets/Advances
+work — no schema or service-layer dependency in either direction.
+
+**Effort estimate:** small — comparable to or smaller than any single Phase 2.5 checkpoint; one table
+pair, a handful of routes, one panel.
+
+**Testing strategy:** RBAC boundary tests are the priority here, mirroring the C11 pattern already
+established for site-scoping (`docs/architecture/authentication.md`) but for ownership instead — a
+user who is neither Master User nor the assignee must be unable to view, list, or mutate a task via
+any route, including a direct API call with a manipulated task id; an assignee must be rejected
+attempting any field edit beyond marking their own task complete; notification rows must be created
+for exactly the three defined events and no others; due-today/overdue must be confirmed as live
+computation (never a stored, staleness-prone value) by asserting the result changes correctly when the
+system clock crosses the due date in a test, not just at creation time.
+
+**Definition of Done:** Master User can create a task, assign it, see it appear (with a notification)
+in the assignee's own panel, and the assignee can mark it complete (notifying Master User back) — all
+while a third user, of any role, can independently be proven unable to see or query that task exists.
+
+**🛑 Review checkpoint.** Stop here for explicit approval before Phase 4 begins — same discipline as
+every other phase boundary in this plan.
 
 ---
 
@@ -1532,9 +1587,13 @@ reconciles to the penny against the underlying records.
 
 ### Phase 8 — Supporting Features
 
-**Builds:** Team Collaboration panel (Chat/To-Do — explicitly lowest priority per
-`reference/PROJECT_SPEC.md`); Audit Log viewer UI (chronological feed, filterable); remaining
-import/export polish and edge-case handling identified during earlier phases' testing.
+**Builds:** Audit Log viewer UI (chronological feed, filterable); remaining import/export polish and
+edge-case handling identified during earlier phases' testing. **Revised 2026-07-10: the Team
+Collaboration panel (Chat/To-Do) no longer belongs here** — it moved to the new Phase 3.5 as the
+Tasks Workspace, with Chat permanently removed rather than deferred (see Phase 3.5, above). Phase 8's
+name is left unchanged for now rather than renamed to something Audit-Log-specific; it may still gain
+other genuinely low-priority odds and ends before Phase 9, and can be revisited if it ever becomes
+misleading.
 
 **Depends on:** nothing structurally new — everything it touches already exists by Phase 7. Scheduled
 last because the spec explicitly deprioritizes it.
@@ -1579,11 +1638,12 @@ deployment step specifically (staging deployment does not require this gate).
 | 2 | Project Sites, Employee Registry, Settings, User Management | 2 |
 | 2.5 | Project Units (new), Employee Registry refinements | 2.5 |
 | 3 | Payroll Entry (with Payroll Work Lines), Payroll Processing | 3 |
+| 3.5 | Tasks (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | 3.5 |
 | 4 | Release Salary, Bank Sheets, Cash Receiving, Advances | 4 |
 | 5 | (Payroll Processing continued: Finalize/Archive/Backup) | 5 |
 | 6 | Corrections, Balance Adjustments | 6 |
 | 7 | Statements, Reports, Dashboard | 7 |
-| 8 | (Team panel, Audit Log UI) | 8 |
+| 8 | (Audit Log UI) | 8 |
 | 9 | — (hardening/deployment, no new modules) | 9 |
 
 This order matches `docs/architecture/overview.md`'s load-bearing path exactly, with Corrections/
@@ -1597,18 +1657,24 @@ Phase 0 (scaffolding)
           └─▶ Phase 2 (sites, employees, settings, users)
                  └─▶ Phase 2.5 (project units, work-line prerequisite, Employee Registry refinements)
                         └─▶ Phase 3 (payroll entry + work lines, calcNet)        🛑 checkpoint
-                               └─▶ Phase 4 (release, sheets, advances)
-                                      └─▶ Phase 5 (finalize, archive, backup)  🛑 checkpoint
-                                             └─▶ Phase 6 (corrections, balance adjustments)  🛑 checkpoint
-                                                    └─▶ Phase 7 (statements, reports, dashboard)
-                                                           └─▶ Phase 8 (supporting features)
-                                                                  └─▶ Phase 9 (hardening, deployment)  🛑 checkpoint
+                               └─▶ Phase 3.5 (Tasks Workspace)                   🛑 checkpoint
+                                      └─▶ Phase 4 (release, sheets, advances)
+                                             └─▶ Phase 5 (finalize, archive, backup)  🛑 checkpoint
+                                                    └─▶ Phase 6 (corrections, balance adjustments)  🛑 checkpoint
+                                                           └─▶ Phase 7 (statements, reports, dashboard)
+                                                                  └─▶ Phase 8 (supporting features)
+                                                                         └─▶ Phase 9 (hardening, deployment)  🛑 checkpoint
 ```
 
 Each arrow is a hard dependency (the later phase reads or builds on tables/logic the earlier phase
 produces) — phases are not meaningfully parallelizable beyond splitting frontend/backend work *within*
 a phase across two developers, since almost every phase's backend must be trustworthy before its
-frontend is built against it (per the overall strategy above).
+frontend is built against it (per the overall strategy above). **One deliberate exception: Phase
+3.5 → Phase 4 is a sequencing choice, not a technical dependency** — Tasks Workspace shares no schema,
+service, or UI surface with Release/Bank Sheets/Advances in either direction (`docs/architecture/
+overview.md`'s Tasks module entry). It is placed here because this project executes phases strictly
+one at a time regardless of technical necessity, not because Phase 4 reads anything Phase 3.5
+produces.
 
 ---
 
@@ -1637,8 +1703,31 @@ frontend is built against it (per the overall strategy above).
   `docs/PROJECT_PROGRESS.md`'s "Phase 2 checkpoint" section for the audit that motivated it — it
   caught real defects, e.g. a table header/value alignment mismatch and a design-system-contradicting
   label-casing inconsistency, that static review and `typecheck`/`lint`/`build` alone did not).
+- **HTML prototype review — added 2026-07-10, mandatory from this point forward, alongside the
+  Playwright rule above.** This formalizes a practice that had only ever been an informal, unwritten
+  habit in prior sessions (`docs/prototypes/*.html` generated "at meaningful UI milestones" per
+  narration in `docs/PROJECT_PROGRESS.md`, but never actually codified as a rule anywhere before this)
+  — the Phase 3.5 architecture revision (2026-07-10) is what surfaced the gap: an obsolete Chat panel
+  had sat in `reference/payroll_prototype.html` and `reference/PROJECT_SPEC.md` (both correctly frozen
+  and unedited) with nothing in the *living* documentation ever having been required to check whether
+  a `docs/prototypes/*.html` file echoed it. **The check must run in both directions, not just one**:
+  (1) every implemented feature the closing phase shipped has a corresponding prototype, where a
+  prototype is appropriate for that kind of feature; (2) no existing prototype under `docs/prototypes/`
+  demonstrates behavior that no longer exists in the shipped architecture — this second direction is
+  exactly what would have caught the obsolete Chat panel had one existed, and must not be skipped as
+  "just the create-new-ones half." Every phase's close-out, in order: **review every living prototype
+  under `docs/prototypes/` → remove or update any obsolete behavior found → create any missing
+  prototype(s) the phase's shipped features warrant → verify the resulting set accurately represents
+  the shipped application → only then perform documentation updates → repository close-out.**
+  `reference/PROJECT_SPEC.md` and `reference/payroll_prototype.html` are never part of this check —
+  they are frozen historical artifacts; living documentation supersedes them, it never conforms to
+  them. **Naming convention**: a prototype's filename uses the literal phase number, including
+  fractional ones — `phase3.5-tasks-workspace-preview.html`, not folded into `phase3-*` or `phase4-*`
+  naming (decided 2026-07-10, prompted by Phase 3.5 being this convention's first fractional-phase
+  prototype).
   Standing checklist for every phase's Definition of Done, in order: **typecheck → lint → build →
-  Playwright visual verification → documentation update → git checkpoint.**
+  Playwright visual verification → HTML prototype review/update → documentation update → git
+  checkpoint.**
 
 ---
 

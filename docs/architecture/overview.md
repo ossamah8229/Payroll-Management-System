@@ -2,7 +2,7 @@
 
 **Owner module(s):** All modules (system-wide architecture overview)
 
-**Contains:** Modular-monolith rationale, the 17-module ownership table, high-level data flow,
+**Contains:** Modular-monolith rationale, the 18-module ownership table, high-level data flow,
 extensibility seams
 
 **Sections:** — (narrative document, not part of the §-numbered schema/workflow set) · Database
@@ -48,6 +48,7 @@ append-only audit log) enforceable in practice rather than just documented in pr
 | **Dashboard** | (read-only, cached) | Summary stats, per-site payroll summary, release progress, deduction breakdown. The most read-heavy module; a candidate for short-TTL caching. |
 | **Settings** | `User`, `Role`, `CompanySettings` | Company Details (Master-User-only; feeds Payslip/Bank Sheet headers), My Profile, Theme, and User Management (accounts, role assignment, per-site assignment for Payroll Staff **and, added 2026-07-05, Finance**) — the "Settings & Profile" and "User Management" screens both live here, working with Authentication's permission model. |
 | **Audit Log** | `AuditLog` | Append-only recorder and query surface for every financial/administrative action across all other modules (Principle 3). Receives events; never depends on other modules' internals. |
+| **Tasks** | `Task`, `TaskNotification` (both added 2026-07-10) | **Added 2026-07-10 — the permanent replacement for the previously-planned "Team Collaboration panel (Chat/To-Do)."** Lightweight internal delegation/tracking: Master User creates and assigns a task to exactly one other user; the assignee can view and mark complete their own tasks; no one else can see the task exists. **Ownership-based visibility, not role- or site-based** — a genuine exception to this system's usual RBAC shape, see `docs/architecture/authentication.md`. Standalone and cross-cutting: it owns no payroll data, is read by no other module, and sits outside the load-bearing payroll data flow entirely (same category as Authentication/Settings below, not a payroll-domain module). Deliberately excludes chat, messaging, comments, discussion threads, attachments, subtasks, a Kanban view, and recurring tasks — not unbuilt placeholders, permanently out of scope. |
 
 ## Interactions & High-Level Data Flow
 
@@ -104,6 +105,10 @@ branch that changes a released entry's outcome) is unchanged.
    Authentication + Settings  →  cross-cutting: gate every module's access via
                                   role + site-scoping middleware; not part of the payroll
                                   data flow itself
+
+   Tasks  →  cross-cutting, standalone: ownership-based visibility (not role/site-scoped);
+             owns no payroll data and is read by no other module; not part of the payroll
+             data flow itself
 ```
 
 The load-bearing path is **Employee Registry / Project Sites → Payroll Entry → Payroll Processing →
@@ -163,7 +168,11 @@ something new (ESS, Gratuity, additional Reports), or (c, added 2026-07-08) regi
 an explicit extension seam Payroll Processing already orchestrates generically (Outstanding Payroll
 Obligations) — never (d) modifies Payroll Processing's internal state machine or calculation logic,
 and never reaches into another module's tables directly. This is the same modular-monolith discipline
-already governing the current 17 modules (added Project Units, 2026-07-03; Release Salary,
+already governing the current 18 modules (added Project Units, 2026-07-03; Release Salary,
 Corrections, and Balance Adjustments' internal mechanics revised 2026-07-05 for per-Unit release and
-the Finance role; Advances added 2026-07-08 for Advance Deduction Deferral — without changing the
-module boundaries themselves), applied concretely to what comes next.
+the Finance role; Advances added 2026-07-08 for Advance Deduction Deferral; Tasks added 2026-07-10,
+replacing the previously-planned Team Collaboration/Chat panel — without changing the module
+boundaries themselves), applied concretely to what comes next. **Tasks is not part of this
+extensibility-seam list** — it doesn't call Payroll Processing's write paths, read its data, or
+register against Outstanding Payroll Obligations; it's a standalone, cross-cutting supporting module
+(alongside Authentication and Settings, below), not a payroll-domain extension.

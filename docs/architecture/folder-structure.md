@@ -55,7 +55,7 @@ reference/                   # Client handoff material — read-only historical 
 backend/                     # Express + TypeScript API
   src/
     modules/                 # one folder per business domain — the modular-monolith boundary,
-                             # matching the 15 modules in docs/architecture/overview.md
+                             # matching the 18 modules in docs/architecture/overview.md
       auth/                  # Authentication — login/logout, session management, CSRF
       employees/             # Employee Registry — identity/employment/bank fields
       sites/                 # Project Sites — pure client/location master data
@@ -75,6 +75,9 @@ backend/                     # Express + TypeScript API
       settings/               # Settings — company details, user profile, theme, User Management
       audit-log/              # Audit Log — append-only writes and queries (no update/delete exposed)
       advances/               # Advances / Eid Advances, balance tracking (feeds Payroll Entry)
+      tasks/                  # Tasks (added 2026-07-10, Phase 3.5) — lightweight internal delegation/
+                             # tracking; ownership-based visibility, not site-scoped; permanent
+                             # replacement for the previously-planned Team Collaboration/Chat panel
     common/                  # Cross-cutting middleware: session/auth guard, RBAC + site-scoping, error handling, request logging
     lib/
       prisma/                # Prisma client instance

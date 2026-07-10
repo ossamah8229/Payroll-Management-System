@@ -138,6 +138,32 @@ Finance user cannot retrieve or write another site's data by manipulating a requ
 cannot re-assign an employee, entry, or release action to a site outside their assignment. The
 filter/validation is applied server-side regardless of what the client sends.
 
+## Tasks: ownership-based visibility (an exception to site-scoping)
+
+**Added 2026-07-10 (Phase 3.5 architecture revision).** `Task` (`database/tasks.md` §27) is visible
+only to Master User and the one user recorded in `Task.assignedToUserId` — no one else, under any
+circumstance. This is a genuinely different access-control shape from every other rule on this page,
+and is called out explicitly so it is never mistaken for a variant of the site-scoping model above:
+
+- **It is not site-based.** A Payroll Staff or Finance user's site assignment has no bearing on which
+  tasks they can see — a task has no `siteId` at all, and none is ever added to give it one.
+- **It is not role-based.** There is no "Payroll Staff can see Payroll Staff's tasks" or
+  "Finance can see Finance's tasks" concept. Visibility is per-row: exactly Master User, plus whichever
+  single user that specific row names as assignee. A Payroll Manager's tasks are invisible to Finance,
+  and vice versa, purely because neither is the named assignee — not because of any role check.
+- **Enforcement is an ownership check at the query/service layer** — `WHERE assignedToUserId =
+  :currentUserId OR :currentUserIsMasterUser` — never the `assertSiteAccess()`-style site-scoping
+  middleware used for Employee/Payroll Entry/Advances/Release above. Do not add site-scoping to Tasks;
+  it does not apply and must not be introduced by habit.
+- **Permissions**: exactly one new permission, `tasks:manage` (`PERMISSIONS.TASKS_MANAGE`), held only
+  by Master User via the existing `Object.values(PERMISSIONS)` wildcard grant — gates create, assign,
+  reassign, edit (title/description/priority/due date), delete, cancel, and reopen. An assignee needs
+  **no permission at all** beyond being authenticated to view their own tasks and mark them complete —
+  the same shape as the existing self-service `PATCH /api/v1/auth/me` path, gated by identity, not a
+  permission grant.
+- **No new role was introduced, and none is needed** — this fits inside the existing Master User /
+  Payroll Staff / Finance model without adding a fourth.
+
 ## CSRF Protection
 
 Cookie-based sessions (as opposed to bearer tokens sent in an `Authorization` header) reintroduce

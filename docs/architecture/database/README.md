@@ -35,6 +35,7 @@ rather than restarting per file.
 | `balance-adjustments.md` | `BalanceAdjustment`, `CorrectionPayment`, `BalanceAdjustmentSettlement` | §14–§14b | Balance Adjustments |
 | `advances.md` | `Advance`, `AdvanceScheduleChange` | §15–§15a | Advances |
 | `audit-log.md` | `AuditLog` | §16 | Audit Log |
+| `tasks.md` | `Task`, `TaskNotification` | §27–§27a | Tasks |
 | `relationships.md` | Full entity-relationship diagram and data-flow spine | §21 | Cross-cutting (derived view) |
 | `schema-invariants.md` | Cross-entity checklists (immutability, append-only, transactions, optimistic locking, audit logging, single-source-of-truth), performance, future extensibility, migration strategy, open design assumptions | §22–§26 | Cross-cutting (derived view) |
 
@@ -42,7 +43,7 @@ Related, non-schema documentation:
 
 | File | Contents |
 |---|---|
-| `docs/architecture/overview.md` | Why each module exists; the 17-module ownership table; system data flow |
+| `docs/architecture/overview.md` | Why each module exists; the 18-module ownership table; system data flow |
 | `docs/architecture/authentication.md` | RBAC rationale, session strategy, CSRF, site-scoping |
 | `docs/architecture/system-conventions.md` | UUID primary-key rationale, `StorageProvider` abstraction, Audit Log immutability policy |
 | `docs/architecture/workflows/payroll-lifecycle.md` | Draft/Released/Archived state machine, new-cycle creation, Payroll Cycle Selector, backup-package generation |
@@ -91,6 +92,8 @@ Related, non-schema documentation:
 | §24 | `schema-invariants.md` |
 | §25 | `schema-invariants.md` |
 | §26 | `schema-invariants.md` |
+| §27 | `tasks.md` |
+| §27a | `tasks.md` |
 
 Note: `docs/architecture/system-conventions.md` (§1–§3) and
 `docs/architecture/workflows/payroll-lifecycle.md` (§4–§5) carry their **own**, separate §-numbering,

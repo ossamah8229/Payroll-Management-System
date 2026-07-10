@@ -9,6 +9,13 @@ otherwise; concrete engineering targets), then implemented, measured, and verifi
 against those frozen decisions — including finding and fixing one genuine pre-existing correctness
 bug the measurement work surfaced (see §1's "Phase 3, Checkpoint 6" entry) — and, following review
 and approval, **committed as `3298e34`. Phase 3 (Checkpoints 0–6) is now fully complete and closed.**
+**The same day, a second, later revision** ran a two-round, read-only architecture review of the
+previously-planned Team Collaboration/Chat panel, culminating in an approved decision to permanently
+remove Chat and insert a new **Phase 3.5 — Tasks Workspace** between Phase 3 and Phase 4, plus a
+permanent HTML-prototype Definition-of-Done rule — see §1's "Phase 3.5 architecture revision" entry
+for the full record. **This revision is documentation-only and NOT YET COMMITTED as of this entry** —
+no code, schema, or prototype was touched, per its own explicit scope; it awaits review before any
+commit or Phase 3.5 implementation planning begins.
 **Latest committed commit:** `3298e34` — "feat(payroll): complete Phase 3 Checkpoint 6 performance
 validation" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
 substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d`
@@ -46,6 +53,12 @@ rows), which was fixed with its own regression test. `LiveTotalsStore` and the c
 strategy were both measured and deliberately left unchanged, per their respective frozen decisions.
 All Decision 4 targets were met and verified against a real browser. Full detail: §1's "Phase 3,
 Checkpoint 6" entry, below.
+
+**A separate, later architecture revision the same day** inserted **Phase 3.5 — Tasks Workspace**
+between Phase 3 and Phase 4: the previously-planned Team Collaboration/Chat panel is permanently
+removed (not deferred) and replaced with a lightweight, ownership-based internal task-delegation tool,
+plus a new permanent HTML-prototype Definition-of-Done rule. Documentation-only, pending commit. Full
+detail: §1's "Phase 3.5 architecture revision" entry, below.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -1645,6 +1658,85 @@ regression pass) — the same per-checkpoint discipline every prior checkpoint i
 followed. **Phase 3 Checkpoint 6 is now complete and closed. Phase 3 (Checkpoints 0–6) is now fully
 complete and closed.**
 
+### Phase 3.5 architecture revision — Chat removed, Tasks Workspace, Phase Close-Out Rule — DECISIONS FROZEN, 2026-07-10, documentation-only, NOT YET COMMITTED
+
+A separate, later session-within-the-day, run before any Phase 4 work, in two rounds: a read-only
+impact analysis first (repository search for every Chat reference, a proposed Tasks Workspace design,
+proposed Phase Close-Out Rule locations, a Phase 3.5-vs.-Phase-4-Checkpoint-0 recommendation), then a
+second, sharper read-only investigation once the design was approved in principle (13 explicit
+questions: which documentation/architecture files change, whether phase numbering or navigation
+tables need renumbering, whether folder-structure/database-planning/permissions/RBAC docs change,
+prototype-naming implications, SESSION_HANDOFF/PROJECT_PROGRESS structural edits, and Phase 8's
+fate) — both rounds produced no code/schema/doc changes themselves, only proposals, per their own
+explicit read-only scope.
+
+**Frozen decisions, approved after the second round:**
+1. **Phase 3.5 — Tasks Workspace** now exists between Phase 3 and Phase 4 in
+   `docs/IMPLEMENTATION_PLAN.md`, following the exact precedent Phase 2.5 already set (a
+   self-contained, gated insert between two numbered phases) — not "Phase 4 Checkpoint 0," since
+   Tasks shares no schema/service/UI dependency with Release/Bank Sheets/Advances in either direction
+   (confirmed via `docs/architecture/overview.md`'s module table before this decision was finalized).
+2. **Chat is permanently removed, not deferred.** There will never be chat, messaging, comments,
+   discussion threads, attachments, subtasks, a Kanban view, or recurring tasks in this feature — a
+   deliberately lightweight, permanent boundary.
+3. **Task visibility is ownership-based** — Master User sees every task; the assigned user sees only
+   their own; no one else can see or query it. Explicitly not site-based, not role-based — a genuine,
+   named exception to this system's RBAC shape (`docs/architecture/authentication.md`'s new "Tasks:
+   ownership-based visibility" section).
+4. **One new permission, `tasks:manage`, Master-User-only.** Assignees need no permission beyond
+   authentication for their own tasks. No new role.
+5. **Status lifecycle: `TO_DO` → `COMPLETED`/`CANCELLED`, deliberately no `IN_PROGRESS`.** Master
+   User may reopen a completed task. Only Master User edits title/description/priority/due
+   date/assignment; an assignee's only write is marking their own task complete.
+6. **Priority: Low/Medium/High. Due date optional. No recurring tasks.**
+7. **Notifications persist only three event types** — assigned, reassigned, completed. Due-today/
+   overdue are computed live, never stored. No WebSockets/SSE — ordinary polling.
+8. **Sorting: Due Date, Priority, Recently Assigned only** (`Task.assignedAt`, a dedicated column
+   distinct from `createdAt`, added specifically to support the third option accurately across
+   reassignment).
+9. **The HTML prototype review rule is now a permanent Definition-of-Done requirement**, alongside
+   the existing Playwright rule (`docs/IMPLEMENTATION_PLAN.md`'s Definition of Done section) —
+   **strengthened during this round to check both directions**, not just "create what's missing": (a)
+   every shipped feature has a prototype where appropriate, and (b) no existing prototype under
+   `docs/prototypes/` demonstrates behavior no longer present in the shipped architecture — the
+   second direction is exactly what would have caught the obsolete Chat panel, had a prototype for it
+   ever existed. Standing checklist: review existing prototypes → remove/update obsolete behavior →
+   create missing prototypes → verify the set matches shipped behavior → only then documentation
+   updates → repository close-out.
+10. **Prototype filenames use the literal phase number, including fractional ones** — decided this
+    round specifically because Phase 3.5 is this convention's first fractional-phase case:
+    `phase3.5-tasks-workspace-preview.html`, never folded into `phase3-*`/`phase4-*` naming.
+11. **Phase 8 keeps its current title unchanged for now**, even though it loses the Team
+    Collaboration line entirely (moved to Phase 3.5) — revisit only if it becomes genuinely
+    misleading after further low-priority work accumulates there; not renamed preemptively.
+12. **`reference/PROJECT_SPEC.md` and `reference/payroll_prototype.html` were confirmed untouched and
+    must remain so** — both still describe the retired Chat concept as client-provided historical
+    reference; living documentation supersedes them, per this project's established precedent (the
+    "Master Admin"→"Master User" rename was handled the identical way, 2026-07-05).
+
+**Documentation actually revised this round** (all documentation-only, verified against a clean
+working tree before starting): new `docs/architecture/database/tasks.md` (§27–§27a); `docs/
+architecture/database/README.md` (navigation row, §→file lookup, 17→18-module cross-reference);
+`docs/architecture/overview.md` (new Tasks module row, both self-referential "17-module" mentions
+corrected to 18, a new cross-cutting diagram note); `docs/architecture/authentication.md` (new
+"Tasks: ownership-based visibility" section); `docs/architecture/folder-structure.md` (new `tasks/`
+module-list line, and its own stale "15 modules" cross-reference corrected to 18 while already being
+edited); `docs/design-system.md` (the `.team-panel` row reworded); `docs/IMPLEMENTATION_PLAN.md` (new
+Phase 3.5 section, Phase 8's `Builds:` line trimmed, the Module Implementation Order table and
+Dependency Graph both updated with an explicit note that the Phase 3.5→4 arrow is a sequencing choice
+rather than a technical dependency, and the new HTML-prototype Definition-of-Done bullet); this file;
+`docs/SESSION_HANDOFF.md` (§1 status, §3 permanent-rules block, §7 next-steps renumbered so Phase 3.5
+precedes Phase 4). **Not touched, per the frozen "never edited" rule**: `reference/PROJECT_SPEC.md`,
+`reference/payroll_prototype.html`.
+
+**Explicitly out of scope this round, none introduced**: no `Task`/`TaskNotification` Prisma model,
+no migration, no backend route, no frontend component, no `docs/prototypes/phase3.5-*.html` file (that
+comes only once Phase 3.5 is actually implemented, not during its own architecture revision) — per
+this round's own explicit documentation-only authorization.
+
+**Not yet committed.** Awaiting review before any commit or Phase 3.5 implementation-planning session
+begins.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -1655,7 +1747,8 @@ complete and closed.**
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Implementation not started |
+| 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **Architecture frozen, 2026-07-10, documentation-only, NOT YET COMMITTED** — see §1's "Phase 3.5 architecture revision" entry. Ownership-based visibility, `tasks:manage` permission, `TO_DO`/`COMPLETED`/`CANCELLED` lifecycle, Low/Medium/High priority, three persisted notification types. Implementation not started; requires its own separate authorization |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Follows Phase 3.5, unchanged from its own frozen scope. Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started |
