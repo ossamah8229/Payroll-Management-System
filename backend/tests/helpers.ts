@@ -41,6 +41,18 @@ export async function cleanTestData(): Promise<void> {
   });
   await prisma.userSiteAssignment.deleteMany({ where: { user: { email: { endsWith: '@test.local' } } } });
   await prisma.employee.deleteMany({ where: { site: { name: { startsWith: 'Test Site ' } } } });
+  // Task.assignedToUserId/.assignedByUserId are RESTRICT (docs/architecture/database/tasks.md §27),
+  // so any task referencing a test user must be cleared before user.deleteMany below — same
+  // FK-ordering discipline as EmployeeTransferHistory, above. TaskNotification rows cascade-delete
+  // automatically with their parent Task (§27a), so no separate cleanup is needed for those.
+  await prisma.task.deleteMany({
+    where: {
+      OR: [
+        { assignedTo: { email: { endsWith: '@test.local' } } },
+        { assignedBy: { email: { endsWith: '@test.local' } } },
+      ],
+    },
+  });
   await prisma.user.deleteMany({ where: { email: { endsWith: '@test.local' } } });
   await prisma.rolePermission.deleteMany({ where: { role: { code: { startsWith: 'TEST_' } } } });
   await prisma.role.deleteMany({ where: { code: { startsWith: 'TEST_' } } });

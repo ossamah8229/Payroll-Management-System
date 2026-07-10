@@ -24,6 +24,7 @@ import {
   payrollEntriesRouter,
   workLinesRouter,
 } from './modules/payroll-entry/payroll-entry.routes';
+import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -108,6 +109,8 @@ export function createApp(): Express {
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
   app.use('/api/v1/payroll-entries', payrollEntriesRouter);
   app.use('/api/v1/work-lines', workLinesRouter);
+  app.use('/api/v1/tasks', tasksRouter);
+  app.use('/api/v1/task-notifications', taskNotificationsRouter);
 
   app.use(errorHandler);
 

@@ -51,6 +51,21 @@ export type {
   UpdateWorkLineInput,
 } from './schemas/payroll-entry';
 
+export {
+  createTaskSchema,
+  listTasksQuerySchema,
+  taskPrioritySchema,
+  taskStatusSchema,
+  updateTaskSchema,
+} from './schemas/task';
+export type {
+  CreateTaskInput,
+  ListTasksQuery,
+  TaskPriority,
+  TaskStatus,
+  UpdateTaskInput,
+} from './schemas/task';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

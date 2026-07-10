@@ -27,6 +27,11 @@ export const PERMISSIONS = {
   USERS_MANAGE: 'users:manage',
   SETTINGS_MANAGE: 'settings:manage',
   AUDIT_LOG_VIEW: 'audit-log:view',
+  /** Master-User-only (Tasks Workspace, Phase 3.5) — gates create/assign/reassign/edit/delete/
+   * cancel/reopen. An assignee needs no permission at all to view their own tasks or mark them
+   * complete — ownership-based visibility, not a permission grant
+   * (docs/architecture/authentication.md's "Tasks: ownership-based visibility" section). */
+  TASKS_MANAGE: 'tasks:manage',
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

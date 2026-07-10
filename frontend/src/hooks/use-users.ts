@@ -15,10 +15,16 @@ export interface ManagedUser {
 
 const USERS_QUERY_KEY = ['users'] as const;
 
-export function useUsers() {
+/** `GET /api/v1/users` is gated by `users:manage` server-side — a caller that only conditionally
+ * needs the list (e.g. the Tasks Workspace's Master-User-only "Assign to" picker, Phase 3.5) should
+ * pass `enabled: false` for any session that doesn't hold that permission, rather than let the
+ * request fire and 403. Defaults to `true` so every existing caller (User Management itself) is
+ * unaffected. */
+export function useUsers(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: USERS_QUERY_KEY,
     queryFn: () => apiRequest<{ users: ManagedUser[] }>('/api/v1/users').then((res) => res.users),
+    enabled: options.enabled ?? true,
   });
 }
 

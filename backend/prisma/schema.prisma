@@ -3,7 +3,10 @@
 // Phase 1 (Role, Permission, RolePermission, User, ProjectSite, UserSiteAssignment, AuditLog) +
 // Phase 2 master data (Bank, Employee, AdjustmentType, CompanySettings) + Phase 2.5 (ProjectUnit,
 // Employee.unitId, EmployeeTransferHistory) + Phase 3 Checkpoint 0 (PayrollCycle, PayrollEntry,
-// PayrollEntryWorkLine — schema/migration only, no routes/services yet) — see
+// PayrollEntryWorkLine) through Checkpoint 6 (all schema/migration + full application code) +
+// Phase 3.5 Checkpoint 1 (TaskPriority, TaskStatus, TaskNotificationType, Task, TaskNotification —
+// schema/migration only, no routes/services yet; permanently replaces the previously-planned Team
+// Collaboration/Chat panel, docs/architecture/database/tasks.md) — see
 // docs/architecture/database/ for the full design and docs/IMPLEMENTATION_PLAN.md for
 // phase sequencing.
 //
@@ -120,6 +123,9 @@ model User {
   payrollCyclesReleased  PayrollCycle[]            @relation("PayrollCycleReleasedBy")
   payrollCyclesArchived  PayrollCycle[]            @relation("PayrollCycleArchivedBy")
   payrollEntriesReleased PayrollEntry[]            @relation("PayrollEntryReleasedBy")
+  tasksAssignedToMe      Task[]                    @relation("TaskAssignedTo")
+  tasksAssignedByMe      Task[]                    @relation("TaskAssignedBy")
+  taskNotifications      TaskNotification[]
 
   @@index([roleId])
 }
@@ -494,4 +500,109 @@ model PayrollEntryWorkLine {
   @@unique([payrollEntryId, unitId])
   @@index([payrollEntryId])
   @@index([unitId])
+}
+
+/// Closed, code-coupled set (docs/architecture/database/conventions-and-enums.md §1) — a lightweight,
+/// deliberately non-extensible set for the Tasks Workspace (docs/architecture/database/tasks.md §27,
+/// Phase 3.5). A new priority level would be a real UI/behavior decision, not a data row.
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// Closed, code-coupled set — the Task lifecycle (docs/architecture/database/tasks.md §27).
+/// Deliberately no IN_PROGRESS value (frozen decision, 2026-07-10): evaluated and rejected as
+/// unnecessary granularity for a lightweight delegation list.
+enum TaskStatus {
+  TO_DO
+  COMPLETED
+  CANCELLED
+}
+
+/// Closed, code-coupled set — the only three notification events this system ever persists
+/// (docs/architecture/database/tasks.md §27a). Due-today/overdue are deliberately NOT represented
+/// here; they are computed live from Task.dueDate/Task.status, never stored.
+enum TaskNotificationType {
+  ASSIGNED
+  REASSIGNED
+  COMPLETED
+}
+
+/// A single unit of internally-delegated work (docs/architecture/database/tasks.md §27, Phase 3.5)
+/// — Master User assigns something to exactly one other user and tracks whether it gets done. Not a
+/// project-management tool: no subtasks, no dependencies, no recurrence, no comment thread — those
+/// are permanently out of scope, not deferred (see the file-level revision note in
+/// docs/architecture/database/tasks.md). Permanently replaces the previously-planned Team
+/// Collaboration/Chat panel (reference/PROJECT_SPEC.md, reference/payroll_prototype.html — both
+/// frozen, unedited historical reference; this schema is the current authority).
+/// Ownership-based visibility, not site- or role-based: a task is visible only to Master User and
+/// the one user in `assignedToUserId` — see docs/architecture/authentication.md's "Tasks:
+/// ownership-based visibility" section. Deliberately carries no optimistic-locking `version` column
+/// — at most two people ever touch one row, writing disjoint fields (Master User owns every
+/// field-level mutation; the assignee's only possible write is the completion flip), unlike
+/// PayrollEntry's genuine multi-editor exposure (docs/architecture/database/schema-invariants.md
+/// §22).
+model Task {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title             String       @db.VarChar(200)
+  description       String?
+  assignedToUserId  String       @db.Uuid
+  assignedByUserId  String       @db.Uuid
+  /// Set on creation; updated whenever `assignedToUserId` changes (a reassignment) — drives the
+  /// "Recently Assigned" sort and the `task.reassigned` notification's timing, independent of
+  /// `createdAt`.
+  assignedAt        DateTime     @default(now()) @db.Timestamptz(6)
+  priority          TaskPriority @default(MEDIUM)
+  status            TaskStatus   @default(TO_DO)
+  dueDate           DateTime?    @db.Date
+  /// Free text, not a native enum, by deliberate choice — mirrors AuditLog.entityType's own
+  /// convention, since the set of "modules a task might be about" grows every phase and a native
+  /// enum would force a migration each time one does.
+  module            String?      @db.VarChar(60)
+  /// Polymorphic reference, reusing AuditLog's own entityType/entityId shape rather than inventing
+  /// a second pattern for the same idea.
+  relatedEntityType String?      @db.VarChar(60)
+  /// No FK constraint (same reasoning as AuditLog.entityId — the referenced table varies).
+  relatedEntityId   String?      @db.Uuid
+  createdAt         DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @db.Timestamptz(6)
+  /// Set when `status` becomes COMPLETED; cleared on reopen.
+  completedAt       DateTime?    @db.Timestamptz(6)
+
+  assignedTo    User               @relation("TaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: Restrict)
+  assignedBy    User               @relation("TaskAssignedBy", fields: [assignedByUserId], references: [id], onDelete: Restrict)
+  notifications TaskNotification[]
+
+  @@index([assignedToUserId])
+  @@index([dueDate])
+  @@index([priority])
+  @@index([assignedAt])
+  @@index([status])
+}
+
+/// The persisted half of the in-app Task notification model (docs/architecture/database/tasks.md
+/// §27a, Phase 3.5) — one row per discrete event a user should be told about. Due-today/overdue are
+/// NOT rows here; they are computed live from Task.dueDate/Task.status at read time. No
+/// WebSockets/SSE — delivered via ordinary client polling (docs/architecture/authentication.md's
+/// Postgres-over-Redis reasoning applies identically here). Deliberately scoped to Tasks only, not a
+/// general-purpose notification system — a second real consumer would be the trigger to generalize
+/// this, not anticipated demand.
+model TaskNotification {
+  id        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String               @db.Uuid
+  taskId    String               @db.Uuid
+  type      TaskNotificationType
+  createdAt DateTime             @default(now()) @db.Timestamptz(6)
+  /// Null = unread; the badge count is COUNT(*) WHERE userId = :current AND readAt IS NULL.
+  readAt    DateTime?            @db.Timestamptz(6)
+
+  /// Both FKs CASCADE — unlike AuditLog (SET NULL on actor deletion) or Task itself (RESTRICT), a
+  /// notification has no standalone historical value once its User or Task is gone; it is ephemeral
+  /// UI state, not a record of what happened. A deliberate, narrow exception to this schema's
+  /// general RESTRICT-by-default convention, not an inconsistency.
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
 }
