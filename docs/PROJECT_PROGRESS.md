@@ -1,18 +1,16 @@
 # Project Progress — Payroll Management System
 
-**Date:** 2026-07-09 (five sessions today — the Advance Deduction Deferral architecture amendment,
-committed, followed by Phase 3 Checkpoint 2's implementation, reviewed, verified, and **committed**,
-followed by a design-review-then-implementation session for Phase 3 Checkpoint 3, implemented,
-verified, re-verified in a dedicated final architectural pass, and **committed**, followed by a
-read-only Checkpoint 4 architecture review, a two-question architecture investigation with frozen
-decisions, then Checkpoint 4's implementation, verification, and **committed**, followed by a
-read-only Checkpoint 5 architecture review, four frozen decisions, then Checkpoint 5's
-implementation, verification, and **committed**). See the
-"Phase 3, Checkpoint 2", "Phase 3, Checkpoint 3", "Phase 3, Checkpoint 4", "Phase 3, Checkpoint 5",
-and "Advance Deduction Deferral" entries in §1, below. Prior entries (2026-07-07 and earlier) are
-preserved unchanged below this point.
-**Latest committed commit:** `b4c1d21` — "feat(payroll): implement Phase 3 Checkpoint 5 payroll entry
-import/export" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
+**Date:** 2026-07-10 (a new session, following the five sessions on 2026-07-09 that closed Phase 3
+Checkpoints 2–5 — see those dated entries in §1, preserved unchanged below this point). This
+session ran a read-only Checkpoint 6 architecture review, froze five decisions (measurement-first;
+keep the in-memory grid architecture; parallelize the page fetch only if measurement justified it;
+leave `LiveTotalsStore` and the cache-invalidation strategy unchanged unless measurement proved
+otherwise; concrete engineering targets), then implemented, measured, and verified Checkpoint 6
+against those frozen decisions — including finding and fixing one genuine pre-existing correctness
+bug the measurement work surfaced (see §1's "Phase 3, Checkpoint 6" entry) — and, following review
+and approval, **committed as `3298e34`. Phase 3 (Checkpoints 0–6) is now fully complete and closed.**
+**Latest committed commit:** `3298e34` — "feat(payroll): complete Phase 3 Checkpoint 6 performance
+validation" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
 substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d`
 Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further
 doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
@@ -26,39 +24,28 @@ Advance Deduction Deferral architecture amendment, doc-only, frozen → `e072da5
 record, closing Checkpoint 2 → `6be6e68` Phase 3 Checkpoint 3 (Split by Unit workflow) implementation,
 reviewed, verified, and committed → `70a52da` Phase 3 Checkpoint 4 (multi-site filtering and Copy to
 All) implementation, reviewed, verified, and committed → `b4c1d21` Phase 3 Checkpoint 5 (Payroll
-Entry CSV/Excel import/export) implementation, reviewed, verified, and committed).
+Entry CSV/Excel import/export) implementation, reviewed, verified, and committed → `4da8a01` doc-only
+commit hash record, closing Checkpoint 5 → `3298e34` Phase 3 Checkpoint 6 (10,000-employee
+performance/concurrency validation) implementation, reviewed, verified, and committed).
 **Branch:** `main`
-**Current implementation phase:** **Phase 3 Checkpoints 0, 1, 2, 3, 4, and now 5 are all committed
-and closed.** This same day's
-first session was architecture-only — no implementation, no Prisma, no migrations, no application
-code — and froze the **Advance Deduction Deferral** architecture (BR-ADV-001 through BR-ADV-006,
-`ScheduledPayrollPeriod`, `AdvanceScheduleChange`, the generalized Outstanding Payroll Obligations
-seam) ahead of Phase 4, committed as `0d54a97`. **A second, explicitly authorized session then
-implemented Phase 3 Checkpoint 2** (the Payroll Entry grid frontend) on top of that commit, underwent
-an explicit verification pass (three genuine defects found and fixed — a numeric-input crash, a
-totals-row aggregation bug at scale, and a Cycle Days validation inconsistency — see §1's "Pre-Commit
-Final Verification Pass" entry), was reviewed and approved, and is now **committed and closed**. **A
-third session then ran a dedicated, explicitly design-only review first** (four UI/UX alternatives
-compared, a Modal-based Split editor approved with eight required implementation decisions — see
-§1's "Phase 3, Checkpoint 3" entry), implemented Checkpoint 3 ("Split by {unitLabel}") against that
-approved design, and — following an explicit request for a final architectural verification of the
-autosave-batching/queueing model before commit — ran a dedicated network-capture Playwright stress
-test that found and fixed one further real bug (a totals-row column-misalignment) before being
-reviewed, approved, and **committed as `6be6e68`**. **A fourth session then ran a read-only
-Checkpoint 4 architecture review, followed by an explicit two-question architecture investigation**
-(whether a new backend bulk-update endpoint was genuinely required, and whether "Copy to All" should
-apply to a split entry's primary line only or every line — see §1's "Phase 3, Checkpoint 4" entry
-for both answers and their evidence) **with the resulting decisions frozen, then implemented and
-verified Checkpoint 4 against them, and — following a final repository-wide verification pass that
-found no defects — reviewed, approved, and committed as `70a52da`.** **A fifth session then ran a
-read-only Checkpoint 5 architecture review** (Payroll Entry CSV/Excel import/export), surfacing one
-three-option design fork (the file format's relationship to `PayrollEntryWorkLine`) and four further
-open questions (match keys, import semantics, optimistic-locking treatment, audit-logging scope),
-**all frozen by explicit user decision before implementation — see §1's "Phase 3, Checkpoint 5"
-entry** — then implemented Checkpoint 5 against those frozen decisions, verified it end to end
-(typecheck/lint/build, 175/175 backend tests, 13/13 real-stack Playwright checks), and — following
-review and approval — **committed as `b4c1d21`. Phase 3 Checkpoint 5 is now complete and closed.
-Checkpoint 6 has NOT started and still requires its own explicit authorization.**
+**Current implementation phase:** **Phase 3 is now fully complete and closed — all seven checkpoints
+(0–6) are committed, and the phase's own 🛑 review checkpoint has passed.** Checkpoint 6's read-only
+architecture review covered the rendering/virtualization/React Query/autosave architecture
+Checkpoints 0–5 already built, and froze five decisions before any code was written: keep the
+existing in-memory grid architecture rather than moving to server-side windowed fetching; only
+replace `LiveTotalsStore`'s full-recomputation model if measurement proved it was the bottleneck;
+leave the `invalidateQueries` cache strategy unchanged unless measurement proved otherwise; concrete
+engineering targets (not hard SLAs) for load time, typing latency, scroll smoothness, bulk-update
+speed, and memory stability; and that the Definition of Done's "review, release" clause is
+historical wording predating the checkpoint restructuring, not part of this checkpoint's scope.
+Measurement (a new, committed 10,000-employee backend performance/concurrency test suite, plus a
+real-browser Playwright pass) then justified exactly one architectural change — parallelizing the
+frontend's page-to-completion fetch — and surfaced one genuine pre-existing correctness bug (every
+bootstrapped `PayrollEntry` defaulted to `sortOrder = 0`, making pagination unstable at 10,000 tied
+rows), which was fixed with its own regression test. `LiveTotalsStore` and the cache-invalidation
+strategy were both measured and deliberately left unchanged, per their respective frozen decisions.
+All Decision 4 targets were met and verified against a real browser. Full detail: §1's "Phase 3,
+Checkpoint 6" entry, below.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -1540,6 +1527,124 @@ answered and frozen by the user before any code was written:
   per-checkpoint discipline every prior checkpoint in this phase has followed. **Phase 3 Checkpoint 5
   is now complete and closed.**
 
+### Phase 3, Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor — COMPLETE, 2026-07-10 (COMMITTED as `3298e34`)
+
+**A dedicated read-only architecture review preceded implementation** (this session), covering the
+rendering/virtualization/React Query/autosave architecture Checkpoints 0–5 already built. Five
+decisions were frozen before any code was written:
+
+1. **Keep the existing in-memory grid architecture** — no server-side windowed fetching.
+   `LiveTotalsStore`, Copy to All, the multi-site filter, import/export, and the React Query cache
+   all already assume the whole cycle is resident client-side; only the fetch strategy *within* that
+   model was open for optimization.
+2. **Only replace `LiveTotalsStore`'s full-recomputation model with an incremental running total if
+   measurement proves it is the bottleneck** — never a server aggregate, never a hybrid.
+3. **Leave `invalidateQueries` (the cache strategy after Copy to All/import) unchanged** unless
+   measurement proved otherwise.
+4. **Concrete engineering targets, not hard SLAs**: initial load ≤2s target/≤3s acceptable upper
+   bound; no visible typing lag at normal human speed; smooth scroll (no obvious frame drops); Copy
+   to All ≤2s; import/export correctness prioritized over speed with no strict UI target; memory may
+   grow during large operations but must stabilize afterward; zero lost updates under concurrency.
+5. **The Definition of Done's "review, release" clause is historical wording**, predating the
+   2026-07-07 seven-checkpoint restructuring — Release does not exist yet (Phase 4); Checkpoint 6
+   does not implement or validate it. Noted in `docs/IMPLEMENTATION_PLAN.md` with a dated revision
+   note rather than silently reinterpreted.
+
+**Concurrency methodology deliberately kept consistent with the project's existing practice**: the
+backend test suite (supertest) plus parallel `Promise.all` requests — no dedicated load-testing
+framework (k6/Locust/Artillery/JMeter), per explicit instruction.
+
+**New `backend/tests/payroll-entry-performance.test.ts`** — the first *committed, repeatable*
+performance/concurrency test at this scale. Checkpoint 1's own 3,000-employee bootstrap timing
+(`docs/IMPLEMENTATION_PLAN.md`'s Checkpoint 1 entry) was an informal, uncommitted smoke test, never
+run at 10,000 and never made part of the automated suite — this file closes that gap. Seeds a
+synthetic 10,000-employee, 10-site cycle once (`beforeAll`, reused/progressively mutated across the
+file's own tests rather than re-seeded per test) and measures: cycle bootstrap; a single page's
+`EXPLAIN ANALYZE` confirming Index Scan usage (not a sequential scan) both unfiltered and
+site-filtered; the original sequential page-to-completion fetch measured against the candidate
+parallelized alternative; a 50-way concurrent distinct-row edit burst; a deliberately provoked
+same-row race; Copy to All at 10,000-row scope; export; import. **9 new tests.**
+
+The fetch-comparison test asserts on **distinct entry IDs seen across all pages**, not the row count
+summed across pages — a weaker "count" assertion would not have caught the pagination bug below,
+since 50 pages of exactly 200 rows always sums to 10,000 by construction even when pagination
+silently duplicates some rows and drops others entirely.
+
+**A real, pre-existing correctness bug was found and fixed — not a performance one.** Every
+`PayrollEntry` created by `createPayrollCycle`'s bootstrap (Checkpoint 1, 2026-07-07) defaulted to
+`sortOrder = 0`: the function never assigned it, silently relying on the schema column default.
+Invisible at the small scale every prior checkpoint's testing used. At the 10,000-employee floor,
+`ORDER BY sortOrder ASC LIMIT/OFFSET` pagination over 10,000 rows all tied on the same value is
+unstable in Postgres (no tiebreaker guarantee) — confirmed at the raw SQL level to silently
+duplicate 23 rows across page boundaries while 23 different rows were never fetched at all.
+**Discovered via this checkpoint's own real-browser (Playwright) measurement pass** (the grid's own
+totals-row employee count plateaued at 9,977, never reaching 10,000) — no existing automated test
+caught it, because every prior test creates a handful of entries through the single-entity
+create-entry endpoint (which correctly assigns `sortOrder`), not through the bootstrap path. Fixed
+in `backend/src/modules/payroll-processing/payroll-processing.service.ts`: each bootstrapped entry
+now gets its own loop-index `sortOrder`, matching the convention `createPayrollEntry`'s single-entity
+path already used (`maxSortOrder + 1`). A dedicated regression test asserts the bootstrap produces
+exactly 10,000 distinct `sortOrder` values; re-verified via a real browser reload showing zero
+duplicate/missing rows.
+
+**Decision 1 applied, measurement-justified.** The measured sequential page-to-completion fetch —
+2.8s, roughly 94% of the 3s acceptable ceiling *before any client-side rendering cost is added* —
+left too little headroom, justifying the approved fix. `usePayrollEntries`
+(`frontend/src/hooks/use-payroll-entries.ts`) now fetches page 1 alone to learn `total`, then the
+remaining pages in concurrency-capped (8-wide, the batch size measured in the backend suite)
+parallel batches, replacing the original one-page-at-a-time sequential loop. No change to the
+in-memory grid model, `LiveTotalsStore`, Copy to All, the site filter, or React Query's cache — this
+is a fetch-strategy change within the existing architecture, exactly as Decision 1 scoped it, not a
+redesign of it.
+
+**Decision 2 — measured, deliberately NOT applied.** Real-browser keystroke measurement showed
+47–52ms per real keystroke (well under any human typing cadence) and only one >50ms long task during
+an artificial rapid-fire stress test (15 keystrokes fired with zero delay between them, far faster
+than any human typist could actually type). This did not meet the bar of "proves it is the
+bottleneck," so `LiveTotalsStore`'s full-recomputation model was left exactly as it was, per Decision
+2's explicit instruction. No server aggregate, no hybrid architecture, no change of any kind.
+
+**Decision 3 — left unchanged.** `invalidateQueries` after Copy to All/import was not touched — no
+measurement showed it as an actual bottleneck worth a targeted-merge implementation.
+
+**Decision 4 targets — all measured and met** (real browser, post-fix, against a freshly bootstrapped
+10,000-row cycle):
+- Initial load to a confirmed-complete state (grid's own totals-row count reaching 10,000): **2.75s**
+  (within the ≤3s acceptable bound, close to the ≤2s target).
+- Per-keystroke latency: **47–52ms** (no visible lag at any realistic human typing speed).
+- Scroll: **zero long tasks** across 20 scroll steps.
+- Copy to All across 10,000 entries: **580ms** (target ≤2s).
+- Export (10,000 rows): **1.8–1.9s**. Import (10,000 rows, row-by-row per the already-approved
+  Checkpoint 5 architecture — correctness over speed, no strict target per Decision 4): **40–44s**,
+  100% of matched rows updated correctly, 0 skipped.
+- Memory: **104MB → 95MB** after a sequence of scroll + editing operations — stabilized (and
+  reclaimed, consistent with normal GC behavior), no unbounded growth.
+
+**Verification**: `typecheck`/`lint`/`build` clean across all three workspaces (same 4 pre-existing
+frontend warnings, none new). **9 new backend tests, full suite 184/184** (175 prior + 9 new) against
+a freshly re-provisioned database. A real-stack Playwright regression pass against the freshly
+bootstrapped, correctly-`sortOrder`'d 10,000-row cycle: inline edit + autosave persistence verified
+for a row deep in the virtualized list (~row 5000 of 10,000, matched by employee identity via its
+exact `aria-label`, not by DOM position, after an initial position-based check produced a false
+negative from virtualizer mounted-window non-determinism across two separate page loads) surviving a
+full page reload; the multi-site filter narrowing the grid and totals-row count to exactly one
+site's 1,000 employees; Copy to All confirmed — via a direct database query, not just the UI toast —
+scoped to only the filtered site's 1,000 entries, leaving the other 9,000 untouched; the Split by
+Unit modal opening correctly and showing the Primary line label; zero unexpected browser console
+errors throughout (the one pre-existing, documented pre-login 401 excepted, per every prior
+checkpoint's own convention).
+
+**Explicitly out of scope, none introduced**: Release, Corrections, Balance Adjustments, Advances,
+and any Phase 4+ work — this checkpoint is validation and measurement-justified optimization of the
+existing Checkpoint 0–5 architecture only, per its own frozen scope.
+
+**Committed as `3298e34`** — "feat(payroll): complete Phase 3 Checkpoint 6 performance validation",
+after review and explicit approval, following independent end-to-end verification (typecheck/lint/
+build clean, 184/184 backend tests including the 9 new performance/concurrency tests, a real-browser
+regression pass) — the same per-checkpoint discipline every prior checkpoint in this phase has
+followed. **Phase 3 Checkpoint 6 is now complete and closed. Phase 3 (Checkpoints 0–6) is now fully
+complete and closed.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -1549,7 +1654,7 @@ answered and frozen by the user before any code was written:
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **Implementation authorized and underway, 2026-07-07.** Checkpoints 0–5 (schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export) are all COMPLETE and committed — see §1. Checkpoint 6 (10,000-employee performance/concurrency floor + this phase's own review checkpoint) not started, requiring its own go-ahead per this project's standing per-checkpoint practice |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
@@ -1868,25 +1973,25 @@ answered and frozen by the user before any code was written:
 
 ## 5. Exact next action for the next development session
 
-**Phase 1, Phase 2, and Phase 2.5 are all closed with DB-backed evidence complete — see §1. The
-database-verification debt remains CLOSED (2026-07-04, §1). The Phase 3 Architecture Review is now
-also COMPLETE (2026-07-05, §1's "Phase 3 Architecture Review" subsection) — the full Payroll Entry,
-Payroll Processing, Release (now per Project Unit), and Corrections/Balance Adjustments design is
-frozen. Phase 3 implementation has NOT started: no application code, no database migration, and no
-schema implementation exist for any of it yet.**
+**Updated 2026-07-10 — this section previously described a pre-Phase-3 state and is now stale;
+corrected here rather than left contradicting §1/§2's current status. Phase 1, Phase 2, Phase 2.5,
+and now Phase 3 (all seven checkpoints, 0–6) are fully closed with DB-backed evidence complete — see
+§1. The database-verification debt remains CLOSED (2026-07-04, §1). Phase 3's own 🛑 review
+checkpoint has passed (`docs/IMPLEMENTATION_PLAN.md`).**
 
 1. **Re-provision the local database before running DB-backed tests** — it does not survive between
    sessions. Recipe unchanged: `@embedded-postgres/darwin-x64` in the scratchpad, `initdb`, start
    TCP-only, create the `payroll`/`payroll_dev` role/database, `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed twice (confirm idempotency), `npm run test --workspace backend`
-   (expect **99/99**, unchanged by tonight's architecture-only session — nothing in the seven existing
-   migrations or the codebase changed).
-2. **Phase 3 (Payroll Entry & Payroll Processing) implementation is next — architecture is frozen, but
-   still requires separate, explicit authorization to begin.** When authorized, implement directly
-   against the frozen design in `database/payroll-entry.md` (§12, §12a), `database/release.md` (§12b),
-   `docs/architecture/workflows/payroll-lifecycle.md` §4, `docs/architecture/workflows/corrections-and-balance-adjustments.md`, and
-   `docs/architecture/authentication.md` (Finance role) — no further architecture review is needed
-   before starting, per this session's own freeze. Follow the standing Definition of Done: architecture
+   (expect **184/184** as of Checkpoint 6's close).
+2. **Phase 4 (Release, Payment Artifacts, and Advances) implementation is next — architecture is
+   frozen (2026-07-05 Phase 3 Architecture Review, §1), but still requires its own separate, explicit
+   authorization to begin**, per this project's standing per-checkpoint/per-phase practice. When
+   authorized, implement directly against the frozen design in `database/release.md` §12b,
+   `docs/architecture/workflows/payroll-lifecycle.md` §4,
+   `docs/architecture/workflows/corrections-and-balance-adjustments.md`, and
+   `docs/architecture/authentication.md` (Finance role) — no further architecture review of that
+   frozen design is needed before starting. Follow the standing Definition of Done: architecture
    compliance → implementation → typecheck → lint → build → backend tests → real-stack Playwright →
    documentation updates → ask before committing.
 3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package

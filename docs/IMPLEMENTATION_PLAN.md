@@ -448,8 +448,8 @@ committing**:
   COMMITTED as `70a52da`.** See below.
 - **Checkpoint 5 — Payroll Entry CSV/Excel import/export — COMPLETE, 2026-07-09, COMMITTED as
   `b4c1d21`.** See below.
-- Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor + this phase's own
-  🛑 review checkpoint (below).
+- **Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor + this phase's
+  own 🛑 review checkpoint — COMPLETE, 2026-07-10, COMMITTED as `3298e34`.** See below.
 
 **Checkpoint 0 — Schema foundation — COMPLETE, 2026-07-07**
 - Prisma schema: `PayrollCycleStatus` enum; `PayrollCycle` (`database/payroll-cycle.md §10`); `PayrollEntry` (`database/payroll-entry.md §12`) and
@@ -1035,6 +1035,93 @@ COMMITTED as `6be6e68`)**
   before commit, per this project's standing per-checkpoint gate. **Checkpoint 5 is complete and
   closed.**
 
+**Checkpoint 6 — Performance/concurrency validation at the 10,000-employee floor — COMPLETE,
+2026-07-10, COMMITTED as `3298e34`**
+- **A dedicated read-only architecture review preceded implementation** (this session), covering
+  the rendering/virtualization/React Query/autosave architecture Checkpoints 0–5 already built, and
+  producing five frozen decisions before any code was written: (1) keep the existing in-memory grid
+  architecture (no server-side windowed fetching) since `LiveTotalsStore`, Copy to All, the
+  multi-site filter, import/export, and the React Query cache all already assume the whole cycle is
+  resident client-side — only optimize the fetch strategy within that model; (2) only replace
+  `LiveTotalsStore`'s full-recomputation model with an incremental running total if measurement
+  proves it is the bottleneck, never a server-aggregate/hybrid; (3) leave the `invalidateQueries`
+  cache-invalidation strategy after Copy to All/import unchanged unless measurement proves
+  otherwise; (4) concrete engineering targets (not hard SLAs) — initial load ≤2s target/≤3s
+  acceptable, no visible typing lag, smooth scroll, Copy to All ≤2s, import/export correctness over
+  speed, memory stabilizes after large operations, no lost updates under concurrency; (5) the
+  Definition of Done's "review, release" phrase (`docs/IMPLEMENTATION_PLAN.md`'s own text above)
+  predates the 2026-07-07 seven-checkpoint restructuring and is historical wording — Release does
+  not exist yet (Phase 4) and Checkpoint 6 does not implement or validate it, noted here per that
+  decision rather than silently reinterpreted. Concurrency methodology was deliberately kept
+  consistent with the project's existing practice — the backend test suite (supertest) plus parallel
+  `Promise.all` requests — no dedicated load-testing framework (k6/Locust/Artillery/JMeter).
+- **New `backend/tests/payroll-entry-performance.test.ts`** — the first committed, repeatable
+  performance/concurrency test at this scale (Checkpoint 1's own 3,000-employee bootstrap timing was
+  an informal, uncommitted smoke test, never run at 10,000). Seeds a synthetic 10,000-employee,
+  10-site cycle once (`beforeAll`, reused/progressively mutated across the file's own tests, never
+  re-seeded per test) and measures: cycle bootstrap; a single page's `EXPLAIN ANALYZE` confirming
+  Index Scan usage (not a sequential scan) both unfiltered and site-filtered; the original sequential
+  page-to-completion fetch against the candidate parallelized alternative; a 50-way concurrent
+  distinct-row edit burst (zero lost updates); a deliberately provoked same-row race (exactly one
+  409, no lost update); Copy to All at 10,000-row scope; export; import. Assertions on the
+  fetch-comparison test check **distinct entry IDs seen**, not the row count summed across pages — a
+  weaker "count" assertion would not have caught the pagination bug below, since 50 pages of exactly
+  200 rows always sums to 10,000 by construction even when pagination silently duplicates some rows
+  and drops others.
+- **A real, pre-existing correctness bug was found and fixed, not a performance one.** Every
+  `PayrollEntry` created by `createPayrollCycle`'s bootstrap (Checkpoint 1, 2026-07-07) defaulted to
+  `sortOrder = 0` — the function never assigned it, silently relying on the schema column default.
+  Invisible at the small scale every prior checkpoint's manual/automated testing used; at the
+  10,000-employee floor, `ORDER BY sortOrder ASC LIMIT/OFFSET` pagination over 10,000 rows tied on
+  the same value is unstable (Postgres gives no tiebreaker guarantee) — confirmed at the raw SQL
+  level to silently duplicate 23 rows across page boundaries while 23 different rows were never
+  fetched at all, discovered via this checkpoint's own real-browser (Playwright) measurement pass,
+  not by any existing test. **Fixed** in `payroll-processing.service.ts`: each bootstrapped entry now
+  gets its own loop-index `sortOrder`, matching the convention `createPayrollEntry`'s single-entity
+  path already used (`maxSortOrder + 1`). A dedicated regression test
+  (`payroll-entry-performance.test.ts`) asserts the bootstrap produces exactly 10,000 distinct
+  `sortOrder` values; re-verified via a real browser reload showing zero duplicate/missing rows.
+- **Decision 1 applied, measurement-justified**: the measured sequential page-to-completion fetch
+  (2.8s — roughly 94% of the 3s acceptable ceiling, before any client-side rendering cost is added)
+  left too little headroom, justifying the approved fix. `usePayrollEntries`
+  (`frontend/src/hooks/use-payroll-entries.ts`) now fetches page 1 alone to learn `total`, then the
+  remaining pages in concurrency-capped (8-wide, the batch size measured in the backend suite)
+  parallel batches, replacing the original one-page-at-a-time sequential loop. No change to the
+  in-memory grid model, `LiveTotalsStore`, Copy to All, the site filter, or React Query's cache — per
+  Decision 1's own scope boundary, this is a fetch-strategy change within the existing architecture,
+  not a redesign of it.
+- **Decision 2 — measured, deliberately NOT applied**: real-browser keystroke measurement showed
+  47–52ms per real keystroke (well under any human typing cadence) and only one >50ms long task
+  during an artificial rapid-fire stress test (15 keystrokes with zero delay, far faster than any
+  human typist) — this did not meet the bar of "proves it is the bottleneck," so `LiveTotalsStore`'s
+  full-recomputation model was left unchanged, exactly as Decision 2 specified. No server aggregate,
+  no hybrid architecture.
+- **Decision 3 — left unchanged**: `invalidateQueries` after Copy to All/import was not touched — no
+  measurement showed it as an actual bottleneck worth a targeted-merge implementation.
+- **Decision 4 targets — all measured and met**: initial load of a 10,000-row grid to a
+  confirmed-complete state, 2.75s (real browser, post-fix); per-keystroke latency 47–52ms; zero long
+  tasks across 20 scroll steps; Copy to All across 10,000 entries, 580ms; export 1.8–1.9s and import
+  40–44s (10,000 rows, row-by-row per the already-approved architecture — correctness-first, no
+  strict target, per Decision 4); memory 104MB → 95MB after scroll+editing (stabilized, no
+  unbounded growth).
+- **Verification**: `typecheck`/`lint`/`build` clean across all three workspaces (same 4
+  pre-existing frontend warnings, none new). **9 new backend tests, full suite 184/184** (175 prior +
+  9 new) against a freshly re-provisioned database. A real-stack Playwright regression pass against a
+  freshly bootstrapped, correctly-`sortOrder`'d 10,000-row cycle: inline edit + autosave persistence
+  verified for a row deep in the virtualized list (~row 5000, matched by employee identity, not
+  position) surviving a full page reload; the multi-site filter narrowing the grid and totals to
+  exactly one site's 1,000 employees; Copy to All confirmed (via direct database query, not just the
+  UI toast) scoped to only the filtered site's 1,000 entries; the Split by Unit modal opening
+  correctly; zero unexpected console errors throughout.
+- **Explicitly out of scope, none introduced**: Release, Corrections, Balance Adjustments, Advances,
+  and any Phase 4+ work — this checkpoint is validation and measurement-justified optimization of
+  the existing Checkpoint 0–5 architecture only, per its own frozen scope.
+- **Committed as `3298e34`** — implementation complete, independently verified end to end
+  (typecheck/lint/build, 184/184 backend tests including the 9 new performance/concurrency tests, a
+  real-browser regression pass), reviewed, and approved before commit, per this project's standing
+  per-checkpoint gate. **Checkpoint 6 is complete and closed. Phase 3 is now fully complete and
+  closed.**
+
 **Builds:** `PayrollCycle` Draft creation (bootstrapping the very first cycle); `calcNet` as a pure,
 well-tested function (Principle 5) that sums across an entry's `PayrollEntryWorkLine` rows — always
 at least one, so there is one calculation path, not a split/non-split branch
@@ -1091,12 +1178,20 @@ created, edited across multiple simulated concurrent sessions without data loss,
 and bulk-edited via Copy to All — all within a response time that doesn't require the client to wait
 more than a second or two per interaction on realistic hardware — and at least one employee in the
 test dataset is split across multiple Project Units within one cycle, exercised end to end (entry,
-review, release, net salary) without special-case handling anywhere in the flow.
+review, release, net salary) without special-case handling anywhere in the flow. **Revision note,
+2026-07-10 (Checkpoint 6 decision 5):** the "review, release" clause above predates the 2026-07-07
+seven-checkpoint restructuring and describes the original, pre-split Phase 3 scope — Release does
+not exist yet (Phase 4) and Checkpoint 6 does not implement or validate it. Every other clause
+(10,000-employee floor, concurrent-session editing without data loss, site filtering, Copy to All,
+response-time targets, multi-unit split handling) was validated by Checkpoint 6 as written.
+Confirmed correct rather than silently reinterpreted.
 
-**🛑 Review checkpoint.** Stop here. This is the single source of truth for the entire system
-(Principle 1) — everything in Phases 4–7 reads from what this phase produces. Verify `calcNet`
-correctness (including the multi-line case) and the locking/autosave behavior before building
-Release, Bank Sheets, or Corrections on top of it.
+**🛑 Review checkpoint — PASSED, 2026-07-10.** Phase 3 (Checkpoints 0–6) is now fully complete and
+closed. This is the single source of truth for the entire system (Principle 1) — everything in
+Phases 4–7 reads from what this phase produces. `calcNet` correctness (including the multi-line
+case) and the locking/autosave behavior are verified, including at the 10,000-employee design floor
+(Checkpoint 6) — Phase 4 (Release, Payment Artifacts, and Advances) may now begin, pending its own
+explicit authorization.
 
 ---
 
