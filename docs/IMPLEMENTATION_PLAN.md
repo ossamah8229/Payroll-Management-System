@@ -1190,19 +1190,33 @@ Confirmed correct rather than silently reinterpreted.
 closed. This is the single source of truth for the entire system (Principle 1) — everything in
 Phases 4–7 reads from what this phase produces. `calcNet` correctness (including the multi-line
 case) and the locking/autosave behavior are verified, including at the 10,000-employee design floor
-(Checkpoint 6) — Phase 3.5 (Tasks Workspace) may now begin, pending its own explicit authorization;
-Phase 4 (Release, Payment Artifacts, and Advances) follows it, unchanged from its own already-frozen
-scope below.
+(Checkpoint 6) — Phase 3.5 (Tasks Workspace) followed and is itself now complete and closed (see its
+own section below); Phase 4 (Release, Payment Artifacts, and Advances) follows it, unchanged from its
+own already-frozen scope below.
 
 ---
 
 ### Phase 3.5 — Tasks Workspace
 
-**Added 2026-07-10, architecture-only, documentation revision — no code, no schema, no application
-logic written yet.** Inserted between Phase 3 and Phase 4 following the exact precedent Phase 2.5
-already set: a genuine, self-contained piece of work that needs its own gated checkpoints between two
-numbered phases, without being smuggled into either one's own scope. Phase 4 begins exactly as
-previously planned once this phase closes — nothing about Phase 4's own frozen architecture changes.
+**COMPLETE, 2026-07-10 — COMMITTED as `1220dce`.** Inserted between Phase 3 and Phase 4 following the
+exact precedent Phase 2.5 already set: a genuine, self-contained piece of work that needs its own
+gated checkpoints between two numbered phases, without being smuggled into either one's own scope.
+Phase 4 begins exactly as previously planned now that this phase has closed — nothing about Phase 4's
+own frozen architecture changed.
+
+Delivered across three gated checkpoints, each independently reviewed and approved before the next
+began: **Checkpoint 0** (2026-07-10, documentation-only — the architecture revision itself: Chat
+removal, this phase's insertion, the HTML-prototype Definition-of-Done rule, committed as `0fb296e`);
+**Checkpoint 1** (Database Foundation + Shared Contracts — `TaskPriority`/`TaskStatus`/
+`TaskNotificationType` enums, `Task`/`TaskNotification` models via migration `20260710150000_tasks`,
+the `User` reverse relations, `shared/src/schemas/task.ts`, `PERMISSIONS.TASKS_MANAGE`); **Checkpoint
+2** (Backend Services, Routes & Notifications — the full `backend/src/modules/tasks/` service/route
+layer); **Checkpoint 3** (Frontend, HTML Prototype & Testing — `frontend/src/components/tasks/`, 24
+new backend tests, an 18/18 real-stack Playwright pass, and
+`docs/prototypes/phase3.5-tasks-workspace-preview.html`). Checkpoints 1–3's implementation is a single
+commit, `1220dce` — see `docs/PROJECT_PROGRESS.md` §1's "Phase 3.5" entry for the full as-built record
+of each checkpoint, including two real defects Checkpoint 3's own Playwright pass found and fixed
+before anything shipped.
 
 **Permanently supersedes** the "Team Collaboration panel (Chat/To-Do)" concept previously planned for
 Phase 8 (`reference/PROJECT_SPEC.md`; `reference/payroll_prototype.html`'s Team Panel — both frozen,
@@ -1241,12 +1255,17 @@ for exactly the three defined events and no others; due-today/overdue must be co
 computation (never a stored, staleness-prone value) by asserting the result changes correctly when the
 system clock crosses the due date in a test, not just at creation time.
 
-**Definition of Done:** Master User can create a task, assign it, see it appear (with a notification)
-in the assignee's own panel, and the assignee can mark it complete (notifying Master User back) — all
-while a third user, of any role, can independently be proven unable to see or query that task exists.
+**Definition of Done — met:** Master User can create a task, assign it, see it appear (with a
+notification) in the assignee's own panel, and the assignee can mark it complete (notifying Master
+User back) — all while a third user, of any role, is independently proven (both by a backend
+ownership-boundary test and by the real-stack Playwright pass) unable to see or query that task
+exists. Verified: `typecheck`/`lint`/`build` clean across all three workspaces; **208/208 backend
+tests** (184 prior + 24 new); **18/18 real-stack Playwright checks**, zero console errors; `prisma
+validate`/migration-drift confirmed clean.
 
-**🛑 Review checkpoint.** Stop here for explicit approval before Phase 4 begins — same discipline as
-every other phase boundary in this plan.
+**🛑 Review checkpoint — PASSED, 2026-07-10.** Phase 3.5 is now fully complete and closed. Phase 4
+(Release, Payment Artifacts, and Advances) may now begin, pending its own explicit authorization —
+its architecture remains frozen and unchanged from the 2026-07-05 Phase 3 Architecture Review.
 
 ---
 

@@ -12,12 +12,16 @@ and approval, **committed as `3298e34`. Phase 3 (Checkpoints 0–6) is now fully
 **The same day, a second, later revision** ran a two-round, read-only architecture review of the
 previously-planned Team Collaboration/Chat panel, culminating in an approved decision to permanently
 remove Chat and insert a new **Phase 3.5 — Tasks Workspace** between Phase 3 and Phase 4, plus a
-permanent HTML-prototype Definition-of-Done rule — see §1's "Phase 3.5 architecture revision" entry
-for the full record. **This revision is documentation-only and NOT YET COMMITTED as of this entry** —
-no code, schema, or prototype was touched, per its own explicit scope; it awaits review before any
-commit or Phase 3.5 implementation planning begins.
-**Latest committed commit:** `3298e34` — "feat(payroll): complete Phase 3 Checkpoint 6 performance
-validation" (session lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
+permanent HTML-prototype Definition-of-Done rule — committed as `0fb296e` (Checkpoint 0). **Three
+further gated checkpoints then implemented the Tasks Workspace itself** — database foundation and
+shared contracts (Checkpoint 1), the backend service/route/notification layer (Checkpoint 2), and the
+complete frontend plus the required prototype and testing (Checkpoint 3, which found and fixed two
+real defects via its own real-stack Playwright pass) — landing together in one implementation commit,
+`1220dce`, after each checkpoint's own review and approval. **Phase 3.5 (Checkpoints 0–3) is now
+fully complete and closed** — see §1's "Phase 3.5" entries for the full record. **Phase 4 has NOT
+started** and requires its own separate, explicit authorization.
+**Latest committed commit:** `1220dce` — "feat(tasks): complete Phase 3.5 Tasks Workspace" (session
+lineage: `2e804d4` closed Phase 1 → `674ab04` landed Phase 2's
 substantive build → `89ac6ff` Phase 2 UI/UX polish pass + final visual consistency audit → `11cdc9d`
 Phase 2 checkpoint documentation → `b7ba9cf` the pre-Phase-3 architecture review → `74c124e` further
 doc status update → `0d9ea33` Phase 2.5 Checkpoint 0 → `c60094c` Phase 2.5 Checkpoint 1 → `70a45ad`
@@ -33,7 +37,12 @@ reviewed, verified, and committed → `70a52da` Phase 3 Checkpoint 4 (multi-site
 All) implementation, reviewed, verified, and committed → `b4c1d21` Phase 3 Checkpoint 5 (Payroll
 Entry CSV/Excel import/export) implementation, reviewed, verified, and committed → `4da8a01` doc-only
 commit hash record, closing Checkpoint 5 → `3298e34` Phase 3 Checkpoint 6 (10,000-employee
-performance/concurrency validation) implementation, reviewed, verified, and committed).
+performance/concurrency validation) implementation, reviewed, verified, and committed → `fbf8ffc`
+doc-only commit hash record, closing Checkpoint 6 and Phase 3 → `0fb296e` Phase 3.5 Checkpoint 0
+(Chat removal, Tasks Workspace, and Phase Close-Out Rule architecture revision) implementation,
+reviewed, verified, and committed → `1220dce` Phase 3.5 Checkpoints 1–3 (Tasks Workspace database
+foundation, backend, and frontend/prototype/testing) implementation, reviewed, verified, and
+committed).
 **Branch:** `main`
 **Current implementation phase:** **Phase 3 is now fully complete and closed — all seven checkpoints
 (0–6) are committed, and the phase's own 🛑 review checkpoint has passed.** Checkpoint 6's read-only
@@ -57,8 +66,13 @@ Checkpoint 6" entry, below.
 **A separate, later architecture revision the same day** inserted **Phase 3.5 — Tasks Workspace**
 between Phase 3 and Phase 4: the previously-planned Team Collaboration/Chat panel is permanently
 removed (not deferred) and replaced with a lightweight, ownership-based internal task-delegation tool,
-plus a new permanent HTML-prototype Definition-of-Done rule. Documentation-only, pending commit. Full
-detail: §1's "Phase 3.5 architecture revision" entry, below.
+plus a new permanent HTML-prototype Definition-of-Done rule (Checkpoint 0, committed as `0fb296e`).
+**Three further gated checkpoints then implemented it in full** — database foundation and shared
+contracts (Checkpoint 1), the backend service/route/notification layer (Checkpoint 2), and the
+complete frontend, required prototype, and testing (Checkpoint 3) — committed together as `1220dce`
+after 208/208 backend tests and an 18/18 real-stack Playwright pass. **Phase 3.5 (Checkpoints 0–3) is
+now fully complete and closed.** Full detail: §1's "Phase 3.5" entries, below. **Phase 4 has not
+started** and requires its own separate, explicit authorization.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -1658,7 +1672,7 @@ regression pass) — the same per-checkpoint discipline every prior checkpoint i
 followed. **Phase 3 Checkpoint 6 is now complete and closed. Phase 3 (Checkpoints 0–6) is now fully
 complete and closed.**
 
-### Phase 3.5 architecture revision — Chat removed, Tasks Workspace, Phase Close-Out Rule — DECISIONS FROZEN, 2026-07-10, documentation-only, NOT YET COMMITTED
+### Phase 3.5, Checkpoint 0 — architecture revision: Chat removed, Tasks Workspace, Phase Close-Out Rule — COMPLETE, 2026-07-10, COMMITTED as `0fb296e`
 
 A separate, later session-within-the-day, run before any Phase 4 work, in two rounds: a read-only
 impact analysis first (repository search for every Chat reference, a proposed Tasks Workspace design,
@@ -1734,8 +1748,89 @@ no migration, no backend route, no frontend component, no `docs/prototypes/phase
 comes only once Phase 3.5 is actually implemented, not during its own architecture revision) — per
 this round's own explicit documentation-only authorization.
 
-**Not yet committed.** Awaiting review before any commit or Phase 3.5 implementation-planning session
-begins.
+**Committed as `0fb296e`** — "docs: add Phase 3.5 planning and Tasks Workspace architecture", after
+review and explicit approval. **Checkpoint 0 is complete and closed.**
+
+### Phase 3.5, Checkpoints 1–3 — Tasks Workspace implementation — COMPLETE, 2026-07-10, COMMITTED as `1220dce`
+
+Three further gated checkpoints, each implemented and independently reviewed/approved before the next
+began, landing together in one implementation commit once Checkpoint 3's own verification closed:
+
+**Checkpoint 1 — Database Foundation + Shared Contracts (architecture review, then implementation).**
+A dedicated backend architecture review preceded any code — comparing the approved Phase 3.5 design
+against this codebase's own actual conventions (not just the frozen docs), confirming `Task`/
+`TaskNotification`'s exact schema shape, that `requireTaskAccess` could not be genuine Express
+middleware the way `requireSiteAccess` is (ownership can only be known after the row is fetched; no
+existing middleware touches Prisma), and every one of the ten frozen decisions against real code
+evidence rather than re-litigating them. Implementation: `TaskPriority`/`TaskStatus`/
+`TaskNotificationType` enums, `Task`/`TaskNotification` models and the three new `User` reverse
+relations in `backend/prisma/schema.prisma`, migration `20260710150000_tasks` (generated via a clean
+file-to-file `prisma migrate diff`, old schema vs. new, avoiding the spurious `DROP TABLE "session"`
+a live-database diff would have produced against the runtime-only `connect-pg-simple` session table),
+`shared/src/schemas/task.ts`, and `PERMISSIONS.TASKS_MANAGE` (Master-User-only via the existing
+`Object.values(PERMISSIONS)` wildcard grant — `PAYROLL_STAFF`'s array untouched). Verified: `prisma
+validate`/`migrate deploy`/`generate` clean, zero drift against the live database, `typecheck` clean
+across all three workspaces. No routes/services/frontend/tests — schema and shared contracts only, by
+design.
+
+**Checkpoint 2 — Backend Services, Routes & Notifications.** The full `backend/src/modules/tasks/`
+layer: `tasks.service.ts` (CRUD, `requireTaskAccess` as a service-layer assertion — not middleware,
+per Checkpoint 1's own finding — reassignment detected implicitly within the ordinary `PATCH` by
+diffing the full field set and `omitKeys`-ing `assignedToUserId` out of the generic changes, exactly
+mirroring `updateEmployee`'s own site/unit transfer-detection shape; a deliberate no-op guard that
+skips `.update()` entirely — not just skips the audit entry — when a PATCH's fields all already match
+current values, so `updatedAt` is never bumped for a request that changed nothing; dedicated
+`completeTask`/`cancelTask`/`reopenTask`/`deleteTask` actions mirroring `POST /employees/:id/leave`'s
+own dedicated-lifecycle-endpoint shape), `task-notifications.service.ts` (creation inside the same
+transaction as its triggering mutation, unread count, mark-one-task-read as a `GET /tasks/:id` side
+effect, mark-all-read), and `tasks.routes.ts` (12 endpoints, every handler thin — parse, delegate,
+respond, zero direct Prisma calls). Every `assignedTo`/`assignedBy` relation is returned via an
+explicit `select: { id, name, email }`, never `include: true` on `User` — a deliberate choice after
+noticing (not fixing, out of scope) that `users.service.ts`'s own existing `listUsers()`/`getUser()`
+return the full row, `passwordHash` included. Mounted in `backend/src/app.ts` at `/api/v1/tasks` and
+`/api/v1/task-notifications`. Verified: `typecheck`/`lint`/`build` clean; a boot-sanity check (dev
+server reload + unauthenticated requests correctly 401ing) since no tests were in this checkpoint's own
+scope by design.
+
+**Checkpoint 3 — Frontend, HTML Prototype & Testing.** `frontend/src/hooks/use-tasks.ts` and
+`frontend/src/components/tasks/{tasks-workspace,tasks-panel,task-list-item,task-form-dialog}.tsx` —
+the repurposed right-side slide-out panel (built on the same Radix Dialog primitive `Modal` already
+uses, styled as a right-edge sheet), a polling notification badge (30s, no WebSockets/SSE),
+filters/sorting/"Load more" pagination, and one shared create/edit dialog. **One architectural bug
+caught and corrected before it ever ran**: an initial draft nested the create/edit dialog's own Radix
+`Dialog.Root` inside the panel's — the exact shape of a bug already confirmed once in this codebase
+(Phase 2.5 Checkpoint 1's Manage Units panel: a nested `Dialog.Root` leaves the outer one permanently
+`aria-hidden`/click-intercepting once the inner one closes) — restructured so `TasksPanel` and
+`TaskFormDialog` render as siblings sharing state through a new `TasksWorkspace` container instead.
+Backend: 24 new tests in `tasks.test.ts` (CRUD, the C11-pattern ownership boundary via a manipulated
+`assignedToUserId` query param, permission boundaries, notification creation/unread-count/mark-read,
+the no-op guard proven via an unchanged `updatedAt` timestamp, reassignment producing `task.reassigned`
+not `task.edited` — and both together when a request changes both — complete/cancel/reopen/delete
+lifecycle and status guards, filtering, all three sort dimensions, pagination); `cleanTestData()`
+extended for `Task`'s `RESTRICT` FKs, ordered before `user.deleteMany`. **Full backend suite: 208/208**
+(184 prior + 24 new). A new `docs/prototypes/phase3.5-tasks-workspace-preview.html` (literal phase
+number in the filename, per the frozen naming decision), reviewed against the shipped implementation
+before being written.
+**Two real defects found and fixed via the real-stack Playwright pass, not shipped**: (1) editing a
+task with an untouched due date silently 400'd, because the API returns `dueDate` as a full ISO
+datetime (how a Prisma `@db.Date` column serializes to JSON) and the edit form resubmitted it
+verbatim against a `z.string().date()` schema — fixed by running it through the shared
+`toIsoDateOnly()` utility when seeding the form, the read-side counterpart to the existing
+`isoDateToUtcDate()` write-side lesson. (2) `TasksPanel` and `TaskFormDialog` both called `useUsers()`
+unconditionally, firing a needless `GET /api/v1/users` (403, `users:manage`-gated) for every
+non-Master-User session — fixed by adding a backward-compatible `enabled` option to `useUsers()` and
+gating both call sites. **Final Playwright pass: 18/18 checks, real-stack (live Postgres, live
+backend, live frontend, two real browser contexts — Master User and assignee), zero console errors in
+either session.**
+**Verification**: `typecheck`/`lint`/`build` clean across all three workspaces (0 errors, same 4
+pre-existing frontend warnings, none new); **208/208 backend tests**; `prisma validate`: valid;
+`prisma migrate status`: up to date; live-database drift check: zero (only the expected, Prisma-
+unmanaged `session` table); **18/18 real-stack Playwright checks**, zero console errors.
+**Committed as `1220dce`** — "feat(tasks): complete Phase 3.5 Tasks Workspace", after review and
+explicit approval. **Phase 3.5 (Checkpoints 0–3) is now fully complete and closed. Its own 🛑 review
+checkpoint has passed. Phase 4 (Release, Payment Artifacts, and Advances) may now begin, pending its
+own separate, explicit authorization — its architecture is unchanged from the 2026-07-05 Phase 3
+Architecture Review.**
 
 ---
 
@@ -1747,7 +1842,7 @@ begins.
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
-| 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **Architecture frozen, 2026-07-10, documentation-only, NOT YET COMMITTED** — see §1's "Phase 3.5 architecture revision" entry. Ownership-based visibility, `tasks:manage` permission, `TO_DO`/`COMPLETED`/`CANCELLED` lifecycle, Low/Medium/High priority, three persisted notification types. Implementation not started; requires its own separate authorization |
+| 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Follows Phase 3.5, unchanged from its own frozen scope. Implementation not started |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
