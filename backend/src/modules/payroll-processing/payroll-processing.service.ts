@@ -119,7 +119,7 @@ export async function createPayrollCycle(
   const entryRows: Prisma.PayrollEntryCreateManyInput[] = [];
   const workLineRows: Prisma.PayrollEntryWorkLineCreateManyInput[] = [];
 
-  for (const employee of activeEmployees) {
+  for (const [index, employee] of activeEmployees.entries()) {
     const sourceEntry = sourceEntryByEmployeeId.get(employee.id);
     const primaryLine = sourceEntry?.workLines[0]; // already ordered by sortOrder asc
     const entryId = randomUUID();
@@ -138,6 +138,16 @@ export async function createPayrollCycle(
       eobiAmount: sourceEntry?.eobiAmount ?? employee.defaultEobiAmount,
       eobiApplicable: sourceEntry?.eobiApplicable ?? employee.defaultEobiApplicable,
       leaveRate: sourceEntry?.leaveRate ?? null,
+      // Checkpoint 6 fix (2026-07-10): every bootstrapped entry previously defaulted to
+      // sortOrder=0 (the schema's column default), which every OTHER entry-creation path avoids
+      // (createPayrollEntry assigns `maxSortOrder + 1`). At small manually-tested scale this was
+      // invisible; at the 10,000-employee floor, `ORDER BY sortOrder ASC LIMIT/OFFSET` pagination
+      // over 10,000 rows tied on the same value is unstable (Postgres gives no tiebreaker
+      // guarantee), which a real-browser Playwright measurement caught as 23 rows silently
+      // duplicated across page boundaries and 23 different rows never fetched at all — a genuine
+      // data-loss bug, not a performance one. Each entry now gets its own distinct position,
+      // matching the loop's own iteration order.
+      sortOrder: index,
     });
 
     workLineRows.push({

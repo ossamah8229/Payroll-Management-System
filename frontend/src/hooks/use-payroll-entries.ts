@@ -88,28 +88,54 @@ export function payrollEntriesQueryKey(cycleId: string | undefined) {
   return ['payroll-entries', cycleId] as const;
 }
 
+// Checkpoint 6 (10,000-employee floor, Decision 1 — "Option A," approved 2026-07-10): capping how
+// many pages are ever in flight at once, rather than firing all of them simultaneously — a bare
+// `Promise.all` over every remaining page would burst up to 49 concurrent requests against a
+// Prisma pool with no explicit `connection_limit` configured. 8 was the batch size measured in
+// the backend performance suite (`backend/tests/payroll-entry-performance.test.ts`): a full
+// 10,000-row, 50-page fetch went from 2.82s sequential to 1.75s batched-parallel (1.61x) against a
+// local Postgres instance, with no connection errors.
+const FETCH_CONCURRENCY = 8;
+
+function fetchPage(cycleId: string, page: number): Promise<ListPayrollEntriesResponse> {
+  return apiRequest<ListPayrollEntriesResponse>(
+    `/api/v1/payroll-cycles/${cycleId}/entries?page=${page}&pageSize=${PAGE_SIZE}`,
+  );
+}
+
 /**
- * Fetches every `PayrollEntry` for a cycle, paging through the backend's own paginated endpoint to
- * completion and flattening into one sortOrder-ordered array — the shape a virtualized grid needs
- * (it virtualizes over an in-memory row set, not a server-side scroll window). This is ordinary
- * page-to-completion client fetching, not the incremental/windowed-fetch optimization Checkpoint 6
- * owns for the 10,000-employee floor; at today's ~1,500 employees this is at most 8 requests.
+ * Fetches every `PayrollEntry` for a cycle and flattens it into one sortOrder-ordered array — the
+ * shape a virtualized grid needs (it virtualizes over an in-memory row set, not a server-side
+ * scroll window; Checkpoint 6's own architecture decision, 2026-07-10, keeps this in-memory model
+ * rather than moving to server-side windowed fetching, since `LiveTotalsStore`, Copy to All, the
+ * multi-site filter, import/export, and the React Query cache all already assume the whole cycle
+ * is resident client-side — see that decision's record for the full reasoning).
+ *
+ * Page 1 is fetched alone first to learn `total`/confirm the page count, then every remaining page
+ * is fetched in `FETCH_CONCURRENCY`-wide parallel batches (measured and tuned in the backend
+ * performance suite, not an arbitrary number) rather than the fully sequential one-page-at-a-time
+ * loop this replaced — that original loop is exactly what the Checkpoint 6 architecture review
+ * measured as the initial-load bottleneck at the 10,000-employee floor. Pages are concatenated in
+ * page order, which is correct as long as `sortOrder` doesn't shift mid-fetch — the same assumption
+ * the original sequential loop already made.
  */
 export function usePayrollEntries(cycleId: string | undefined) {
   return useQuery({
     queryKey: payrollEntriesQueryKey(cycleId),
     queryFn: async () => {
       if (!cycleId) return [];
-      const all: PayrollEntry[] = [];
-      let page = 1;
-      for (;;) {
-        const result = await apiRequest<ListPayrollEntriesResponse>(
-          `/api/v1/payroll-cycles/${cycleId}/entries?page=${page}&pageSize=${PAGE_SIZE}`,
-        );
-        all.push(...result.entries);
-        if (all.length >= result.total || result.entries.length < PAGE_SIZE) break;
-        page += 1;
+
+      const first = await fetchPage(cycleId, 1);
+      const all: PayrollEntry[] = [...first.entries];
+      const totalPages = Math.ceil(first.total / PAGE_SIZE);
+
+      const remainingPages = Array.from({ length: Math.max(0, totalPages - 1) }, (_, i) => i + 2);
+      for (let i = 0; i < remainingPages.length; i += FETCH_CONCURRENCY) {
+        const batch = remainingPages.slice(i, i + FETCH_CONCURRENCY);
+        const results = await Promise.all(batch.map((page) => fetchPage(cycleId, page)));
+        for (const result of results) all.push(...result.entries);
       }
+
       return all;
     },
     enabled: Boolean(cycleId),
