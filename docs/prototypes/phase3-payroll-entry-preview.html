@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 3 Visual Preview — Payroll Entry — Payroll Management System</title>
+<style>
+  :root {
+    --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
+    --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #9c978f;
+    --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
+    --color-green: #1a6b3a; --color-green-light: #e8f5ee;
+    --color-amber: #8b5e00; --color-amber-light: #fff8e6;
+    --color-red: #8b1a1a; --color-red-light: #fbe8e8;
+    --color-purple: #4a2080; --color-purple-light: #f0ebf8;
+    --radius: 8px; --radius-lg: 12px;
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; }
+  .meta-banner { background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .meta-banner strong { color: #fff; }
+  .meta-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
+  .meta-tabs button.is-active { background: #fff; color: var(--accent); }
+  .screen { display: none; }
+  .screen.is-active { display: block; }
+  .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
+  .card-title { font-size: 13px; font-weight: 600; margin: 0; }
+  .card-content { padding: 18px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 34px; font-size: 12px; }
+  .btn-sm { padding: 0 10px; height: 30px; font-size: 11px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+  .btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-danger { background: var(--color-red); color: #fff; }
+  .app-shell { display: flex; height: calc(100vh - 37px); overflow: hidden; background: var(--color-bg); }
+  .sidebar { position: fixed; inset: 37px 0 0 0; width: 220px; display: flex; flex-direction: column; background: var(--accent); }
+  .sidebar-brand { border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px 16px 16px; }
+  .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
+  .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.35); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
+  .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .avatar-on-accent { background: rgba(255,255,255,0.2); color: #fff; }
+  .avatar-on-surface { background: var(--accent-light); color: var(--accent); }
+  .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
+  .sidebar-footer .who-role { font-size: 10px; color: rgba(255,255,255,0.5); }
+  .main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { flex-shrink: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
+  .topbar .title { font-size: 15px; font-weight: 600; }
+  .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .task-bell { position: relative; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-text-muted); background: transparent; border: none; }
+  .task-bell .badge-count { position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; border-radius: 999px; background: var(--color-red); color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 3px; }
+  .main-content { flex: 1; overflow-y: auto; padding: 28px; }
+  .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
+  .badge-green { background: var(--color-green-light); color: var(--color-green); }
+  .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
+  .badge-blue { background: var(--accent-light); color: var(--accent); }
+  .muted { color: var(--color-text-muted); }
+
+  .filter-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+  .filter-field { display: flex; flex-direction: column; gap: 6px; }
+  .filter-field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted); }
+  .filter-select-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 200px; height: 34px;
+    border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2);
+    padding: 0 10px; font-size: 12px; color: var(--color-text); font-family: inherit; cursor: pointer;
+  }
+
+  .bulk-toolbar {
+    display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--color-border);
+    background: var(--color-surface-2); border-radius: var(--radius); padding: 10px 12px; margin: 14px 0;
+  }
+  .bulk-toolbar .bulk-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted); }
+  .bulk-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+  .bulk-field { display: flex; align-items: flex-end; gap: 6px; }
+  .bulk-field label { font-size: 11px; font-weight: 500; color: var(--color-text-muted); }
+  input.bulk-input {
+    width: 100px; height: 32px; border-radius: var(--radius); border: 1px solid var(--color-border);
+    background: var(--color-surface-2); padding: 0 8px; font-size: 12px; font-family: inherit;
+  }
+  input.bulk-input:disabled { background: var(--color-bg); color: var(--color-text-faint); }
+
+  .split-note { font-size: 11px; color: var(--color-text-muted); margin: 0 0 12px; }
+
+  /* ===== Payroll Entry grid ===== */
+  .grid-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--color-border); border-radius: var(--radius-lg); }
+  table.payroll-grid { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+  table.payroll-grid th, table.payroll-grid td { padding: 5px 7px; border-bottom: 1px solid var(--color-border); border-right: 1px solid var(--color-border); }
+  table.payroll-grid th:last-child, table.payroll-grid td:last-child { border-right: none; }
+  table.payroll-grid thead th {
+    position: sticky; top: 0; z-index: 3; background: var(--color-surface);
+    font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted);
+  }
+  table.payroll-grid thead tr.group-row th { top: 0; height: 20px; text-align: center; }
+  table.payroll-grid thead tr.label-row th { top: 20px; text-align: left; }
+  table.payroll-grid th.num, table.payroll-grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.payroll-grid th.ctr, table.payroll-grid td.ctr { text-align: center; }
+  table.payroll-grid td.deduct { color: var(--color-red); }
+  .balance-note { margin-top: 2px; font-size: 10px; color: var(--color-text-faint); text-align: center; }
+  table.payroll-grid td input, table.payroll-grid td select {
+    width: 100%; border: 1px solid transparent; background: transparent; border-radius: 4px;
+    padding: 3px 4px; font: inherit; font-size: 11px; color: var(--color-text);
+  }
+  table.payroll-grid td input:hover, table.payroll-grid td select:hover { border-color: var(--color-border); }
+  table.payroll-grid td input.num, table.payroll-grid td select.num { text-align: right; }
+  table.payroll-grid tr.row-conflict td { background: var(--color-red-light); }
+  table.payroll-grid td.net { font-weight: 600; }
+  table.payroll-grid td.net.positive { color: var(--color-green); }
+  .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-amber); }
+  .status-ok { color: var(--color-green); font-weight: 700; }
+  .status-saving { color: var(--color-text-muted); }
+  .status-error, .status-conflict { color: var(--color-red); font-weight: 700; cursor: pointer; border: none; background: none; padding: 0; }
+  .units-pill {
+    border: 1px solid var(--color-border); background: var(--color-surface); border-radius: var(--radius);
+    padding: 2px 7px; font-size: 10px; font-weight: 500; cursor: pointer; font-family: inherit;
+  }
+  .toggle { position: relative; display: inline-block; width: 28px; height: 15px; border-radius: 999px; background: var(--color-border-strong); vertical-align: middle; }
+  .toggle.on { background: var(--accent); }
+  .toggle .knob { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transition: left .15s ease; }
+  .toggle.on .knob { left: 15px; }
+  table.payroll-grid tfoot td {
+    position: sticky; bottom: 0; background: var(--color-surface); border-top: 2px solid var(--color-border-strong);
+    border-bottom: none; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+
+  .modal-standalone-wrap { padding: 40px 28px; display: flex; justify-content: center; }
+  .modal { width: 92vw; max-width: 480px; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+  .modal.wide { max-width: 760px; }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); padding: 14px 20px; }
+  .modal-header h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .modal-close { border: none; background: none; font-size: 16px; color: var(--color-text-muted); cursor: pointer; line-height: 1; }
+  .modal-body { padding: 20px; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); padding: 14px 20px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.span-2 { grid-column: span 2; }
+  label { font-size: 11px; font-weight: 500; color: var(--color-text-muted); }
+  input[type="text"], input[type="number"], select {
+    height: 34px; width: 100%; border-radius: var(--radius); border: 1px solid var(--color-border);
+    background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit;
+  }
+  .form-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* Split-by-unit table */
+  table.split-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.split-table th { text-align: left; padding: 4px 6px; font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted); }
+  table.split-table th.num, table.split-table td.num { text-align: right; }
+  table.split-table td { padding: 5px 6px; vertical-align: middle; }
+  table.split-table input, table.split-table select { height: 30px; padding: 3px 6px; font-size: 11px; }
+  .primary-chip { background: var(--accent-light); color: var(--accent-mid); border-radius: 4px; padding: 2px 6px; font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+
+  footer.note { max-width: 960px; margin: 24px auto; padding: 16px 20px; font-size: 11px; line-height: 1.6; color: var(--color-text-muted); background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius); }
+  footer.note code { background: var(--color-bg); padding: 1px 5px; border-radius: 4px; font-size: 10.5px; }
+</style>
+</head>
+<body>
+
+  <div class="meta-banner">
+    <span><strong>Static visual preview</strong> — reproduces the current Payroll Entry UI (through Phase 3 Checkpoint 6) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <div class="meta-tabs">
+      <button type="button" class="is-active" data-target="screen-grid">Payroll Entry grid</button>
+      <button type="button" data-target="screen-new-cycle">New Payroll Cycle modal</button>
+      <button type="button" data-target="screen-split">Split by Unit modal</button>
+      <button type="button" data-target="screen-import-result">Import Results modal</button>
+    </div>
+  </div>
+
+  <!-- ================= PAYROLL ENTRY GRID SCREEN ================= -->
+  <section id="screen-grid" class="screen is-active">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Overview</div>
+          <a href="#" class="nav-item"><span>▦</span> Dashboard</a>
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span>▤</span> Payroll Entry</a>
+          <div class="nav-section-label">Employees</div>
+          <a href="#" class="nav-item"><span>👤</span> Employee Registry</a>
+          <div class="nav-section-label">Admin</div>
+          <a href="#" class="nav-item"><span>🏢</span> Project Sites</a>
+          <a href="#" class="nav-item"><span>🧑‍💼</span> Users</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">MA</div>
+          <div><div class="who-name">Master Admin</div><div class="who-role">Master Admin</div></div>
+        </div>
+      </aside>
+
+      <div class="main-area">
+        <header class="topbar">
+          <div>
+            <div class="title">Payroll Entry</div>
+            <div class="subtitle">This cycle's editable payroll figures</div>
+          </div>
+          <div class="topbar-right">
+            <button class="task-bell">📋<span class="badge-count">3</span></button>
+            <div class="avatar avatar-on-surface">MA</div>
+          </div>
+        </header>
+
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <h3 class="card-title">Payroll Entry</h3>
+                <span class="badge badge-green">June 2026</span>
+              </div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm">⬇ Export CSV</button>
+                <button class="btn btn-secondary btn-sm">⬇ Export Excel</button>
+                <button class="btn btn-secondary btn-sm">⬆ Import</button>
+                <button class="btn btn-secondary btn-sm">+ New Payroll Cycle</button>
+              </div>
+            </div>
+            <div class="card-content">
+              <div class="filter-row">
+                <div class="filter-field">
+                  <label>Site</label>
+                  <button type="button" class="filter-select-btn">All Sites <span>⌄</span></button>
+                </div>
+              </div>
+
+              <div class="bulk-toolbar">
+                <span class="bulk-label">Bulk apply to filtered employees</span>
+                <p class="muted" style="margin:0; font-size:11px;">Select at least one site above to enable bulk apply.</p>
+                <div class="bulk-fields">
+                  <div class="bulk-field">
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                      <label>Cycle Days</label>
+                      <input class="bulk-input" placeholder="e.g. 30" disabled />
+                    </div>
+                    <button class="btn btn-secondary btn-sm" disabled>Copy to All</button>
+                  </div>
+                  <div class="bulk-field">
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                      <label>OT Rate</label>
+                      <input class="bulk-input" placeholder="e.g. 150" disabled />
+                    </div>
+                    <button class="btn btn-secondary btn-sm" disabled>Copy to All</button>
+                  </div>
+                  <div class="bulk-field">
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                      <label>Leave Rate</label>
+                      <input class="bulk-input" placeholder="e.g. 1000" disabled />
+                    </div>
+                    <button class="btn btn-secondary btn-sm" disabled>Copy to All</button>
+                  </div>
+                </div>
+              </div>
+
+              <p class="split-note">
+                1 employee has attendance split across more than one location this cycle — CSV/Excel
+                import and export only cover each employee's primary line. Review or edit the full
+                split directly in the grid via each row's Split action.
+              </p>
+
+              <div class="grid-wrap">
+                <table class="payroll-grid">
+                  <thead>
+                    <tr class="group-row">
+                      <th colspan="5"></th>
+                      <th colspan="4">Bank Details</th>
+                      <th colspan="2"></th>
+                      <th colspan="7"></th>
+                      <th colspan="2">EOBI</th>
+                      <th colspan="4"></th>
+                      <th colspan="2"></th>
+                    </tr>
+                    <tr class="label-row">
+                      <th class="ctr">#</th>
+                      <th>Code</th>
+                      <th>Employee</th>
+                      <th>Designation</th>
+                      <th>Site</th>
+                      <th>Bank</th>
+                      <th>Branch Code</th>
+                      <th>Account No.</th>
+                      <th>Account Title</th>
+                      <th class="num">Gross Pay</th>
+                      <th class="ctr">Units</th>
+                      <th class="num">Working Days</th>
+                      <th class="num">OT Hours</th>
+                      <th class="num">OT Rate</th>
+                      <th class="num">Cycle Days</th>
+                      <th class="num">Leave Days</th>
+                      <th class="num">Leave Rate</th>
+                      <th class="num">Allowance</th>
+                      <th class="num">Amount</th>
+                      <th class="ctr">Applicable</th>
+                      <th class="num">Advance Ded.</th>
+                      <th class="num">Eid Advance Ded.</th>
+                      <th class="num">Fine</th>
+                      <th class="ctr">Hold</th>
+                      <th>Remarks</th>
+                      <th class="num">Net Salary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="ctr"><span class="status-ok" title="Saved">✓</span> 1</td>
+                      <td class="muted">V001</td>
+                      <td><strong>Muhammad Asif</strong></td>
+                      <td><input value="Security Guard" /></td>
+                      <td class="muted">ABL City Region Lahore</td>
+                      <td><select><option>MCB</option></select></td>
+                      <td><input value="0140" /></td>
+                      <td><input value="001234567890" /></td>
+                      <td><input value="Muhammad Asif" /></td>
+                      <td class="num"><input class="num" value="32,000.00" /></td>
+                      <td class="ctr"><button type="button" class="units-pill" data-target="screen-split">1 Branch</button></td>
+                      <td class="num"><input class="num" value="26" /></td>
+                      <td class="num"><input class="num" value="4" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="30" /></td>
+                      <td class="num"><input class="num" value="1" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="0.00" /></td>
+                      <td class="num"><input class="num" value="400.00" /></td>
+                      <td class="ctr"><span class="toggle on"><span class="knob"></span></span></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="ctr"><span class="toggle"><span class="knob"></span></span></td>
+                      <td><input value="" /></td>
+                      <td class="num net positive">PKR 31,600.00</td>
+                    </tr>
+                    <tr>
+                      <td class="ctr"><span class="status-dot" title="Unsaved changes"></span> 2</td>
+                      <td class="muted">V002</td>
+                      <td><strong>Bilal Hussain</strong></td>
+                      <td><input value="Supervisor" /></td>
+                      <td class="muted">HBL Corporate Karachi</td>
+                      <td><select><option>HBL</option></select></td>
+                      <td><input value="0311" /></td>
+                      <td><input value="003300110022" /></td>
+                      <td><input value="Bilal Hussain" /></td>
+                      <td class="num"><input class="num" value="55,000.00" /></td>
+                      <td class="ctr"><button type="button" class="units-pill" data-target="screen-split">2 Branches</button></td>
+                      <td class="num"><input class="num" value="30" /></td>
+                      <td class="num"><input class="num" value="0" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="30" /></td>
+                      <td class="num"><input class="num" value="0" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="2,000.00" /></td>
+                      <td class="num"><input class="num" value="400.00" /></td>
+                      <td class="ctr"><span class="toggle on"><span class="knob"></span></span></td>
+                      <td class="num deduct">
+                        <input class="num" value="5,000.00" />
+                        <p class="balance-note">Bal: PKR 10,000.00</p>
+                      </td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="1,500.00" /></td>
+                      <td class="ctr"><span class="toggle"><span class="knob"></span></span></td>
+                      <td><input value="" /></td>
+                      <td class="num net positive">PKR 50,900.00</td>
+                    </tr>
+                    <tr>
+                      <td class="ctr"><span class="status-saving" title="Saving…">⟳</span> 3</td>
+                      <td class="muted">V003</td>
+                      <td><strong>Sana Malik</strong></td>
+                      <td><input value="Supervisor" /></td>
+                      <td class="muted">ABL City Region Lahore</td>
+                      <td><select><option>Cash</option></select></td>
+                      <td><input value="" /></td>
+                      <td><input value="" /></td>
+                      <td><input value="" /></td>
+                      <td class="num"><input class="num" value="48,000.00" /></td>
+                      <td class="ctr"><button type="button" class="units-pill" data-target="screen-split">1 Branch</button></td>
+                      <td class="num"><input class="num" value="28" /></td>
+                      <td class="num"><input class="num" value="2" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="30" /></td>
+                      <td class="num"><input class="num" value="0" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="0.00" /></td>
+                      <td class="num"><input class="num" value="400.00" /></td>
+                      <td class="ctr"><span class="toggle on"><span class="knob"></span></span></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="ctr"><span class="toggle"><span class="knob"></span></span></td>
+                      <td><input value="" /></td>
+                      <td class="num net positive">PKR 47,600.00</td>
+                    </tr>
+                    <tr class="row-conflict">
+                      <td class="ctr"><button type="button" class="status-conflict" title="Changed elsewhere — click to reload this row">▲</button> 4</td>
+                      <td class="muted">V004</td>
+                      <td><strong>Tariq Javed</strong></td>
+                      <td><input value="Guard" disabled /></td>
+                      <td class="muted">HBL Corporate Karachi</td>
+                      <td><select disabled><option>Cash</option></select></td>
+                      <td><input value="" disabled /></td>
+                      <td><input value="" disabled /></td>
+                      <td><input value="" disabled /></td>
+                      <td class="num"><input class="num" value="30,000.00" disabled /></td>
+                      <td class="ctr"><button type="button" class="units-pill" data-target="screen-split" disabled>1 Branch</button></td>
+                      <td class="num"><input class="num" value="26" disabled /></td>
+                      <td class="num"><input class="num" value="0" disabled /></td>
+                      <td class="num"><input class="num" placeholder="auto" disabled /></td>
+                      <td class="num"><input class="num" value="30" disabled /></td>
+                      <td class="num"><input class="num" value="0" disabled /></td>
+                      <td class="num"><input class="num" placeholder="auto" disabled /></td>
+                      <td class="num"><input class="num" value="0.00" disabled /></td>
+                      <td class="num"><input class="num" value="400.00" disabled /></td>
+                      <td class="ctr"><span class="toggle on"><span class="knob"></span></span></td>
+                      <td class="num deduct"><input class="num" value="0.00" disabled /></td>
+                      <td class="num deduct"><input class="num" value="0.00" disabled /></td>
+                      <td class="num deduct"><input class="num" value="0.00" disabled /></td>
+                      <td class="ctr"><span class="toggle on"><span class="knob"></span></span></td>
+                      <td><input value="On hold pending site transfer" disabled /></td>
+                      <td class="num net positive">PKR 29,600.00</td>
+                    </tr>
+                    <tr>
+                      <td class="ctr"><button type="button" class="status-error" title="Save failed — click to retry now">!</button> 5</td>
+                      <td class="muted">V005</td>
+                      <td><strong>Imran Qureshi</strong></td>
+                      <td><input value="Guard" /></td>
+                      <td class="muted">ABL City Region Lahore</td>
+                      <td><select><option>Cash</option></select></td>
+                      <td><input value="" /></td>
+                      <td><input value="" /></td>
+                      <td><input value="" /></td>
+                      <td class="num"><input class="num" value="26,000.00" /></td>
+                      <td class="ctr"><button type="button" class="units-pill" data-target="screen-split">1 Branch</button></td>
+                      <td class="num"><input class="num" value="26" /></td>
+                      <td class="num"><input class="num" value="0" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="30" /></td>
+                      <td class="num"><input class="num" value="0" /></td>
+                      <td class="num"><input class="num" placeholder="auto" /></td>
+                      <td class="num"><input class="num" value="0.00" /></td>
+                      <td class="num"><input class="num" value="400.00" /></td>
+                      <td class="ctr"><span class="toggle on"><span class="knob"></span></span></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="num deduct"><input class="num" value="0.00" /></td>
+                      <td class="ctr"><span class="toggle"><span class="knob"></span></span></td>
+                      <td><input value="" /></td>
+                      <td class="num net positive">PKR 25,600.00</td>
+                    </tr>
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td class="ctr">Σ</td>
+                      <td></td>
+                      <td>5 employees</td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td class="num">PKR 191,000.00</td>
+                      <td></td>
+                      <td class="num">136</td>
+                      <td class="num">6</td>
+                      <td class="num"></td>
+                      <td class="num">150</td>
+                      <td class="num">1</td>
+                      <td class="num"></td>
+                      <td class="num">PKR 2,000.00</td>
+                      <td class="num">PKR 2,000.00</td>
+                      <td></td>
+                      <td class="num">PKR 5,000.00</td>
+                      <td class="num">PKR 0.00</td>
+                      <td class="num">PKR 1,500.00</td>
+                      <td></td>
+                      <td></td>
+                      <td class="num" style="color:var(--color-green);">PKR 185,300.00</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= NEW PAYROLL CYCLE MODAL SCREEN ================= -->
+  <section id="screen-new-cycle" class="screen">
+    <div class="app-shell" style="background: var(--color-bg);">
+      <div class="modal-standalone-wrap">
+        <div class="modal">
+          <div class="modal-header"><h3>Start New Payroll Cycle</h3><button class="modal-close">✕</button></div>
+          <div class="modal-body">
+            <p class="muted" style="margin:0 0 14px;">
+              Creates a new Draft cycle — continuing employees carry their payroll figures forward
+              from the most recent cycle; attendance always starts fresh.
+            </p>
+            <div class="form-grid-2">
+              <div class="field"><label>Year</label><input type="number" value="2026" /></div>
+              <div class="field"><label>Month</label><input type="number" value="7" /></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary">Cancel</button>
+            <button class="btn btn-primary">Create Cycle</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= SPLIT BY UNIT MODAL SCREEN ================= -->
+  <section id="screen-split" class="screen">
+    <div class="app-shell" style="background: var(--color-bg);">
+      <div class="modal-standalone-wrap">
+        <div class="modal wide">
+          <div class="modal-header"><h3>Split by Branch — Bilal Hussain</h3><button class="modal-close">✕</button></div>
+          <div class="modal-body">
+            <p class="muted" style="margin:0 0 14px;">
+              This employee's attendance for this cycle, attributed across one or more branches. The
+              <strong style="color:var(--color-text);">Primary</strong> line determines the Leave Rate
+              basis whenever no explicit Leave Rate is set on this entry.
+            </p>
+            <table class="split-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Branch</th>
+                  <th class="num">Days</th>
+                  <th class="num">OT Hours</th>
+                  <th class="num">OT Rate</th>
+                  <th class="num">Cycle Days</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="primary-chip">Primary</span></td>
+                  <td><select><option>HBL Corporate Karachi — Main Branch</option></select></td>
+                  <td class="num"><input class="num" value="20" /></td>
+                  <td class="num"><input class="num" value="0" /></td>
+                  <td class="num"><input class="num" placeholder="auto" /></td>
+                  <td class="num"><input class="num" value="30" /></td>
+                  <td class="ctr"><button type="button" title="A payroll entry must always have at least one work line" disabled style="border:none; background:none; color:var(--color-text-faint);">✕</button></td>
+                </tr>
+                <tr>
+                  <td class="muted">Line 2</td>
+                  <td><select><option>HBL Corporate Karachi — Gulshan Branch</option></select></td>
+                  <td class="num"><input class="num" value="10" /></td>
+                  <td class="num"><input class="num" value="0" /></td>
+                  <td class="num"><input class="num" placeholder="auto" /></td>
+                  <td class="num"><input class="num" value="30" /></td>
+                  <td class="ctr"><button type="button" style="border:none; background:none; color:var(--color-text-muted);">✕</button></td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="display:flex; align-items:flex-end; gap:10px; border:1px dashed var(--color-border); border-radius:var(--radius); padding:12px; margin-top:14px;">
+              <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                <label>Add a branch</label>
+                <select><option>Select a branch</option><option>HBL Corporate Karachi — DHA Branch</option></select>
+              </div>
+              <button class="btn btn-secondary btn-sm">Add line</button>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= IMPORT RESULTS MODAL SCREEN ================= -->
+  <section id="screen-import-result" class="screen">
+    <div class="app-shell" style="background: var(--color-bg);">
+      <div class="modal-standalone-wrap">
+        <div class="modal" style="max-width:520px; max-height:75vh; overflow-y:auto;">
+          <div class="modal-header"><h3>Import Results</h3><button class="modal-close">✕</button></div>
+          <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; gap:14px;">
+              <span class="badge badge-blue">41 updated</span>
+              <span class="badge" style="background:var(--color-red-light); color:var(--color-red);">1 skipped</span>
+            </div>
+            <div>
+              <p style="font-weight:500; margin:0 0 6px;">Skipped rows</p>
+              <div style="border:1px solid var(--color-border); border-radius:var(--radius); background:var(--color-bg); padding:6px 10px; font-size:11px;">
+                Row 17: No matching Payroll Entry for employee code "V099" in this cycle
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="note">
+    Generated 2026-07-11 during the pre-Phase-4 prototype audit — the sole missing prototype it was
+    tasked with producing. Reproduces <code>frontend/src/routes/payroll-entry-page.tsx</code> and the
+    components under <code>frontend/src/components/payroll-entry/</code>
+    (<code>payroll-entry-grid.tsx</code>, <code>payroll-entry-row.tsx</code>,
+    <code>columns.ts</code>, <code>copy-to-all-toolbar.tsx</code>, <code>new-cycle-modal.tsx</code>,
+    <code>split-work-lines-modal.tsx</code>, <code>save-status-indicator.tsx</code>) as they stand at
+    the close of <strong>Phase 3 Checkpoint 6</strong> (performance validation — no UI changes of its
+    own; the grid shown here is the same one validated against 503 rows via virtualization,
+    <code>@tanstack/react-virtual</code>).
+    <br /><br />
+    All 26 columns from <code>docs/architecture/database/payroll-entry.md</code> §12/§12a are shown,
+    grouped exactly as the real grid groups them ("Bank Details" spanning Bank/Branch Code/Account
+    No./Account Title; "EOBI" spanning Amount/Applicable) — one column-width array
+    (<code>PAYROLL_COLUMNS</code>) drives the sticky group-header row, the sticky column-header row,
+    every body row, and the sticky totals row in the real implementation, keeping all four pixel-
+    aligned. Sample rows illustrate all <strong>five</strong> non-idle per-row save states
+    (<code>SaveStatusIndicator</code>): <strong>saved</strong> (green check), <strong>dirty</strong>
+    (amber dot, unsaved), <strong>saving</strong> (spinner), <strong>conflict</strong> (red
+    triangle, row tinted, inputs locked until reloaded — changed elsewhere by another user), and
+    <strong>error</strong> (row 5, red "!" — a failed autosave; unlike conflict, the row's inputs stay
+    editable so the user can simply keep typing or click the icon to retry, matching
+    <code>save-status-indicator.tsx</code>'s <code>WifiOff</code>/<code>onRetry</code> case). Row 2's
+    "2 Branches" Units pill and row 1/3/5's "1 Branch" reflect a Payroll Entry's <code>workLines</code>
+    count; clicking any Units pill opens the <strong>Split by Unit</strong> modal tab. Deduction-type
+    columns (Advance/Eid Advance/Fine) are tinted red in both the grid and the totals row, matching
+    <code>InlineNumberCell</code>'s <code>deduct</code> prop and <code>PayrollEntryTotalsRow</code>'s
+    own styling; Net Salary is green when positive, matching <code>calcNet</code>'s sign. Row 2's
+    Advance Ded. cell also carries the small "Bal: PKR 10,000.00" linked-balance indicator added by
+    Phase 4 Checkpoint 5 (Advances) directly to <code>payroll-entry-row.tsx</code> — read-only here,
+    managed from the Advances page; <code>phase4-advances-preview.html</code> has a dedicated,
+    isolated screen for this same cell.
+    <br /><br />
+    <strong>Copy to All</strong> (Phase 3 Checkpoint 4) is shown in its disabled/no-site-selected
+    state — the real component requires at least one site explicitly selected in the filter above it
+    before a bulk mutation can run, never implicitly "everyone in the cycle"
+    (<code>bulkUpdatePayrollEntriesSchema</code>'s non-empty <code>siteIds</code> requirement).
+    <strong>Import</strong> is update-only by design (Phase 3 Checkpoint 5, Option C): there is no
+    "created" count in its results modal, since every row either matches an existing entry in this
+    cycle and is updated, or is skipped and reported — mirrored from Employee Registry's own
+    <code>ImportResultModal</code> pattern but without the "created" badge. The split-employee CSV/
+    Excel limitation banner ("...import and export only cover each employee's primary line...") is
+    the approved Option C copy, not a format change. <strong>New Payroll Cycle</strong> is
+    deliberately thin (year/month only) — Finalize/Release/Archive affordances are out of this
+    checkpoint's scope. The topbar's Tasks bell (Phase 3.5) appears here exactly as it does on every
+    other page, since it lives in the shared <code>Topbar</code> component, not per-route.
+    <br /><br />
+    Reviewed for factual accuracy against the shipped implementation as part of the pre-Phase-4
+    prototype audit's bidirectional prototype rule (<code>docs/IMPLEMENTATION_PLAN.md</code>'s
+    Definition of Done) — this was the one Phase missing a prototype entirely before this audit.
+    <br /><br />
+    <strong>Corrected 2026-07-11 during the Phase 1–3 prototype reconciliation</strong>: this file's
+    initial pass had four defects, all now fixed. The Site filter button read "All sites" where the
+    real <code>MultiSelectFilter</code> trigger renders "All Sites"
+    (<code>frontend/src/components/ui/multi-select-filter.tsx</code>). The read-only Net Salary
+    column and the totals row's genuine-payment columns (Gross Pay, Allowance, EOBI Amount, Advance/
+    Eid Advance Ded., Fine, Net Salary) were missing the "PKR " prefix that <code>formatMoney()</code>
+    always applies — design-system §4's own rule, which <code>PayrollEntryTotalsRow</code> already
+    implements correctly; non-money counts (Working Days, OT Hours/Rate, Cycle Days, Leave Days/Rate)
+    correctly stay unprefixed and are unchanged. Row 5 (Imran Qureshi) and its "!" save-status icon
+    were added because the <strong>error</strong> save state — already styled in this file's own
+    <code>.status-error</code> CSS rule but never actually used — was undocumented; the totals row
+    was recomputed to include it (5 employees, not 4). Row 2's linked-Advance balance indicator
+    (Phase 4 Checkpoint 5) was added for the same reason: it is real, shipped code inside
+    <code>payroll-entry-row.tsx</code>, the exact file this prototype claims to reproduce.
+  </footer>
+
+  <script>
+    function activateTab(target) {
+      document.querySelectorAll('.meta-tabs button').forEach(function (b) {
+        b.classList.toggle('is-active', b.dataset.target === target);
+      });
+      document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
+      document.getElementById(target).classList.add('is-active');
+    }
+    document.querySelectorAll('.meta-tabs button').forEach(function (btn) {
+      btn.addEventListener('click', function () { activateTab(btn.dataset.target); });
+    });
+    document.querySelectorAll('[data-target].units-pill').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!btn.disabled) activateTab(btn.dataset.target);
+      });
+    });
+  </script>
+</body>
+</html>

@@ -55,6 +55,9 @@
   .topbar { flex-shrink: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
   .topbar .title { font-size: 15px; font-weight: 600; }
   .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .task-bell { position: relative; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-text-muted); background: transparent; border: none; }
+  .task-bell .badge-count { position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; border-radius: 999px; background: var(--color-red); color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 3px; }
   .main-content { flex: 1; overflow-y: auto; padding: 28px; }
   .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
   .badge-green { background: var(--color-green-light); color: var(--color-green); }
@@ -86,15 +89,27 @@
   .field.span-2 { grid-column: span 2; }
   label { font-size: 11px; font-weight: 500; color: var(--color-text-muted); }
   footer.note { padding: 14px 28px 28px; font-size: 11px; color: var(--color-text-faint); }
+  .cnic-warning {
+    margin-top: 6px; border: 1px solid var(--color-amber); background: var(--color-amber-light);
+    border-radius: var(--radius); padding: 6px 10px; font-size: 11px; color: var(--color-text);
+  }
+  .link-btn {
+    border: none; background: none; padding: 0; font: inherit; font-size: 11px; font-weight: 600;
+    color: var(--color-text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  }
+  .badge-blue { background: var(--accent-light); color: var(--accent); }
+  .badge-red { background: var(--color-red-light); color: var(--color-red); }
 </style>
 </head>
 <body>
 
   <div class="meta-banner">
-    <span><strong>Static visual preview</strong> — reproduces the current Employee Registry UI (through Phase 2.5 Checkpoint 2) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <span><strong>Static visual preview</strong> — reproduces the current Employee Registry UI (through Phase 2.5 Checkpoint 4) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
     <div class="meta-tabs">
       <button type="button" class="is-active" data-target="screen-list">Employee list</button>
       <button type="button" data-target="screen-form">New/Edit Employee modal</button>
+      <button type="button" data-target="screen-reactivate">Reactivate Employee modal</button>
+      <button type="button" data-target="screen-import-result">Import Results modal</button>
     </div>
   </div>
 
@@ -125,14 +140,22 @@
             <div class="title">Employee Registry</div>
             <div class="subtitle">Identity, employment, and bank details</div>
           </div>
-          <div class="avatar avatar-on-surface">MA</div>
+          <div class="topbar-right">
+            <button class="task-bell">📋<span class="badge-count">2</span></button>
+            <div class="avatar avatar-on-surface">MA</div>
+          </div>
         </header>
 
         <main class="main-content">
           <div class="card">
             <div class="card-header">
               <h3 class="card-title">All Employees</h3>
-              <button class="btn btn-primary btn-sm">+ New Employee</button>
+              <div style="display:flex; gap:8px;">
+                <button class="btn btn-secondary btn-sm">⬇ Export CSV</button>
+                <button class="btn btn-secondary btn-sm">⬇ Export Excel</button>
+                <button class="btn btn-secondary btn-sm">⬆ Import</button>
+                <button class="btn btn-primary btn-sm">+ New Employee</button>
+              </div>
             </div>
             <div class="filter-row">
               <div class="filter-field">
@@ -169,6 +192,11 @@
                 </tr>
               </tbody>
             </table>
+            <p class="muted" style="padding:10px 18px 16px; font-size:11px; margin:0;">
+              Row actions (⋯): <strong>Edit</strong> always; <strong>Mark as left</strong> only while
+              active; <strong>Reactivate</strong> only once left — symmetric CNIC-normalized
+              workflows (Phase 2.5 Checkpoint 4).
+            </p>
           </div>
         </main>
       </div>
@@ -186,7 +214,15 @@
               <div class="form-grid">
                 <div class="field span-2"><label>Full name</label><input type="text" /></div>
                 <div class="field"><label>Employee code</label><input type="text" placeholder="e.g. V001" /></div>
-                <div class="field"><label>CNIC</label><input type="text" placeholder="13 digits, optional" /></div>
+                <div class="field">
+                  <label>CNIC</label>
+                  <input type="text" value="35202-1234567-9" placeholder="13 digits, optional" />
+                  <div class="cnic-warning">
+                    Already registered to <strong>Rashid Mehmood</strong> at ABL City Region Lahore
+                    (departed).
+                    <button type="button" class="link-btn" data-target="screen-reactivate">Reactivate instead</button>
+                  </div>
+                </div>
                 <div class="field"><label>Father's name</label><input type="text" /></div>
                 <div class="field"><label>Religion</label><input type="text" /></div>
                 <div class="field"><label>Date of birth</label><input type="text" placeholder="DD-MM-YYYY" /></div>
@@ -225,6 +261,67 @@
     </div>
   </section>
 
+  <section id="screen-reactivate" class="screen">
+    <div class="app-shell" style="background: var(--color-bg);">
+      <div class="modal-standalone-wrap">
+        <div class="modal" style="max-width:620px; max-height:85vh; overflow-y:auto;">
+          <div class="modal-header"><h3>Reactivate Employee</h3><button class="modal-close">✕</button></div>
+          <div class="modal-body">
+            <p class="muted" style="margin:0 0 14px;">
+              <strong style="color:var(--color-text);">Rashid Mehmood</strong> left on 2026-03-15.
+              Reactivating clears that and restores them to the active roster on this same record —
+              review or update their current details below.
+            </p>
+            <div class="form-grid">
+              <div class="field"><label>Designation</label><input type="text" value="Guard" /></div>
+              <div class="field"><label>Project site</label><select><option>ABL City Region Lahore</option></select></div>
+              <div class="field"><label>Branch</label><select><option>Model Town Branch</option></select></div>
+              <div class="field"><label>Pay type</label><select><option>Daily wage</option><option>Monthly</option></select></div>
+              <div class="field"><label>Gross pay</label><input type="text" value="30,000.00" /></div>
+              <div class="field"><label>Bank</label><select><option>None (cash payment)</option></select></div>
+              <div class="field"><label>Branch code</label><input type="text" /></div>
+              <div class="field"><label>Account number</label><input type="text" /></div>
+              <div class="field span-2"><label>Account title</label><input type="text" /></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary">Cancel</button>
+            <button class="btn btn-primary">Reactivate</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screen-import-result" class="screen">
+    <div class="app-shell" style="background: var(--color-bg);">
+      <div class="modal-standalone-wrap">
+        <div class="modal" style="max-width:520px; max-height:75vh; overflow-y:auto;">
+          <div class="modal-header"><h3>Import Results</h3><button class="modal-close">✕</button></div>
+          <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; gap:14px;">
+              <span class="badge badge-green">6 created</span>
+              <span class="badge badge-blue">14 updated</span>
+              <span class="badge badge-red">2 skipped</span>
+            </div>
+            <div>
+              <p style="font-weight:500; margin:0 0 6px;">Skipped rows</p>
+              <div style="border:1px solid var(--color-border); border-radius:var(--radius); background:var(--color-bg); padding:6px 10px; margin-bottom:6px; font-size:11px;">
+                Row 9: CNIC already registered to an employee outside your assigned sites
+              </div>
+              <div style="border:1px solid var(--color-border); border-radius:var(--radius); background:var(--color-bg); padding:6px 10px; font-size:11px;">
+                Row 22: Site "Faisalabad Depot" not found
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <footer class="note">
     Generated 2026-07-02 for Phase 2 (Employee Registry CRUD) from <code>frontend/src/routes/employees-page.tsx</code>.
     Sample data is illustrative, not seed data. Site-scoped RBAC (C11 decision) and CNIC/employee-code
@@ -251,6 +348,29 @@
     `employee.updated` entry) — see <code>docs/architecture/database-schema.md</code> §8b. No
     dedicated "record a transfer" screen exists yet (reason/effective-date fields are accepted by
     the API but not yet surfaced in this form).
+    <br /><br />
+    <strong>Regenerated 2026-07-11 during the pre-Phase-4 prototype audit</strong> — this file had
+    not been touched since the 2026-07-04 review above and had drifted behind Phase 2.5 Checkpoints
+    3–4, both of which shipped real UI this preview was missing entirely:
+    <strong>Checkpoint 3</strong> (import/export remap to Project Units) added the Export CSV/Export
+    Excel/Import buttons in the list header and the Import Results modal (skipped-row reporting,
+    mirrored from <code>ImportResultModal</code> in <code>employees-page.tsx</code>); <strong>
+    Checkpoint 4</strong> (CNIC normalization, duplicate-check, and Reactivate workflow —
+    <code>docs/architecture/database/schema-invariants.md</code> §26 item 6) added the debounced CNIC
+    duplicate-check warning in the New/Edit Employee modal (with its "Reactivate instead" shortcut
+    for a departed match) and the standalone Reactivate Employee modal, which fetches the full
+    current record and re-collects every current-employment field in the same call that clears
+    `dateOfLeaving` via `POST /employees/:id/reactivate`. The existing "Mark Employee as Left" flow
+    (unchanged since Phase 2) is not re-illustrated as its own screen here — it is unchanged, and the
+    Employee list screen's caption above the table now names it alongside Reactivate as one of the
+    three possible row actions.
+    <br /><br />
+    <strong>Corrected 2026-07-11 during the Phase 1–3 prototype reconciliation</strong>: the Employee
+    list screen's topbar was missing the Tasks bell — a real, currently-shipped element that has
+    appeared on every authenticated page since Phase 3.5 (Tasks Workspace, closed 2026-07-10),
+    because it lives in the shared <code>Topbar</code> component
+    (<code>frontend/src/components/layout/topbar.tsx</code>), not per-route. Added here to match
+    <code>phase3-payroll-entry-preview.html</code>, which already carried it correctly.
   </footer>
 
   <script>
@@ -259,6 +379,15 @@
         document.querySelectorAll('.meta-tabs button').forEach(function (b) { b.classList.remove('is-active'); });
         document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
         btn.classList.add('is-active');
+        document.getElementById(btn.dataset.target).classList.add('is-active');
+      });
+    });
+    document.querySelectorAll('.link-btn[data-target]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.meta-tabs button').forEach(function (b) {
+          b.classList.toggle('is-active', b.dataset.target === btn.dataset.target);
+        });
+        document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
         document.getElementById(btn.dataset.target).classList.add('is-active');
       });
     });
