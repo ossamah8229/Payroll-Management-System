@@ -27,6 +27,7 @@ import {
 import { payrollUnitReleasesRouter } from './modules/payroll-release/payroll-release.routes';
 import { bankSheetRouter } from './modules/bank-sheets/bank-sheets.routes';
 import { cashReceivingRouter } from './modules/cash-receiving/cash-receiving.routes';
+import { advancesRouter } from './modules/advances/advances.routes';
 import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
 
 const PgSession = connectPgSimple(session);
@@ -121,6 +122,9 @@ export function createApp(): Express {
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
   app.use('/api/v1/payroll-entries', payrollEntriesRouter);
   app.use('/api/v1/work-lines', workLinesRouter);
+  // Phase 4 Checkpoint 5 — flat top-level resource, matching Banks' own pattern (Advances relate
+  // to Employee, not to a specific Payroll Cycle route).
+  app.use('/api/v1/advances', advancesRouter);
   app.use('/api/v1/tasks', tasksRouter);
   app.use('/api/v1/task-notifications', taskNotificationsRouter);
 

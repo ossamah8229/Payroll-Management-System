@@ -1,16 +1,28 @@
 import { randomUUID } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import type { CreatePayrollCycleInput, SessionUser } from '@payroll/shared';
-import { prisma } from '../../lib/prisma';
+import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { conflict, notFound } from '../../common/http-error';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
+import { materializeScheduledAdvanceDeductions } from '../advances/advances.service';
 
 /**
  * Payroll Processing — owns the `PayrollCycle` lifecycle (docs/architecture/database/payroll-cycle.md
  * §10). Phase 3 Checkpoint 1 scope: cycle *creation* only (bootstrap and carry-forward). Finalize
  * Cycle, Release, Archiving, and Backup Package generation are explicitly NOT implemented here —
  * see this module's `createPayrollCycle` doc comment for the precise, approved scope boundary.
+ *
+ * **Phase 4 Checkpoint 5 (Advances) addition:** this module now also owns
+ * `ScheduledPayrollPeriod` (docs/architecture/database/payroll-cycle.md §10a) — the only module that
+ * ever creates, resolves, or mutates a row in that table. Advances only ever holds a foreign key
+ * into it and calls `findOrCreateScheduledPayrollPeriod` below rather than touching the table
+ * directly. **Deliberately no generic Outstanding-Payroll-Obligation provider/hook registry** (an
+ * approved architecture decision, superseding the fuller framework `docs/architecture/workflows/
+ * outstanding-obligations.md` describes as a future possibility) — `createPayrollCycle` calls
+ * Advances' own `materializeScheduledAdvanceDeductions` directly. Should Phase 6 (Balance
+ * Adjustments) become a genuine second consumer needing the same seam, that is the point to
+ * generalize this into a real registry, not before.
  */
 
 const CHUNK_SIZE = 500;
@@ -21,6 +33,32 @@ function chunk<T>(items: T[], size: number): T[][] {
     chunks.push(items.slice(i, i + size));
   }
   return chunks;
+}
+
+/**
+ * The canonical, single find-or-create for a `ScheduledPayrollPeriod` row (docs/architecture/
+ * database/payroll-cycle.md §10a) — the only function anywhere in the codebase that creates one.
+ * Advances calls this rather than writing to the table directly (the ownership boundary the schema
+ * doc itself specifies). The unique `(year, month)` constraint is the concurrency backstop: on a
+ * race, the loser's `create` throws a unique-constraint violation, which is caught and resolved by
+ * re-reading the winner's row.
+ */
+export async function findOrCreateScheduledPayrollPeriod(
+  year: number,
+  month: number,
+  client: PrismaTransactionClient = prisma,
+) {
+  const existing = await client.scheduledPayrollPeriod.findUnique({ where: { year_month: { year, month } } });
+  if (existing) {
+    return existing;
+  }
+
+  try {
+    return await client.scheduledPayrollPeriod.create({ data: { year, month } });
+  } catch {
+    // Lost a concurrent find-or-create race — the winner's row now exists; use it.
+    return client.scheduledPayrollPeriod.findUniqueOrThrow({ where: { year_month: { year, month } } });
+  }
 }
 
 export async function listPayrollCycles() {
@@ -118,11 +156,15 @@ export async function createPayrollCycle(
 
   const entryRows: Prisma.PayrollEntryCreateManyInput[] = [];
   const workLineRows: Prisma.PayrollEntryWorkLineCreateManyInput[] = [];
+  // Phase 4 Checkpoint 5 (Advances): which newly-created entry belongs to which employee, so the
+  // materialization step below can target the right row without a second lookup.
+  const employeeIdToEntryId = new Map<string, string>();
 
   for (const [index, employee] of activeEmployees.entries()) {
     const sourceEntry = sourceEntryByEmployeeId.get(employee.id);
     const primaryLine = sourceEntry?.workLines[0]; // already ordered by sortOrder asc
     const entryId = randomUUID();
+    employeeIdToEntryId.set(employee.id, entryId);
 
     entryRows.push({
       id: entryId,
@@ -180,6 +222,37 @@ export async function createPayrollCycle(
       }
       for (const batch of chunk(workLineRows, CHUNK_SIZE)) {
         await tx.payrollEntryWorkLine.createMany({ data: batch });
+      }
+
+      // Phase 4 Checkpoint 5 (Advances) — resolution step, owned exclusively by Payroll Processing
+      // (docs/architecture/database/payroll-cycle.md §10a): if anything ever scheduled a deduction
+      // against this exact (year, month) before this cycle existed, resolve that
+      // `ScheduledPayrollPeriod` row now — the one-time NULL → NOT NULL transition. If nothing was
+      // ever scheduled against this period, there is nothing to resolve and ordinary cycle creation
+      // proceeds unaffected, same as the schema doc specifies.
+      const pendingPeriod = await tx.scheduledPayrollPeriod.findFirst({
+        where: { year: input.year, month: input.month, payrollCycleId: null },
+      });
+      if (pendingPeriod) {
+        await tx.scheduledPayrollPeriod.update({
+          where: { id: pendingPeriod.id },
+          data: { payrollCycleId: created.id, resolvedAt: new Date() },
+        });
+
+        // Deliberately a direct call into Advances' own module, not a generic provider/hook
+        // registry (approved architecture decision) — see this file's own header comment.
+        await materializeScheduledAdvanceDeductions(
+          {
+            cycleId: created.id,
+            cycleYear: input.year,
+            cycleMonth: input.month,
+            resolvedPeriodId: pendingPeriod.id,
+            employeeIdToEntryId,
+            actorUserId: currentUser.id,
+            requestMeta,
+          },
+          tx,
+        );
       }
 
       await recordAuditLog(

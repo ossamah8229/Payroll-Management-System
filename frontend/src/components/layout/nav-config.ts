@@ -1,5 +1,15 @@
 import type { LucideIcon } from 'lucide-react';
-import { Banknote, Building2, ClipboardList, Landmark, LayoutDashboard, UserCog, Users, Wallet } from 'lucide-react';
+import {
+  Banknote,
+  Building2,
+  ClipboardList,
+  HandCoins,
+  Landmark,
+  LayoutDashboard,
+  UserCog,
+  Users,
+  Wallet,
+} from 'lucide-react';
 import type { PermissionKey } from '@payroll/shared';
 
 export interface NavItem {
@@ -40,6 +50,14 @@ export const navSections: NavSection[] = [
         // Reuses bank-sheets:view (approved architecture decision, Phase 4 Checkpoint 4) — Finance
         // and Master User already see both documents; Payroll Staff sees neither.
         requiredPermission: 'bank-sheets:view',
+      },
+      {
+        label: 'Advances',
+        to: '/advances',
+        icon: HandCoins,
+        // Phase 4 Checkpoint 5 — Payroll Staff (site-scoped) and Master Admin only; Finance holds
+        // no Advances permission (approved architecture decision, unchanged).
+        requiredPermission: 'advances:manage',
       },
     ],
   },

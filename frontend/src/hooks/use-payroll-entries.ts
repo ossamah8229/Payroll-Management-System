@@ -49,7 +49,13 @@ export interface PayrollEntry {
   eobiAmount: string;
   eobiApplicable: boolean;
   advanceDeduction: string;
+  /** Phase 4 Checkpoint 5 (Advances) — the linked Advance, when materialized/manually linked. A
+   * light projection (id/outstandingBalance/status), not the full Advance record. */
+  advanceId: string | null;
+  advance: { id: string; outstandingBalance: string; status: 'ACTIVE' | 'PAID_OFF' } | null;
   eidAdvanceDeduction: string;
+  eidAdvanceId: string | null;
+  eidAdvance: { id: string; outstandingBalance: string; status: 'ACTIVE' | 'PAID_OFF' } | null;
   fine: string;
   hold: boolean;
   released: boolean;

@@ -57,6 +57,25 @@ export type {
 } from './schemas/payroll-entry';
 
 export {
+  advanceRepaymentTypeSchema,
+  advanceStatusSchema,
+  advanceTypeSchema,
+  createAdvanceSchema,
+  deferAdvanceScheduleSchema,
+  listAdvancesQuerySchema,
+  updateAdvanceSchema,
+} from './schemas/advance';
+export type {
+  AdvanceRepaymentType,
+  AdvanceStatus,
+  AdvanceType,
+  CreateAdvanceInput,
+  DeferAdvanceScheduleInput,
+  ListAdvancesQuery,
+  UpdateAdvanceInput,
+} from './schemas/advance';
+
+export {
   createTaskSchema,
   listTasksQuerySchema,
   taskPrioritySchema,

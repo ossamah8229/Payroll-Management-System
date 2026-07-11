@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 4 Visual Preview — Advances — Payroll Management System</title>
+<style>
+  :root {
+    --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
+    --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #9c978f;
+    --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
+    --color-green: #1a6b3a; --color-green-light: #e8f5ee;
+    --color-amber: #8b5e00; --color-amber-light: #fff8e6;
+    --color-red: #8b1a1a; --color-red-light: #fbe8e8;
+    --color-purple: #4a2080; --color-purple-light: #f0ebf8;
+    --radius: 8px; --radius-lg: 12px;
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; }
+  .meta-banner { background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .meta-banner strong { color: #fff; }
+  .meta-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
+  .meta-tabs button.is-active { background: #fff; color: var(--accent); }
+  .screen { display: none; }
+  .screen.is-active { display: block; }
+  .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 34px; font-size: 12px; }
+  .btn-sm { padding: 0 10px; height: 30px; font-size: 11px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+  .app-shell { display: flex; height: calc(100vh - 37px); overflow: hidden; background: var(--color-bg); }
+  .sidebar { position: fixed; inset: 37px 0 0 0; width: 220px; display: flex; flex-direction: column; background: var(--accent); }
+  .sidebar-brand { border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px 16px 16px; }
+  .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
+  .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.35); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
+  .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .avatar-on-accent { background: rgba(255,255,255,0.2); color: #fff; }
+  .avatar-on-surface { background: var(--accent-light); color: var(--accent); }
+  .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
+  .sidebar-footer .who-role { font-size: 10px; color: rgba(255,255,255,0.5); }
+  .main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { flex-shrink: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
+  .topbar .title { font-size: 15px; font-weight: 600; }
+  .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .main-content { flex: 1; overflow-y: auto; padding: 28px; }
+  .card-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
+  .card-header-top { display: flex; align-items: center; gap: 10px; width: 100%; }
+  .card-title { font-size: 13px; font-weight: 600; margin: 0; }
+  .filters-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; width: 100%; margin-top: 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
+  select, input { height: 34px; min-width: 160px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+  .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
+  .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
+  .badge-green { background: var(--color-green-light); color: var(--color-green); }
+  .muted { color: var(--color-text-muted); }
+  .table-scroll { overflow-x: auto; }
+  table.data-table { width: 100%; min-width: 1100px; border-collapse: collapse; font-size: 12px; }
+  table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .hint { font-size: 11px; color: var(--color-text-muted); margin: 0; line-height: 1.5; padding: 14px 18px; }
+  footer.note { padding: 14px 28px 28px; font-size: 11px; color: var(--color-text-faint); }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 60; }
+  .modal { width: 480px; max-width: 92vw; background: var(--color-surface-2); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--color-border); font-size: 13px; font-weight: 600; }
+  .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; border-top: 1px solid var(--color-border); }
+  .balance-note { margin-top: 2px; font-size: 10px; color: var(--color-text-faint); text-align: center; }
+</style>
+</head>
+<body>
+
+  <div class="meta-banner">
+    <span><strong>Static visual preview</strong> — reproduces the implemented Advances UI (Phase 4 Checkpoint 5) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <div class="meta-tabs">
+      <button type="button" class="is-active" data-target="screen-list">Advances list</button>
+      <button type="button" data-target="screen-record">Record Advance modal</button>
+      <button type="button" data-target="screen-defer">Defer modal</button>
+      <button type="button" data-target="screen-payroll-entry">Payroll Entry balance indicator</button>
+      <button type="button" data-target="screen-empty">Empty state</button>
+      <button type="button" data-target="screen-finance">Finance — no access</button>
+    </div>
+  </div>
+
+  <!-- ================= ADVANCES LIST ================= -->
+  <section id="screen-list" class="screen is-active">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item"><span>▤</span> Payroll Entry</a>
+          <a href="#" class="nav-item"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item"><span>🏦</span> Bank Sheet</a>
+          <a href="#" class="nav-item"><span>👛</span> Cash Receiving</a>
+          <a href="#" class="nav-item is-active"><span>🤝</span> Advances</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">IS</div>
+          <div><div class="who-name">Imran Sheikh</div><div class="who-role">Payroll Staff</div></div>
+        </div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar">
+          <div>
+            <div class="title">Advances</div>
+            <div class="subtitle">Record and track Advance / Eid Advance balances</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-header-top">
+                <h3 class="card-title">Advances</h3>
+              </div>
+              <div class="filters-row">
+                <div class="field"><label>Site</label><select><option>All sites</option></select></div>
+                <div class="field"><label>Type</label><select><option>All types</option></select></div>
+                <div class="field"><label>Status</label><select><option>All statuses</option></select></div>
+                <div style="margin-left:auto;">
+                  <button class="btn btn-primary btn-sm">Record Advance</button>
+                </div>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th><th>Type</th><th style="text-align:right;">Total Amount</th>
+                    <th style="text-align:right;">Outstanding Balance</th><th>Repayment Type</th>
+                    <th>Status</th><th>Scheduled Period</th><th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Bilal Ahmed</td><td>Advance</td><td class="num">PKR 12,000.00</td>
+                    <td class="num">PKR 0.00</td><td>Full Deduction</td>
+                    <td><span class="badge badge-gray">Paid Off</span></td><td>—</td>
+                    <td><button class="btn btn-secondary btn-sm">Edit</button></td>
+                  </tr>
+                  <tr>
+                    <td>Sana Tariq</td><td>Eid Advance</td><td class="num">PKR 15,000.00</td>
+                    <td class="num">PKR 10,000.00</td><td>Installment</td>
+                    <td><span class="badge badge-green">Active</span></td><td>August 2026</td>
+                    <td><button class="btn btn-secondary btn-sm">Edit</button> <button class="btn btn-secondary btn-sm">Defer</button></td>
+                  </tr>
+                  <tr>
+                    <td>Usman Farooq</td><td>Advance</td><td class="num">PKR 9,000.00</td>
+                    <td class="num">PKR 9,000.00</td><td>Full Deduction</td>
+                    <td><span class="badge badge-green">Active</span></td><td>July 2026</td>
+                    <td><button class="btn btn-secondary btn-sm">Edit</button> <button class="btn btn-secondary btn-sm">Defer</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              At most one ACTIVE Advance and one ACTIVE Eid Advance may exist per employee at a time
+              — a second of the same type is rejected until the first is fully paid off. Scheduled
+              deductions materialize automatically the moment their target payroll cycle is created.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= RECORD ADVANCE MODAL ================= -->
+  <section id="screen-record" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="modal-overlay" style="position:static; background:none;">
+            <div class="modal">
+              <div class="modal-header">
+                <span>Record Advance</span>
+                <span style="cursor:pointer; color:var(--color-text-muted);">✕</span>
+              </div>
+              <div class="modal-body">
+                <div class="field"><label>Employee</label><select style="width:100%;"><option>Bilal Ahmed (EMP-0142)</option></select></div>
+                <div style="display:flex; gap:12px;">
+                  <div class="field" style="flex:1;"><label>Type</label><select style="width:100%;"><option>Advance</option><option>Eid Advance</option></select></div>
+                  <div class="field" style="flex:1;"><label>Total Amount</label><input style="width:100%;" value="15000" /></div>
+                </div>
+                <div style="display:flex; gap:12px;">
+                  <div class="field" style="flex:1;"><label>Date Given</label><input style="width:100%;" value="11-07-2026" /></div>
+                  <div class="field" style="flex:1;"><label>Repayment Type</label><select style="width:100%;"><option>Installment</option></select></div>
+                </div>
+                <div class="field"><label>Scheduled Installment Amount (optional)</label><input style="width:100%;" value="3000" /></div>
+                <div style="display:flex; gap:12px;">
+                  <div class="field" style="flex:1;"><label>First Deduction Year</label><input style="width:100%;" value="2026" /></div>
+                  <div class="field" style="flex:1;"><label>First Deduction Month</label><input style="width:100%;" value="7" /></div>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary btn-sm">Cancel</button>
+                <button class="btn btn-primary btn-sm">Record Advance</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= DEFER MODAL ================= -->
+  <section id="screen-defer" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="modal-overlay" style="position:static; background:none;">
+            <div class="modal">
+              <div class="modal-header">
+                <span>Defer Eid Advance — Sana Tariq</span>
+                <span style="cursor:pointer; color:var(--color-text-muted);">✕</span>
+              </div>
+              <div class="modal-body">
+                <p class="muted" style="margin:0;">Currently deducting <strong style="color:var(--color-text);">PKR 5,000.00</strong> in 7/2026.</p>
+                <div style="display:flex; gap:12px;">
+                  <div class="field" style="flex:1;"><label>Target Year</label><input style="width:100%;" value="2026" /></div>
+                  <div class="field" style="flex:1;"><label>Target Month</label><input style="width:100%;" value="9" /></div>
+                </div>
+                <div class="field"><label>Reason</label><input style="width:100%;" value="Employee requested a delay" /></div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary btn-sm">Cancel</button>
+                <button class="btn btn-primary btn-sm">Defer</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PAYROLL ENTRY BALANCE INDICATOR ================= -->
+  <section id="screen-payroll-entry" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content">
+          <div class="card" style="max-width:420px; margin:0 auto;">
+            <div class="card-header"><h3 class="card-title">Payroll Entry — Advance Ded. cell</h3></div>
+            <div style="padding:20px; text-align:center;">
+              <input style="width:120px; text-align:right;" value="5,000.00" />
+              <p class="balance-note">Bal: PKR 10,000.00</p>
+              <p class="hint" style="padding-top:14px;">
+                The small linked-balance indicator (PROJECT_SPEC.md's own requirement) appears only
+                when this cycle's deduction is linked to a real Advance — read-only here; managed
+                from the Advances page.
+              </p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= EMPTY STATE ================= -->
+  <section id="screen-empty" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <a href="#" class="nav-item is-active"><span>🤝</span> Advances</a>
+        </nav>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Advances</div></header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header"><div class="card-header-top"><h3 class="card-title">Advances</h3></div></div>
+            <div style="padding:56px 20px; text-align:center;">
+              <p style="font-weight:600; margin:0 0 4px;">No Advances recorded yet</p>
+              <p class="muted" style="margin:0;">Use "Record Advance" to add one.</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FINANCE NO ACCESS ================= -->
+  <section id="screen-finance" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item"><span>🏦</span> Bank Sheet</a>
+          <a href="#" class="nav-item"><span>👛</span> Cash Receiving</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">FN</div>
+          <div><div class="who-name">Farah Naveed</div><div class="who-role">Finance</div></div>
+        </div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Bank Sheet</div></header>
+        <main class="main-content">
+          <p class="hint" style="max-width:640px; padding:0;">
+            Finance never sees "Advances" in the sidebar at all — approved architecture decision,
+            unchanged: Finance receives no Advances permission of any kind. <code>advances:manage</code>
+            belongs only to Payroll Staff (site-scoped) and Master Admin. A direct API call to any
+            Advances route with a Finance session is rejected server-side (403), independent of the
+            sidebar.
+          </p>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <footer class="note">
+    Generated 2026-07-11 for Phase 4 Checkpoint 5 (Advances) from
+    <code>frontend/src/routes/advances-page.tsx</code>, <code>frontend/src/hooks/use-advances.ts</code>,
+    and <code>backend/src/modules/advances/</code>.
+    <br /><br />
+    <strong>Scope, matching the implemented checkpoint exactly:</strong> records a Loan or Eid
+    Advance and tracks its remaining balance; at most one ACTIVE advance per employee per type
+    (approved, frozen decision — a partial unique index backstops an application-layer check);
+    automatic deduction materialization at new-cycle creation via a direct call from
+    <code>payroll-processing.service.ts</code> into <code>advances.service.ts</code> — deliberately
+    <strong>not</strong> a generic Outstanding-Payroll-Obligation provider/hook registry (approved
+    architecture decision); schedule deferral to any future Draft-eligible period, with a complete
+    append-only <code>AdvanceScheduleChange</code> history. No new permission —
+    <code>advances:manage</code> already existed, reused unchanged, granted only to Payroll Staff
+    and Master Admin; Finance receives none. Payroll Entry CSV/Excel import/export is unchanged — no
+    automatic Advance linking during import. Cash Advances, Advance-only Bank Sheets, and Company
+    Bank Account management are explicitly out of scope and not depicted here. Employee Statements,
+    Reports, Dashboard, and any Phase 5 functionality are equally out of scope.
+    <br /><br />
+    <strong>Historical integrity:</strong> once a Payroll Entry releases, its
+    <code>advanceDeduction</code>/<code>advanceId</code> (or eid- equivalent) freeze permanently via
+    the same <code>assertEntryEditable</code> guard every other field already obeys — verified
+    directly in <code>backend/tests/advances.test.ts</code>: editing or deferring an Advance after
+    its entry has released never modifies the released row. Deferral can reverse a
+    <code>FULL_DEDUCTION</code> advance's just-materialized <code>PAID_OFF</code> status back to
+    <code>ACTIVE</code> while its entry is still Draft — nothing about a not-yet-released deduction
+    is ever final.
+  </footer>
+
+  <script>
+    document.querySelectorAll('.meta-tabs button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.meta-tabs button').forEach(function (b) { b.classList.remove('is-active'); });
+        document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
+        btn.classList.add('is-active');
+        document.getElementById(btn.dataset.target).classList.add('is-active');
+      });
+    });
+  </script>
+</body>
+</html>

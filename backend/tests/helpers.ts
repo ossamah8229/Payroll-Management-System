@@ -29,13 +29,24 @@ import { prisma } from '../src/lib/prisma';
  * createdBy/releasedBy/archivedBy FKs are RESTRICT) — both ordered ahead of those deletes below.
  */
 export async function cleanTestData(): Promise<void> {
+  // Advances (Phase 4 Checkpoint 5, docs/architecture/database/advances.md §15/§15a) — all RESTRICT,
+  // so deletion order matters: AdvanceScheduleChange references Advance/PayrollEntry/
+  // ScheduledPayrollPeriod/User and must go first; PayrollEntry.advanceId/.eidAdvanceId reference
+  // Advance, so PayrollEntry must be gone before Advance can be deleted; Advance/AdvanceScheduleChange
+  // reference ScheduledPayrollPeriod, so that table is cleared only after both of those, and strictly
+  // before PayrollCycle (ScheduledPayrollPeriod.payrollCycleId → PayrollCycle is also RESTRICT).
+  // Scoped by the same fake year>=2900 convention as PayrollEntry/PayrollCycle below — every test in
+  // this suite uses a year in that range, comfortably outside any real payroll year.
+  await prisma.advanceScheduleChange.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
   // PayrollUnitRelease (Phase 4 Checkpoint 2, docs/architecture/database/release.md §12b) is
   // RESTRICT on both cycleId (→ PayrollCycle) and unitId (→ ProjectUnit) — deleted before those,
   // scoped by the same fake year=2900 convention as PayrollEntry/PayrollCycle below (it has no
   // text column of its own to prefix).
-  await prisma.payrollUnitRelease.deleteMany({ where: { cycle: { year: 2900 } } });
-  await prisma.payrollEntry.deleteMany({ where: { cycle: { year: 2900 } } });
-  await prisma.payrollCycle.deleteMany({ where: { year: 2900 } });
+  await prisma.payrollUnitRelease.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
+  await prisma.payrollEntry.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
+  await prisma.advance.deleteMany({ where: { employee: { site: { name: { startsWith: 'Test Site ' } } } } });
+  await prisma.scheduledPayrollPeriod.deleteMany({ where: { year: { gte: 2900 } } });
+  await prisma.payrollCycle.deleteMany({ where: { year: { gte: 2900 } } });
   await prisma.employeeTransferHistory.deleteMany({
     where: {
       OR: [

@@ -291,6 +291,14 @@ function PayrollEntryRowImpl({
           nav={nav('advanceDeduction')}
           ariaLabel={`Advance deduction for ${entry.employee.name}`}
         />
+        {/* Phase 4 Checkpoint 5 (Advances) — small linked-balance indicator, PROJECT_SPEC.md's own
+            requirement ("visible... in Payroll Entry, small balance indicator under the advance/eid
+            input"). Read-only here; managed from the Advances page. */}
+        {entry.advance && (
+          <p className="mt-0.5 text-center text-[10px] text-text-faint">
+            Bal: {formatMoney(entry.advance.outstandingBalance)}
+          </p>
+        )}
       </div>
       <div role="cell">
         <InlineNumberCell
@@ -302,6 +310,11 @@ function PayrollEntryRowImpl({
           nav={nav('eidAdvanceDeduction')}
           ariaLabel={`Eid advance deduction for ${entry.employee.name}`}
         />
+        {entry.eidAdvance && (
+          <p className="mt-0.5 text-center text-[10px] text-text-faint">
+            Bal: {formatMoney(entry.eidAdvance.outstandingBalance)}
+          </p>
+        )}
       </div>
       <div role="cell">
         <InlineNumberCell

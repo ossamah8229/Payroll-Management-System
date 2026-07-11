@@ -125,7 +125,16 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
     prisma.payrollEntry.count({ where }),
     prisma.payrollEntry.findMany({
       where,
-      include: { employee: true, site: true, bank: true, workLines: { orderBy: { sortOrder: 'asc' } } },
+      include: {
+        employee: true,
+        site: true,
+        bank: true,
+        // Phase 4 Checkpoint 5 (Advances) — the small linked-balance indicator surfaced under
+        // the Advance/Eid Advance grid cells; a light select, not the full row.
+        advance: { select: { id: true, outstandingBalance: true, status: true } },
+        eidAdvance: { select: { id: true, outstandingBalance: true, status: true } },
+        workLines: { orderBy: { sortOrder: 'asc' } },
+      },
       orderBy: { sortOrder: 'asc' },
       skip: (page - 1) * pageSize,
       take: pageSize,
@@ -143,7 +152,16 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
 export async function getPayrollEntry(currentUser: SessionUser, id: string) {
   const entry = await prisma.payrollEntry.findUnique({
     where: { id },
-    include: { employee: true, site: true, bank: true, workLines: { orderBy: { sortOrder: 'asc' } } },
+    include: {
+      employee: true,
+      site: true,
+      bank: true,
+      // Phase 4 Checkpoint 5 (Advances) — the small linked-balance indicator surfaced under
+      // the Advance/Eid Advance grid cells; a light select, not the full row.
+      advance: { select: { id: true, outstandingBalance: true, status: true } },
+      eidAdvance: { select: { id: true, outstandingBalance: true, status: true } },
+      workLines: { orderBy: { sortOrder: 'asc' } },
+    },
   });
   if (!entry) {
     throw notFound('Payroll entry not found');
