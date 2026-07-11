@@ -11,8 +11,15 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **Latest committed commit: `1220dce`** — "feat(tasks): complete Phase 3.5 Tasks Workspace". Full
-  prior lineage:
+- **This session's Phase 4 Checkpoint 2 work (Finance role + Salary Release foundation, below) is
+  reviewed, approved, verified, and being committed in this same session as one commit** —
+  `feat(payroll): implement Phase 4 Checkpoint 2 salary release foundation`. Per explicit
+  instruction, exactly one commit is made this session and this file's own text (committed inside
+  that same commit) cannot self-reference its own not-yet-created hash — the next session's first
+  action should record it here as a doc-only commit, matching this project's own established
+  convention (every "doc-only commit hash record" entry in the lineage below exists for exactly
+  this reason). Prior lineage, most recent first: `7c2cdb5` (Phase 4 Checkpoint 1 — Bank Registry —
+  implementation, committed, 2026-07-11) → back through the full history below.
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -33,7 +40,37 @@ be enough to resume correctly without re-deriving context from scratch — per
   — Chat removal, Tasks Workspace, and Phase Close-Out Rule architecture revision — implementation,
   reviewed, verified, and committed) → `1220dce` (Phase 3.5 Checkpoints 1–3 — Tasks Workspace database
   foundation, backend, and frontend/prototype/testing — implementation, reviewed, verified, and
-  committed).
+  committed) → `7c2cdb5` (Phase 4 Checkpoint 1 — Bank Registry — implementation, committed).
+- **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
+  `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
+  blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`
+  permission), explicitly scoped to exclude Finance Role, Salary Release, Bank Sheets, Statements,
+  and Reports. **18 new backend tests, full suite 226/226** at the time; a reviewed
+  `docs/prototypes/phase4-bank-registry-preview.html`. **Documentation note (reconciled
+  2026-07-11, the following session, during Checkpoint 2's own pre-commit review):** this
+  checkpoint's own commit did not update `PROJECT_PROGRESS.md`/`SESSION_HANDOFF.md`/
+  `IMPLEMENTATION_PLAN.md` at the time — a real gap in the documentation-before-done convention,
+  reconstructed from `7c2cdb5`'s diff and recorded properly (not silently skipped) before Checkpoint
+  2 was committed. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 1" entry.
+- **Phase 4, Checkpoint 2 (Finance Role and Salary Release foundation) is reviewed, approved,
+  verified, and COMMITTED.** A new `FINANCE` role and `payroll:view`/`payroll:release` permissions,
+  the `PayrollUnitRelease` data model (migration `20260711140000_payroll_unit_release`), the
+  per-Unit release workflow/sweep (`backend/src/modules/payroll-release/`), an any-of
+  `requirePermission`, a new Salary Release frontend page, User Management's Finance-role support,
+  and `docs/prototypes/phase4-salary-release-preview.html`. Scope was deliberately narrowed before
+  any code was written — `PayrollUnitReadiness` ("Ready for Release") and the Late Entry one-off
+  release path are both explicitly deferred to a later checkpoint, per the user's own answers to two
+  scope-clarifying questions asked up front. **The double-release business rule (releasing an
+  already-released Unit must fail cleanly, not rely solely on the DB unique constraint) was
+  explicitly re-verified before commit** — `releaseProjectUnit()`'s existing service-level pre-check
+  (a typed 409 `CONFLICT`) was already correct; the test was strengthened to assert the exact
+  response body and a zero-second-row database check, plus a new concurrent-race test confirming the
+  DB constraint's own P2002 → 409 translation (the global error handler) as the correctness backstop.
+  **241/241 backend tests** (226 prior + 15 new); a real-stack Playwright pass (Master User creates a
+  Finance user and a Draft cycle, the Finance user releases a Project Unit, the UI updates correctly,
+  zero console errors) — full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 2" entry.
+  **Do not begin Checkpoint 3 (Bank Sheets or any other later Phase 4 work) until this checkpoint's
+  own review has passed.**
 - **Phase 3.5 (Tasks Workspace) is reviewed, approved, verified, and COMMITTED across two commits —
   `0fb296e` (Checkpoint 0, architecture revision) and `1220dce` (Checkpoints 1–3, implementation).
   Phase 3.5 is now fully complete and closed — its own 🛑 review checkpoint has passed.** The

@@ -29,6 +29,11 @@ import { prisma } from '../src/lib/prisma';
  * createdBy/releasedBy/archivedBy FKs are RESTRICT) — both ordered ahead of those deletes below.
  */
 export async function cleanTestData(): Promise<void> {
+  // PayrollUnitRelease (Phase 4 Checkpoint 2, docs/architecture/database/release.md §12b) is
+  // RESTRICT on both cycleId (→ PayrollCycle) and unitId (→ ProjectUnit) — deleted before those,
+  // scoped by the same fake year=2900 convention as PayrollEntry/PayrollCycle below (it has no
+  // text column of its own to prefix).
+  await prisma.payrollUnitRelease.deleteMany({ where: { cycle: { year: 2900 } } });
   await prisma.payrollEntry.deleteMany({ where: { cycle: { year: 2900 } } });
   await prisma.payrollCycle.deleteMany({ where: { year: 2900 } });
   await prisma.employeeTransferHistory.deleteMany({

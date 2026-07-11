@@ -56,7 +56,9 @@ function CreateUserModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [roleCode, setRoleCode] = useState<'MASTER_ADMIN' | 'PAYROLL_STAFF'>(ROLE_CODES.PAYROLL_STAFF);
+  const [roleCode, setRoleCode] = useState<'MASTER_ADMIN' | 'PAYROLL_STAFF' | 'FINANCE'>(
+    ROLE_CODES.PAYROLL_STAFF,
+  );
   const [siteIds, setSiteIds] = useState<string[]>([]);
 
   async function handleSubmit(event: FormEvent) {
@@ -106,10 +108,11 @@ function CreateUserModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
               onChange={(e) => setRoleCode(e.target.value as typeof roleCode)}
             >
               <option value={ROLE_CODES.PAYROLL_STAFF}>Payroll Staff</option>
+              <option value={ROLE_CODES.FINANCE}>Finance</option>
               <option value={ROLE_CODES.MASTER_ADMIN}>Master Admin</option>
             </select>
           </div>
-          {roleCode === ROLE_CODES.PAYROLL_STAFF && (
+          {roleCode !== ROLE_CODES.MASTER_ADMIN && (
             <div className="flex flex-col gap-1.5">
               <Label>Assigned sites</Label>
               <SiteCheckboxList selected={siteIds} onChange={setSiteIds} />
@@ -260,7 +263,7 @@ export function UsersPage({ user }: { user: SessionUser }) {
   const [resettingUser, setResettingUser] = useState<ManagedUser | undefined>(undefined);
 
   return (
-    <AppShell user={user} title="User Management" subtitle="Master Admin and Payroll Staff accounts">
+    <AppShell user={user} title="User Management" subtitle="Master Admin, Payroll Staff, and Finance accounts">
       <Card>
         <CardHeader>
           <CardTitle>All Users</CardTitle>

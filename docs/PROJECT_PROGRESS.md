@@ -74,6 +74,14 @@ after 208/208 backend tests and an 18/18 real-stack Playwright pass. **Phase 3.5
 now fully complete and closed.** Full detail: §1's "Phase 3.5" entries, below. **Phase 4 has not
 started** and requires its own separate, explicit authorization.
 
+**Update, 2026-07-11 — Phase 4 has now begun.** Checkpoint 1 (Bank Registry) was implemented and
+committed as `7c2cdb5`, though its own commit did not update this file at the time — reconciled
+retroactively in a later session (below). Checkpoint 2 (Finance Role and Salary Release foundation)
+followed, reviewed, approved, verified, and committed as a single commit in that same later session.
+Full detail: §1's "Phase 4, Checkpoint 1" and "Phase 4, Checkpoint 2" entries. **Phase 4 Checkpoint 3
+(Bank Sheets or any other later Phase 4 work) has not started** and requires its own separate,
+explicit authorization — do not begin it without that.
+
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
 without approval, see `docs/SESSION_HANDOFF.md`.
@@ -1831,6 +1839,215 @@ explicit approval. **Phase 3.5 (Checkpoints 0–3) is now fully complete and clo
 checkpoint has passed. Phase 4 (Release, Payment Artifacts, and Advances) may now begin, pending its
 own separate, explicit authorization — its architecture is unchanged from the 2026-07-05 Phase 3
 Architecture Review.**
+
+### Phase 4, Checkpoint 1 — Bank Registry (2026-07-11, COMMITTED as `7c2cdb5`)
+
+**Documentation note (added retroactively, 2026-07-11, the following session):** this checkpoint's
+own commit did not update `PROJECT_PROGRESS.md`, `SESSION_HANDOFF.md`, or `IMPLEMENTATION_PLAN.md` —
+a real gap in the project's documentation-before-done convention, discovered and reconciled during
+Phase 4 Checkpoint 2's own review, rather than left silent. The entry below is reconstructed from
+`7c2cdb5`'s commit message and full diff (the authoritative record of what actually shipped), not
+from memory of the original session.
+
+Master User management of the Bank Registry — the first Phase 4 checkpoint, explicitly scoped to
+exclude Finance Role, Salary Release, Bank Sheets, Statements, and Reports (all later Phase 4 work).
+
+- **Schema**: no migration — `Bank`/`Bank.isActive` already existed since Phase 2; this checkpoint
+  is application code only.
+- **Reserved `CASH_BANK_CODE`** (`shared/src/constants/bank.ts`, new) — a permanent, protected
+  `Bank` row (`code = "CASH"`) seeded once by `backend/prisma/seed.ts` and exempt from every
+  ordinary Bank Registry edit/deactivate/delete rule, enforced in `banks.service.ts` regardless of
+  reference state. Not a separate model — Cash is a `Bank` row like any other, just a protected
+  one. Deliberately excluded from the plain `GET /banks` list Employee Registry and Payroll Entry
+  already consumed before this checkpoint (so it never appears twice alongside their own existing
+  "Cash"/"None (cash payment)" option) and surfaced only via the admin listing's
+  `?includeInactive=true` query.
+- **`BANKS_MANAGE` permission** (`banks:manage`, `shared/src/constants/permissions.ts`) —
+  Master-User-only, gating create/edit/activate/deactivate/delete. `GET /banks`'s default
+  (active-only) results need no permission, unchanged from before this checkpoint.
+- **Backend** (`backend/src/modules/banks/{banks.service,banks.routes}.ts`, extended): full
+  CRUD, delete blocked while any `Employee`/`PayrollEntry` still references the bank, an
+  `isReferenced` flag surfaced per bank so the Edit dialog can lock the Code field proactively
+  rather than only reject on submit, and the reserved Cash record's protection enforced
+  independent of reference state. `shared/src/schemas/bank.ts` (new) — `createBankSchema`/
+  `updateBankSchema`, field lengths mirroring `Bank.code`/`Bank.name`'s existing column limits.
+- **Frontend** (`frontend/src/hooks/use-banks.ts` extended, `frontend/src/routes/settings-page.tsx`
+  extended with a new Banks tab): list/search, create/edit/activate-deactivate/delete flows, the
+  Code field's proactive lock once referenced, and the Cash row's protected-record row-menu
+  treatment — visible only to a Master User session (`banks:manage`), omitted entirely (not merely
+  disabled) for everyone else.
+- **Tests**: `backend/tests/banks.test.ts`, 18 new cases (permission boundaries, CRUD, the
+  referenced-code lock, delete-blocked-while-referenced, and the reserved Cash record's protection
+  against every mutation regardless of reference state). **Full backend suite at the time: 226/226**
+  (208 prior, Phase 3.5's close, + 18 new).
+- **Verification** (per the commit's own diff — `typecheck`/`lint`/`build` are inferred standard
+  practice for this project, not independently re-confirmed by this retroactive note):
+  `docs/prototypes/phase4-bank-registry-preview.html` (5 screens: Banks list, New Bank modal, Edit
+  Bank modal with the code field locked, Delete Bank modal, and the Cash row's protected-record
+  menu).
+
+### Phase 4, Checkpoint 2 — Finance Role and Salary Release foundation (2026-07-11)
+
+Scope explicitly narrowed by the user ahead of implementation to exactly: the Finance role, the
+`PayrollUnitRelease` data model, the per-Unit release workflow and its permissions, audit logging,
+and the required frontend UI — **not** Bank Sheets, Statements, Reports, or any other later Phase 4
+work. Two further scope questions were asked and answered before writing any schema: both
+`PayrollUnitReadiness` ("Ready for Release," Payroll Staff's own non-gating signal to Finance) and
+the Late Entry one-off release path are **deliberately deferred to a later checkpoint** — neither is
+named in the approved scope list, and the required frontend UI list ("Finance-only controls, Release
+confirmation dialog, Released status indicators") names nothing that needs either.
+
+**Finance role** (`docs/architecture/authentication.md`, `database/access-control.md §2`): a third
+seeded `Role` (`ROLE_CODES.FINANCE`, `shared/src/constants/permissions.ts`), site-scoped via the
+existing `UserSiteAssignment` table — no new scoping mechanism needed, identical in shape to Payroll
+Staff's. Two new permissions: `PAYROLL_VIEW` (`payroll:view`, read-only — the only way a role that
+never holds the Payroll Staff/Master User edit permission `payroll:entry` can still see Payroll
+Cycles/Entries and release status) and `PAYROLL_RELEASE` (`payroll:release`, already reserved as a
+permission key since Phase 3 Checkpoint 0 but never granted to any role until now). Finance's grant
+is exactly `[PAYROLL_VIEW, PAYROLL_RELEASE]` — no payroll-edit permission, no `payroll:mark-ready`
+(doesn't exist yet), no corrections-approval permission, matching
+`docs/architecture/authentication.md`'s explicit "Finance's permission set" withholding list.
+`backend/prisma/seed.ts`'s role-name mapping (previously a two-way `MASTER_ADMIN`/else ternary) was
+generalized to a lookup table so a third role gets its correct display name rather than silently
+inheriting "Payroll Staff." `shared/src/schemas/user.ts`'s `createUserSchema.roleCode` enum extended
+to accept `FINANCE`, so User Management's already-role-agnostic `createUser`/`updateUser` (which
+resolve the `Role` row and site-assignment handling generically from `input.roleCode`, unchanged
+since Phase 2) supports creating/editing Finance accounts with no other backend change.
+
+**`PayrollUnitRelease`** (`database/release.md §12b`): new model exactly as frozen — `id`, `cycleId`
+(→ `PayrollCycle`, RESTRICT), `unitId` (→ `ProjectUnit`, RESTRICT), `releasedAt`, `releasedById` (→
+`User`, RESTRICT), unique on `(cycleId, unitId)`, immutable/append-only, no un-release action.
+Migration `20260711140000_payroll_unit_release`, generated via `prisma migrate diff` against a real,
+live-in-session database (the same embedded-Postgres-in-scratchpad instance from a prior session,
+still running and reachable — re-verified rather than re-provisioned) and applied via `prisma migrate
+deploy`; the diff tool's spurious `DROP TABLE "session"` (that table is `connect-pg-simple`-owned,
+never part of this Prisma schema, `database/access-control.md §20`) was removed by hand before the
+migration file was written, matching the standing rule that no migration in this project ever touches
+it. `PayrollEntry.released`/`.releasedAt`/`.releasedBy`/`.lateReason` already existed since Phase 3
+Checkpoint 0 and needed no schema change — only application code that actually writes to them for the
+first time.
+
+**Release workflow** (`backend/src/modules/payroll-release/`): `releaseProjectUnit()` inserts the
+`PayrollUnitRelease` row and, in the same transaction, sweeps every non-held `PayrollEntry` at that
+Unit's own Site whose work lines touch it — an entry flips to `released = true` only once *every*
+distinct Unit its work lines touch has its own release row, preserving one entry/one net salary/one
+downstream document even for a multi-unit split employee (Principle 1, 6; verified directly by a
+dedicated test releasing a two-Unit split entry's Units one at a time). Scoped to one Site rather than
+the whole cycle for both correctness (a `PayrollEntryWorkLine` can never reference a Unit outside its
+parent entry's own Site, Principle 7) and scale (bounded by that Site's headcount, not the whole
+company, Principle 10). `getUnitReleaseStatus()` — the read side driving the Release UI's unit list
+and confirmation dialog — reports, per Unit: released state, `releasedAt`/`releasedBy`, how many
+entries touch it (`entryCount`), and how many would flip to released *right now* if it released
+(`willReleaseCount`, `0` once already released), computed fresh on every read, never stored
+(Principle 5). No new mechanism was needed to keep a released entry's snapshot correct after a later
+`Employee` change (bank, account, designation, transfer): every field release freezes was already
+copied onto `PayrollEntry` at entry-creation/edit time and already never cascades from `Employee`
+(Phase 3 Checkpoint 0/2.5 design) — release only ever flips the `released`/`releasedAt`/`releasedBy`
+flags, so the "regenerates identical downstream outputs even after later Employee changes" requirement
+was already true before this checkpoint; verified directly rather than assumed (a dedicated test
+changes an employee's bank/account/designation after release and confirms the released
+`PayrollEntry` row is untouched).
+
+**Permissions**: `requirePermission` (`backend/src/common/middleware/require-permission.ts`) now
+accepts either a single permission or a list, checked as **any-of** — its first use is letting
+`GET /payroll-cycles`, `GET /payroll-cycles/:cycleId/entries`, and `GET /payroll-entries/:id` accept
+either `payroll:entry` (Payroll Staff's existing edit permission, which has always implied view) or
+`payroll:view` (Finance's own, narrower, read-only grant), without duplicating any route. The release
+action itself (`POST /payroll-cycles/:cycleId/units/:unitId/release`) is gated by `payroll:release`
+alone — Payroll Staff never holds it, matching "Finance authorizes payment, Payroll Staff prepares
+payroll" exactly. Site-scoping reuses the existing generic `assertSiteAccess()`
+(`employees.service.ts`) against the target Unit's own Site — the same C11-pattern boundary this
+project already applies everywhere else, including a manipulated-`unitId`-outside-assignment direct
+API call test.
+
+**Audit logging**: reuses the existing `recordAuditLog()` insert-only service exclusively — no second
+audit mechanism. One `payroll_unit.released` entry per release event, plus one `payroll_entry.released`
+entry per entry the sweep actually finalizes (release.md §12b's explicit requirement), all inside the
+same transaction as the data change (Principle 3).
+
+**Frontend**: `frontend/src/hooks/use-payroll-release.ts` and
+`frontend/src/routes/salary-release-page.tsx` — a new "Salary Release" page (nav item gated on
+`payroll:view`, so Payroll Staff never sees it in the sidebar) showing a Site-scoped table of Units
+with a status badge (Released/Pending), employee count, released-by/at, and a Release action visible
+only when the caller holds `payroll:release` and the cycle is still Draft. Clicking Release opens a
+confirmation dialog (the required "Release confirmation dialog") showing exactly how many employees
+are at that Unit, how many will release now, and how many remain pending due to another still-open
+Unit — sourced from the same `getUnitReleaseStatus()` read the list itself uses, no extra round trip.
+`frontend/src/routes/users-page.tsx` updated for the third role: a Finance option in the role select,
+the "assigned sites" section generalized from `roleCode === PAYROLL_STAFF` to `roleCode !==
+MASTER_ADMIN` (Finance is site-scoped exactly like Payroll Staff), and the page subtitle updated.
+
+**A real, environment-level bug found and fixed via this checkpoint's own Playwright pass, not
+shipped**: the frontend dev server (already running from a background `run`-skill agent invocation
+in this same checkout) had pre-bundled `@payroll/shared` into its Vite `optimizeDeps` cache *before*
+this session's `ROLE_CODES.FINANCE` addition landed — the Users page's role `<select>` silently had no
+Finance option, `selectOption('#user-role', 'FINANCE')` timed out with "did not find some options."
+This is the exact, previously-documented "Vite dev cache staleness" class of issue (Phase 2.5
+Checkpoint 4's session, `.vite`/dep-cache going stale after a `@payroll/shared` change) — fixed by
+killing that one dev-server process, clearing `frontend/node_modules/.vite`, and restarting; verified
+the freshly re-bundled `@payroll_shared.js` dep chunk now contains `FINANCE` before re-running the
+Playwright pass.
+
+**Tests**: `backend/tests/payroll-release.test.ts`, 15 cases — permission tests (Payroll Staff
+rejected, Finance and Master User allowed to release; both Finance's `payroll:view` and Payroll
+Staff's `payroll:entry` allowed to view, a permission-less user rejected); site-scoping boundary tests
+(a manipulated `unitId`/`siteId` outside a Finance user's assignment, the C11 pattern); the release
+workflow (single-unit release sets `released`/`releasedAt`/`releasedBy` and writes both audit
+entries; a multi-unit split entry stays unreleased until every touched Unit has released, then
+releases on the last one; a held entry never releases even after its Unit does; releasing a
+non-Draft cycle's Unit is rejected); snapshot integrity (a released entry rejects an ordinary edit;
+a released entry's frozen fields are provably unchanged after the employee's bank/account/designation
+change later); and the release-status summary's `entryCount`/`willReleaseCount` arithmetic before and
+after a partial release. **Double-release rejection verified explicitly (added during this
+checkpoint's pre-commit review), as two separate cases**: (1) a sequential second release attempt
+against an already-released Unit gets `releaseProjectUnit()`'s own pre-check — a clean, typed 409
+`CONFLICT` (`common/http-error.ts`'s `conflict()`) with the exact business-error message, asserted
+against the response body's `error.code`/`error.message`, not just its status code — and a direct
+`PayrollUnitRelease` row-count check confirms no second row was ever inserted; (2) two concurrent
+release requests racing the same pre-check-then-insert window resolve to exactly one `201` and one
+clean `409` (the loser via the global error handler's existing P2002 → 409 `DUPLICATE` translation,
+`common/middleware/error-handler.ts`, since the DB's own `(cycleId, unitId)` unique constraint is the
+correctness backstop for a genuine race) — never a raw 500, never a silent duplicate; a row-count
+check confirms exactly one `PayrollUnitRelease` row exists afterward either way. Together these
+confirm the business rule holds on both the ordinary path (the service-level guard) and the race path
+(the DB constraint, translated to the same standard error shape) — neither path can silently succeed
+or crash uncleanly. `backend/tests/helpers.ts`'s `cleanTestData()` extended for `PayrollUnitRelease`'s
+two `RESTRICT` FKs, ordered before the `PayrollCycle`/`User` deletes it depends on. **Full backend
+suite: 241/241** (226 prior + 15 new).
+
+**Verification**: `typecheck`/`lint`/`build` clean across all three workspaces (0 errors, same 4
+pre-existing frontend `react-refresh` warnings, none new); **241/241 backend tests** against a live
+PostgreSQL instance (re-verified three times across this checkpoint — once mid-implementation, once
+after the E2E Playwright pass mutated the same database, and once more in a dedicated pre-commit pass
+after strengthening the double-release test); `prisma validate`: valid; `prisma generate`: clean;
+`prisma migrate status`: up to date, zero drift. **Real-stack
+Playwright pass** (live browser → Vite dev server → Express → PostgreSQL, no mocks): Master User
+creates a Project Site/Unit/Employee/Draft cycle and a Finance user (site-assigned, "Finance" role
+badge rendered correctly in User Management); the Finance user logs in, sees "Salary Release" but not
+"Payroll Entry" in the sidebar, opens the confirmation dialog, releases the Unit, and the row
+immediately shows "Released" with the correct timestamp/name and the Release button gone; zero
+`console.error`/`pageerror` events across every screen visited (the app's own documented, expected
+401 on the pre-login `GET /api/v1/auth/me` session probe is the only network-level "Failed to load
+resource" entry observed, matching `use-session.ts`'s own doc comment that this is a normal, handled
+outcome, not an error state). E2E fixtures were cleaned from the dev database afterward (same
+convention as the 2026-07-04 database-verification session), audit rows left in place by design.
+`docs/prototypes/phase4-salary-release-preview.html` created (four screens: Finance's unit list,
+the release confirmation dialog, the after-release state showing a still-pending split-entry Unit,
+and Payroll Staff's read-only omission of the page entirely) and reviewed directly against the
+implemented UI's own screenshots before being finalized. `docs/prototypes/phase1-preview.html`,
+`phase2-employee-registry-preview.html`, and `phase3-payroll-entry-preview.html` were left exactly as
+they already stood in the working tree at the start of this session (pre-existing, unrelated
+in-progress edits from before this checkpoint began) — not reviewed or touched here, since none of
+them depict Release/Finance screens this checkpoint would factually contradict.
+
+**Reviewed and approved, committed as a single commit** (`feat(payroll): implement Phase 4
+Checkpoint 2 salary release foundation`) per explicit instruction — exactly one commit, Checkpoint 2
+files only (the two pre-existing, unrelated, already-modified prototype files noted above were
+deliberately left out of this commit). This entry, written and committed in that same commit,
+cannot self-reference its own not-yet-created hash; the next session's first action should record
+it here as a doc-only commit, matching this project's own established convention. **Do not begin
+Checkpoint 3 (Bank Sheets or any other later Phase 4 work) until the next explicit review and
+authorization.**
 
 ---
 

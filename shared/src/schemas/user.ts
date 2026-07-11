@@ -5,7 +5,7 @@ export const createUserSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(120),
   email: z.string().trim().email('Enter a valid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
-  roleCode: z.enum([ROLE_CODES.MASTER_ADMIN, ROLE_CODES.PAYROLL_STAFF]),
+  roleCode: z.enum([ROLE_CODES.MASTER_ADMIN, ROLE_CODES.PAYROLL_STAFF, ROLE_CODES.FINANCE]),
   /** Ignored for Master Admin (implicit, unrestricted access — no assignment rows). */
   siteIds: z.array(z.string().uuid()).optional(),
 });

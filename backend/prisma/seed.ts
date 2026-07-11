@@ -19,6 +19,12 @@ const BANKS = [
   { code: CASH_BANK_CODE, name: 'Cash' },
 ];
 
+const ROLE_DISPLAY_NAMES: Record<string, string> = {
+  [ROLE_CODES.MASTER_ADMIN]: 'Master Admin',
+  [ROLE_CODES.PAYROLL_STAFF]: 'Payroll Staff',
+  [ROLE_CODES.FINANCE]: 'Finance',
+};
+
 const ADJUSTMENT_TYPES = [
   { code: 'ATTENDANCE_CORRECTION', label: 'Attendance Correction' },
   { code: 'OVERTIME_CORRECTION', label: 'Overtime Correction' },
@@ -31,8 +37,8 @@ const ADJUSTMENT_TYPES = [
 
 /**
  * Idempotent — safe to re-run against an environment that already has seed data (upserts
- * throughout, never blind inserts). Seeds the permission registry, the two roles with their
- * grants, one Master Admin account, the Bank/AdjustmentType lookup tables, and the singleton
+ * throughout, never blind inserts). Seeds the permission registry, every role with its grants,
+ * one Master Admin account, the Bank/AdjustmentType lookup tables, and the singleton
  * CompanySettings row. Later phases extend this file additively rather than replacing it.
  */
 async function main() {
@@ -52,7 +58,7 @@ async function main() {
       update: {},
       create: {
         code: roleCode,
-        name: roleCode === ROLE_CODES.MASTER_ADMIN ? 'Master Admin' : 'Payroll Staff',
+        name: ROLE_DISPLAY_NAMES[roleCode] ?? roleCode,
       },
     });
 

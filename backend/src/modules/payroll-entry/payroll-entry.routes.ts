@@ -57,7 +57,11 @@ export const payrollCycleEntriesRouter = Router({ mergeParams: true });
 
 payrollCycleEntriesRouter.use(requireAuth);
 
-payrollCycleEntriesRouter.get('/', requirePermission(PERMISSIONS.PAYROLL_ENTRY), async (req, res, next) => {
+// View access is shared with Finance (read-only, Phase 4 Checkpoint 2) via `payroll:view` —
+// Payroll Staff's own `payroll:entry` grant already implies view, so both are accepted here.
+const VIEW_PERMISSIONS = [PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.PAYROLL_VIEW];
+
+payrollCycleEntriesRouter.get('/', requirePermission(VIEW_PERMISSIONS), async (req, res, next) => {
   try {
     const cycleId = requireIdParam(req.params.cycleId);
     const page = req.query.page ? Number(req.query.page) : undefined;
@@ -194,7 +198,7 @@ export const payrollEntriesRouter = Router();
 
 payrollEntriesRouter.use(requireAuth);
 
-payrollEntriesRouter.get('/:id', requirePermission(PERMISSIONS.PAYROLL_ENTRY), async (req, res, next) => {
+payrollEntriesRouter.get('/:id', requirePermission(VIEW_PERMISSIONS), async (req, res, next) => {
   try {
     const entry = await getPayrollEntry(req.currentUser!, requireIdParam(req.params.id));
     res.status(200).json({ entry });

@@ -6,7 +6,10 @@
 // PayrollEntryWorkLine) through Checkpoint 6 (all schema/migration + full application code) +
 // Phase 3.5 Checkpoint 1 (TaskPriority, TaskStatus, TaskNotificationType, Task, TaskNotification —
 // schema/migration only, no routes/services yet; permanently replaces the previously-planned Team
-// Collaboration/Chat panel, docs/architecture/database/tasks.md) — see
+// Collaboration/Chat panel, docs/architecture/database/tasks.md) + Phase 4 Checkpoint 2 (FINANCE
+// role — a seeded Role row, not a schema change — and PayrollUnitRelease,
+// docs/architecture/database/release.md §12b; PayrollUnitReadiness and the Late Entry release path
+// are deliberately deferred past this checkpoint) — see
 // docs/architecture/database/ for the full design and docs/IMPLEMENTATION_PLAN.md for
 // phase sequencing.
 //
@@ -57,8 +60,8 @@ enum PayType {
 }
 
 /// Role → Permission RBAC (docs/architecture/authentication.md). A named bundle of permissions;
-/// Master Admin and Payroll Staff today, extensible to future roles (e.g. an ESS "Employee" role)
-/// as a data change, never a code change.
+/// Master Admin, Payroll Staff, and Finance (added Phase 4 Checkpoint 2) today, extensible to
+/// future roles (e.g. an ESS "Employee" role) as a data change, never a code change.
 model Role {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code        String   @unique @db.VarChar(40)
@@ -123,6 +126,7 @@ model User {
   payrollCyclesReleased  PayrollCycle[]            @relation("PayrollCycleReleasedBy")
   payrollCyclesArchived  PayrollCycle[]            @relation("PayrollCycleArchivedBy")
   payrollEntriesReleased PayrollEntry[]            @relation("PayrollEntryReleasedBy")
+  payrollUnitReleases    PayrollUnitRelease[]      @relation("PayrollUnitReleaseReleasedBy")
   tasksAssignedToMe      Task[]                    @relation("TaskAssignedTo")
   tasksAssignedByMe      Task[]                    @relation("TaskAssignedBy")
   taskNotifications      TaskNotification[]
@@ -198,6 +202,7 @@ model ProjectUnit {
   transfersFrom EmployeeTransferHistory[] @relation("EmployeeTransferFromUnit")
   transfersTo   EmployeeTransferHistory[] @relation("EmployeeTransferToUnit")
   workLines     PayrollEntryWorkLine[]
+  unitReleases  PayrollUnitRelease[]
 
   // `@@unique([id, siteId])` exists purely so downstream tables (Employee.unitId, added in
   // Checkpoint 2, and PayrollEntryWorkLine.unitId, added in Phase 3 Checkpoint 0) can declare a
@@ -397,6 +402,7 @@ model PayrollCycle {
   releasedByUser User?          @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
   archivedByUser User?          @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
   entries        PayrollEntry[]
+  unitReleases   PayrollUnitRelease[]
 
   @@unique([year, month])
 }
@@ -499,6 +505,34 @@ model PayrollEntryWorkLine {
 
   @@unique([payrollEntryId, unitId])
   @@index([payrollEntryId])
+  @@index([unitId])
+}
+
+/// The release event for one Project Unit, for one cycle (docs/architecture/database/release.md
+/// §12b, Phase 4 Checkpoint 2) — the source of truth `PayrollEntry.released` is derived from.
+/// Immutable, append-only: inserted once per `(cycleId, unitId)`, never updated or deleted — there
+/// is no "un-release" action (Principle 9). Inserting this row must, in the same transaction,
+/// sweep every non-held `PayrollEntry` at this Unit's own Site whose work lines touch `unitId`
+/// and, for each one whose every distinct touched Unit now has a release row, flip
+/// `PayrollEntry.released`/`releasedAt`/`releasedBy` and write its own `payroll_entry.released`
+/// audit entry — see `payroll-release.service.ts`. `PayrollUnitReadiness` ("Ready for Release")
+/// and the Late Entry one-off release path are both explicitly deferred past this checkpoint (not
+/// built here) — see docs/PROJECT_PROGRESS.md's Phase 4 Checkpoint 2 entry for the scope decision.
+model PayrollUnitRelease {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId      String   @db.Uuid
+  unitId       String   @db.Uuid
+  releasedAt   DateTime @default(now()) @db.Timestamptz(6)
+  /// Must hold `payroll:release` for this Unit's Site (Finance or Master User) — enforced at the
+  /// application layer, docs/architecture/authentication.md.
+  releasedById String   @db.Uuid
+
+  cycle      PayrollCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  unit       ProjectUnit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  releasedBy User         @relation("PayrollUnitReleaseReleasedBy", fields: [releasedById], references: [id], onDelete: Restrict)
+
+  @@unique([cycleId, unitId])
+  @@index([cycleId])
   @@index([unitId])
 }
 

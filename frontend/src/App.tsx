@@ -7,6 +7,7 @@ import { HomePage } from '@/routes/home-page';
 import { ProjectSitesPage } from '@/routes/project-sites-page';
 import { EmployeesPage } from '@/routes/employees-page';
 import { PayrollEntryPage } from '@/routes/payroll-entry-page';
+import { SalaryReleasePage } from '@/routes/salary-release-page';
 import { SettingsPage } from '@/routes/settings-page';
 import { UsersPage } from '@/routes/users-page';
 import { NotFoundPage } from '@/routes/not-found-page';
@@ -59,6 +60,12 @@ export function App() {
         path="/payroll-entry"
         element={
           <RequireSession>{(user) => <PayrollEntryPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/release"
+        element={
+          <RequireSession>{(user) => <SalaryReleasePage user={user} />}</RequireSession>
         }
       />
       <Route
