@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import argon2 from 'argon2';
 import { PrismaClient } from '@prisma/client';
-import { PERMISSIONS, ROLE_CODES, ROLE_PERMISSIONS } from '@payroll/shared';
+import { CASH_BANK_CODE, PERMISSIONS, ROLE_CODES, ROLE_PERMISSIONS } from '@payroll/shared';
 
 const prisma = new PrismaClient();
 
@@ -12,6 +12,11 @@ const BANKS = [
   { code: 'ABL', name: 'Allied Bank Limited' },
   { code: 'HBL', name: 'Habib Bank Limited' },
   { code: 'MCB', name: 'MCB Bank Limited' },
+  // The reserved, protected Cash record (Phase 4 Checkpoint 1 — Bank Registry). Seeded once here
+  // and never touched again by this script (`update: {}` below) — its code/name are permanently
+  // locked by banks.service.ts regardless, but this keeps the seed itself from ever being a second
+  // place that could silently rewrite it.
+  { code: CASH_BANK_CODE, name: 'Cash' },
 ];
 
 const ADJUSTMENT_TYPES = [

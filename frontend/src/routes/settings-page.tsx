@@ -1,16 +1,28 @@
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import type { SessionUser } from '@payroll/shared';
+import { MoreHorizontal, Plus } from 'lucide-react';
+import { CASH_BANK_CODE, PERMISSIONS, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/cn';
 import { ApiError } from '@/lib/api-client';
 import { LogoPlaceholder } from '@/components/logo-placeholder';
 import { useCompanySettings, useUpdateCompanySettings } from '@/hooks/use-company-settings';
 import { useChangePassword, useUpdateProfile } from '@/hooks/use-session';
+import { useAllBanks, useCreateBank, useDeleteBank, useUpdateBank, type Bank } from '@/hooks/use-banks';
 
 function TabIntro({ title, description }: { title: string; description: string }) {
   return (
@@ -29,7 +41,7 @@ const ACCENT_PRESETS = [
   { label: 'Slate', value: '#374151' },
 ];
 
-type Tab = 'company' | 'profile' | 'theme';
+type Tab = 'company' | 'profile' | 'theme' | 'banks';
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -274,6 +286,297 @@ function MyProfileTab({ user }: { user: SessionUser }) {
   );
 }
 
+function BankFormModal({
+  open,
+  onOpenChange,
+  bank,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  bank?: Bank;
+}) {
+  const createBank = useCreateBank();
+  const updateBank = useUpdateBank();
+  const isEdit = Boolean(bank);
+  const codeLocked = isEdit && Boolean(bank?.isReferenced);
+  const isPending = createBank.isPending || updateBank.isPending;
+
+  const [code, setCode] = useState(bank?.code ?? '');
+  const [name, setName] = useState(bank?.name ?? '');
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+
+    try {
+      if (isEdit && bank) {
+        await updateBank.mutateAsync({
+          id: bank.id,
+          input: { name, ...(codeLocked ? {} : { code }) },
+        });
+        toast.success('Bank updated');
+      } else {
+        await createBank.mutateAsync({ code, name });
+        toast.success('Bank created');
+      }
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Something went wrong');
+    }
+  }
+
+  return (
+    <Modal open={open} onOpenChange={(next) => !isPending && onOpenChange(next)}>
+      <ModalContent title={isEdit ? 'Edit Bank' : 'New Bank'} widthClassName="max-w-[460px]">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="bank-code">Bank code</Label>
+            <Input
+              id="bank-code"
+              required
+              maxLength={10}
+              value={code}
+              disabled={codeLocked}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="e.g. MCB"
+            />
+            {codeLocked && (
+              <p className="text-[11px] text-text-muted">
+                Locked — this bank is already referenced by an employee or payroll record. Create a
+                new bank instead if the code genuinely needs to change, then deactivate this one.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="bank-name">Display name</Label>
+            <Input
+              id="bank-name"
+              required
+              maxLength={120}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. MCB Bank Limited"
+            />
+          </div>
+          <ModalFooter>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isPending}>
+              {isEdit ? 'Save changes' : 'Create bank'}
+            </Button>
+          </ModalFooter>
+        </form>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function DeleteBankModal({
+  open,
+  onOpenChange,
+  bank,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  bank: Bank;
+}) {
+  const deleteBank = useDeleteBank();
+
+  async function handleDelete() {
+    try {
+      await deleteBank.mutateAsync(bank.id);
+      toast.success('Bank deleted');
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Something went wrong deleting this bank');
+    }
+  }
+
+  return (
+    <Modal open={open} onOpenChange={(next) => !deleteBank.isPending && onOpenChange(next)}>
+      <ModalContent title="Delete Bank" widthClassName="max-w-[420px]">
+        <p className="text-xs text-text-muted">
+          Delete <span className="font-medium text-text">{bank.name}</span>? This cannot be undone.
+        </p>
+        <ModalFooter>
+          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={deleteBank.isPending}>
+            Cancel
+          </Button>
+          <Button
+            className="bg-danger hover:brightness-110"
+            onClick={handleDelete}
+            disabled={deleteBank.isPending}
+          >
+            Delete
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+/**
+ * Settings → Banks (Phase 4 Checkpoint 1) — Master User only; the tab itself is hidden from anyone
+ * without `banks:manage` (see `SettingsPage` below), and the backend independently re-enforces the
+ * same permission on every write. Lists every bank via `useAllBanks()` (active or not, including
+ * the reserved Cash record) — Employee Registry / Payroll Entry keep using `useBanks()`'s
+ * active-only list unchanged. No `overflow-x-auto` wrapper is needed at today's 3-column width, but
+ * the table still follows the Layout Integrity rule: nothing here truncates — Code and Name both
+ * render at full length, wrapping rather than clipping if a name is ever unusually long.
+ */
+function BanksTab() {
+  const { data: banks, isLoading } = useAllBanks();
+  const [search, setSearch] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingBank, setEditingBank] = useState<Bank | undefined>(undefined);
+  const [deletingBank, setDeletingBank] = useState<Bank | undefined>(undefined);
+  const updateBank = useUpdateBank();
+
+  const filteredBanks = (banks ?? []).filter((bank) => {
+    if (!search) return true;
+    const term = search.toLowerCase();
+    return bank.name.toLowerCase().includes(term) || bank.code.toLowerCase().includes(term);
+  });
+
+  async function handleToggleActive(bank: Bank) {
+    try {
+      await updateBank.mutateAsync({ id: bank.id, input: { isActive: !bank.isActive } });
+      toast.success(bank.isActive ? 'Bank deactivated' : 'Bank activated');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Something went wrong');
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between gap-3">
+        <TabIntro
+          title="Banks"
+          description="Banks employees can receive salary at. Only active banks appear in Employee Registry."
+        />
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-3.5 w-3.5" aria-hidden />
+          New Bank
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-1.5 max-w-[280px]">
+        <Label htmlFor="bank-search">Search</Label>
+        <Input
+          id="bank-search"
+          placeholder="Name or code"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
+      {isLoading && (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      )}
+
+      {!isLoading && filteredBanks.length === 0 && (
+        <div className="flex flex-col items-center gap-1 py-10 text-center">
+          <p className="text-xs font-medium text-text">No banks found</p>
+          <p className="text-xs text-text-muted">Try a different search, or add the first bank.</p>
+        </div>
+      )}
+
+      {!isLoading && filteredBanks.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Code</TableHead>
+              <TableHead>Display name</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredBanks.map((bank) => {
+              const isCash = bank.code === CASH_BANK_CODE;
+              return (
+                <TableRow key={bank.id}>
+                  <TableCell className="font-medium">{bank.code}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      {bank.name}
+                      {isCash && <Badge tone="purple">Protected</Badge>}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge tone={bank.isActive ? 'green' : 'gray'}>
+                      {bank.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+                          aria-label={`Actions for ${bank.name}`}
+                        >
+                          <MoreHorizontal className="h-4 w-4" aria-hidden />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {isCash ? (
+                          <DropdownMenuItem disabled className="opacity-100">
+                            Protected system record — cannot be edited, deactivated, or deleted
+                          </DropdownMenuItem>
+                        ) : (
+                          <>
+                            <DropdownMenuItem onSelect={() => setEditingBank(bank)}>Edit</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => handleToggleActive(bank)}>
+                              {bank.isActive ? 'Deactivate' : 'Activate'}
+                            </DropdownMenuItem>
+                            {bank.isReferenced ? (
+                              <DropdownMenuItem
+                                disabled
+                                className="opacity-100"
+                                title="Referenced banks cannot be deleted"
+                              >
+                                Delete (referenced)
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem onSelect={() => setDeletingBank(bank)}>Delete</DropdownMenuItem>
+                            )}
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+
+      <BankFormModal open={createOpen} onOpenChange={setCreateOpen} />
+
+      {editingBank && (
+        <BankFormModal
+          open={Boolean(editingBank)}
+          onOpenChange={(open) => !open && setEditingBank(undefined)}
+          bank={editingBank}
+        />
+      )}
+
+      {deletingBank && (
+        <DeleteBankModal
+          open={Boolean(deletingBank)}
+          onOpenChange={(open) => !open && setDeletingBank(undefined)}
+          bank={deletingBank}
+        />
+      )}
+    </div>
+  );
+}
+
 function ThemeTab({ user }: { user: SessionUser }) {
   const updateProfile = useUpdateProfile();
   const [selected, setSelected] = useState(user.themeAccentColor);
@@ -329,6 +632,7 @@ function ThemeTab({ user }: { user: SessionUser }) {
 
 export function SettingsPage({ user }: { user: SessionUser }) {
   const [tab, setTab] = useState<Tab>('company');
+  const canManageBanks = user.permissions.includes(PERMISSIONS.BANKS_MANAGE);
 
   return (
     <AppShell user={user} title="Settings" subtitle="Company details, your profile, and theme">
@@ -345,12 +649,18 @@ export function SettingsPage({ user }: { user: SessionUser }) {
               <TabButton active={tab === 'theme'} onClick={() => setTab('theme')}>
                 Theme
               </TabButton>
+              {canManageBanks && (
+                <TabButton active={tab === 'banks'} onClick={() => setTab('banks')}>
+                  Banks
+                </TabButton>
+              )}
             </div>
           </CardHeader>
           <CardContent className="border-t border-border p-7">
             {tab === 'company' && <CompanyDetailsTab user={user} />}
             {tab === 'profile' && <MyProfileTab user={user} />}
             {tab === 'theme' && <ThemeTab user={user} />}
+            {tab === 'banks' && canManageBanks && <BanksTab />}
           </CardContent>
         </Card>
       </div>

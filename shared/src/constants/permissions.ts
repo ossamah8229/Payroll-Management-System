@@ -14,6 +14,11 @@ export const PERMISSIONS = {
   EMPLOYEES_EDIT: 'employees:edit',
   EMPLOYEES_CREATE: 'employees:create',
   SITES_MANAGE: 'sites:manage',
+  /** Master-User-only (Bank Registry, Phase 4 Checkpoint 1, Settings → Banks) — create/edit/
+   * activate/deactivate/delete. `GET /banks`'s default (active-only) results need no permission —
+   * any authenticated user can populate a bank-selection dropdown with them, same as before this
+   * checkpoint. */
+  BANKS_MANAGE: 'banks:manage',
   PAYROLL_ENTRY: 'payroll:entry',
   /** Master-User-only cycle lifecycle action (bootstrap/create a Payroll Cycle) — added Phase 3
    * Checkpoint 1. Distinct from `PAYROLL_ENTRY` (Payroll Staff's day-to-day data-entry
