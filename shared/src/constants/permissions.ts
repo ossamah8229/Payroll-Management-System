@@ -32,6 +32,13 @@ export const PERMISSIONS = {
    * permission set"). */
   PAYROLL_VIEW: 'payroll:view',
   PAYROLL_RELEASE: 'payroll:release',
+  /** Finance-only (+ Master User) — view, generate, and export Bank Sheets, added Phase 4
+   * Checkpoint 3. Reserved by name in `docs/architecture/authentication.md`'s "Finance's
+   * permission set" since Phase 3's architecture review; Checkpoint 2 deliberately deferred
+   * granting it ("Bank Sheets/Cash Receiving view permissions are deferred to the checkpoint that
+   * actually builds them"). Payroll Staff never holds this — Bank Sheets are a Finance/Master User
+   * capability only, independent of `PAYROLL_ENTRY`/`PAYROLL_VIEW`. */
+  BANK_SHEETS_VIEW: 'bank-sheets:view',
   CORRECTIONS_APPROVE: 'corrections:approve',
   ADVANCES_MANAGE: 'advances:manage',
   REPORTS_VIEW: 'reports:view',
@@ -76,7 +83,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionKey[]> = {
     PERMISSIONS.REPORTS_VIEW,
   ],
   /** Deliberately narrow (docs/architecture/authentication.md "Finance's permission set") — no
-   * payroll-edit permission, no `payroll:mark-ready`, no corrections approval. Bank Sheets/Cash
-   * Receiving view permissions are deferred to the checkpoint that actually builds them. */
-  [ROLE_CODES.FINANCE]: [PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_RELEASE],
+   * payroll-edit permission, no `payroll:mark-ready`, no corrections approval. Cash Receiving's
+   * own view permission is deferred to the checkpoint that actually builds that module. */
+  [ROLE_CODES.FINANCE]: [PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_RELEASE, PERMISSIONS.BANK_SHEETS_VIEW],
 };

@@ -40,6 +40,34 @@ import {
 const selectClassName =
   'flex h-9 w-full rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
 
+/** The one place `EmployeeFormModal`'s form shape is built from an `Employee` (edit) or blank
+ * (create) — used both by the initial `useState` and by the open-triggered reset effect below, so
+ * there is exactly one implementation of "what a fresh form looks like," never two definitions
+ * that could drift apart. */
+function buildEmployeeForm(employee: Employee | undefined, defaultSiteId: string | undefined) {
+  return {
+    name: employee?.name ?? '',
+    employeeCode: employee?.employeeCode ?? '',
+    cnic: employee?.cnic ?? '',
+    fatherName: employee?.fatherName ?? '',
+    religion: employee?.religion ?? '',
+    dateOfBirth: toIsoDateOnly(employee?.dateOfBirth),
+    mobileNumber: employee?.mobileNumber ?? '',
+    designation: employee?.designation ?? '',
+    siteId: employee?.siteId ?? defaultSiteId ?? '',
+    unitId: employee?.unitId ?? '',
+    dateOfJoining: toIsoDateOnly(employee?.dateOfJoining),
+    payType: employee?.payType ?? ('DAILY_WAGE' as const),
+    grossPay: employee?.grossPay ?? '',
+    bankId: employee?.bankId ?? '',
+    branchCode: employee?.branchCode ?? '',
+    accountNumber: employee?.accountNumber ?? '',
+    accountTitle: employee?.accountTitle ?? '',
+    defaultEobiAmount: employee?.defaultEobiAmount ?? '',
+    defaultEobiApplicable: employee?.defaultEobiApplicable ?? true,
+  };
+}
+
 function EmployeeFormModal({
   open,
   onOpenChange,
@@ -59,27 +87,24 @@ function EmployeeFormModal({
   const isEdit = Boolean(employee);
   const isPending = createEmployee.isPending || updateEmployee.isPending;
 
-  const [form, setForm] = useState({
-    name: employee?.name ?? '',
-    employeeCode: employee?.employeeCode ?? '',
-    cnic: employee?.cnic ?? '',
-    fatherName: employee?.fatherName ?? '',
-    religion: employee?.religion ?? '',
-    dateOfBirth: toIsoDateOnly(employee?.dateOfBirth),
-    mobileNumber: employee?.mobileNumber ?? '',
-    designation: employee?.designation ?? '',
-    siteId: employee?.siteId ?? defaultSiteId ?? '',
-    unitId: employee?.unitId ?? '',
-    dateOfJoining: toIsoDateOnly(employee?.dateOfJoining),
-    payType: employee?.payType ?? 'DAILY_WAGE',
-    grossPay: employee?.grossPay ?? '',
-    bankId: employee?.bankId ?? '',
-    branchCode: employee?.branchCode ?? '',
-    accountNumber: employee?.accountNumber ?? '',
-    accountTitle: employee?.accountTitle ?? '',
-    defaultEobiAmount: employee?.defaultEobiAmount ?? '',
-    defaultEobiApplicable: employee?.defaultEobiApplicable ?? true,
-  });
+  const [form, setForm] = useState(() => buildEmployeeForm(employee, defaultSiteId));
+
+  // The "New Employee" modal instance (employees-page.tsx's own `<EmployeeFormModal open=
+  // {createOpen} .../>`, unlike the "Edit" instance) is always mounted, only ever toggled via its
+  // `open` prop — so `useState`'s initializer above runs exactly once, at first mount, not on
+  // every reopen. Without this reset, a real, reproducible bug: create Employee A with a bank
+  // selected, close the modal, click "New Employee" again — every field (bank, account number,
+  // designation, gross pay, etc.) still holds Employee A's values, silently carried into Employee
+  // B unless every field is manually cleared by hand. Found via this checkpoint's own real-stack
+  // Playwright verification (Phase 4 Checkpoint 3) creating two employees back-to-back; fixed here
+  // since it's a genuine, reproducible payroll data-entry correctness bug, not a Bank Sheet
+  // feature change itself.
+  useEffect(() => {
+    if (open) {
+      setForm(buildEmployeeForm(employee, defaultSiteId));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));

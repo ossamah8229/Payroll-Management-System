@@ -191,3 +191,15 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
     netSalary: netSalary.toFixed(TWO_DP),
   };
 }
+
+/**
+ * Sums a list of monetary decimal strings using `decimal.js`, never native floats — the same
+ * rounding-policy requirement `calcNet` itself follows (Principle 5). Added Phase 4 Checkpoint 3
+ * for Bank Sheet totals (a plain sum of already-2dp `netSalary` figures, no further calculation),
+ * but generic enough for any other "sum of monetary strings" need — one implementation, not one
+ * per caller.
+ */
+export function sumMoney(values: MoneyInput[]): string {
+  const total = values.reduce((sum, value) => sum.plus(toDecimal(value)), new Decimal(0));
+  return roundMoney(total).toFixed(TWO_DP);
+}

@@ -25,6 +25,7 @@ import {
   workLinesRouter,
 } from './modules/payroll-entry/payroll-entry.routes';
 import { payrollUnitReleasesRouter } from './modules/payroll-release/payroll-release.routes';
+import { bankSheetRouter } from './modules/bank-sheets/bank-sheets.routes';
 import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
 
 const PgSession = connectPgSimple(session);
@@ -110,6 +111,9 @@ export function createApp(): Express {
   // Same reasoning as :cycleId/entries above — mounted ahead of payrollCyclesRouter's own /:id
   // route so Express matches this more specific /:cycleId/units path first (Phase 4 Checkpoint 2).
   app.use('/api/v1/payroll-cycles/:cycleId/units', payrollUnitReleasesRouter);
+  // Same reasoning again — mounted ahead of payrollCyclesRouter's own /:id route (Phase 4
+  // Checkpoint 3).
+  app.use('/api/v1/payroll-cycles/:cycleId/bank-sheet', bankSheetRouter);
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
   app.use('/api/v1/payroll-entries', payrollEntriesRouter);
   app.use('/api/v1/work-lines', workLinesRouter);

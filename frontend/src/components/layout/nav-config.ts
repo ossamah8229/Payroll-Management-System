@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Banknote, Building2, ClipboardList, LayoutDashboard, UserCog, Users } from 'lucide-react';
+import { Banknote, Building2, ClipboardList, Landmark, LayoutDashboard, UserCog, Users } from 'lucide-react';
 import type { PermissionKey } from '@payroll/shared';
 
 export interface NavItem {
@@ -32,6 +32,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: 'Payroll Entry', to: '/payroll-entry', icon: ClipboardList, requiredPermission: 'payroll:entry' },
       { label: 'Salary Release', to: '/release', icon: Banknote, requiredPermission: 'payroll:view' },
+      { label: 'Bank Sheet', to: '/bank-sheet', icon: Landmark, requiredPermission: 'bank-sheets:view' },
     ],
   },
   {

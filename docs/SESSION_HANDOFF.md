@@ -11,15 +11,13 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **This session's Phase 4 Checkpoint 2 work (Finance role + Salary Release foundation, below) is
-  reviewed, approved, verified, and being committed in this same session as one commit** —
-  `feat(payroll): implement Phase 4 Checkpoint 2 salary release foundation`. Per explicit
-  instruction, exactly one commit is made this session and this file's own text (committed inside
-  that same commit) cannot self-reference its own not-yet-created hash — the next session's first
-  action should record it here as a doc-only commit, matching this project's own established
-  convention (every "doc-only commit hash record" entry in the lineage below exists for exactly
-  this reason). Prior lineage, most recent first: `7c2cdb5` (Phase 4 Checkpoint 1 — Bank Registry —
-  implementation, committed, 2026-07-11) → back through the full history below.
+- **This session's Phase 4 Checkpoint 3 work (Bank Sheets, below) is reviewed, approved, verified,
+  and being committed in this same session as one commit** —
+  `feat(bank-sheets): implement Phase 4 Checkpoint 3 Bank Sheets`. Per explicit instruction, exactly
+  one commit is made this session and this file's own text (committed inside that same commit)
+  cannot self-reference its own not-yet-created hash — the next session's first action should record
+  it here as a doc-only commit, matching this project's own established convention. Full prior
+  lineage:
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -40,7 +38,9 @@ be enough to resume correctly without re-deriving context from scratch — per
   — Chat removal, Tasks Workspace, and Phase Close-Out Rule architecture revision — implementation,
   reviewed, verified, and committed) → `1220dce` (Phase 3.5 Checkpoints 1–3 — Tasks Workspace database
   foundation, backend, and frontend/prototype/testing — implementation, reviewed, verified, and
-  committed) → `7c2cdb5` (Phase 4 Checkpoint 1 — Bank Registry — implementation, committed).
+  committed) → `7c2cdb5` (Phase 4 Checkpoint 1 — Bank Registry — implementation, committed) →
+  `cedf386` (Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation — implementation,
+  reviewed, verified, and committed).
 - **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
   `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
   blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`
@@ -53,8 +53,8 @@ be enough to resume correctly without re-deriving context from scratch — per
   reconstructed from `7c2cdb5`'s diff and recorded properly (not silently skipped) before Checkpoint
   2 was committed. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 1" entry.
 - **Phase 4, Checkpoint 2 (Finance Role and Salary Release foundation) is reviewed, approved,
-  verified, and COMMITTED.** A new `FINANCE` role and `payroll:view`/`payroll:release` permissions,
-  the `PayrollUnitRelease` data model (migration `20260711140000_payroll_unit_release`), the
+  verified, and COMMITTED as `cedf386`.** A new `FINANCE` role and `payroll:view`/`payroll:release`
+  permissions, the `PayrollUnitRelease` data model (migration `20260711140000_payroll_unit_release`), the
   per-Unit release workflow/sweep (`backend/src/modules/payroll-release/`), an any-of
   `requirePermission`, a new Salary Release frontend page, User Management's Finance-role support,
   and `docs/prototypes/phase4-salary-release-preview.html`. Scope was deliberately narrowed before
@@ -69,8 +69,30 @@ be enough to resume correctly without re-deriving context from scratch — per
   **241/241 backend tests** (226 prior + 15 new); a real-stack Playwright pass (Master User creates a
   Finance user and a Draft cycle, the Finance user releases a Project Unit, the UI updates correctly,
   zero console errors) — full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 2" entry.
-  **Do not begin Checkpoint 3 (Bank Sheets or any other later Phase 4 work) until this checkpoint's
-  own review has passed.**
+- **Phase 4, Checkpoint 3 (Bank Sheets) is reviewed, approved, verified, and COMMITTED.** Preceded
+  by a read-only architecture review (no files touched) reconfirming the release boundary, the
+  derived/no-own-table nature of Bank
+  Sheets, and the reserved `bank-sheets:view` permission name against the codebase as it stood after
+  Checkpoints 1–2. One unified Bank Sheet feature (`backend/src/modules/bank-sheets/`,
+  `frontend/src/routes/bank-sheet-page.tsx`) filters released-only payroll by any active Bank or a
+  `cash` sentinel — a deliberate, user-directed scope decision in place of the frozen architecture's
+  separate future Cash Receiving module. CSV/Excel export reuses the existing `ExcelJS`/
+  `csv-stringify` convention; a new shared `sumMoney()` sums totals via `decimal.js`, matching
+  `calcNet`'s own rounding policy. **Two real defects found and fixed via this checkpoint's own
+  mandatory Playwright pass**: (1) a genuine, pre-existing Employee Registry bug — the "New Employee"
+  modal's form state silently carried over between consecutive employee creations (bank, account
+  number, designation, gross pay, all of it) because the modal never unmounts, only its "Edit"
+  sibling does; fixed with a reset-on-open effect, confirmed via direct database inspection before
+  and after. (2) The Bank Sheet totals row's `position: sticky` had no bounded vertical scrolling
+  ancestor to attach to and instead floated at the page's own edge; fixed to a plain footer row,
+  matching CSS also updated in the prototype. Historical snapshot integrity was verified two ways —
+  a dedicated backend test and a live Playwright check — changing an employee's bank/account/
+  designation after release, then confirming a previously generated Bank Sheet is byte-for-byte
+  unchanged. **253/253 backend tests** (241 prior + 12 new); a real-stack Playwright pass covering
+  bank/Cash filtering, untruncated account numbers, CSV export, the historical-snapshot check, and
+  Payroll Staff's complete exclusion (no sidebar item, 403 on direct API access) — full detail:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 3" entry. **Do not begin Checkpoint 4 until
+  the next explicit review and authorization.**
 - **Phase 3.5 (Tasks Workspace) is reviewed, approved, verified, and COMMITTED across two commits —
   `0fb296e` (Checkpoint 0, architecture revision) and `1220dce` (Checkpoints 1–3, implementation).
   Phase 3.5 is now fully complete and closed — its own 🛑 review checkpoint has passed.** The

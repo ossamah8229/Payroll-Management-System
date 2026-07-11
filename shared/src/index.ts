@@ -79,7 +79,7 @@ export { formatDate, isoDateToUtcDate, parseDateInput, toIsoDateOnly } from './l
 export { pluralize } from './lib/text';
 export { normalizeCnic } from './lib/cnic';
 export { formatMoney, formatNumber } from './lib/number';
-export { calcNet } from './lib/calc-net';
+export { calcNet, sumMoney } from './lib/calc-net';
 export type {
   CalcNetResult,
   MoneyInput,

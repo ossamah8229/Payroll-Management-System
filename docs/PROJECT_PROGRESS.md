@@ -77,10 +77,11 @@ started** and requires its own separate, explicit authorization.
 **Update, 2026-07-11 — Phase 4 has now begun.** Checkpoint 1 (Bank Registry) was implemented and
 committed as `7c2cdb5`, though its own commit did not update this file at the time — reconciled
 retroactively in a later session (below). Checkpoint 2 (Finance Role and Salary Release foundation)
-followed, reviewed, approved, verified, and committed as a single commit in that same later session.
-Full detail: §1's "Phase 4, Checkpoint 1" and "Phase 4, Checkpoint 2" entries. **Phase 4 Checkpoint 3
-(Bank Sheets or any other later Phase 4 work) has not started** and requires its own separate,
-explicit authorization — do not begin it without that.
+followed, reviewed, approved, verified, and committed as `cedf386`. Checkpoint 3 (Bank Sheets)
+followed in a later session, reviewed, approved, verified, and committed as a single commit.
+Full detail: §1's "Phase 4, Checkpoint 1," "Checkpoint 2," and "Checkpoint 3" entries.
+**Phase 4 Checkpoint 4 (or any other later Phase 4 work) has not started** and requires its own
+separate, explicit authorization — do not begin it without that.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -2040,14 +2041,133 @@ they already stood in the working tree at the start of this session (pre-existin
 in-progress edits from before this checkpoint began) — not reviewed or touched here, since none of
 them depict Release/Finance screens this checkpoint would factually contradict.
 
-**Reviewed and approved, committed as a single commit** (`feat(payroll): implement Phase 4
-Checkpoint 2 salary release foundation`) per explicit instruction — exactly one commit, Checkpoint 2
-files only (the two pre-existing, unrelated, already-modified prototype files noted above were
-deliberately left out of this commit). This entry, written and committed in that same commit,
-cannot self-reference its own not-yet-created hash; the next session's first action should record
-it here as a doc-only commit, matching this project's own established convention. **Do not begin
-Checkpoint 3 (Bank Sheets or any other later Phase 4 work) until the next explicit review and
-authorization.**
+**Reviewed, approved, and COMMITTED as `cedf386`** ("feat(payroll): implement Phase 4 Checkpoint 2
+salary release foundation") per explicit instruction — exactly one commit, Checkpoint 2 files only
+(the two pre-existing, unrelated, already-modified prototype files noted above were deliberately
+left out of this commit). Hash recorded here in the following session's own Checkpoint 3 entry,
+below, per this project's established doc-only-commit-hash convention.
+
+### Phase 4, Checkpoint 3 — Bank Sheets (2026-07-11)
+
+Preceded by a read-only architecture review (no files touched) re-confirming the plan against the
+codebase as it stood after Checkpoints 1–2: `docs/architecture/database/relationships.md`'s "Bank
+Sheets... have no tables of their own — they are query modules" (Principle 1); `Amount =
+PayrollEntry.netSalary ± settling BalanceAdjustments` with `BalanceAdjustment` not yet built (Phase
+6), so `Amount = netSalary` exactly, the same documented gap Checkpoint 2 already left for the
+release sweep; the release boundary staying Project Unit exactly as Checkpoint 2 built it, queried
+via `PayrollEntry.released` (never `PayrollCycle.status`, since a Unit's Bank Sheet must be
+generatable while the cycle is still Draft overall — `docs/IMPLEMENTATION_PLAN.md` Phase 4: "generated
+per Unit-release event, not only per whole-Cycle release"); and the exact reserved permission name
+(`bank-sheets:view`) `docs/architecture/authentication.md` had already named for this checkpoint since
+the Phase 3 architecture review, deliberately left ungranted until now.
+
+**Scope decision, explicit and user-directed, not a silent reinterpretation:** rather than the frozen
+architecture's separate, future "Cash Receiving" module, this checkpoint implements one unified Bank
+Sheet feature whose bank filter accepts either a real, active `Bank` or a `cash` sentinel (employees
+with no bank account on file) — matching this checkpoint's own scope text ("filtering by every active
+supported Bank and Cash... this is generation filtering, not release filtering"). A dedicated Cash
+Receiving module remains future work.
+
+**Backend** (`backend/src/modules/bank-sheets/{bank-sheets.service,bank-sheets.routes}.ts`, new):
+`getBankSheet()` — the single query every other function in this module builds on — filters
+`PayrollEntry` by `released = true, hold = false` (never Draft), a resolved bank/cash filter, and an
+optional site filter (`assertSiteAccess`-checked per site, the same C11-pattern shape as every other
+module's export). One row per employee, matching `PayrollEntry`'s own `(cycleId, employeeId)`
+uniqueness. Every displayed value — bank, branch code, account number, account title, designation,
+net salary — is read exclusively from `PayrollEntry`'s own frozen columns (copied at entry-creation/
+edit time, immutable once released since Phase 3), never from `Employee`'s live record; Employee
+name/CNIC are the one exception, read live, matching every existing export in this codebase since
+`PayrollEntry` never copied those fields either. `exportBankSheetToCsv`/`exportBankSheetToXlsx`
+reuse this exact query — no second implementation of "which rows belong on this sheet" — and reuse
+this project's existing `ExcelJS`/`csv-stringify` export convention (`payroll-entry-import-export.
+service.ts`'s precedent), no new export framework. New shared `sumMoney()`
+(`shared/src/lib/calc-net.ts`, exported from `@payroll/shared`) sums monetary decimal strings via
+`decimal.js`, matching `calcNet`'s own Principle-5 rounding-policy requirement rather than a native
+floating-point `Array.reduce`. New `PERMISSIONS.BANK_SHEETS_VIEW` (`bank-sheets:view`) — granted to
+Finance (alongside `payroll:view`/`payroll:release`) and Master User (wildcard); Payroll Staff holds
+neither this nor any payroll-view permission, so it is excluded automatically, without a separate
+denial rule. Two new routes nested under a cycle, mounted ahead of `payrollCyclesRouter`'s own `/:id`
+route (same reasoning as `:cycleId/entries` and `:cycleId/units` before it): `GET .../bank-sheet` (the
+on-screen view) and `GET .../bank-sheet/export` (download, writing its own summary
+`bank_sheet.export` `AuditLog` entry, mirroring Payroll Entry export's `payroll_entry.export`
+precedent — one entry per operation, not one per row).
+
+**A real, pre-existing Employee Registry bug found and fixed via this checkpoint's own mandatory
+Playwright pass, not shipped:** `employees-page.tsx`'s `EmployeeFormModal`, in its "New Employee"
+role, stays mounted between opens (controlled only via its `open` prop, unlike its "Edit" sibling
+instance, which is conditionally mounted and so remounts fresh each time) — its `useState` form
+initializer therefore only ever ran once, at first mount, not on every reopen. Creating Employee A
+with a bank selected, closing the modal, then clicking "New Employee" again for Employee B silently
+carried over every one of Employee A's field values (bank, account number, designation, gross pay,
+etc.) into Employee B's form unless each field was manually cleared by hand — confirmed directly via
+the database, not just the UI, once this checkpoint's own two-employees-with-different-banks
+Playwright scenario surfaced it. Fixed with a `buildEmployeeForm()` helper (the one place a fresh vs.
+edit-prefilled form shape is built, now shared by the initial `useState` and a new reset effect) and
+a `useEffect` that reinitializes `form` whenever `open` becomes `true`. A genuine payroll data-entry
+correctness bug, not a Bank Sheet feature change — fixed here rather than left for a future session,
+per this project's own established precedent (Phase 3 Checkpoint 6, Phase 3.5 Checkpoint 3) of fixing
+real defects the mandatory Playwright pass exists to catch, even when outside the checkpoint's named
+feature.
+
+**A second real bug, found and fixed the same pass:** the Bank Sheet totals row was originally styled
+`position: sticky; bottom: 0`, intending to stay pinned to the bottom of the table while scrolling —
+but the table's only scroll container (`overflow-x-auto`, for wide account-number columns) scrolls
+horizontally only, so the sticky row had no bounded vertical scrolling ancestor to attach to and
+instead detached from the table entirely, floating at the whole page's own viewport edge. Fixed to a
+plain, non-sticky `<tfoot>` (still always reachable at the bottom of the table, satisfying "totals
+must always remain visible" without the broken mechanism) — `frontend/src/routes/bank-sheet-page.tsx`
+and `docs/prototypes/phase4-bank-sheets-preview.html` both updated to match.
+
+**Frontend**: `frontend/src/hooks/use-bank-sheet.ts` and
+`frontend/src/routes/bank-sheet-page.tsx` — a new "Bank Sheet" page (nav item gated on
+`bank-sheets:view`, so Payroll Staff never sees it), with a cycle selector (every cycle, not only the
+current Draft one — required by "historical exports must always reproduce identical data," since
+Finance must be able to regenerate a past cycle's sheet), a Bank-or-Cash filter, the existing
+`MultiSelectFilter` reused for the site filter, and Export CSV/Export Excel actions
+(`downloadBankSheetExport`, mirroring `downloadPayrollEntryExport` exactly). Layout Integrity:
+the table renders in its own `overflow-x-auto` container with `whitespace-nowrap` on every cell (no
+column ever truncates an account number or a long employee name), `min-w-[1180px]` so columns are
+never compressed to fit a narrow viewport, and `tabular-nums` on every numeric column per
+`docs/design-system.md` §4's numeric-alignment rule.
+
+**Tests**: `backend/tests/bank-sheets.test.ts`, 12 cases — permission tests (Payroll Staff rejected
+from both view and export; Finance and Master User allowed; a user holding `payroll:view`/
+`payroll:entry` but not `bank-sheets:view` rejected); a site-scoping boundary test (manipulated
+`siteIds` outside a Finance user's assignment, the C11 pattern); released-only enforcement (a Draft,
+unreleased entry never appears; a held entry excluded even after its Unit releases; a released entry
+appears once its Unit has released); filtering behaviour (a specific Bank shows only its own
+employees; Cash shows only no-bank employees; an inactive Bank filter 400s; a nonexistent Bank 404s);
+a `sumMoney`-based totals test (two employees, decimal-precise sum, not floating-point); the
+historical snapshot integrity test (changing an employee's bank, account number, and designation
+after release leaves a previously generated Bank Sheet, filtered by the *original* bank, completely
+unchanged — and the employee's *new* bank shows zero rows for that cycle, proving the release was
+never retroactively reassigned); and export correctness (CSV/XLSX row counts, headers, a totals row,
+and the summary audit entry). **Full backend suite: 253/253** (241 prior + 12 new).
+
+**Verification**: `prisma validate`/`prisma generate` clean; `typecheck`/`lint`/`build` clean across
+all three workspaces (0 errors, same 4 pre-existing frontend `react-refresh` warnings, none new);
+**253/253 backend tests** against live PostgreSQL. **Real-stack Playwright pass** (live browser → Vite
+dev server → Express → PostgreSQL, no mocks): Master User creates a Bank (Settings → Banks), a
+Project Site/Unit, one employee paid via that Bank and one paid Cash, releases the Unit, and creates a
+Finance user and a Payroll Staff user; the Finance user's Bank Sheet page correctly isolates each
+employee under its own Bank/Cash filter with the full, untruncated account number visible, exports a
+CSV successfully: a direct database read after the Master User then edited the banked employee's
+designation confirmed the Bank Sheet, re-filtered by the *original* bank, still showed "Verifier," not
+the new "Changed After Release" value; Payroll Staff has no "Bank Sheet" sidebar item and a direct API
+call to the Bank Sheet route with a Payroll Staff session returns 403. Zero `console.error`/
+`pageerror` events across every screen visited (the same expected pre-login session-probe 401 as
+every prior Playwright pass in this project, not a defect). `docs/prototypes/phase4-bank-sheets-
+preview.html` created (four screens: a real-Bank filter, the Cash filter, the empty state, and Payroll
+Staff's sidebar omission) and reviewed directly against the implemented UI's own screenshots,
+including updating its totals-row CSS to match the sticky-row fix above, before being finalized.
+
+**Reviewed and approved, committed as a single commit** (`feat(bank-sheets): implement Phase 4
+Checkpoint 3 Bank Sheets`) per explicit instruction — exactly one commit, Checkpoint 3 files only
+(the two pre-existing, unrelated, already-modified prototype files noted above were deliberately
+left out of this commit, same as Checkpoint 2's). This entry, written and committed in that same
+commit, cannot self-reference its own not-yet-created hash; the next session's first action should
+record it here as a doc-only commit, matching this project's own established convention. **Do not
+begin Checkpoint 4 until the next explicit review and authorization.**
 
 ---
 

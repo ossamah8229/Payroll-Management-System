@@ -1,0 +1,256 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Download } from 'lucide-react';
+import { toast } from 'sonner';
+import type { SessionUser } from '@payroll/shared';
+import { formatMoney } from '@payroll/shared';
+import { AppShell } from '@/components/layout/app-shell';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { ApiError } from '@/lib/api-client';
+import { useBanks } from '@/hooks/use-banks';
+import { useProjectSites } from '@/hooks/use-project-sites';
+import { formatCycleLabel, usePayrollCycles } from '@/hooks/use-payroll-cycles';
+import { CASH_BANK_FILTER, downloadBankSheetExport, useBankSheet } from '@/hooks/use-bank-sheet';
+
+const selectClassName =
+  'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
+
+export function BankSheetPage({ user }: { user: SessionUser }) {
+  const cycles = usePayrollCycles();
+  const sites = useProjectSites();
+  const banks = useBanks();
+
+  const [cycleId, setCycleId] = useState<string | undefined>(undefined);
+  const [bankFilter, setBankFilter] = useState<string | undefined>(undefined);
+  const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Defaults to the current Draft cycle if one exists, otherwise the most recent cycle
+  // (`usePayrollCycles` is already ordered year/month descending) — Finance needs to regenerate a
+  // past cycle's Bank Sheet just as often as the current one (historical exports must always
+  // reproduce identical data), so every cycle is selectable, not only the current Draft one.
+  useEffect(() => {
+    if (!cycleId && cycles.data && cycles.data.length > 0) {
+      const draft = cycles.data.find((c) => c.status === 'DRAFT');
+      setCycleId((draft ?? cycles.data[0])!.id);
+    }
+  }, [cycleId, cycles.data]);
+
+  useEffect(() => {
+    if (!bankFilter && banks.data) {
+      setBankFilter(banks.data[0]?.id ?? CASH_BANK_FILTER);
+    }
+  }, [bankFilter, banks.data]);
+
+  const bankSheet = useBankSheet(cycleId, bankFilter, selectedSiteIds);
+
+  const siteOptions = useMemo(
+    () => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })),
+    [sites.data],
+  );
+
+  const cycleLabel = useMemo(() => {
+    const cycle = cycles.data?.find((c) => c.id === cycleId);
+    return cycle ? formatCycleLabel(cycle) : '';
+  }, [cycles.data, cycleId]);
+
+  async function handleExport(format: 'csv' | 'xlsx') {
+    if (!cycleId || !bankFilter || !bankSheet.data) return;
+    setIsExporting(true);
+    try {
+      await downloadBankSheetExport(cycleId, bankFilter, bankSheet.data.bankLabel, format, selectedSiteIds);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Export failed');
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  const isLoading = cycles.isLoading || banks.isLoading || sites.isLoading;
+
+  return (
+    <AppShell user={user} title="Bank Sheet" subtitle="Generate and export released payroll by bank">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2.5">
+            <CardTitle>Bank Sheet</CardTitle>
+            {cycleLabel && <Badge tone="gray">{cycleLabel}</Badge>}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="bank-sheet-cycle">
+                Cycle
+              </label>
+              <select
+                id="bank-sheet-cycle"
+                className={selectClassName}
+                value={cycleId ?? ''}
+                onChange={(e) => setCycleId(e.target.value)}
+              >
+                {(cycles.data ?? []).map((cycle) => (
+                  <option key={cycle.id} value={cycle.id}>
+                    {formatCycleLabel(cycle)} {cycle.status === 'DRAFT' ? '(Draft)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="bank-sheet-bank">
+                Bank
+              </label>
+              <select
+                id="bank-sheet-bank"
+                className={selectClassName}
+                value={bankFilter ?? ''}
+                onChange={(e) => setBankFilter(e.target.value)}
+              >
+                {(banks.data ?? []).map((bank) => (
+                  <option key={bank.id} value={bank.id}>
+                    {bank.name}
+                  </option>
+                ))}
+                <option value={CASH_BANK_FILTER}>Cash</option>
+              </select>
+            </div>
+            <MultiSelectFilter
+              id="bank-sheet-site-filter"
+              label="Site"
+              options={siteOptions}
+              selectedIds={selectedSiteIds}
+              onChange={setSelectedSiteIds}
+            />
+            <div className="ml-auto flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => handleExport('csv')}
+                disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden />
+                Export CSV
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => handleExport('xlsx')}
+                disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden />
+                Export Excel
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading && (
+            <div className="flex flex-col gap-2 p-[18px]">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+            </div>
+          )}
+
+          {!isLoading && (cycles.data ?? []).length === 0 && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-text">No payroll cycles exist yet</p>
+              <p className="text-xs text-text-muted">A Bank Sheet can only be generated once a cycle exists.</p>
+            </div>
+          )}
+
+          {!isLoading && (cycles.data ?? []).length > 0 && bankSheet.error && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-danger">Could not load the Bank Sheet</p>
+              <p className="text-xs text-text-muted">
+                {bankSheet.error instanceof ApiError ? bankSheet.error.message : 'Something went wrong'}
+              </p>
+            </div>
+          )}
+
+          {!isLoading && !bankSheet.error && bankSheet.isLoading && (
+            <div className="flex flex-col gap-2 p-[18px]">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+            </div>
+          )}
+
+          {!isLoading && !bankSheet.error && !bankSheet.isLoading && bankSheet.data && bankSheet.data.rows.length === 0 && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-text">No released payroll for this selection</p>
+              <p className="max-w-sm text-xs text-text-muted">
+                Bank Sheets are generated only from released payroll — release the relevant Project
+                Unit(s) first (Salary Release), or try a different Bank/Cash or Site filter.
+              </p>
+            </div>
+          )}
+
+          {!isLoading && !bankSheet.error && !bankSheet.isLoading && bankSheet.data && bankSheet.data.rows.length > 0 && (
+            // Layout Integrity (permanent rule): never compress financial data — this wraps in its
+            // own horizontal-scroll container rather than shrinking columns, so account numbers,
+            // employee names, and amounts always render at full width regardless of viewport.
+            <div className="overflow-x-auto">
+              <Table className="min-w-[1180px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="whitespace-nowrap">Employee Code</TableHead>
+                    <TableHead className="whitespace-nowrap">CNIC</TableHead>
+                    <TableHead className="whitespace-nowrap">Employee Name</TableHead>
+                    <TableHead className="whitespace-nowrap">Site</TableHead>
+                    <TableHead className="whitespace-nowrap">Designation</TableHead>
+                    <TableHead className="whitespace-nowrap">Bank</TableHead>
+                    <TableHead className="whitespace-nowrap">Branch Code</TableHead>
+                    <TableHead className="whitespace-nowrap">Account Number</TableHead>
+                    <TableHead className="whitespace-nowrap">Account Title</TableHead>
+                    <TableHead className="whitespace-nowrap text-right">Net Salary</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {bankSheet.data.rows.map((row) => (
+                    <TableRow key={row.entryId}>
+                      <TableCell className="whitespace-nowrap">{row.employeeCode ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.cnic ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap font-medium">{row.employeeName}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.siteName}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.designation}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.bankName ?? 'Cash'}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.branchCode ?? '—'}</TableCell>
+                      {/* Account numbers must never truncate — whitespace-nowrap plus the table's
+                          own horizontal scroll container is what guarantees this, not a fixed
+                          column width that could clip a longer number. */}
+                      <TableCell className="whitespace-nowrap tabular-nums">{row.accountNumber ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.accountTitle ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right tabular-nums">
+                        {formatMoney(row.netSalary)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+                {/* Totals must always remain visible — a plain footer row, not `position: sticky`:
+                    this table's only scroll container is horizontal (`overflow-x-auto`, for wide
+                    columns/account numbers), not vertical, so there is no bounded scrolling
+                    ancestor for a sticky-bottom row to attach to. An earlier attempt at `sticky
+                    bottom-0` here detached from the table entirely and floated at the page's own
+                    viewport edge instead — found via this checkpoint's own Playwright pass. A
+                    plain trailing row is simpler and correct: it's always reachable at the bottom
+                    of the table, exactly where a reader expects a total. */}
+                <tfoot className="border-t-2 border-border bg-surface-2">
+                  <TableRow>
+                    <TableCell colSpan={9} className="whitespace-nowrap text-right font-semibold">
+                      Total ({bankSheet.data.rows.length} employee{bankSheet.data.rows.length === 1 ? '' : 's'})
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-right font-semibold tabular-nums">
+                      {formatMoney(bankSheet.data.totalNetSalary)}
+                    </TableCell>
+                  </TableRow>
+                </tfoot>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </AppShell>
+  );
+}
