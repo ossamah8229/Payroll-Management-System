@@ -93,6 +93,18 @@ be enough to resume correctly without re-deriving context from scratch — per
   Payroll Staff's complete exclusion (no sidebar item, 403 on direct API access) — full detail:
   `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 3" entry. **Do not begin Checkpoint 4 until
   the next explicit review and authorization.**
+- **Architecture review, same day (2026-07-11, documentation-only, no code/schema/migrations/
+  prototypes): Employee Statements is confirmed NOT Phase 4 scope.** A complete Statement of Account
+  depends on `Correction`/`BalanceAdjustment`/`CorrectionPayment` (Phase 6, not started) and `Advance`
+  (Phase 4's own not-yet-built sub-scope) — none exist in `backend/prisma/schema.prisma` yet, so
+  building it now would produce a structurally incomplete ledger. Bank Registry/Salary Release
+  foundation/Bank Sheets remain exactly Checkpoints 1/2/3, unchanged. Employee Statements remains
+  Phase 7 scope, exactly as `docs/IMPLEMENTATION_PLAN.md` already specified — this review confirms
+  the existing frozen plan, not a redesign. New note recorded: Reports (also Phase 7) should reuse
+  Statements' ledger-computation code rather than duplicating it. Full detail:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 4 — Employee Statements Architecture Review and Scope
+  Decision" entry. **Whatever Phase 4 builds next (Payslip generation, Advances), it is not
+  "Checkpoint 4 = Statements" — do not assume that mapping in a future session.**
 - **Phase 3.5 (Tasks Workspace) is reviewed, approved, verified, and COMMITTED across two commits —
   `0fb296e` (Checkpoint 0, architecture revision) and `1220dce` (Checkpoints 1–3, implementation).
   Phase 3.5 is now fully complete and closed — its own 🛑 review checkpoint has passed.** The
@@ -980,6 +992,14 @@ three process docs) preceded the commit.
   - **Phase 8 keeps its current name unchanged for now**, even though it loses the Team Collaboration
     line entirely (moved to Phase 3.5) — do not rename it preemptively; revisit only if it becomes
     genuinely misleading after further low-priority work accumulates there.
+- **Employee Statements is not Phase 4 scope (confirmed 2026-07-11, architecture review, no code) —
+  do not build it under Phase 4 without a new, explicit re-authorization.** It depends on
+  `Correction`/`BalanceAdjustment`/`CorrectionPayment` (Phase 6) and `Advance` (Phase 4's own
+  not-yet-built sub-scope), none of which exist yet; it remains Phase 7 work, unchanged from
+  `docs/IMPLEMENTATION_PLAN.md`'s original sequencing. Reports (also Phase 7) should reuse Statements'
+  ledger-computation code once both are built, rather than duplicating the aggregation — full record:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 4 — Employee Statements Architecture Review and Scope
+  Decision" entry.
 
 ## 4. Current frozen architecture (reference index)
 

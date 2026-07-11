@@ -82,6 +82,13 @@ followed in a later session, reviewed, approved, verified, and committed as a si
 Full detail: §1's "Phase 4, Checkpoint 1," "Checkpoint 2," and "Checkpoint 3" entries.
 **Phase 4 Checkpoint 4 (or any other later Phase 4 work) has not started** and requires its own
 separate, explicit authorization — do not begin it without that.
+**Update, same day — a read-only architecture review (no code, no schema, no migrations) evaluated
+building Employee Statements next and confirmed it is NOT Phase 4 Checkpoint 4 (or any other Phase 4
+work): a complete Statement of Account depends on Corrections, Balance Adjustments, and Advances,
+none of which exist yet (Phase 6 and Phase 4's own not-yet-built Advances sub-scope respectively).
+Employee Statements remains Phase 7 scope, exactly as `docs/IMPLEMENTATION_PLAN.md` already specified
+before this review — this is a confirmation of the existing frozen plan, not a redesign. Full
+detail: §1's "Phase 4 — Employee Statements Architecture Review and Scope Decision" entry, below.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -2169,6 +2176,63 @@ commit, cannot self-reference its own not-yet-created hash; the next session's f
 record it here as a doc-only commit, matching this project's own established convention. **Do not
 begin Checkpoint 4 until the next explicit review and authorization.**
 
+### Phase 4 — Employee Statements Architecture Review and Scope Decision (2026-07-11, architecture-only, no code)
+
+A dedicated, read-only architecture review (no application code, no schema, no migrations, no
+prototypes) evaluated Employee Statements as candidate next Phase 4 work, immediately following
+Checkpoint 3's close. **Finding:** a complete Statement of Account, per `reference/PROJECT_SPEC.md`
+§12 and `docs/architecture/overview.md`'s own Statements row, must show salary earned, EOBI,
+advances, fines, **and any corrections** with a running balance — which requires reading
+`Correction`, `BalanceAdjustment`, `CorrectionPayment`, and `Advance`. None of these tables exist in
+`backend/prisma/schema.prisma` yet: Corrections/Balance Adjustments are Phase 6 (not started), and
+Advances is Phase 4's own not-yet-built sub-scope (Bank Registry/Salary Release/Bank Sheets —
+Checkpoints 1–3 — never included it). Building Statements now, against `PayrollEntry` alone, would
+therefore produce a structurally incomplete ledger, missing three of the five line items the
+original spec requires — a real financial-correctness risk in a project whose central premise
+(Principles 1, 3, 4, 9) is a trustworthy, non-drifting record.
+
+**Decision (approved):**
+- **Bank Registry remains Phase 4 Checkpoint 1** (`7c2cdb5`), **Salary Release foundation remains
+  Phase 4 Checkpoint 2** (`cedf386`), **Bank Sheets remain Phase 4 Checkpoint 3** — all three
+  unchanged, already committed, not reopened by this review.
+- **Employee Statements will not be implemented during Phase 4.** It is deferred to the later
+  financial-ledger phase — **Phase 7**, exactly as `docs/IMPLEMENTATION_PLAN.md` already specified
+  before this review (`### Phase 7 — Statements, Reports, Dashboard`, "**Depends on:** Phase 6")
+  — this review **confirms** the existing frozen plan rather than changing it. No prior document
+  ever placed Employee Statements in Phase 4; this entry exists to record that the question was
+  explicitly raised, reviewed against the actual repository state, and settled, rather than left
+  ambiguous the next time a session picks up "what's next after Checkpoint 3."
+- **Reports (also Phase 7) should eventually reuse Statements' ledger-computation/aggregation code
+  rather than duplicating it** — both modules read the same underlying `PayrollEntry` (and, once it
+  exists, `Correction`/`BalanceAdjustment`/`Advance`) data and perform overlapping per-employee/
+  per-cycle aggregation. This is a new, explicit architectural note (not previously written down
+  anywhere) — recorded here, and in `docs/architecture/overview.md`'s Major Modules table, so Phase 7
+  implementation doesn't independently reinvent the same aggregation twice.
+- **No redesign of any other Phase 4/5/6/7 checkpoint.** This review did not reopen the per-Unit
+  release model, Bank Sheets' scope, or the Phase 6 Corrections/Balance Adjustments design — all
+  remain exactly as previously frozen.
+
+**Files reviewed for every reference to Employee Statements**: `docs/IMPLEMENTATION_PLAN.md`,
+`docs/PROJECT_PROGRESS.md` (this file), `docs/SESSION_HANDOFF.md`, `docs/architecture/overview.md`,
+`docs/architecture/database/relationships.md`, `docs/architecture/database/schema-invariants.md`,
+`docs/architecture/database/advances.md`, `docs/architecture/database/balance-adjustments.md`,
+`docs/architecture/workflows/corrections-and-balance-adjustments.md`,
+`docs/architecture/workflows/payroll-lifecycle.md`, `docs/design-system.md`,
+`docs/PROJECT_PRINCIPLES.md`, `docs/architecture/folder-structure.md`,
+`docs/prototypes/phase4-bank-sheets-preview.html`. Every schema/workflow-detail file's mentions of
+"Statements" already correctly describe it as a future, read-only, no-own-table consumer of
+Corrections/Balance Adjustments data with no phase-timing claim of its own — none needed a change.
+`docs/PROJECT_PRINCIPLES.md` and `docs/design-system.md` state the general "Statements are a derived,
+read-only view" principle and its UI/ledger-table convention respectively, both true regardless of
+which phase builds it — reviewed, no change needed. `reference/PROJECT_SPEC.md` and
+`reference/payroll_prototype.html` were read for context only, per the standing "frozen, never
+edited" rule — not modified. **Files actually changed by this decision**:
+`docs/IMPLEMENTATION_PLAN.md` (Phase 4 and Phase 7 section notes), `docs/PROJECT_PROGRESS.md` (this
+entry, plus the top-of-file summary and the §2/§5 status tables/next-steps below),
+`docs/SESSION_HANDOFF.md` (§1 current-status bullet), and `docs/architecture/overview.md` (a Reports/
+Statements reuse note in the Major Modules table). No application code, schema, migration, or HTML
+prototype was touched.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -2180,10 +2244,10 @@ begin Checkpoint 4 until the next explicit review and authorization.**
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | Architecture frozen alongside Phase 3, 2026-07-05 (per-Unit release, Finance role, Late Entry). Follows Phase 3.5, unchanged from its own frozen scope. Implementation not started |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | **Checkpoints 1–3 (Bank Registry, Salary Release foundation, Bank Sheets) CLOSED and committed** — `7c2cdb5`, `cedf386`, and Checkpoint 3's commit; see §1. Remaining scope: Payslip generation and the Advances module (Advance Requests, installments/Advance Deduction Deferral, Cash Advances, Advance-only Bank Sheets), per `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section — not yet started. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
-| 7 | Statements, Reports, Dashboard | Not started |
+| 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
 
@@ -2518,7 +2582,11 @@ checkpoint has passed (`docs/IMPLEMENTATION_PLAN.md`).**
    `docs/architecture/authentication.md` (Finance role) — no further architecture review of that
    frozen design is needed before starting. Follow the standing Definition of Done: architecture
    compliance → implementation → typecheck → lint → build → backend tests → real-stack Playwright →
-   documentation updates → ask before committing.
+   documentation updates → ask before committing. **Updated 2026-07-11**: Checkpoints 1–3 (Bank
+   Registry, Salary Release foundation, Bank Sheets) are now closed and committed — see §1/§2.
+   Remaining Phase 4 scope is Payslip generation and the Advances module. **Employee Statements is
+   confirmed not part of this phase** (2026-07-11 architecture review, §1) — do not schedule it as
+   "Checkpoint 4"; it remains Phase 7 work, gated on Phase 6.
 3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to

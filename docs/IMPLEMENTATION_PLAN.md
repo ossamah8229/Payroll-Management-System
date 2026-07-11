@@ -1271,6 +1271,16 @@ its architecture remains frozen and unchanged from the 2026-07-05 Phase 3 Archit
 
 ### Phase 4 — Release, Payment Artifacts, and Advances
 
+**Confirmed 2026-07-11 (read-only architecture review, no code) — Employee Statements is not, and
+was never, part of this phase's scope.** Checkpoints 1–3 (Bank Registry, Salary Release foundation,
+Bank Sheets) are complete and committed. Employee Statements was raised as a candidate next
+checkpoint and reviewed against the actual repository state: a complete Statement of Account depends
+on `Correction`/`BalanceAdjustment`/`CorrectionPayment` (Phase 6, not started) and `Advance` (this
+phase's own not-yet-built sub-scope), none of which exist yet — building it now would produce a
+structurally incomplete ledger. It remains Phase 7 scope, exactly as this document already specified
+below; this note only records that the question was explicitly settled, not a change to the plan.
+Remaining Phase 4 scope is Payslip generation and the Advances module (see "Builds," below).
+
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
 superseded by the frozen design in `docs/architecture/workflows/payroll-lifecycle.md` §4 and
@@ -1578,10 +1588,19 @@ financial error, not a cosmetic one).
 
 ### Phase 7 — Statements, Reports, Dashboard
 
+**Confirmed 2026-07-11 (read-only architecture review, no code) — reaffirmed unchanged, plus one new
+note.** A Phase 4 review considered building Employee Statements early and confirmed it must wait for
+this phase (see Phase 4's own note, above) — no change to this phase's scope or dependency resulted.
+**New architectural note recorded this review**: Reports should reuse Statements' ledger-computation/
+aggregation code once both are built here, rather than each independently re-deriving the same
+per-employee/per-cycle figures from `PayrollEntry`/`Correction`/`BalanceAdjustment`/`Advance` — see
+also `docs/architecture/overview.md`'s Major Modules table.
+
 **Builds:** Statement of Account (per-employee, cross-cycle ledger, showing the replayed/corrected
 current state, running balance, corrections and balance adjustments as distinct highlighted entries);
-Fines & EOBI Report (multi-select site filter, four panels); Dashboard (summary stats, per-site
-payroll summary, release progress, deduction breakdown, short-TTL caching).
+Fines & EOBI Report (multi-select site filter, four panels) — **reusing Statements' own ledger-
+computation/aggregation code rather than a second, independent implementation**; Dashboard (summary
+stats, per-site payroll summary, release progress, deduction breakdown, short-TTL caching).
 
 **Depends on:** Phase 6 (Statements must correctly reflect corrections/balance adjustments, which
 don't exist until Phase 6 is built).
