@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Banknote, Building2, ClipboardList, Landmark, LayoutDashboard, UserCog, Users } from 'lucide-react';
+import { Banknote, Building2, ClipboardList, Landmark, LayoutDashboard, UserCog, Users, Wallet } from 'lucide-react';
 import type { PermissionKey } from '@payroll/shared';
 
 export interface NavItem {
@@ -33,6 +33,14 @@ export const navSections: NavSection[] = [
       { label: 'Payroll Entry', to: '/payroll-entry', icon: ClipboardList, requiredPermission: 'payroll:entry' },
       { label: 'Salary Release', to: '/release', icon: Banknote, requiredPermission: 'payroll:view' },
       { label: 'Bank Sheet', to: '/bank-sheet', icon: Landmark, requiredPermission: 'bank-sheets:view' },
+      {
+        label: 'Cash Receiving',
+        to: '/cash-receiving',
+        icon: Wallet,
+        // Reuses bank-sheets:view (approved architecture decision, Phase 4 Checkpoint 4) — Finance
+        // and Master User already see both documents; Payroll Staff sees neither.
+        requiredPermission: 'bank-sheets:view',
+      },
     ],
   },
   {
