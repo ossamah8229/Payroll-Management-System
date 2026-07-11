@@ -80,8 +80,6 @@ retroactively in a later session (below). Checkpoint 2 (Finance Role and Salary 
 followed, reviewed, approved, verified, and committed as `cedf386`. Checkpoint 3 (Bank Sheets)
 followed in a later session, reviewed, approved, verified, and committed as a single commit.
 Full detail: §1's "Phase 4, Checkpoint 1," "Checkpoint 2," and "Checkpoint 3" entries.
-**Phase 4 Checkpoint 4 (or any other later Phase 4 work) has not started** and requires its own
-separate, explicit authorization — do not begin it without that.
 **Update, same day — a read-only architecture review (no code, no schema, no migrations) evaluated
 building Employee Statements next and confirmed it is NOT Phase 4 Checkpoint 4 (or any other Phase 4
 work): a complete Statement of Account depends on Corrections, Balance Adjustments, and Advances,
@@ -89,6 +87,13 @@ none of which exist yet (Phase 6 and Phase 4's own not-yet-built Advances sub-sc
 Employee Statements remains Phase 7 scope, exactly as `docs/IMPLEMENTATION_PLAN.md` already specified
 before this review — this is a confirmation of the existing frozen plan, not a redesign. Full
 detail: §1's "Phase 4 — Employee Statements Architecture Review and Scope Decision" entry, below.
+**Checkpoint 4 (Cash Receiving Sheets) was then reviewed (architecture-only), approved, implemented,
+reviewed, verified, and COMMITTED as `477fbb1`** — a dedicated module separate from Bank Sheets,
+reusing the existing `bank-sheets:view` permission and Bank Sheets' own shipped `bankId IS NULL` Cash
+rule unchanged, CSV/XLSX export only. Full detail: §1's "Phase 4, Checkpoint 4" entry, below.
+**Phase 4's remaining scope (Payslip generation, the Advances module, or any other later Phase 4
+work) has not started** and requires its own separate, explicit authorization — do not begin it
+without that.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -2233,6 +2238,89 @@ entry, plus the top-of-file summary and the §2/§5 status tables/next-steps bel
 Statements reuse note in the Major Modules table). No application code, schema, migration, or HTML
 prototype was touched.
 
+### Phase 4, Checkpoint 4 — Cash Receiving Sheets (2026-07-11, COMMITTED as `477fbb1`)
+
+Preceded by a dedicated, read-only architecture review (no files touched) that investigated the
+actual repository state — not just documentation — before any code was written. Two changes were
+made to the review's own recommendations before approval: (1) reuse the existing `bank-sheets:view`
+permission rather than introduce a new `cash-receiving:view` key (even though `authentication.md` had
+reserved that name since the Phase 3 architecture review); (2) ship the simplified document layout
+below rather than the original historical prototype's full attendance/OT/allowance/deduction
+breakdown.
+
+**Data source and Cash rule, reused exactly, unchanged:** `PayrollEntry.bankId IS NULL`, `released =
+true`, `hold = false` — the identical rule and query shape Bank Sheets already ships and tests, not a
+second definition of "Cash." `accountNumber` deliberately plays no role, per the approved decision
+never to silently change this already-shipped classification behaviour, despite a known, pre-existing,
+unrelated documentation/code gap around it (flagged in the architecture review, not resolved here —
+out of this checkpoint's scope).
+
+**A dedicated module** (`backend/src/modules/cash-receiving/`), not a bolt-on filter inside Bank
+Sheets — the two documents' column shapes genuinely differ (this one carries no bank/account columns
+at all, and a Signature/Remarks pair Bank Sheets doesn't need) even though they share every
+calc/scope/export/audit primitive (`computeEntryCalc`, `assertSiteAccess`/`isMasterAdmin`, `sumMoney`,
+`ExcelJS`/`csv-stringify`, `recordAuditLog`). New frontend page (`cash-receiving-page.tsx`) and hook
+(`use-cash-receiving.ts`), a new nav item, mounted at `/api/v1/payroll-cycles/:cycleId/cash-receiving`
+ahead of `payrollCyclesRouter`'s own `/:id` route, same pattern as `bank-sheet` before it.
+
+**No database changes of any kind** — no new table, column, or migration; `prisma migrate deploy`
+confirmed "No pending migrations to apply" both before and after implementation.
+
+**Permission: `bank-sheets:view` reused, not a new permission** — approved explicitly, overriding the
+architecture review's own recommendation. Finance and Master User see both Bank Sheets and Cash
+Receiving Sheets; Payroll Staff sees neither (verified: no sidebar item, 403 on direct API access).
+
+**Document layout, simplified by approved decision, not matching the original historical prototype**:
+Serial No., Employee Code, Employee Name, CNIC, Designation, Site, Net Salary, Signature / Thumb
+Impression, Remarks — no Working Days/OT Hours/OT Amount/Allowance/Deduction/Project Unit columns.
+Document header (Company, Payroll Cycle, Generation Date, Generated By) and footer (Total Employees,
+Total Cash Amount), rendered both on-screen and in every CSV/XLSX export, making the sheet suitable to
+print and physically sign without a PDF pipeline (Puppeteer/PDF generation still doesn't exist
+anywhere in this codebase and was not added). **Export formats: CSV and Excel only**, reusing the
+existing `ExcelJS`/`csv-stringify` helpers — no new dependency.
+
+**Audit: export-only**, one `cash_receiving_sheet.export` entry per download (mirroring
+`bank_sheet.export` exactly); viewing is not audited, same asymmetry as Bank Sheets.
+
+**Historical snapshot integrity verified two ways**: a dedicated backend test (change an employee's
+designation, and separately give a Cash employee a bank account, both after release — the historical
+sheet stays byte-for-byte unchanged, and the employee's later bank assignment never retroactively
+removes them from an already-released Cash Receiving Sheet) and a live Playwright check confirming the
+same read-exclusively-from-`PayrollEntry` behaviour end to end.
+
+**One real inconsistency found and fixed during pre-commit final verification, not shipped**: the
+approved column spec names the first column "Serial No.," and the backend's CSV/XLSX export headers
+already said exactly that — but the on-screen page and the prototype had both independently used the
+shorter "Sr." (carried over by habit from Bank Sheets' own historical-prototype convention). Fixed
+both to read "Serial No.," re-verified live via Playwright (column header text asserted directly) —
+a label-only fix, no behavior change, so not treated as reopening the implementation.
+
+**Verified**: `prisma validate`/`generate` clean, both before and after final cleanup;
+`typecheck`/`lint`/`build` clean across all three workspaces (same 4 pre-existing `react-refresh`
+warnings, none from new files); **264/264 backend tests** (253 prior + 11 new,
+`backend/tests/cash-receiving.test.ts` — permissions, released-only, held-entry exclusion, site
+scoping, Cash-only filtering, totals via `sumMoney`, historical snapshot integrity, export content +
+audit entry); a real-stack Playwright pass (Finance access, Payroll Staff denial via both sidebar and
+direct API 403, populated state, cash-only filtering live against a mixed bank/cash release, CNIC
+rendered untruncated, Signature column measured at 208px against a 160px reserved minimum, CSV/Excel
+downloads triggered, empty state, zero uncaught JavaScript errors) — re-run after the "Serial No."
+fix and again after final dev-database cleanup, both clean.
+
+**Ad hoc dev-database test records created during verification were identified and removed** before
+commit: Playwright-created test sites/units/employees/users (name/email patterns `PW Cash *`) and a
+test Draft payroll cycle (year 2901, itself created by this session's own verification, containing
+only this session's own 4 test entries) were all deleted; confirmed zero remaining via a direct
+database query. The throwaway verification scripts themselves lived only in the session scratchpad,
+never the repository.
+
+**Reviewed and approved, committed as `477fbb1`** ("feat(cash-receiving): implement Phase 4
+Checkpoint 4 Cash Receiving Sheets") — backend module, tests, router mount, frontend hook/page/route/
+navigation, and the prototype only; the three pre-existing, unrelated, already-modified prototype
+files (`phase1-preview.html`, `phase2-employee-registry-preview.html`,
+`phase3-payroll-entry-preview.html`) were deliberately excluded, same convention as every prior
+checkpoint's commit. **Checkpoint 4 is complete and closed. Do not begin Checkpoint 5 (or any other
+later Phase 4 work) without its own explicit authorization.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -2244,7 +2332,7 @@ prototype was touched.
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | **Checkpoints 1–3 (Bank Registry, Salary Release foundation, Bank Sheets) CLOSED and committed** — `7c2cdb5`, `cedf386`, and Checkpoint 3's commit; see §1. Remaining scope: Payslip generation and the Advances module (Advance Requests, installments/Advance Deduction Deferral, Cash Advances, Advance-only Bank Sheets), per `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section — not yet started. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | **Checkpoints 1–4 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, and `477fbb1`; see §1. Remaining scope: Payslip generation and the Advances module (Advance Requests, installments/Advance Deduction Deferral, Cash Advances, Advance-only Bank Sheets), per `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section — not yet started. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
@@ -2582,11 +2670,11 @@ checkpoint has passed (`docs/IMPLEMENTATION_PLAN.md`).**
    `docs/architecture/authentication.md` (Finance role) — no further architecture review of that
    frozen design is needed before starting. Follow the standing Definition of Done: architecture
    compliance → implementation → typecheck → lint → build → backend tests → real-stack Playwright →
-   documentation updates → ask before committing. **Updated 2026-07-11**: Checkpoints 1–3 (Bank
-   Registry, Salary Release foundation, Bank Sheets) are now closed and committed — see §1/§2.
-   Remaining Phase 4 scope is Payslip generation and the Advances module. **Employee Statements is
-   confirmed not part of this phase** (2026-07-11 architecture review, §1) — do not schedule it as
-   "Checkpoint 4"; it remains Phase 7 work, gated on Phase 6.
+   documentation updates → ask before committing. **Updated 2026-07-11**: Checkpoints 1–4 (Bank
+   Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets) are now closed and
+   committed — see §1/§2. Remaining Phase 4 scope is Payslip generation and the Advances module.
+   **Employee Statements is confirmed not part of this phase** (2026-07-11 architecture review, §1)
+   — it was never "Checkpoint 4"; it remains Phase 7 work, gated on Phase 6.
 3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
    generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
    stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to

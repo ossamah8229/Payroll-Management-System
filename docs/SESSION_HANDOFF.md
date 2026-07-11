@@ -40,7 +40,10 @@ be enough to resume correctly without re-deriving context from scratch — per
   foundation, backend, and frontend/prototype/testing — implementation, reviewed, verified, and
   committed) → `7c2cdb5` (Phase 4 Checkpoint 1 — Bank Registry — implementation, committed) →
   `cedf386` (Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation — implementation,
-  reviewed, verified, and committed).
+  reviewed, verified, and committed) → `86f1095` (Phase 4 Checkpoint 3 — Bank Sheets —
+  implementation, reviewed, verified, and committed) → `9a2caeb` (Employee Statements deferred to
+  Phase 7 — documentation-only) → `477fbb1` (Phase 4 Checkpoint 4 — Cash Receiving Sheets —
+  implementation, reviewed, verified, and committed).
 - **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
   `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
   blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`
@@ -91,8 +94,7 @@ be enough to resume correctly without re-deriving context from scratch — per
   unchanged. **253/253 backend tests** (241 prior + 12 new); a real-stack Playwright pass covering
   bank/Cash filtering, untruncated account numbers, CSV export, the historical-snapshot check, and
   Payroll Staff's complete exclusion (no sidebar item, 403 on direct API access) — full detail:
-  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 3" entry. **Do not begin Checkpoint 4 until
-  the next explicit review and authorization.**
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 3" entry.
 - **Architecture review, same day (2026-07-11, documentation-only, no code/schema/migrations/
   prototypes): Employee Statements is confirmed NOT Phase 4 scope.** A complete Statement of Account
   depends on `Correction`/`BalanceAdjustment`/`CorrectionPayment` (Phase 6, not started) and `Advance`
@@ -103,8 +105,28 @@ be enough to resume correctly without re-deriving context from scratch — per
   the existing frozen plan, not a redesign. New note recorded: Reports (also Phase 7) should reuse
   Statements' ledger-computation code rather than duplicating it. Full detail:
   `docs/PROJECT_PROGRESS.md` §1's "Phase 4 — Employee Statements Architecture Review and Scope
-  Decision" entry. **Whatever Phase 4 builds next (Payslip generation, Advances), it is not
-  "Checkpoint 4 = Statements" — do not assume that mapping in a future session.**
+  Decision" entry.
+- **Phase 4, Checkpoint 4 (Cash Receiving Sheets) is reviewed, approved, verified, and COMMITTED as
+  `477fbb1`.** Preceded by its own read-only architecture review (no files touched), approved with
+  two changes: reuse `bank-sheets:view` rather than introduce `cash-receiving:view`, and ship a
+  simplified document layout rather than the original historical prototype's full attendance
+  breakdown. A dedicated module (`backend/src/modules/cash-receiving/`), not a bolt-on filter inside
+  Bank Sheets — sourced from released, non-held `PayrollEntry` rows with `bankId IS NULL` (Bank
+  Sheets' own already-shipped Cash rule, reused unchanged; `accountNumber` deliberately not
+  introduced). No database changes of any kind. CSV/XLSX export only, reusing existing
+  `ExcelJS`/`csv-stringify` helpers; export-only audit logging (`cash_receiving_sheet.export`).
+  Document columns: Serial No., Employee Code, Employee Name, CNIC, Designation, Site, Net Salary,
+  Signature / Thumb Impression, Remarks, with a Company/Cycle/Generated-By/Generated-On header and a
+  Total Employees/Total Cash Amount footer. **264/264 backend tests** (253 prior + 11 new); a
+  real-stack Playwright pass (Finance access, Payroll Staff denial via sidebar and direct API 403,
+  cash-only filtering verified live against a mixed bank/cash release, CNIC untruncated, Signature
+  column width verified, CSV/Excel downloads, empty state, zero uncaught JavaScript errors). One
+  label inconsistency ("Sr." vs. the approved "Serial No.") was found and fixed in both the on-screen
+  page and the prototype during pre-commit final verification, re-verified live — not a behavior
+  change. Ad hoc dev-database test records created during verification were identified and removed
+  before commit. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 4" entry.
+  **Checkpoint 4 is complete and closed. Do not begin Checkpoint 5 (or any other later Phase 4 work —
+  Payslip generation, Advances) until the next explicit review and authorization.**
 - **Phase 3.5 (Tasks Workspace) is reviewed, approved, verified, and COMMITTED across two commits —
   `0fb296e` (Checkpoint 0, architecture revision) and `1220dce` (Checkpoints 1–3, implementation).
   Phase 3.5 is now fully complete and closed — its own 🛑 review checkpoint has passed.** The

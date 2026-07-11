@@ -1279,7 +1279,19 @@ on `Correction`/`BalanceAdjustment`/`CorrectionPayment` (Phase 6, not started) a
 phase's own not-yet-built sub-scope), none of which exist yet — building it now would produce a
 structurally incomplete ledger. It remains Phase 7 scope, exactly as this document already specified
 below; this note only records that the question was explicitly settled, not a change to the plan.
-Remaining Phase 4 scope is Payslip generation and the Advances module (see "Builds," below).
+
+**Checkpoint 4 — Cash Receiving Sheets — COMPLETE, 2026-07-11, COMMITTED as `477fbb1`.** A dedicated
+module, separate from Bank Sheets, sourced from released/non-held `PayrollEntry` rows with `bankId
+IS NULL` (Bank Sheets' own already-shipped rule, reused unchanged — `accountNumber` deliberately not
+introduced into the classification). Reuses the existing `bank-sheets:view` permission rather than a
+new one — Finance and Master User see both documents, Payroll Staff neither. CSV/XLSX export only
+(no PDF library added); export-only audit logging (`cash_receiving_sheet.export`). Simplified
+document layout (Serial No., Employee Code, Employee Name, CNIC, Designation, Site, Net Salary,
+Signature / Thumb Impression, Remarks, with a Company/Cycle/Generated-By/Generated-On header and a
+Total Employees/Total Cash Amount footer) — deliberately not the original historical prototype's
+full attendance/OT/allowance/deduction breakdown. Full record: `docs/PROJECT_PROGRESS.md` §1's
+"Phase 4, Checkpoint 4" entry. Remaining Phase 4 scope is Payslip generation and the Advances module
+(see "Builds," below).
 
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
