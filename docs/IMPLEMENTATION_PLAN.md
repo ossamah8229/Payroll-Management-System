@@ -1290,8 +1290,28 @@ document layout (Serial No., Employee Code, Employee Name, CNIC, Designation, Si
 Signature / Thumb Impression, Remarks, with a Company/Cycle/Generated-By/Generated-On header and a
 Total Employees/Total Cash Amount footer) — deliberately not the original historical prototype's
 full attendance/OT/allowance/deduction breakdown. Full record: `docs/PROJECT_PROGRESS.md` §1's
-"Phase 4, Checkpoint 4" entry. Remaining Phase 4 scope is Payslip generation and the Advances module
-(see "Builds," below).
+"Phase 4, Checkpoint 4" entry.
+
+**Checkpoint 5 — Advances — COMPLETE, 2026-07-11, COMMITTED as `75c5e64`.** Adds `Advance`,
+`ScheduledPayrollPeriod` (owned by Payroll Processing, referenced only by Advances — never written
+to directly), and the append-only `AdvanceScheduleChange` history, plus `PayrollEntry.advanceId`/
+`.eidAdvanceId`, closing the deferral this document has carried since Phase 3 Checkpoint 0. At most
+one `ACTIVE` Advance per employee per type (the assumption `database/schema-invariants.md` had
+flagged "not yet confirmed — revisit before Phase 4" is now confirmed and enforced, application layer
+plus a partial unique index). Automatic deduction materialization at new-cycle creation is a **direct
+call** from `payroll-processing.service.ts` into `advances.service.ts` — **deliberately not** the
+fuller generic Outstanding-Payroll-Obligation provider/hook registry `docs/architecture/workflows/
+outstanding-obligations.md` describes as a future possibility; that generalization is deferred until
+Phase 6 (Balance Adjustments) becomes a genuine second consumer, per this checkpoint's own approved
+architecture decision. `Advance.scheduledInstallmentAmount` (additive beyond `database/advances.md`
+§15's original column list, but already proposed by name earlier in this document — see the historical
+note a few paragraphs below) is what lets an `INSTALLMENT` advance's per-cycle deduction repeat
+forward automatically without the system ever computing the amount itself. No new permission —
+`advances:manage` already existed (seeded since Phase 1) and was already granted to Payroll Staff;
+Finance receives none, unchanged. Cash Advances, Advance-only Bank Sheets, and Company Bank Account
+management remain explicitly out of scope. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 4,
+Checkpoint 5" entry. **Phase 4's remaining scope is Payslip generation** — the last item before this
+phase's own 🛑 review checkpoint.
 
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is

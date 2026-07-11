@@ -91,9 +91,14 @@ detail: §1's "Phase 4 — Employee Statements Architecture Review and Scope Dec
 reviewed, verified, and COMMITTED as `477fbb1`** — a dedicated module separate from Bank Sheets,
 reusing the existing `bank-sheets:view` permission and Bank Sheets' own shipped `bankId IS NULL` Cash
 rule unchanged, CSV/XLSX export only. Full detail: §1's "Phase 4, Checkpoint 4" entry, below.
-**Phase 4's remaining scope (Payslip generation, the Advances module, or any other later Phase 4
-work) has not started** and requires its own separate, explicit authorization — do not begin it
-without that.
+**Checkpoint 5 (Advances) was then reviewed (architecture-only), approved, implemented, reviewed,
+verified, and COMMITTED as `75c5e64`** — `Advance`/`ScheduledPayrollPeriod`/`AdvanceScheduleChange`,
+at-most-one-`ACTIVE`-per-type now confirmed and enforced, automatic deduction materialization via a
+direct call (not a generic provider/hook registry) from `payroll-processing.service.ts`, schedule
+deferral with a complete append-only history, no new permission (`advances:manage` already existed).
+Full detail: §1's "Phase 4, Checkpoint 5" entry, below.
+**Phase 4's remaining scope (Payslip generation, or any other later Phase 4 work) has not started**
+and requires its own separate, explicit authorization — do not begin it without that.
 
 This file is the living progress tracker. Update it at the end of every session. For the full phase
 roadmap and Definitions of Done, see `docs/IMPLEMENTATION_PLAN.md`; for what must not be changed
@@ -2318,8 +2323,78 @@ Checkpoint 4 Cash Receiving Sheets") — backend module, tests, router mount, fr
 navigation, and the prototype only; the three pre-existing, unrelated, already-modified prototype
 files (`phase1-preview.html`, `phase2-employee-registry-preview.html`,
 `phase3-payroll-entry-preview.html`) were deliberately excluded, same convention as every prior
-checkpoint's commit. **Checkpoint 4 is complete and closed. Do not begin Checkpoint 5 (or any other
-later Phase 4 work) without its own explicit authorization.**
+checkpoint's commit. **Checkpoint 4 is complete and closed.**
+
+### Phase 4, Checkpoint 5 — Advances (2026-07-11, COMMITTED as `75c5e64`)
+
+Preceded by a dedicated, read-only architecture review (no files touched) that verified every
+assumption against the actual implementation, not just documentation — confirming `Advance`,
+`ScheduledPayrollPeriod`, and `AdvanceScheduleChange` were 100% documentation with zero code, that
+the "Outstanding Payroll Obligation" generic provider/hook registry was likewise pure documentation
+(`createPayrollCycle`'s bootstrap was a flat function with no plugin mechanism), and that the
+new-cycle bootstrap silently reset `advanceDeduction`/`eidAdvanceDeduction` to zero every cycle — not
+a bug, but exactly the gap this checkpoint needed to fill. One pre-implementation finding was
+surfaced and resolved before any schema was written: the frozen `advances.md` §15 column list has no
+field an `INSTALLMENT`-type advance's automatic materialization could read an amount from —
+`docs/IMPLEMENTATION_PLAN.md` had already proposed `Advance.scheduledInstallmentAmount` by name as a
+"proposed schema addition... not yet implemented," so this was treated as additive, not a genuine
+conflict, and included.
+
+**Approved architecture decisions, implemented exactly as frozen:**
+- **At most one `ACTIVE` Advance per employee per type** — the assumption
+  `database/schema-invariants.md` had explicitly flagged "not yet confirmed — revisit before Phase 4"
+  is now confirmed and enforced: a partial unique index (`Advance_employeeId_type_active_key`, raw
+  SQL in the migration, matching the Employee CNIC/employeeCode precedent) backstops an
+  application-layer pre-check, translated to a clean 409 by the existing global P2002 error handler.
+- **No generic Outstanding-Payroll-Obligation provider/hook registry** — `payroll-processing.service.ts`'s
+  `createPayrollCycle` calls a new, exported `materializeScheduledAdvanceDeductions()` in
+  `advances.service.ts` directly. `ScheduledPayrollPeriod`'s own resolution step (the
+  `payrollCycleId` `NULL → NOT NULL` transition) stays exclusively owned by Payroll Processing, per
+  its documented ownership boundary — Advances only ever holds a foreign key into it, via a new
+  `findOrCreateScheduledPayrollPeriod()` export, never a direct write.
+- **Cash Advances, Advance-only Bank Sheets, and Company Bank Account management** — confirmed out of
+  scope; not built.
+- **Payroll Entry import/export unchanged** — no automatic Advance linking during CSV/Excel import;
+  linkage happens only through payroll generation (interactive entry creation and automatic
+  materialization), never a bulk-import side effect.
+- **No new permission** — `advances:manage` already existed (seeded since Phase 1, reserved ahead of
+  time exactly like `bank-sheets:view` was before Checkpoint 3) and was already granted to Payroll
+  Staff; reused unchanged. Finance receives none, unchanged.
+
+**A real design gap found and fixed during implementation, before commit, not shipped broken**:
+deferring a `FULL_DEDUCTION` advance's just-materialized deduction initially failed, because
+materialization immediately (and correctly, in isolation) marks a `FULL_DEDUCTION` advance
+`PAID_OFF` — but the entry carrying that deduction hasn't released yet, so nothing about it should be
+treated as final. Fixed by having `deferAdvanceSchedule` read the exact amount the specific entry
+being deferred deducted (not `advance.currentScheduledPeriodId`/`.status`, which may have already
+auto-advanced past it or been cleared), reverse it back onto `outstandingBalance`, and flip `status`
+back to `ACTIVE` — correct for both `FULL_DEDUCTION` and `INSTALLMENT` deferrals, caught by the
+checkpoint's own test suite before commit.
+
+**Historical integrity verified directly**: a released `PayrollEntry`'s `advanceDeduction`/
+`advanceId` freeze permanently via the same `assertEntryEditable()` guard every other field already
+obeys (no new enforcement code needed) — proven by a dedicated test (editing an Advance's notes, and
+separately attempting to defer, after its entry has released) asserting the released row is
+byte-for-byte unchanged.
+
+**Verified**: `prisma validate`/`generate`/`migrate deploy` clean; `typecheck`/`lint`/`build` clean
+across all three workspaces (same 4 pre-existing `react-refresh` warnings, none from new files);
+**276/276 backend tests** (264 prior + 12 new, `backend/tests/advances.test.ts` — permissions, site
+scoping, at-most-one-`ACTIVE`-per-type, `FULL_DEDUCTION`/`INSTALLMENT` automatic materialization
+including the no-standing-schedule skip case, deferral happy path and rejections, historical
+snapshot, update+audit); a real-stack Playwright pass (Record Advance via the real UI, automatic
+materialization confirmed both via the new Payroll Entry balance indicator and a reduced Advances-page
+balance, Defer modal auto-resolving the live materialized entry and succeeding, Finance's sidebar
+hiding Advances entirely plus a 403 on direct API access, zero real console errors). Ad hoc
+dev-database test records created during two rounds of Playwright verification were identified and
+removed before commit.
+
+**Reviewed and approved, committed as `75c5e64`** ("feat(advances): implement Phase 4 Checkpoint 5
+Advances") — schema/migration, backend module, tests, frontend hook/page/route/navigation plus the
+small Payroll Entry balance indicator, and the prototype only; the three pre-existing, unrelated,
+already-modified prototype files were deliberately excluded, same convention as every prior
+checkpoint's commit. **Checkpoint 5 is complete and closed. Do not begin the next Phase 4 checkpoint
+(Payslip generation) without its own explicit authorization.**
 
 ---
 
@@ -2332,7 +2407,7 @@ later Phase 4 work) without its own explicit authorization.**
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | **Checkpoints 1–4 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, and `477fbb1`; see §1. Remaining scope: Payslip generation and the Advances module (Advance Requests, installments/Advance Deduction Deferral, Cash Advances, Advance-only Bank Sheets), per `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section — not yet started. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | **Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; see §1. Remaining scope: Payslip generation, per `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section — not yet started (Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope, not part of "remaining"). **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
@@ -2670,9 +2745,9 @@ checkpoint has passed (`docs/IMPLEMENTATION_PLAN.md`).**
    `docs/architecture/authentication.md` (Finance role) — no further architecture review of that
    frozen design is needed before starting. Follow the standing Definition of Done: architecture
    compliance → implementation → typecheck → lint → build → backend tests → real-stack Playwright →
-   documentation updates → ask before committing. **Updated 2026-07-11**: Checkpoints 1–4 (Bank
-   Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets) are now closed and
-   committed — see §1/§2. Remaining Phase 4 scope is Payslip generation and the Advances module.
+   documentation updates → ask before committing. **Updated 2026-07-11**: Checkpoints 1–5 (Bank
+   Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) are now closed
+   and committed — see §1/§2. Remaining Phase 4 scope is Payslip generation only.
    **Employee Statements is confirmed not part of this phase** (2026-07-11 architecture review, §1)
    — it was never "Checkpoint 4"; it remains Phase 7 work, gated on Phase 6.
 3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package

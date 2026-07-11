@@ -43,7 +43,9 @@ be enough to resume correctly without re-deriving context from scratch — per
   reviewed, verified, and committed) → `86f1095` (Phase 4 Checkpoint 3 — Bank Sheets —
   implementation, reviewed, verified, and committed) → `9a2caeb` (Employee Statements deferred to
   Phase 7 — documentation-only) → `477fbb1` (Phase 4 Checkpoint 4 — Cash Receiving Sheets —
-  implementation, reviewed, verified, and committed).
+  implementation, reviewed, verified, and committed) → `d1c9dd1` (doc-only commit hash record,
+  closing Checkpoint 4) → `75c5e64` (Phase 4 Checkpoint 5 — Advances — implementation, reviewed,
+  verified, and committed).
 - **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
   `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
   blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`
@@ -125,8 +127,37 @@ be enough to resume correctly without re-deriving context from scratch — per
   page and the prototype during pre-commit final verification, re-verified live — not a behavior
   change. Ad hoc dev-database test records created during verification were identified and removed
   before commit. Full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 4" entry.
-  **Checkpoint 4 is complete and closed. Do not begin Checkpoint 5 (or any other later Phase 4 work —
-  Payslip generation, Advances) until the next explicit review and authorization.**
+  **Checkpoint 4 is complete and closed.**
+- **Phase 4, Checkpoint 5 (Advances) is reviewed, approved, verified, and COMMITTED as `75c5e64`.**
+  Preceded by its own read-only architecture review that verified every assumption against the actual
+  implementation, not just documentation — confirmed `Advance`/`ScheduledPayrollPeriod`/
+  `AdvanceScheduleChange` and the generic Outstanding-Payroll-Obligation registry were 100%
+  documentation with zero code, and that `createPayrollCycle`'s bootstrap silently reset
+  `advanceDeduction`/`eidAdvanceDeduction` to zero every cycle (the gap this checkpoint fills, not a
+  pre-existing bug). Adds `Advance`, `ScheduledPayrollPeriod` (owned by Payroll Processing),
+  `AdvanceScheduleChange` (append-only), and `PayrollEntry.advanceId`/`.eidAdvanceId`. **At most one
+  `ACTIVE` Advance per employee per type is now confirmed and enforced** — `database/
+  schema-invariants.md` had explicitly left this "not yet confirmed — revisit before Phase 4"; a
+  partial unique index backstops an application-layer check. **Deliberately no generic
+  Outstanding-Payroll-Obligation provider/hook registry** — `payroll-processing.service.ts` calls
+  Advances' own materialization function directly; that generalization is deferred until Phase 6
+  becomes a genuine second consumer. `Advance.scheduledInstallmentAmount` (additive beyond `database/
+  advances.md` §15's original columns, but already proposed by name in this document's Phase 4
+  section) lets an `INSTALLMENT` advance's deduction repeat forward automatically without the system
+  ever computing the amount. No new permission — `advances:manage` already existed and was already
+  granted to Payroll Staff; Finance receives none, unchanged. Cash Advances, Advance-only Bank
+  Sheets, and Company Bank Account management remain out of scope; Payroll Entry import/export is
+  unchanged (no automatic Advance linking on import). **A real design gap was found and fixed before
+  commit**: deferring a `FULL_DEDUCTION` advance's just-materialized deduction must reverse its
+  `PAID_OFF` status back to `ACTIVE`, since the entry hasn't released yet — nothing about a
+  not-yet-released deduction is final. **276/276 backend tests** (264 prior + 12 new); a real-stack
+  Playwright pass (Record Advance via the real UI, automatic materialization confirmed via both the
+  new Payroll Entry balance indicator and the Advances page, Defer modal auto-resolving the live
+  entry, Finance denial via sidebar and 403, zero real console errors). Ad hoc dev-database test
+  records from two rounds of Playwright verification were identified and removed before commit. Full
+  detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 5" entry. **Checkpoint 5 is complete
+  and closed. Do not begin the next Phase 4 checkpoint (Payslip generation) until the next explicit
+  review and authorization.**
 - **Phase 3.5 (Tasks Workspace) is reviewed, approved, verified, and COMMITTED across two commits —
   `0fb296e` (Checkpoint 0, architecture revision) and `1220dce` (Checkpoints 1–3, implementation).
   Phase 3.5 is now fully complete and closed — its own 🛑 review checkpoint has passed.** The
