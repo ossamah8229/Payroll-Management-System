@@ -10,7 +10,6 @@ import { SaveStatusIndicator } from './save-status-indicator';
 import { SplitWorkLinesModal } from './split-work-lines-modal';
 import { toNumberOrNull, type LiveTotalsStore } from './live-totals-store';
 import { computeServerSnapshot } from './calc-input';
-import { gridTemplateColumns } from './columns';
 import { isValidDecimalDraft, parseValidCycleDays } from './numeric-validation';
 
 const ROW_HEIGHT = 40;
@@ -22,6 +21,11 @@ interface PayrollEntryRowProps {
   cycleStatus: string;
   banks: Bank[];
   liveTotalsStore: LiveTotalsStore;
+  /** The one shared, dynamically-computed grid template (`columns.ts`'s `computeColumnWidths` +
+   * `gridTemplateColumns`) — passed down from `PayrollEntryGrid` rather than each row calling
+   * `gridTemplateColumns()` independently, so every row is guaranteed pixel-aligned with the
+   * header/totals row on the exact same computation, never a second, possibly-stale copy. */
+  gridTemplateColumns: string;
   style: React.CSSProperties;
 }
 
@@ -32,6 +36,7 @@ function PayrollEntryRowImpl({
   cycleStatus,
   banks,
   liveTotalsStore,
+  gridTemplateColumns,
   style,
 }: PayrollEntryRowProps) {
   const editor = usePayrollEntryEditor(entry, cycleId, cycleStatus);
@@ -90,7 +95,7 @@ function PayrollEntryRowImpl({
     <>
     <div
       role="row"
-      style={{ ...style, gridTemplateColumns: gridTemplateColumns() }}
+      style={{ ...style, gridTemplateColumns }}
       className={cn(
         'grid items-center border-b border-border text-xs',
         status === 'conflict' && 'bg-danger-light/40',
@@ -106,7 +111,10 @@ function PayrollEntryRowImpl({
         <span className="tabular-nums text-text-muted">{rowIndex + 1}</span>
       </div>
 
-      <ReadOnlyCell>{entry.employee.employeeCode ?? '—'}</ReadOnlyCell>
+      {/* Employee Code is a business-critical identifier under the permanent Layout Integrity
+          Rule — never ellipsis-clipped, even though every other read-only cell in this row still
+          truncates by default. */}
+      <ReadOnlyCell truncate={false}>{entry.employee.employeeCode ?? '—'}</ReadOnlyCell>
       <ReadOnlyCell muted={false}>
         <span className="font-medium">{entry.employee.name}</span>
       </ReadOnlyCell>
@@ -129,7 +137,16 @@ function PayrollEntryRowImpl({
           value={effectiveEntry.bankId ?? ''}
           onChange={(v) => editor.setEntryField('bankId', v || null)}
           disabled={disabled}
-          options={[{ value: '', label: 'Cash' }, ...banks.map((b) => ({ value: b.id, label: b.code }))]}
+          // Bank Code only in this dense grid — the approved Bank display rule (2026-07-13,
+          // superseding the 2026-07-11 attempt that showed the full "{name} ({code})" here). The
+          // Master User already defines both Bank Name and Bank Code (Settings → Banks); the full
+          // name stays useful in Employee Registry's own dropdown where a user is picking a bank
+          // and needs the context, but a dense transaction grid displays the Code specifically so
+          // the column stays compact without losing meaning — the Code's whole purpose.
+          options={[
+            { value: '', label: 'Cash' },
+            ...banks.map((b) => ({ value: b.id, label: b.code })),
+          ]}
           nav={nav('bankId')}
           ariaLabel={`Bank for ${entry.employee.name}`}
         />
@@ -156,12 +173,15 @@ function PayrollEntryRowImpl({
       </div>
       <div role="cell">
         <InlineTextCell
-          value={effectiveEntry.accountTitle ?? ''}
-          onChange={(v) => editor.setEntryField('accountTitle', v || null)}
+          value={effectiveEntry.iban ?? ''}
+          // Stored uppercase, displayed exactly as entered (2026-07-11 banking refinement) —
+          // uppercased live here too, so what's on screen always matches what gets saved; never
+          // required, since many employees operationally don't know or provide one.
+          onChange={(v) => editor.setEntryField('iban', v ? v.toUpperCase() : null)}
           disabled={disabled}
-          maxLength={160}
-          nav={nav('accountTitle')}
-          ariaLabel={`Account title for ${entry.employee.name}`}
+          maxLength={34}
+          nav={nav('iban')}
+          ariaLabel={`IBAN for ${entry.employee.name}`}
         />
       </div>
 
@@ -372,6 +392,9 @@ export const PayrollEntryRow = memo(PayrollEntryRowImpl, (prev, next) => {
     prev.rowIndex === next.rowIndex &&
     prev.cycleStatus === next.cycleStatus &&
     prev.banks === next.banks &&
+    // The shared grid template changes whenever any loaded value (on any row) needs a wider
+    // column than before — every mounted row must re-render to stay pixel-aligned when it does.
+    prev.gridTemplateColumns === next.gridTemplateColumns &&
     prev.style.transform === next.style.transform
   );
 });

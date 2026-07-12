@@ -66,7 +66,10 @@
   .badge-green { background: var(--color-green-light); color: var(--color-green); }
   .muted { color: var(--color-text-muted); }
   .table-scroll { overflow-x: auto; }
-  table.data-table { width: 100%; min-width: 1180px; border-collapse: collapse; font-size: 12px; }
+  /* Dynamic Width Rule (permanent, corrected 2026-07-13): natural `table-layout: auto` sizing
+     plus `width: max-content` — no arbitrary pixel floor; `min-width: 100%` only avoids looking
+     sparse on a wide viewport, never forces a column narrower than its real content. */
+  table.data-table { table-layout: auto; width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
   table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); white-space: nowrap; }
   table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
   table.data-table tr:last-child td { border-bottom: none; }
@@ -152,26 +155,26 @@
                 <thead>
                   <tr>
                     <th>Employee Code</th><th>CNIC</th><th>Employee Name</th><th>Site</th><th>Designation</th>
-                    <th>Bank</th><th>Branch Code</th><th>Account Number</th><th>Account Title</th><th style="text-align:right;">Net Salary</th>
+                    <th>Bank</th><th>Branch Code</th><th>Account Number</th><th>IBAN</th><th>Account Title</th><th style="text-align:right;">Net Salary</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td>EMP-0142</td><td>3520112345671</td><td>Bilal Ahmed</td><td>ABL City Region Lahore</td><td>Security Guard</td>
-                    <td>Habib Bank Limited</td><td>1234</td><td>01234567890123</td><td>Bilal Ahmed</td><td class="num">PKR 32,450.00</td>
+                    <td>HBL</td><td>1234</td><td>01234567890123</td><td>PK36SCBL0000001123456702</td><td>Bilal Ahmed</td><td class="num">PKR 32,450.00</td>
                   </tr>
                   <tr>
                     <td>EMP-0198</td><td>3520187654321</td><td>Sana Tariq</td><td>ABL City Region Lahore</td><td>Supervisor</td>
-                    <td>Habib Bank Limited</td><td>1234</td><td>09876543210987</td><td>Sana Tariq</td><td class="num">PKR 41,200.00</td>
+                    <td>HBL</td><td>1234</td><td>09876543210987</td><td>—</td><td>Sana Tariq</td><td class="num">PKR 41,200.00</td>
                   </tr>
                   <tr>
                     <td>EMP-0211</td><td>3520155566778</td><td>Usman Farooq</td><td>ABL City Region Lahore</td><td>Security Guard</td>
-                    <td>Habib Bank Limited</td><td>1234</td><td>01122334455667</td><td>Usman Farooq</td><td class="num">PKR 30,000.00</td>
+                    <td>HBL</td><td>1234</td><td>01122334455667</td><td>—</td><td>Usman Farooq</td><td class="num">PKR 30,000.00</td>
                   </tr>
                 </tbody>
                 <tfoot>
                   <tr>
-                    <td colspan="9" style="text-align:right;">Total (3 employees)</td>
+                    <td colspan="10" style="text-align:right;">Total (3 employees)</td>
                     <td class="num">PKR 103,650.00</td>
                   </tr>
                 </tfoot>
@@ -228,13 +231,13 @@
                 <thead>
                   <tr>
                     <th>Employee Code</th><th>CNIC</th><th>Employee Name</th><th>Site</th><th>Designation</th>
-                    <th>Bank</th><th>Branch Code</th><th>Account Number</th><th>Account Title</th><th style="text-align:right;">Net Salary</th>
+                    <th>Bank</th><th>Branch Code</th><th>Account Number</th><th>IBAN</th><th>Account Title</th><th style="text-align:right;">Net Salary</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td>EMP-0305</td><td>3520199988877</td><td>Imran Sheikh</td><td>ABL City Region Lahore</td><td>Cash Van Driver</td>
-                    <td>Cash</td><td>—</td><td>—</td><td>—</td><td class="num">PKR 28,000.00</td>
+                    <td>Cash</td><td>—</td><td>—</td><td>—</td><td>Imran Sheikh</td><td class="num">PKR 28,000.00</td>
                   </tr>
                 </tbody>
                 <tfoot>
@@ -344,13 +347,13 @@
     Dashboard work, and any Phase 5 functionality are all explicitly out of scope and not depicted
     here.
     <br /><br />
-    Every value on a Bank Sheet row — bank, branch code, account number, account title, designation,
-    net salary — is read exclusively from the released <code>PayrollEntry</code>'s own frozen
-    columns, never from Employee's live record (Employee name/CNIC are the one exception, matching
-    every other export already in this codebase, since <code>PayrollEntry</code> never copied
-    those). Verified directly in <code>backend/tests/bank-sheets.test.ts</code>: changing an
-    employee's bank, account number, and designation after release leaves a previously generated
-    Bank Sheet byte-for-byte unchanged.
+    Every value on a Bank Sheet row — bank, branch code, account number, IBAN, designation, net
+    salary — is read exclusively from the released <code>PayrollEntry</code>'s own frozen columns,
+    never from Employee's live record (Employee name/CNIC, and — since the 2026-07-11 banking
+    refinement below — the derived Account Title, are the exceptions, matching every other export
+    already in this codebase, since <code>PayrollEntry</code> never copied those). Verified directly
+    in <code>backend/tests/bank-sheets.test.ts</code>: changing an employee's bank, account number,
+    and designation after release leaves a previously generated Bank Sheet byte-for-byte unchanged.
     <br /><br />
     <strong>Two real defects found and fixed via this checkpoint's own real-stack Playwright pass,
     not shipped:</strong> (1) the totals row was originally styled <code>position: sticky; bottom:
@@ -364,6 +367,49 @@
     designation, gross pay, every field — silently carried over from one employee creation to the
     next unless manually cleared. Caught because Bank Sheet verification depends on creating two
     employees with different banks back-to-back; fixed with a reset-on-open effect.
+    <br /><br />
+    <strong>Updated 2026-07-11 for the Employee/Payroll Entry/Bank Sheet banking refinement</strong>:
+    Account Title is no longer a stored field anywhere — the frozen client Bank Sheet format
+    (<code>reference/PROJECT_SPEC.md</code>, "Sample Bank Sheet Format") still requires a "Title of
+    Account" column, so it survives here, but as a **derived** value only, always exactly the row's
+    own <code>entry.employee.name</code> — read live, the same already-established exception noted
+    above for Employee Name/CNIC, never re-introducing a stored/editable Account Title column. This
+    holds for Cash rows too (see Imran Sheikh below): Account Title reflects the employee's name
+    regardless of bank status, since it was never tied to having a bank account in the first place.
+    IBAN is added as a new column (optional — many employees operationally don't have one on file,
+    shown as "—" for Sana Tariq/Usman Farooq below) between Account Number and Account Title, in
+    both the on-screen table and the CSV/Excel export headers; the Excel export's column widths
+    (<code>bank-sheets.service.ts</code>) were extended to every business-critical identifier per the
+    new permanent Layout Integrity Rule, not just Account Number as before.
+    <br /><br />
+    <strong>Corrected 2026-07-12</strong>: Bilal Ahmed's IBAN is now the exact canonical test value
+    (<code>PK36SCBL0000001123456702</code>), not an invented one — this table already rendered plain
+    text (not an editable <code>&lt;input&gt;</code>), a full <code>bank.name</code> (never a bare
+    code), and used <code>white-space: nowrap</code> with no <code>truncate</code>/<code>overflow-
+    hidden</code> and no fixed per-column pixel widths, so it was already structurally safe from the
+    defect found and fixed in Payroll Entry's grid this session (a <code>&lt;select&gt;</code>
+    showing only <code>bank.code</code>, and a <code>truncate</code> class silently clipping
+    Employee Code) — see
+    <code>phase3-payroll-entry-preview.html</code>'s footer for the full root-cause account. The
+    Excel export's own column widths were widened further this same session (Bank 20→32, Account
+    Number 24→30, IBAN 30→36) with explicit margin, not a bare fit — see
+    <code>bank-sheets.service.ts</code>.
+    <br /><br />
+    <strong>Reversed 2026-07-13, superseding the "full bank.name (never a bare code)" claim
+    above.</strong> Two corrections: (1) the table's Bank column now shows the Bank Code ("HBL"),
+    not the Bank Name ("Habib Bank Limited") — the approved Bank display rule, matching Payroll
+    Entry's identical correction; the "Bank" *filter dropdown* above the table keeps the full name
+    unchanged, since that is a selection control (the same "clarity is useful" treatment as
+    Employee Registry's own dropdown), not a dense grid cell. (2) The table's fixed
+    <code>min-width: 1320px</code> is replaced with natural <code>table-layout: auto</code> sizing
+    (<code>width: max-content; min-width: 100%</code>) — it never caused clipping (this table
+    holds plain text, not `&lt;input&gt;`s, so it was never subject to the intrinsic-sizing trap
+    Payroll Entry's grid has), but the exact pixel number was still an arbitrary, manually-chosen
+    one the permanent Dynamic Width Rule no longer permits, even when harmless. The Excel export's
+    column widths (still necessarily fixed numbers — ExcelJS has no native content-driven
+    auto-width) are computed from each export's own actual data (`excelColumnWidth`,
+    `bank-sheets.service.ts`), not the generous-but-manually-chosen constants noted in the
+    paragraph above.
   </footer>
 
   <script>

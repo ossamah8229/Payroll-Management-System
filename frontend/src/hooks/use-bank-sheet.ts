@@ -16,7 +16,9 @@ export interface BankSheetRow {
   siteName: string;
   designation: string;
   bankId: string | null;
-  bankName: string | null;
+  /** Bank Code only, not the full Bank Name — the approved Bank display rule (2026-07-13); see
+   * `bank-sheets.service.ts`'s identical field for the full reasoning. */
+  bankCode: string | null;
   branchCode: string | null;
   accountNumber: string | null;
   iban: string | null;

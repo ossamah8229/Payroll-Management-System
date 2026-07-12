@@ -492,59 +492,61 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
           )}
 
           {!isLoading && sites && sites.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Unit label</TableHead>
-                  <TableHead>Address</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-10" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sites.map((site) => (
-                  <TableRow key={site.id}>
-                    <TableCell className="font-medium">{site.name}</TableCell>
-                    <TableCell className="text-text-muted">{site.unitLabel}</TableCell>
-                    <TableCell
-                      className="max-w-[260px] truncate text-text-muted"
-                      title={site.address ?? undefined}
-                    >
-                      {site.address ?? '—'}
-                    </TableCell>
-                    <TableCell>
-                      <Badge tone={site.isActive ? 'green' : 'gray'}>
-                        {site.isActive ? 'Active' : 'Inactive'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
-                            aria-label={`Actions for ${site.name}`}
-                          >
-                            <MoreHorizontal className="h-4 w-4" aria-hidden />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onSelect={() => setEditingSite(site)}>
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => setManagingUnitsSite(site)}>
-                            Manage {pluralize(site.unitLabel)}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => setDeletingSite(site)}>
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
+            // Layout Integrity (permanent rule, corrected 2026-07-13): Address previously used
+            // `truncate` with a `title` tooltip fallback — exactly the "visible only by tooltip"
+            // pattern the rule forbids. A horizontal-scroll wrapper plus `whitespace-nowrap`
+            // (this project's own established convention — see Bank Sheet/Cash Receiving/
+            // Advances) replaces it: the full address is always directly readable in the table.
+            <div className="overflow-x-auto">
+              <Table className="min-w-full">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="whitespace-nowrap">Name</TableHead>
+                    <TableHead className="whitespace-nowrap">Unit label</TableHead>
+                    <TableHead className="whitespace-nowrap">Address</TableHead>
+                    <TableHead className="whitespace-nowrap">Status</TableHead>
+                    <TableHead className="w-10" />
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {sites.map((site) => (
+                    <TableRow key={site.id}>
+                      <TableCell className="whitespace-nowrap font-medium">{site.name}</TableCell>
+                      <TableCell className="whitespace-nowrap text-text-muted">{site.unitLabel}</TableCell>
+                      <TableCell className="whitespace-nowrap text-text-muted">{site.address ?? '—'}</TableCell>
+                      <TableCell>
+                        <Badge tone={site.isActive ? 'green' : 'gray'}>
+                          {site.isActive ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+                              aria-label={`Actions for ${site.name}`}
+                            >
+                              <MoreHorizontal className="h-4 w-4" aria-hidden />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => setEditingSite(site)}>
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setManagingUnitsSite(site)}>
+                              Manage {pluralize(site.unitLabel)}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setDeletingSite(site)}>
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

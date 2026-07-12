@@ -93,7 +93,14 @@
 
   /* ===== Payroll Entry grid ===== */
   .grid-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--color-border); border-radius: var(--radius-lg); }
-  table.payroll-grid { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+  /* Dynamic Width Rule (permanent, corrected 2026-07-13): "do not assign arbitrary widths...
+     every column must expand according to the longest visible header or value it contains."
+     `table-layout: auto` (the default — never `table-fixed`) plus `width: max-content` makes the
+     table size itself to its own real content, growing past its container when a column
+     genuinely needs to (`.grid-wrap`'s own scroll handles that); `min-width: 100%` only keeps it
+     from looking sparse on a wide viewport when the data is short, never forcing a column
+     narrower than its content. No manually guessed per-column pixel number anywhere below. */
+  table.payroll-grid { border-collapse: collapse; table-layout: auto; width: max-content; min-width: 100%; font-size: 11px; white-space: nowrap; }
   table.payroll-grid th, table.payroll-grid td { padding: 5px 7px; border-bottom: 1px solid var(--color-border); border-right: 1px solid var(--color-border); }
   table.payroll-grid th:last-child, table.payroll-grid td:last-child { border-right: none; }
   table.payroll-grid thead th {
@@ -287,7 +294,7 @@
                       <th>Bank</th>
                       <th>Branch Code</th>
                       <th>Account No.</th>
-                      <th>Account Title</th>
+                      <th>IBAN</th>
                       <th class="num">Gross Pay</th>
                       <th class="ctr">Units</th>
                       <th class="num">Working Days</th>
@@ -316,8 +323,8 @@
                       <td class="muted">ABL City Region Lahore</td>
                       <td><select><option>MCB</option></select></td>
                       <td><input value="0140" /></td>
-                      <td><input value="001234567890" /></td>
-                      <td><input value="Muhammad Asif" /></td>
+                      <td><input value="001234567890" size="12" /></td>
+                      <td><input value="PK36SCBL0000001123456702" size="24" /></td>
                       <td class="num"><input class="num" value="32,000.00" /></td>
                       <td class="ctr"><button type="button" class="units-pill" data-target="screen-split">1 Branch</button></td>
                       <td class="num"><input class="num" value="26" /></td>
@@ -342,10 +349,13 @@
                       <td><strong>Bilal Hussain</strong></td>
                       <td><input value="Supervisor" /></td>
                       <td class="muted">HBL Corporate Karachi</td>
-                      <td><select><option>HBL</option></select></td>
+                      <!-- A genuinely long configured Bank Code (10 characters — the schema's
+                           own real maximum, varchar(10)), not just a short one like "MCB", to
+                           actually demonstrate the dynamic-width calculation growing the column. -->
+                      <td><select><option>HABIBMETRO</option></select></td>
                       <td><input value="0311" /></td>
-                      <td><input value="003300110022" /></td>
-                      <td><input value="Bilal Hussain" /></td>
+                      <td><input value="00330011002233445566" size="20" /></td>
+                      <td><input value="PK24HABB0311003300110022" size="24" /></td>
                       <td class="num"><input class="num" value="55,000.00" /></td>
                       <td class="ctr"><button type="button" class="units-pill" data-target="screen-split">2 Branches</button></td>
                       <td class="num"><input class="num" value="30" /></td>
@@ -616,7 +626,7 @@
     <br /><br />
     All 26 columns from <code>docs/architecture/database/payroll-entry.md</code> §12/§12a are shown,
     grouped exactly as the real grid groups them ("Bank Details" spanning Bank/Branch Code/Account
-    No./Account Title; "EOBI" spanning Amount/Applicable) — one column-width array
+    No./IBAN; "EOBI" spanning Amount/Applicable) — one column-width array
     (<code>PAYROLL_COLUMNS</code>) drives the sticky group-header row, the sticky column-header row,
     every body row, and the sticky totals row in the real implementation, keeping all four pixel-
     aligned. Sample rows illustrate all <strong>five</strong> non-idle per-row save states
@@ -668,6 +678,62 @@
     was recomputed to include it (5 employees, not 4). Row 2's linked-Advance balance indicator
     (Phase 4 Checkpoint 5) was added for the same reason: it is real, shipped code inside
     <code>payroll-entry-row.tsx</code>, the exact file this prototype claims to reproduce.
+    <br /><br />
+    <strong>Updated 2026-07-11 for the Employee/Payroll Entry/Bank Sheet banking refinement</strong>:
+    Account Title is removed entirely from this grid — it is no longer stored on `PayrollEntry` at
+    all; the employee's own legal name is always the account holder (Bank Sheet alone still shows a
+    derived "Title of Account" column, computed from the entry's employee name, never a separately
+    stored field — see <code>phase4-bank-sheets-preview.html</code>). The "Bank Details" group's
+    fourth column is now IBAN (optional, nullable, trimmed, stored uppercase, never truncated) in its
+    place — same column count, same group span. Row 1 and Row 2 show sample IBANs; Rows 3–5 (Cash
+    employees, no bank selected) correctly show it blank, same as Branch Code/Account Number for
+    those rows, per the banking rule that a cash employee never carries any bank detail at all.
+    <br /><br />
+    <strong>Corrected 2026-07-12 — the 2026-07-11 width increase alone did not fix the underlying
+    defect.</strong> Root cause: the real grid's Bank <code>&lt;select&gt;</code>
+    (<code>payroll-entry-row.tsx</code>) was rendering only <code>bank.code</code> (e.g. "MCB", a
+    genuinely separate, short abbreviation field) instead of the full configured
+    <code>bank.name</code> — no column width could have fixed that, since the *displayed value
+    itself* was never the long string in the first place. Fixed to show
+    <code>"{bank.name} ({bank.code})"</code>, matching Employee Registry's own established
+    convention — reproduced here as "Muslim Commercial Bank (MCB)" / "Habib Bank Limited (HBL)",
+    not the bare codes this file previously (incorrectly) mirrored. Separately,
+    <code>ReadOnlyCell</code>'s unconditional Tailwind <code>truncate</code> class was silently
+    ellipsis-clipping Employee Code specifically — fixed with an opt-out, since ellipsis is exactly
+    the "hidden overflow" the permanent rule forbids for that field. Row 1's IBAN is now the exact
+    canonical test value <code>PK36SCBL0000001123456702</code>; Row 2's Account Number was
+    lengthened to 20 digits to demonstrate a realistic long value, not just a short one that always
+    fit anyway. Columns widened again, this time from an explicit character-width budget rather
+    than a guess (<code>columns.ts</code>'s own comment shows the math): Employee Code 100→140,
+    Bank 120→280 (now rendering "name (code)", needs real room), Branch Code 110→140, Account No.
+    190→260, IBAN 200→300 — each with deliberate margin above the minimum, not a bare fit. This
+    static file's own CSS mirrors the same widths via explicit <code>min-width</code> rules (see
+    the stylesheet), since a plain <code>&lt;table&gt;</code>'s auto-layout sizes an
+    <code>&lt;input&gt;</code>-holding column by the input's default ~20-character intrinsic size,
+    not by its actual value's length — the same category of "looks unconstrained but isn't" trap
+    the real component's fixed-pixel CSS Grid tracks don't have, but worth guarding here too so
+    this prototype can't silently drift back out of sync with what it claims to demonstrate.
+    <br /><br />
+    <strong>Reversed 2026-07-13 — two architectural corrections, superseding the 2026-07-12 entry
+    above.</strong> (1) <strong>Bank Code only, not "{name} (code)".</strong> The Master User
+    defines both a Bank Name and a Bank Code (Settings → Banks); a dense transaction grid displays
+    the Code specifically so the column stays compact without losing meaning — that is the Code's
+    whole purpose. The full Name remains useful in Employee Registry's own dropdown, where a user
+    is actively picking a bank and needs the context; it was never appropriate for this grid, and
+    the 2026-07-12 fix above was itself the wrong direction, not merely incomplete. Reproduced here
+    as "MCB" (Row 1) and "HABIBMETRO" (Row 2 — a 10-character code, the exact real maximum
+    <code>Bank.code varchar(10)</code> permits, chosen specifically to demonstrate the dynamic
+    calculation actually growing the column for a long *code*, not a long name). (2) <strong>No
+    manually assigned pixel widths, guessed or generous.</strong> Every business-identifier column
+    in the real grid (<code>columns.ts</code>) now computes its own width at runtime from the
+    header and the longest value in the *entire loaded dataset* (`measureColumnWidth`,
+    `computeColumnWidths`) — this file's own CSS mirrors that by switching from hand-picked
+    <code>min-width</code> numbers to genuine browser-native content sizing
+    (<code>table-layout: auto; width: max-content; min-width: 100%</code>), with each identifier
+    input's <code>size</code> attribute set to its real value's length so the table's own
+    auto-layout algorithm sizes the column from that value directly, not its input's ~20-character
+    default — the dynamic-sizing equivalent of the real grid's per-entry measurement, expressed in
+    plain HTML/CSS since this file has no JavaScript width calculation to run.
   </footer>
 
   <script>

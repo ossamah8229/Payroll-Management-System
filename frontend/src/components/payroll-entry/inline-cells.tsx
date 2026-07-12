@@ -136,15 +136,23 @@ export function ReadOnlyCell({
   children,
   align = 'left',
   muted = true,
+  truncate = true,
 }: {
   children: React.ReactNode;
   align?: 'left' | 'right' | 'center';
   muted?: boolean;
+  /** Defaults to the original ellipsis-on-overflow behavior. Set `false` for a business-critical
+   * identifier the permanent Layout Integrity Rule protects (Employee Code, CNIC, ...) — ellipsis
+   * is exactly the "depend on hidden overflow" this rule forbids, so those cells must render at
+   * `white-space: nowrap` instead and rely on the grid's own horizontal scroll if content is ever
+   * wider than its column (2026-07-12 fix: `truncate` was silently clipping Employee Code). */
+  truncate?: boolean;
 }) {
   return (
     <div
       className={cn(
-        'truncate px-1.5 py-1 text-xs',
+        'px-1.5 py-1 text-xs',
+        truncate ? 'truncate' : 'overflow-visible whitespace-nowrap',
         muted ? 'text-text-muted' : 'text-text',
         align === 'right' && 'text-right tabular-nums',
         align === 'center' && 'text-center',

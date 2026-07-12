@@ -544,7 +544,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
 
           {!advances.isLoading && !advances.error && rows.length > 0 && (
             <div className="overflow-x-auto">
-              <Table className="min-w-[1100px]">
+              <Table className="min-w-full">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Employee</TableHead>

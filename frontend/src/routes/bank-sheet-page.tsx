@@ -188,11 +188,12 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
           )}
 
           {!isLoading && !bankSheet.error && !bankSheet.isLoading && bankSheet.data && bankSheet.data.rows.length > 0 && (
-            // Layout Integrity (permanent rule): never compress financial data — this wraps in its
-            // own horizontal-scroll container rather than shrinking columns, so account numbers,
-            // employee names, and amounts always render at full width regardless of viewport.
+            // Layout Integrity (permanent rule): never compress a business-critical identifier —
+            // this wraps in its own horizontal-scroll container rather than shrinking columns, so
+            // Employee Code, CNIC, Bank, Account Number, IBAN, and amounts always render at full
+            // width regardless of viewport.
             <div className="overflow-x-auto">
-              <Table className="min-w-[1180px]">
+              <Table className="min-w-full">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Employee Code</TableHead>
@@ -216,11 +217,12 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                       <TableCell className="whitespace-nowrap font-medium">{row.employeeName}</TableCell>
                       <TableCell className="whitespace-nowrap">{row.siteName}</TableCell>
                       <TableCell className="whitespace-nowrap">{row.designation}</TableCell>
-                      <TableCell className="whitespace-nowrap">{row.bankName ?? 'Cash'}</TableCell>
+                      <TableCell className="whitespace-nowrap">{row.bankCode ?? 'Cash'}</TableCell>
                       <TableCell className="whitespace-nowrap">{row.branchCode ?? '—'}</TableCell>
-                      {/* Account numbers must never truncate — whitespace-nowrap plus the table's
-                          own horizontal scroll container is what guarantees this, not a fixed
-                          column width that could clip a longer number. */}
+                      {/* Business-critical identifiers must never truncate — the permanent Layout
+                          Integrity Rule (2026-07-11) — whitespace-nowrap plus the table's own
+                          horizontal scroll container is what guarantees this, not a fixed column
+                          width that could clip a longer value. */}
                       <TableCell className="whitespace-nowrap tabular-nums">{row.accountNumber ?? '—'}</TableCell>
                       <TableCell className="whitespace-nowrap tabular-nums">{row.iban ?? '—'}</TableCell>
                       {/* Account Title is derived, never stored (banking refinement, 2026-07-11) —

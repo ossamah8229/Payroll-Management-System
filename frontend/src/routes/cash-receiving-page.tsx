@@ -223,7 +223,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
                   reserved minimum width to stay physically usable once printed, not just wide
                   enough for its own header text. */}
               <div className="overflow-x-auto">
-                <Table className="min-w-[1180px]">
+                <Table className="min-w-full">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="whitespace-nowrap">Serial No.</TableHead>
@@ -233,6 +233,9 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
                       <TableHead className="whitespace-nowrap">Designation</TableHead>
                       <TableHead className="whitespace-nowrap">Site</TableHead>
                       <TableHead className="whitespace-nowrap text-right">Net Salary</TableHead>
+                      {/* A true fixed width, the Dynamic Width Rule's own stated exception
+                          (2026-07-13): this column holds no text content to measure at all — it's
+                          blank physical space reserved for a printed, handwritten signature. */}
                       <TableHead className="whitespace-nowrap" style={{ minWidth: 160 }}>
                         Signature / Thumb Impression
                       </TableHead>

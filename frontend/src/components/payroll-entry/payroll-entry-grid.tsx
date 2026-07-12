@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PayrollCycle } from '@/hooks/use-payroll-cycles';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import type { Bank } from '@/hooks/use-banks';
-import { PAYROLL_COLUMNS, gridTemplateColumns, totalGridWidth } from './columns';
+import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, totalGridWidth, type ResolvedPayrollColumnDef } from './columns';
 import { PayrollEntryRow, ROW_HEIGHT } from './payroll-entry-row';
 import { PayrollEntryTotalsRow } from './payroll-entry-totals-row';
 import { LiveTotalsStore } from './live-totals-store';
@@ -15,22 +15,25 @@ const columnHelper = createColumnHelper<PayrollEntry>();
 const GROUP_ROW_HEIGHT = 22;
 const HEADER_ROW_HEIGHT = 30;
 
-/** Contiguous grouped header spans ("Bank Details", "EOBI") computed once from the flat column
- * array — a lighter-weight approach than TanStack Table's nested-grouped-column API, since the
- * grouping here is purely a visual label row, not a structural pivot. */
-function computeGroupSpans() {
+/** Contiguous grouped header spans ("Bank Details", "EOBI") computed once from the *resolved*
+ * (already width-measured) column array — a lighter-weight approach than TanStack Table's
+ * nested-grouped-column API, since the grouping here is purely a visual label row, not a
+ * structural pivot. Takes `resolvedColumns` as a parameter (rather than reading the static
+ * `PAYROLL_COLUMNS` directly) so a group's span always reflects the same dynamically-computed
+ * widths every other layer uses — never a second, independently-sized copy. */
+function computeGroupSpans(resolvedColumns: ResolvedPayrollColumnDef[]) {
   const spans: { label: string; width: number }[] = [];
   let i = 0;
-  while (i < PAYROLL_COLUMNS.length) {
-    const column = PAYROLL_COLUMNS[i]!;
+  while (i < resolvedColumns.length) {
+    const column = resolvedColumns[i]!;
     if (!column.group) {
       spans.push({ label: '', width: column.width });
       i += 1;
       continue;
     }
     let width = 0;
-    while (i < PAYROLL_COLUMNS.length && PAYROLL_COLUMNS[i]!.group === column.group) {
-      width += PAYROLL_COLUMNS[i]!.width;
+    while (i < resolvedColumns.length && resolvedColumns[i]!.group === column.group) {
+      width += resolvedColumns[i]!.width;
       i += 1;
     }
     spans.push({ label: column.group, width });
@@ -88,8 +91,17 @@ export function PayrollEntryGrid({
 
   const { handleKeyDown } = useGridKeyboardNav(containerRef, rowVirtualizer, rows.length);
 
-  const groupSpans = useMemo(computeGroupSpans, []);
-  const width = totalGridWidth();
+  // The one shared dynamic column-sizing calculation (Layout Integrity Rule, corrected
+  // 2026-07-13) — inspects the *full* loaded `entries` array, not just whichever rows the
+  // virtualizer currently has mounted, so a long value scrolled out of view still gets its column
+  // the width it needs. Recomputed only when the loaded dataset or bank list actually changes
+  // (never per keystroke — draft edits live in each row's own `usePayrollEntryEditor`, not here),
+  // then reused as-is by the grouped header, the column header, every body row, and the totals
+  // row below — one calculation, four layers, always pixel-aligned.
+  const resolvedColumns = useMemo(() => computeColumnWidths(entries, banks), [entries, banks]);
+  const gridTemplate = useMemo(() => gridTemplateColumns(resolvedColumns), [resolvedColumns]);
+  const groupSpans = useMemo(() => computeGroupSpans(resolvedColumns), [resolvedColumns]);
+  const width = totalGridWidth(resolvedColumns);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -130,7 +142,7 @@ export function PayrollEntryGrid({
               role="row"
               key={headerGroup.id}
               className="sticky z-20 grid border-b border-border bg-surface"
-              style={{ top: GROUP_ROW_HEIGHT, gridTemplateColumns: gridTemplateColumns(), width, height: HEADER_ROW_HEIGHT }}
+              style={{ top: GROUP_ROW_HEIGHT, gridTemplateColumns: gridTemplate, width, height: HEADER_ROW_HEIGHT }}
             >
               {headerGroup.headers.map((header) => (
                 <div
@@ -156,6 +168,7 @@ export function PayrollEntryGrid({
                   cycleStatus={cycle.status}
                   banks={banks}
                   liveTotalsStore={liveTotalsStore}
+                  gridTemplateColumns={gridTemplate}
                   style={{
                     position: 'absolute',
                     top: 0,
@@ -170,7 +183,7 @@ export function PayrollEntryGrid({
           </div>
 
           <div className="sticky bottom-0 z-20" style={{ width }}>
-            <PayrollEntryTotalsRow store={liveTotalsStore} />
+            <PayrollEntryTotalsRow store={liveTotalsStore} gridTemplateColumns={gridTemplate} />
           </div>
         </div>
       </div>

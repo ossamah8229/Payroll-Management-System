@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react';
 import { formatMoney, formatNumber } from '@payroll/shared';
-import { gridTemplateColumns } from './columns';
 import type { LiveTotalsStore } from './live-totals-store';
 
 // Only genuine payment amounts get the PKR prefix (docs/design-system.md §4) — rates (OT Rate,
@@ -14,7 +13,15 @@ const MONEY_COLUMNS = new Set(['grossPay', 'allowance', 'eobiAmount', 'advanceDe
  * from the same per-row `calcNet` results the grid itself displays (docs/architecture/
  * database/payroll-entry.md §12) — never a second, independently-derived total.
  */
-export function PayrollEntryTotalsRow({ store }: { store: LiveTotalsStore }) {
+export function PayrollEntryTotalsRow({
+  store,
+  gridTemplateColumns,
+}: {
+  store: LiveTotalsStore;
+  /** The one shared, dynamically-computed grid template — see `PayrollEntryRow`'s identical prop
+   * for why this is passed down rather than computed here independently. */
+  gridTemplateColumns: string;
+}) {
   const totals = useSyncExternalStore(store.subscribe, store.getTotals, store.getTotals);
 
   function cell(key: keyof typeof totals) {
@@ -25,7 +32,7 @@ export function PayrollEntryTotalsRow({ store }: { store: LiveTotalsStore }) {
   return (
     <div
       role="row"
-      style={{ gridTemplateColumns: gridTemplateColumns() }}
+      style={{ gridTemplateColumns }}
       className="grid items-center border-t-2 border-border-strong bg-surface text-xs font-semibold"
     >
       <div role="cell" className="px-1.5 py-2 text-center text-text-muted">

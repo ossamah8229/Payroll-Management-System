@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
@@ -5,6 +6,23 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
 const PASSWORD = 'CorrectHorseBattery1!';
+
+/** supertest/superagent only auto-buffers `res.body` for content-types it recognizes as binary —
+ * `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` isn't one of them, so without
+ * this, `res.body` comes back empty/corrupted rather than a real XLSX buffer. Reads the response as
+ * raw binary and hands back a genuine `Buffer`, the only way to actually parse the exported workbook
+ * and prove a cell's value is complete rather than just asserting "some bytes came back." */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function binaryParser(res: any, callback: (err: Error | null, body: unknown) => void) {
+  res.setEncoding('binary');
+  let data = '';
+  res.on('data', (chunk: string) => {
+    data += chunk;
+  });
+  res.on('end', () => {
+    callback(null, Buffer.from(data, 'binary'));
+  });
+}
 
 describe('Phase 4 Checkpoint 3 — Bank Sheets', () => {
   beforeEach(async () => {
@@ -355,12 +373,65 @@ describe('Phase 4 Checkpoint 3 — Bank Sheets', () => {
     expect(afterEmployeeChange.body.rows).toHaveLength(1);
     expect(afterEmployeeChange.body.rows[0].accountNumber).toBe('1111111111');
     expect(afterEmployeeChange.body.rows[0].designation).toBe('Guard');
-    expect(afterEmployeeChange.body.rows[0].bankName).toBe('Bank Before');
+    expect(afterEmployeeChange.body.rows[0].bankCode).toBe('TBBEFORE');
 
     // The employee's NEW bank must show zero rows for this cycle — the historical release was
     // never retroactively reassigned to the new bank.
     const newBankSheet = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet?bankId=${bankAfter.id}`);
     expect(newBankSheet.body.rows).toHaveLength(0);
+  });
+
+  // --- Banking refinement (2026-07-11): derived Account Title, IBAN --------------------------------
+
+  it('derives Account Title from the employee name, live — unlike bank/account/IBAN, it is NOT frozen at release', async () => {
+    const admin = await masterAdminAgent('bs-derived-title-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site BS Derived Title');
+    // Month must be 1–12; reusing 1 here is safe since cleanTestData() clears every fake
+    // year>=2900 cycle before each test runs (full isolation, see tests/helpers.ts).
+    const cycle = await makeDraftCycle(admin, 1);
+    const bank = await makeBank('DERV', 'Derived Title Bank');
+
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Original Name',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        bankId: bank.id,
+        accountNumber: '5551234567',
+      },
+    });
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const before = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet?bankId=${bank.id}`);
+    expect(before.body.rows[0].accountTitle).toBe('Original Name');
+
+    // A later name correction (e.g. a spelling fix) — unlike bank/account/IBAN — DOES reach a
+    // previously generated Bank Sheet's Account Title, since it is derived from the employee's
+    // current name at generation time, not copied onto PayrollEntry the way banking fields are.
+    await prisma.employee.update({ where: { id: employee.id }, data: { name: 'Corrected Name' } });
+
+    const after = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet?bankId=${bank.id}`);
+    expect(after.body.rows[0].accountTitle).toBe('Corrected Name');
+    // Account Number/bank stayed frozen throughout, exactly as the snapshot test above verifies.
+    expect(after.body.rows[0].accountNumber).toBe('5551234567');
+  });
+
+  it('derives Account Title from the employee name for a Cash employee too — never blank just because there is no bank', async () => {
+    const admin = await masterAdminAgent('bs-derived-title-cash-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site BS Derived Title Cash');
+    const cycle = await makeDraftCycle(admin, 2);
+    const employee = await makeEmployee(site.id, unit.id, 'Cash Title Employee');
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet?bankId=cash`);
+    expect(res.body.rows).toHaveLength(1);
+    expect(res.body.rows[0].accountTitle).toBe('Cash Title Employee');
+    expect(res.body.rows[0].accountNumber).toBeNull();
+    expect(res.body.rows[0].iban).toBeNull();
   });
 
   // --- Export correctness -----------------------------------------------------------------------
@@ -370,9 +441,17 @@ describe('Phase 4 Checkpoint 3 — Bank Sheets', () => {
     const { site, unit } = await makeSiteWithUnit('Test Site BS Export');
     const cycle = await makeDraftCycle(admin, 12);
     const bank = await makeBank('EXP', 'Export Test Bank');
-    const employee = await makeEmployee(site.id, unit.id, 'Export Employee', {
-      bankId: bank.id,
-      accountNumber: '9999999999',
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Export Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        bankId: bank.id,
+        accountNumber: '9999999999',
+        iban: 'PK36SCBL0000001123456702',
+      },
     });
     await createEntry(admin, cycle.id, employee.id);
     await releaseUnit(admin, cycle.id, unit.id);
@@ -385,20 +464,120 @@ describe('Phase 4 Checkpoint 3 — Bank Sheets', () => {
     const csvText = csvRes.text;
     expect(csvText).toContain('Export Employee');
     expect(csvText).toContain('9999999999');
+    // Banking refinement (2026-07-11): IBAN is a real export column; Account Title is derived from
+    // the employee's own name, never a separately stored/exported field.
+    expect(csvText).toContain('IBAN');
+    expect(csvText).toContain('PK36SCBL0000001123456702');
+    expect(csvText).toContain('Account Title');
+    expect(csvText).not.toContain('accountTitle');
+    // Bank display rule (2026-07-13): the exported Bank column is the Code, never the Name.
+    expect(csvText).toContain('TBEXP');
+    expect(csvText).not.toContain('Export Test Bank');
     expect(csvText).toContain('Total');
 
-    const xlsxRes = await admin.agent.get(
-      `/api/v1/payroll-cycles/${cycle.id}/bank-sheet/export?bankId=${bank.id}&format=xlsx`,
-    );
+    const xlsxRes = await admin.agent
+      .get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet/export?bankId=${bank.id}&format=xlsx`)
+      .buffer()
+      .parse(binaryParser);
     expect(xlsxRes.status).toBe(200);
     expect(xlsxRes.headers['content-type']).toContain('spreadsheetml');
-    // A real, non-empty XLSX binary was returned.
-    expect(Number(xlsxRes.headers['content-length'])).toBeGreaterThan(0);
+    // Parse the real binary and read the actual IBAN cell — "a non-empty buffer was returned" does
+    // not prove the value inside it is complete; only reading the cell does (2026-07-12).
+    const workbook = new ExcelJS.Workbook();
+    // `exceljs`'s bundled type defs pin an older, incompatible `Buffer` generic than this
+    // workspace's @types/node — a real cross-package type-version mismatch, not a bug in this
+    // test; `any` here is the correct, narrow escape hatch, not a mask for a genuine type error.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await workbook.xlsx.load(xlsxRes.body as any);
+    const worksheet = workbook.worksheets[0]!;
+    const ibanColumnIndex = (worksheet.getRow(1).values as unknown[]).findIndex((v) => v === 'IBAN');
+    const ibanCellValue = worksheet.getRow(2).getCell(ibanColumnIndex).value;
+    expect(ibanCellValue).toBe('PK36SCBL0000001123456702');
+    // Dynamic Width Rule (2026-07-13): the column width is computed from this export's own actual
+    // content (`excelColumnWidth`), not a manually guessed number — for this 24-character IBAN
+    // (longer than the 4-character "IBAN" header), that's exactly length + margin, never a fixed
+    // constant regardless of what's actually in the sheet.
+    expect(worksheet.getColumn(ibanColumnIndex).width).toBe('PK36SCBL0000001123456702'.length + 3);
 
     const auditEntry = await prisma.auditLog.findFirst({
       where: { action: 'bank_sheet.export', entityId: cycle.id },
       orderBy: { occurredAt: 'desc' },
     });
     expect(auditEntry).not.toBeNull();
+  });
+
+  it('the Bank Sheet API response carries the Bank Code (not the Bank Name) and a realistic long account number, untruncated', async () => {
+    const admin = await masterAdminAgent('bs-long-values-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site BS Long Values');
+    // Month must be 1–12; reusing 3 here is safe since cleanTestData() clears every fake
+    // year>=2900 cycle before each test runs (full isolation, see tests/helpers.ts).
+    const cycle = await makeDraftCycle(admin, 3);
+    // A realistic long configured Bank Code (not just a short one like "MCB") — the approved
+    // Bank display rule (2026-07-13): dense tables show the Code, never the Name, so a genuinely
+    // long code is the class of value that actually exercises the dynamic-width calculation.
+    // `Bank.code` is `varchar(10)` — "HABIBMETRO" (10 characters) is the realistic *maximum*
+    // this schema allows, not an arbitrary example, so created directly (not via `makeBank`,
+    // whose "TB" cleanup prefix would push it over that limit) and cleaned up explicitly below.
+    const bank = await prisma.bank.create({ data: { code: 'HABIBMETRO', name: 'Habib Metropolitan Bank' } });
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Long Values Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        bankId: bank.id,
+        accountNumber: '00330011002233445566', // 20 digits — a realistic long account number
+        iban: 'PK36SCBL0000001123456702',
+      },
+    });
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet?bankId=${bank.id}`);
+    expect(res.status).toBe(200);
+    const row = res.body.rows[0];
+    expect(row.bankCode).toBe('HABIBMETRO');
+    expect(row.bankCode).not.toContain('Habib Metropolitan Bank');
+    expect(row.accountNumber).toBe('00330011002233445566');
+    expect(row.accountNumber).toHaveLength(20);
+    expect(row.iban).toBe('PK36SCBL0000001123456702');
+    expect(row.iban).toHaveLength(24);
+
+    // Manual cleanup — this bank's code deliberately doesn't carry the "TB" prefix
+    // cleanTestData() relies on (see the creation comment above), so it must be removed here,
+    // after every RESTRICT reference to it (the PayrollEntry snapshot and the Employee's own
+    // current bankId) is gone.
+    await prisma.payrollUnitRelease.deleteMany({ where: { cycleId: cycle.id } });
+    await prisma.payrollEntry.deleteMany({ where: { cycleId: cycle.id } });
+    await prisma.employee.delete({ where: { id: employee.id } });
+    await prisma.bank.delete({ where: { id: bank.id } });
+  });
+
+  it('also renders a full 34-character IBAN-like value completely — the schema maximum, not just the Pakistani 24-character case', async () => {
+    const admin = await masterAdminAgent('bs-iban34-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site BS IBAN34');
+    const cycle = await makeDraftCycle(admin, 4);
+    const bank = await makeBank('IBAN34', 'IBAN 34 Test Bank');
+    const iban34 = 'PK36ABCD12345678901234567890123456';
+    expect(iban34).toHaveLength(34);
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'IBAN34 Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        bankId: bank.id,
+        accountNumber: '5551234567',
+        iban: iban34,
+      },
+    });
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet?bankId=${bank.id}`);
+    expect(res.body.rows[0].iban).toBe(iban34);
+    expect(res.body.rows[0].iban).toHaveLength(34);
   });
 });

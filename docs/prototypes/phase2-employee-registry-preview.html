@@ -245,8 +245,8 @@
               <div class="form-grid">
                 <div class="field"><label>Bank</label><select><option>None (cash payment)</option></select></div>
                 <div class="field"><label>Branch code</label><input type="text" /></div>
-                <div class="field"><label>Account number</label><input type="text" /></div>
-                <div class="field"><label>Account title</label><input type="text" /></div>
+                <div class="field"><label>Account number <span style="color:var(--color-red);">*</span></label><input type="text" /></div>
+                <div class="field"><label>IBAN</label><input type="text" placeholder="Optional — e.g. PK36SCBL0000001123456702" /></div>
                 <div class="field"><label>Default EOBI amount</label><input type="text" placeholder="400.00" /></div>
                 <label style="display:flex; align-items:center; gap:6px; padding-top:20px;"><input type="checkbox" checked /> EOBI applicable</label>
               </div>
@@ -278,10 +278,10 @@
               <div class="field"><label>Branch</label><select><option>Model Town Branch</option></select></div>
               <div class="field"><label>Pay type</label><select><option>Daily wage</option><option>Monthly</option></select></div>
               <div class="field"><label>Gross pay</label><input type="text" value="30,000.00" /></div>
-              <div class="field"><label>Bank</label><select><option>None (cash payment)</option></select></div>
-              <div class="field"><label>Branch code</label><input type="text" /></div>
-              <div class="field"><label>Account number</label><input type="text" /></div>
-              <div class="field span-2"><label>Account title</label><input type="text" /></div>
+              <div class="field"><label>Bank</label><select><option selected>Muslim Commercial Bank (MCB)</option><option>None (cash payment)</option></select></div>
+              <div class="field"><label>Branch code</label><input type="text" value="0140" /></div>
+              <div class="field"><label>Account number <span style="color:var(--color-red);">*</span></label><input type="text" value="001234567890" /></div>
+              <div class="field span-2"><label>IBAN</label><input type="text" value="PK36SCBL0000001123456702" /></div>
             </div>
           </div>
           <div class="modal-footer">
@@ -371,6 +371,25 @@
     because it lives in the shared <code>Topbar</code> component
     (<code>frontend/src/components/layout/topbar.tsx</code>), not per-route. Added here to match
     <code>phase3-payroll-entry-preview.html</code>, which already carried it correctly.
+    <br /><br />
+    <strong>Updated 2026-07-11 for the Employee/Payroll Entry/Bank Sheet banking refinement</strong>:
+    Account Title is removed entirely — it is no longer stored anywhere; the employee's own legal
+    name is always the account holder. IBAN is added in its place (optional, nullable, trimmed,
+    stored uppercase) in both the New/Edit Employee modal and the Reactivate Employee modal. Account
+    Number is now marked required (<span style="color:var(--color-red);">*</span>) whenever a bank is
+    selected — a bank employee must have an Account Number on file; a cash employee (no bank) has
+    neither an Account Number nor an IBAN, enforced server-side in
+    <code>employees.service.ts</code>'s <code>applyBankingInvariant</code>.
+    <br /><br />
+    <strong>Corrected 2026-07-12 — Reactivate Employee modal now shows real, populated banking
+    values</strong> instead of blank/placeholder-only fields, so the exact canonical IBAN test value
+    (<code>PK36SCBL0000001123456702</code>) and a full bank name ("Muslim Commercial Bank (MCB)",
+    not a bare code) are actually visible in the rendered form, not just described in this footer.
+    This modal's fields were already generous enough width-wise (a 2-column 620px form grid, IBAN
+    spanning both columns) that no CSS changes were needed here — the defect this session fixed was
+    specific to the Payroll Entry grid's narrow, fixed-pixel CSS Grid columns and its Bank
+    <code>&lt;select&gt;</code> showing only <code>bank.code</code>; see
+    <code>phase3-payroll-entry-preview.html</code>'s footer for the full root-cause account.
   </footer>
 
   <script>

@@ -46,7 +46,12 @@ export interface BankSheetRow {
   siteName: string;
   designation: string;
   bankId: string | null;
-  bankName: string | null;
+  /** Bank Code only, not the full Bank Name — the approved Bank display rule (2026-07-13): a
+   * dense transaction table displays the Code specifically so the column stays compact without
+   * losing meaning. The full name remains available via `bankId` → Settings → Banks if ever
+   * needed; `getBankSheet`'s own `bankLabel` (the whole sheet's single selected bank) still uses
+   * the full name, since that is a one-time filter-selection descriptor, not a dense grid cell. */
+  bankCode: string | null;
   branchCode: string | null;
   accountNumber: string | null;
   iban: string | null;
@@ -66,9 +71,11 @@ export interface BankSheetResult {
   totalNetSalary: string;
 }
 
-async function resolveBankFilter(bankFilter: string): Promise<{ bankId: string | null; label: string }> {
+async function resolveBankFilter(
+  bankFilter: string,
+): Promise<{ bankId: string | null; label: string; code: string | null }> {
   if (bankFilter === CASH_BANK_FILTER) {
-    return { bankId: null, label: 'Cash' };
+    return { bankId: null, label: 'Cash', code: null };
   }
 
   const bank = await prisma.bank.findUnique({ where: { id: bankFilter } });
@@ -79,14 +86,17 @@ async function resolveBankFilter(bankFilter: string): Promise<{ bankId: string |
     throw badRequest('Cannot generate a Bank Sheet for an inactive bank');
   }
 
-  return { bankId: bank.id, label: bank.name };
+  // `label` (the full name) is still used for the whole sheet's one-time filter-selection
+  // descriptor (`bankLabel`, export filenames, audit log) — a selection context, not a dense grid
+  // cell, so it keeps the same "clarity is useful" treatment as Employee Registry's own dropdown.
+  return { bankId: bank.id, label: bank.name, code: bank.code };
 }
 
 type EntryForSheet = Prisma.PayrollEntryGetPayload<{
   include: { employee: true; site: true; workLines: true };
 }>;
 
-function buildRow(entry: EntryForSheet, bankLabel: string): BankSheetRow {
+function buildRow(entry: EntryForSheet, bankCode: string | null): BankSheetRow {
   return {
     entryId: entry.id,
     employeeId: entry.employeeId,
@@ -101,7 +111,7 @@ function buildRow(entry: EntryForSheet, bankLabel: string): BankSheetRow {
     // never alter a previously released Bank Sheet (this checkpoint's own explicit requirement).
     designation: entry.designation,
     bankId: entry.bankId,
-    bankName: entry.bankId ? bankLabel : null,
+    bankCode: entry.bankId ? bankCode : null,
     branchCode: entry.branchCode,
     accountNumber: entry.accountNumber,
     iban: entry.iban,
@@ -144,7 +154,7 @@ export async function getBankSheet(
   siteIds?: string[],
 ): Promise<BankSheetResult> {
   await getPayrollCycle(cycleId); // 404s cleanly if the cycle doesn't exist
-  const { bankId, label } = await resolveBankFilter(bankFilter);
+  const { bankId, label, code } = await resolveBankFilter(bankFilter);
   const siteIdFilter = await resolveSiteIdFilter(currentUser, siteIds);
 
   const entries = await prisma.payrollEntry.findMany({
@@ -163,7 +173,7 @@ export async function getBankSheet(
     orderBy: [{ site: { name: 'asc' } }, { sortOrder: 'asc' }],
   });
 
-  const rows = entries.map((entry) => buildRow(entry, label));
+  const rows = entries.map((entry) => buildRow(entry, code));
 
   return {
     bankFilter,
@@ -194,13 +204,26 @@ function buildExportRow(row: BankSheetRow): string[] {
     row.employeeName,
     row.siteName,
     row.designation,
-    row.bankName ?? 'Cash',
+    row.bankCode ?? 'Cash',
     row.branchCode ?? '',
     row.accountNumber ?? '',
     row.iban ?? '',
     row.accountTitle,
     row.netSalary,
   ];
+}
+
+/**
+ * A column's width from its actual exported content — the permanent Dynamic Width Rule
+ * (2026-07-13): "do not assign arbitrary widths... every column must expand according to the
+ * longest visible header or value it contains." ExcelJS has no native content-driven auto-width
+ * (unlike an HTML `<table>`'s own `table-layout: auto`), so this is the closest equivalent: the
+ * longest of the header and every exported row's value for that column, in ExcelJS's own
+ * character-count width unit, plus a small margin — never a manually guessed number.
+ */
+function excelColumnWidth(header: string, values: string[]): number {
+  const longest = values.reduce((max, value) => Math.max(max, value.length), header.length);
+  return longest + 3;
 }
 
 export interface BankSheetExportResult {
@@ -246,12 +269,17 @@ export async function exportBankSheetToXlsx(
     totalRow.font = { bold: true };
   }
 
-  // Never truncate the account number/IBAN columns, per this checkpoint's own layout-integrity
-  // rule — ExcelJS's own column width, unlike CSS, has no overflow-scroll fallback if left too
-  // narrow.
-  worksheet.getColumn(8).width = 24;
-  worksheet.getColumn(9).width = 36;
-  worksheet.getColumn(3).width = 28;
+  // Never truncate a business-critical identifier — the permanent Layout Integrity Rule. Every
+  // column's width is computed from its own actual exported content (`excelColumnWidth`, above),
+  // not a manually guessed number (corrected 2026-07-13 — a fixed pixel/character guess is exactly
+  // what the Dynamic Width Rule removes, even one with generous margin). Net Salary (column 11) is
+  // deliberately excluded — its right-aligned monetary format reads fine at ExcelJS's own default
+  // width, and totals/individual values are short enough that this was never the constrained one.
+  BANK_SHEET_HEADERS.forEach((header, index) => {
+    if (header === 'Net Salary') return;
+    const columnValues = rows.map((row) => row[index] ?? '');
+    worksheet.getColumn(index + 1).width = excelColumnWidth(header, columnValues);
+  });
 
   const buffer = await workbook.xlsx.writeBuffer();
   return { buffer: Buffer.from(buffer), rowCount: sheet.rows.length, bankLabel: sheet.bankLabel };
