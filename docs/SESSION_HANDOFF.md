@@ -46,7 +46,12 @@ be enough to resume correctly without re-deriving context from scratch — per
   implementation, reviewed, verified, and committed) → `d1c9dd1` (doc-only commit hash record,
   closing Checkpoint 4) → `75c5e64` (Phase 4 Checkpoint 5 — Advances — implementation, reviewed,
   verified, and committed) → `f002072` (doc-only commit hash record, closing Checkpoint 5) →
-  `3c05f5e` (Phase 1–3 HTML prototype reconciliation, docs-only).
+  `3c05f5e` (Phase 1–3 HTML prototype reconciliation, docs-only) → `3b74c32` (post-Phase-4 banking
+  refinement — Account Title removal, IBAN addition, banking invariants — implementation,
+  committed) → `9d9bc32` (Layout Integrity corrections — implementation, committed) → `372eeba`
+  (doc-only commit, closing out both of the above) → `093a9df` (Phase 4 Checkpoints 6.1 — Payslips
+  backend foundation — and 6.2 — Payslip PDF Engine — implementation, reviewed, verified, and
+  committed together as one logical commit).
 - **Post-Phase-4 banking refinement — COMMITTED as `3b74c32`.** `Employee`/`PayrollEntry.
   accountTitle` removed entirely (clean, destructive migration); `iban` added to both; a new
   banking invariant (bank employee requires Account Number, cash employee has neither); Bank
@@ -65,39 +70,48 @@ be enough to resume correctly without re-deriving context from scratch — per
   `372eeba`'s own prose still read "not yet committed"/"pending review" in several places, narrating
   the working tree's state as it stood *before* these two commits existed — corrected in place in
   `docs/PROJECT_PROGRESS.md` §1, since `git log` was never actually in doubt.
-- **Phase 4, Checkpoint 6.1 (Payslips backend foundation) — implemented and verified this session,
-  NOT YET COMMITTED.** Preceded by a dedicated, approved Payslip architecture review. Payslip
+- **Phase 4, Checkpoints 6.1 (Payslips backend foundation) and 6.2 (Payslip PDF Engine) — reviewed,
+  approved, verified, and COMMITTED TOGETHER as `093a9df`.** Checkpoint 6.1 was intentionally left
+  uncommitted while Checkpoint 6.2 was built directly on top of it in the same session, per explicit
+  instruction, then both were staged and committed as one logical implementation commit. Payslip
   generation is now explicitly three checkpoints — **6.1 Backend Foundation → 6.2 PDF Engine → 6.3
   Frontend, Batch Generation, and Phase Close-Out** — superseding this file's own earlier informal
-  "Payslip generation" framing as one undivided item. `PayrollEntry.employeeNameSnapshot`/
-  `.fatherNameSnapshot` (new, additive migration), a dedicated `payslips:view` permission (Master
-  Admin/Payroll Staff/Finance), and a new `backend/src/modules/payslips/` module exposing two
-  read-only endpoints only (list/picker + one assembled Payslip JSON) — no PDF, no batch/ZIP, no
-  frontend surface, those are 6.2/6.3. **304/304 backend tests** (287 prior + 17 new); real-stack
-  verification via a real local Postgres + live server + real HTTP login/session flow. Full detail:
-  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.1" entry.
-- **Phase 4, Checkpoint 6.2 (Payslip PDF Engine) — implemented and verified this session, NOT YET
-  COMMITTED.** Preceded by its own dedicated, approved architecture review. `puppeteer` added;
-  `backend/src/lib/pdf/` (browser singleton, generic HTML→PDF renderer, HTML-escaping utility,
-  shared print stylesheet, the Payslip template); one new `GET .../payslips/:employeeId/pdf`
-  endpoint — identical permission/site-scoping/released-gate as the JSON route, one PDF artifact
-  serving both preview and download via `Content-Disposition` (never a second HTML route), a new
-  `payslip.exported` audit action. `Payslip.periodStartDate`/`.periodEndDate` added to 6.1's JSON
-  shape (derived, not stored). Fully stateless — no persistence, no cache, no `StorageProvider`
-  dependency (that section's own wording clarified this same checkpoint,
-  `docs/architecture/system-conventions.md §2`). **325/325 backend tests** (304 prior + 21 new);
-  real-stack verification against the actual compiled production build (`dist/`), including a
-  hostile-input employee name through the real endpoint, verified escaped, not executed. **Real
-  deviation found during implementation**: Puppeteer 22+ is ESM-only and this backend compiles to
-  CommonJS — TypeScript's own dynamic `import()` doesn't solve this either (downlevels to a failing
-  `require()`); fixed via the standard `new Function('return import("puppeteer")')` ESM-from-CJS
-  interop pattern, plus `NODE_OPTIONS=--experimental-vm-modules` added to the `test` script so Jest
-  itself can execute it. **Known limitation, not resolved**: no actual Render/Linux-container
-  deployment smoke test was possible this session (no Docker, no live Render access in this
-  sandboxed environment) — required before this checkpoint is fully production-ready. Full detail:
-  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.2" entry. **The next session's first
-  action, if this hasn't been reviewed yet, is to pick up review from here before beginning
-  Checkpoint 6.3 (Frontend, Batch Generation, and Phase Close-Out).**
+  "Payslip generation" framing as one undivided item.
+  - **6.1**: `PayrollEntry.employeeNameSnapshot`/`.fatherNameSnapshot` (additive migration), a
+    dedicated `payslips:view` permission (Master Admin/Payroll Staff/Finance), and a new
+    `backend/src/modules/payslips/` module exposing the list/picker and single assembled Payslip
+    JSON endpoints.
+  - **6.2**: `puppeteer` added; `backend/src/lib/pdf/` (browser singleton, generic HTML→PDF
+    renderer, HTML-escaping utility, shared print stylesheet, the Payslip template); one new
+    `GET .../payslips/:employeeId/pdf` endpoint — identical permission/site-scoping/released-gate
+    as the JSON route, one PDF artifact serving both preview and download via
+    `Content-Disposition`, a new `payslip.exported` audit action. `Payslip.periodStartDate`/
+    `.periodEndDate` added to 6.1's JSON shape (derived, not stored). Fully stateless — no
+    persistence, no cache, no `StorageProvider` dependency
+    (`docs/architecture/system-conventions.md §2`, clarified this same checkpoint).
+  - **Real deviation found during implementation**: Puppeteer 22+ is ESM-only and this backend
+    compiles to CommonJS — TypeScript's own dynamic `import()` doesn't solve this either
+    (downlevels to a failing `require()`); fixed via the standard
+    `new Function('return import("puppeteer")')` ESM-from-CJS interop pattern, plus
+    `NODE_OPTIONS=--experimental-vm-modules` added to the `test` script so Jest itself can execute
+    it.
+  - **Final narrow pre-commit verification pass (2026-07-12)**, against the approved review's own
+    7-point checklist, found and fixed one real issue before commit: `getBrowser()`'s crash/
+    disconnect relaunch could race under concurrent requests and orphan a Chrome process; fixed
+    with a compare-and-swap guard. The other six checks (interop isolation, page-close-in-finally,
+    filename sanitization against quotes/CRLF/path separators, correct binary `Buffer` handling, no
+    sensitive data in application logs) were all confirmed already correct.
+  - **325/325 backend tests** (304 at 6.1+6.2's initial implementation, unchanged after the final
+    verification fix); real-stack verification against the actual compiled production build
+    (`dist/`), including a hostile-input employee name through the real endpoint, verified escaped,
+    not executed.
+  - **Known limitation, not resolved**: no actual Render/Linux-container deployment smoke test was
+    possible this session (no Docker, no live Render access in this sandboxed environment) —
+    required before this checkpoint is fully production-ready.
+  - Full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.1"/"Checkpoint 6.2" entries.
+  **The next session's first action is Checkpoint 6.3 (Frontend, Batch Generation, and Phase
+  Close-Out) — a dedicated architecture review for it should precede implementation, same as every
+  prior checkpoint in this phase.**
 - **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
   `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
   blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`

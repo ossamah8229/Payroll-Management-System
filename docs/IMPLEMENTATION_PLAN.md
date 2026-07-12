@@ -1336,8 +1336,8 @@ reconciliation note (2026-07-12, Checkpoint 6.1's own preflight):** this paragra
 previously read "not yet committed"/"still not committed," narrating the working tree's state as it
 stood before these commits existed — corrected here against `git log`.
 
-**Phase 4, Checkpoint 6.1 — Payslips backend foundation (2026-07-12, implemented and verified, not
-yet committed).** `PayrollEntry.employeeNameSnapshot`/`.fatherNameSnapshot` (additive migration,
+**Phase 4, Checkpoint 6.1 — Payslips backend foundation (2026-07-12, COMMITTED together with
+Checkpoint 6.2 as `093a9df`).** `PayrollEntry.employeeNameSnapshot`/`.fatherNameSnapshot` (additive migration,
 carried forward at cycle bootstrap rather than refreshed, unlike designation/banking); a dedicated
 `payslips:view` permission (Master Admin/Payroll Staff/Finance); a new `backend/src/modules/
 payslips/` module exposing exactly two read-only endpoints (list/picker + one assembled Payslip
@@ -1345,8 +1345,8 @@ JSON) — no PDF, no batch/ZIP, no frontend, those are 6.2/6.3. 304/304 backend 
 new); real-stack HTTP verification against a real local Postgres + live server. Full record:
 `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.1" entry.
 
-**Phase 4, Checkpoint 6.2 — Payslip PDF Engine (2026-07-12, implemented and verified, not yet
-committed).** Preceded by its own dedicated, approved architecture review. Adds `puppeteer`;
+**Phase 4, Checkpoint 6.2 — Payslip PDF Engine (2026-07-12, COMMITTED together with Checkpoint 6.1
+as `093a9df`).** Preceded by its own dedicated, approved architecture review. Adds `puppeteer`;
 `backend/src/lib/pdf/` (`browser.ts` singleton, `render-pdf.ts` generic HTML→PDF wrapper,
 `html-escape.ts`, `print-styles.ts`, `templates/payslip.ts`); a new
 `GET /api/v1/payroll-cycles/:cycleId/payslips/:employeeId/pdf` endpoint (identical permission/

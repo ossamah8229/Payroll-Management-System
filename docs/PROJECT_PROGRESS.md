@@ -2614,7 +2614,7 @@ inconsistent with `git log`, though the code itself was never in doubt. Correcte
 rather than left to mislead a future session into re-litigating already-committed, already-reviewed
 work.
 
-### Phase 4, Checkpoint 6.1 — Payslips backend foundation (2026-07-12, implemented and verified, not yet committed)
+### Phase 4, Checkpoint 6.1 — Payslips backend foundation (2026-07-12, COMMITTED as `093a9df`)
 
 Preceded by a dedicated, read-only Payslip architecture review (no files touched) — approved, and
 grounded the decisions below. **Explicitly backend/schema foundation only**: no PDF, no batch/ZIP
@@ -2691,11 +2691,12 @@ this session — no frontend surface exists yet for this checkpoint regardless, 
 carry-forward-vs-refresh note), `docs/architecture/authentication.md` (new permission), this file, and
 the stale post-Phase-4-refinement "not yet committed" narrative reconciled against `git log` (above).
 
-**Implemented and verified, not yet committed** — nothing staged or committed this session, per
-explicit instruction. Waiting for review and commit approval before beginning Checkpoint 6.2 (PDF
-Engine).
+**Committed as `093a9df`** — reviewed, approved, and committed together with Checkpoint 6.2 below
+as one logical implementation commit (Checkpoint 6.1 was intentionally left uncommitted while
+Checkpoint 6.2 was built directly on top of it in the same session, per explicit instruction; see
+`093a9df`'s own commit message for the combined summary). Doc-only hash record, this pass.
 
-### Phase 4, Checkpoint 6.2 — Payslip PDF Engine (2026-07-12, implemented and verified, not yet committed)
+### Phase 4, Checkpoint 6.2 — Payslip PDF Engine (2026-07-12, COMMITTED as `093a9df`)
 
 Preceded by a dedicated, read-only architecture review (no files touched), approved before this
 implementation began. Builds the complete backend PDF-generation engine for Payslips — no frontend,
@@ -2801,9 +2802,9 @@ substitutes for an actual staging deploy confirming Chromium starts and fonts re
 Render itself. Flagged as required before this checkpoint is considered fully production-ready, not
 silently assumed fine.
 
-**Implemented and verified, not yet committed** — nothing staged or committed this session, per
-explicit instruction. Waiting for review and commit approval before beginning Checkpoint 6.3
-(Frontend, Batch Generation, and Phase Close-Out).
+**Committed as `093a9df`**, together with Checkpoint 6.1 above, as one logical implementation
+commit. Waiting for review and commit approval before beginning Checkpoint 6.3 (Frontend, Batch
+Generation, and Phase Close-Out).
 
 **Final narrow pre-commit verification (2026-07-12), approved-in-principle review's own explicit
 checklist — one correction made, six confirmed clean:**
@@ -2839,7 +2840,7 @@ checklist — one correction made, six confirmed clean:**
 7. Re-ran in full after the correction: typecheck/lint/build clean across shared/backend/frontend;
    **backend 325/325**, unchanged.
 
-No other Checkpoint 6.2 file required a change. Ready for commit.
+No other Checkpoint 6.2 file required a change. Committed as `093a9df`.
 
 ---
 
@@ -2852,7 +2853,7 @@ No other Checkpoint 6.2 file required a change. Ready for commit.
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement CLOSED and committed — `3b74c32`, `9d9bc32`, `372eeba`; see §1. **Payslip generation, per the dedicated 2026-07-12 architecture review, is split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out). Checkpoints 6.1 and 6.2 implemented and verified this session — not yet committed, pending review** (see §1's own Checkpoint 6.1/6.2 entries). Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement CLOSED and committed — `3b74c32`, `9d9bc32`, `372eeba`; see §1. **Payslip generation, per the dedicated 2026-07-12 architecture review, is split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out). Checkpoints 6.1 and 6.2 CLOSED and committed together as `093a9df`** (see §1's own Checkpoint 6.1/6.2 entries). Checkpoint 6.3 not yet started. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
