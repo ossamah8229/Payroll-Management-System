@@ -48,6 +48,21 @@ free-text column with no prior mention in this section — an explicitly approve
 addition (not merely filling a documentation gap), ordinarily Draft-editable like every other field
 here, frozen into the permanent snapshot once released, and intended to render as the last column
 of the Payroll Entry grid (a later, UI-focused checkpoint's concern).
+**Revised 2026-07-12 (Phase 4 Checkpoint 6.1, Payslips backend foundation) — `employeeNameSnapshot`/
+`fatherNameSnapshot` added:** closes the one historical-correctness gap the 2026-07-11/07-12 banking
+refinement review explicitly left open (`PROJECT_PROGRESS.md`'s "Snapshot-name finding" — Bank
+Sheet's own Account Title still reads `Employee.name` live and is unaffected by this addition, out of
+this checkpoint's scope). Unlike `designation`/the banking fields, which always **refresh** from
+`Employee`'s current record at new-cycle bootstrap, these two fields **carry forward** from the prior
+cycle's entry once first captured (a continuing employee's Payslip name stays stable across cycles
+the same way its released figures do) — a genuinely new employee (no prior entry) still seeds fresh
+from `Employee`'s current record, same as every other field. See
+`payroll-processing.service.ts`'s `createPayrollCycle` doc comment for the full carry-forward-vs-
+refresh reasoning. Backfilled best-effort for pre-existing rows (copied from each row's current
+linked `Employee`, migration `20260712210000_payslip_identity_snapshots`) — not historically exact
+for an employee already renamed before this column existed, since no earlier record of the name
+exists to backfill from. Read exclusively by Payslip generation (`payslips.service.ts`); no other
+module consumes these columns yet.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
@@ -55,6 +70,8 @@ of the Payroll Entry grid (a later, UI-focused checkpoint's concern).
 | `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
 | `employeeId` | uuid | no | — | FK → `Employee.id`, `ON DELETE RESTRICT` |
 | `siteId` | uuid | no | — | FK → `ProjectSite.id`, `ON DELETE RESTRICT` — copied from `Employee` at entry creation, then ordinarily Draft-editable, see note below. Every work line under this entry (§12a) must belong to a `ProjectUnit` under this same site — database-guaranteed via a composite FK, same mechanism as `Employee.unitId` (`database/employee.md §9`) |
+| `employeeNameSnapshot` | varchar(160) | yes | — | **Added 2026-07-12 (Phase 4 Checkpoint 6.1).** Frozen copy of `Employee.name`; carried forward from the prior cycle's entry at bootstrap (not refreshed), see the revision note above. Nullable at the schema level only for pre-existing-row backfill purposes — every entry created going forward always populates it. |
+| `fatherNameSnapshot` | varchar(160) | yes | — | **Added 2026-07-12 (Phase 4 Checkpoint 6.1).** Same as `employeeNameSnapshot`, for `Employee.fatherName` — nullable both at the schema level and legitimately in data, since `Employee.fatherName` itself is optional. |
 | `designation` | varchar(80) | no | — | copied from `Employee.designation` at entry creation, then ordinarily Draft-editable |
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT` — copied from `Employee` at entry creation, then ordinarily Draft-editable |
 | `branchCode` | varchar(20) | yes | — | the employee's own bank branch code, copied from `Employee` at entry creation, then ordinarily Draft-editable — unrelated to `ProjectUnit.code` (`database/sites-and-units.md §8a`), same distinction noted in `database/employee.md §9` |

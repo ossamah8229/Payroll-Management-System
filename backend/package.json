@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "jest --runInBand",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate",
     "prisma:seed": "tsx prisma/seed.ts"
@@ -36,6 +36,7 @@
     "pg": "^8.13.0",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
+    "puppeteer": "^25.3.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

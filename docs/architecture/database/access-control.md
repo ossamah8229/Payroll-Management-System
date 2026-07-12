@@ -156,6 +156,17 @@ Staff's.
   row can ever exist — simpler than a separate partial-unique-index trick.
 - **Module owner:** Settings
 - **Row count:** exactly 1
+- **Read live, never snapshotted — an accepted, documented gap (recorded 2026-07-12, Phase 4
+  Checkpoint 6.2's own architecture review).** Payslip PDFs (`payslips.service.ts`) read
+  `CompanySettings` at render time, not from any frozen copy on `PayrollEntry`/`PayrollCycle`. If
+  the company's name/address ever changes, every historical Payslip regenerated after that change
+  would show the new details, not what was true at the time of release — the same category of
+  historical-correctness gap Checkpoint 6.1 closed for `Employee.name`/`.fatherName`
+  (`payroll-entry.md §12`'s `employeeNameSnapshot`/`fatherNameSnapshot` revision note), left open
+  here on purpose: a company legally renaming or relocating is vastly lower-probability than an
+  individual employee's name changing, and closing it would mean snapshotting `CompanySettings`
+  onto every `PayrollEntry`/`PayrollCycle` — real schema scope outside a PDF-*engine* checkpoint.
+  Not fixed without a future, separately-authorized decision.
 
 ## 20. `Session` (external, library-owned)
 

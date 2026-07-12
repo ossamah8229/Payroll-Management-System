@@ -235,6 +235,13 @@ export async function createPayrollEntry(
         cycleId,
         employeeId: employee.id,
         siteId: employee.siteId,
+        // Phase 4 Checkpoint 6.1 (Payslips backend foundation) — frozen at creation, same "copied,
+        // not linked" convention as designation/banking below. No prior-entry carry-forward path
+        // exists here: this is the single ad-hoc "add this employee to the cycle" action, which has
+        // no prior-cycle concept of its own (that carry-forward instead lives in
+        // `payroll-processing.service.ts`'s `createPayrollCycle` bootstrap).
+        employeeNameSnapshot: employee.name,
+        fatherNameSnapshot: employee.fatherName,
         designation: employee.designation,
         bankId: employee.bankId,
         branchCode: employee.branchCode,

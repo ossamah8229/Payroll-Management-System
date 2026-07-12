@@ -2,6 +2,7 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { logger } from './lib/logger';
 import { prisma } from './lib/prisma';
+import { closeBrowser } from './lib/pdf/browser';
 
 const app = createApp();
 
@@ -12,6 +13,10 @@ const server = app.listen(env.PORT, () => {
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down gracefully`);
   server.close(async () => {
+    // Phase 4 Checkpoint 6.2 — the shared Puppeteer browser (if a PDF was ever rendered this
+    // process) must be closed explicitly, same as Prisma, or it's left as an orphaned Chrome
+    // process rather than exiting with the server.
+    await closeBrowser();
     await prisma.$disconnect();
     process.exit(0);
   });

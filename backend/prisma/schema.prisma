@@ -468,52 +468,63 @@ model ScheduledPayrollPeriod {
 /// `lateReason IS NOT NULL ⇒ released = true` are Prisma-DSL-inexpressible and added by raw SQL
 /// in the migration.
 model PayrollEntry {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cycleId             String    @db.Uuid
-  employeeId          String    @db.Uuid
-  siteId              String    @db.Uuid
-  designation         String    @db.VarChar(80)
-  bankId              String?   @db.Uuid
-  branchCode          String?   @db.VarChar(20)
-  accountNumber       String?   @db.VarChar(40)
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId              String    @db.Uuid
+  employeeId           String    @db.Uuid
+  siteId               String    @db.Uuid
+  /// **Added Phase 4 Checkpoint 6.1 (Payslips backend foundation, 2026-07-12).** Frozen copy of
+  /// `Employee.name`/`.fatherName` at this entry's creation, closing the historical-correctness gap
+  /// `bank-sheets.service.ts`'s `buildRow` comment and `PROJECT_PROGRESS.md`'s "Snapshot-name
+  /// finding" both flagged as unresolved: Bank Sheet's own "Account Title" still reads
+  /// `entry.employee.name` live and is deliberately left that way (out of this checkpoint's scope,
+  /// no existing shipped behavior silently changed) — only Payslip generation reads these new
+  /// columns. Nullable because pre-existing rows are backfilled best-effort from current `Employee`
+  /// data (see this migration's own header comment), not because a newly created entry may
+  /// legitimately omit them — `createPayrollEntry`/`createPayrollCycle` always populate both.
+  employeeNameSnapshot String?   @db.VarChar(160)
+  fatherNameSnapshot   String?   @db.VarChar(160)
+  designation          String    @db.VarChar(80)
+  bankId               String?   @db.Uuid
+  branchCode           String?   @db.VarChar(20)
+  accountNumber        String?   @db.VarChar(40)
   /// **Added Phase 4 banking refinement (2026-07-11).** Copied from `Employee` at entry creation
   /// (or carried forward at new-cycle creation), then ordinarily Draft-editable — same "copied,
   /// not linked" convention as every other field in this group. Replaces `accountTitle` (removed
   /// the same pass); the account holder is always the entry's own `Employee.name` snapshot.
-  iban                String?   @db.VarChar(34)
-  grossPay            Decimal   @db.Decimal(12, 2)
-  allowance           Decimal   @default(0) @db.Decimal(12, 2)
-  leaveDays           Decimal   @default(0) @db.Decimal(5, 2)
-  leaveRate           Decimal?  @db.Decimal(10, 2)
-  eobiAmount          Decimal   @default(400.00) @db.Decimal(10, 2)
-  eobiApplicable      Boolean   @default(true)
-  advanceDeduction    Decimal   @default(0) @db.Decimal(12, 2)
+  iban                 String?   @db.VarChar(34)
+  grossPay             Decimal   @db.Decimal(12, 2)
+  allowance            Decimal   @default(0) @db.Decimal(12, 2)
+  leaveDays            Decimal   @default(0) @db.Decimal(5, 2)
+  leaveRate            Decimal?  @db.Decimal(10, 2)
+  eobiAmount           Decimal   @default(400.00) @db.Decimal(10, 2)
+  eobiApplicable       Boolean   @default(true)
+  advanceDeduction     Decimal   @default(0) @db.Decimal(12, 2)
   /// **Added Phase 4 Checkpoint 5.** The specific `LOAN`-type Advance this cycle's
   /// `advanceDeduction` reduces — recorded at the moment the deduction is entered/materialized,
   /// never re-inferred later from "whichever advance is currently active" (docs/architecture/
   /// database/advances.md §15). Frozen once the entry releases, exactly like every other field here.
-  advanceId           String?   @db.Uuid
-  eidAdvanceDeduction Decimal   @default(0) @db.Decimal(12, 2)
+  advanceId            String?   @db.Uuid
+  eidAdvanceDeduction  Decimal   @default(0) @db.Decimal(12, 2)
   /// **Added Phase 4 Checkpoint 5.** Same as `advanceId`, for the `EID_ADVANCE`-type Advance this
   /// cycle's `eidAdvanceDeduction` reduces.
-  eidAdvanceId        String?   @db.Uuid
-  fine                Decimal   @default(0) @db.Decimal(12, 2)
-  hold                Boolean   @default(false)
-  released            Boolean   @default(false)
-  releasedAt          DateTime? @db.Timestamptz(6)
-  releasedBy          String?   @db.Uuid
-  lateReason          String?
+  eidAdvanceId         String?   @db.Uuid
+  fine                 Decimal   @default(0) @db.Decimal(12, 2)
+  hold                 Boolean   @default(false)
+  released             Boolean   @default(false)
+  releasedAt           DateTime? @db.Timestamptz(6)
+  releasedBy           String?   @db.Uuid
+  lateReason           String?
   /// Approved Phase 3 Checkpoint 0 addition — not in docs/architecture/database/payroll-entry.md §12 as originally
   /// frozen. Editable while the entry is editable; frozen into the permanent snapshot once
   /// released, exactly like every other Draft-editable field.
-  remarks             String?
+  remarks              String?
   /// User-controlled drag-to-reorder position within the cycle. Assigned by the application at
   /// entry-creation time (Checkpoint 1), not a database sequence.
-  sortOrder           Int       @default(0)
+  sortOrder            Int       @default(0)
   /// Optimistic-locking token — incremented on every update (Checkpoint 1).
-  version             Int       @default(1)
-  createdAt           DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime  @updatedAt @db.Timestamptz(6)
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @db.Timestamptz(6)
 
   cycle                  PayrollCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   employee               Employee                @relation(fields: [employeeId], references: [id], onDelete: Restrict)

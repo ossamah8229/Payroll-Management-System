@@ -2454,7 +2454,9 @@ flow confirming the derived title and IBAN snapshot end-to-end, CSV export heade
 HTML prototypes (`phase2-employee-registry-preview.html`, `phase3-payroll-entry-preview.html`,
 `phase4-bank-sheets-preview.html`) updated to match.
 
-**Not yet committed** — implementation complete, pending review. No conflicts with frozen
+**Committed as `3b74c32`** ("feat(banking): remove Account Title, add IBAN, add banking invariants")
+— see the two later "Rejected on review" corrections below for what happened to this pass's own
+Layout Integrity fix before the whole working tree was finally committed. No conflicts with frozen
 architecture remain unresolved; the one identified (Bank Sheet's "Title of Account") was resolved
 as described above, with explicit sign-off, before implementation began.
 
@@ -2505,7 +2507,9 @@ drift (no schema change this pass); typecheck/lint/build clean across shared/bac
 backend tests 286/286 (one new XLSX-cell-value assertion added; one unrelated, pre-existing flaky
 performance test — `payroll-entry-performance.test.ts`'s query-plan check — failed once in the full
 suite and passed cleanly both standalone and on re-run, confirmed unrelated to this change by code
-inspection). **Still not committed** — pending this review's approval.
+inspection). **This 2026-07-12 iteration was itself superseded by the 2026-07-13 correction below
+before ever being committed on its own** — the eventual `9d9bc32` commit is that later, corrected
+version, not this one.
 
 **Rejected on review again, 2026-07-13 — two architectural corrections, superseding the 2026-07-12
 entry above.** (1) The "full `bank.name (code)`" display, added by the 2026-07-12 fix, was itself
@@ -2573,7 +2577,9 @@ Bank Sheet table (Bank Code column, full Account Number, full IBAN) — screensh
 corroborating evidence. `phase3-payroll-entry-preview.html` and `phase4-bank-sheets-preview.html`
 updated to match (Bank Code only in the rendered table rows, natural `table-layout: auto` sizing,
 horizontal scroll as the escape valve); the other nine prototypes in scope were reviewed and found
-to already comply, so left unmodified. **Still not committed** — pending this review's approval.
+to already comply, so left unmodified. **This 2026-07-13 pass was itself superseded by the header-
+width defect fix immediately below, before either was committed on its own** — the eventual `9d9bc32`
+commit is that final, corrected version.
 
 **One further defect found and fixed during this entry's own mandatory re-verification pass, before
 commit:** `measureColumnWidth`'s header-width estimate used a column header's literal-case label
@@ -2597,6 +2603,244 @@ reproducible with zero navigation). Full Definition of Done re-run clean after t
 typecheck/lint/build clean across shared/backend/frontend (0 lint errors, same 4 pre-existing
 `react-refresh` warnings); **backend 287/287**; **frontend 14/14**.
 
+**Committed as `9d9bc32`** ("feat(layout): implement dynamic layout integrity improvements"), the
+final, corrected version of this whole Layout Integrity pass. Both this commit and banking's own
+`3b74c32` above were closed out in the same session by a doc-only commit, `372eeba` ("docs: record
+banking refinement and layout integrity refinements") — **reconciled 2026-07-12 (Phase 4 Checkpoint
+6.1's own preflight):** `372eeba`'s prose was written and committed narrating the working tree's state
+*as it stood before* `3b74c32`/`9d9bc32` were actually committed, and several "not yet committed"/
+"pending review" sentences above were never updated afterward to reflect that they had been —
+inconsistent with `git log`, though the code itself was never in doubt. Corrected here, in place,
+rather than left to mislead a future session into re-litigating already-committed, already-reviewed
+work.
+
+### Phase 4, Checkpoint 6.1 — Payslips backend foundation (2026-07-12, implemented and verified, not yet committed)
+
+Preceded by a dedicated, read-only Payslip architecture review (no files touched) — approved, and
+grounded the decisions below. **Explicitly backend/schema foundation only**: no PDF, no batch/ZIP
+generation, no frontend surface — those are Checkpoints 6.2 and 6.3, per the explicit three-way split
+this checkpoint introduced (superseding this file's own earlier informal "Payslip generation" framing
+as a single undivided item): **6.1 Backend Foundation → 6.2 PDF Engine → 6.3 Frontend, Batch
+Generation, and Phase Close-Out**.
+
+**Preflight:** working tree confirmed clean; the post-Phase-4 banking/layout refinement confirmed
+already committed (`3b74c32`, `9d9bc32`, `372eeba`) — see the reconciliation note immediately above,
+recorded as this checkpoint's own first action.
+
+**Database — one additive migration, no `Payslip` table:** `PayrollEntry.employeeNameSnapshot`/
+`.fatherNameSnapshot` (both nullable `varchar(160)`), migration `20260712210000_payslip_identity_snapshots`
+— closes the "Snapshot-name finding" left open by the banking refinement above. Populated at entry
+creation (`createPayrollEntry`); carried forward from the prior cycle's entry at bootstrap
+(`createPayrollCycle`), a **deliberate deviation** from designation/banking's own "always refresh from
+current Employee" bootstrap rule — see `database/payroll-entry.md §12`'s revision note and
+`payroll-processing.service.ts`'s own doc comment for the full reasoning. Pre-existing rows
+best-effort-backfilled from their current linked `Employee` in the same migration — no financial
+figure touched. No `Payslip`/PDF-storage table, per Principle 1 (Payslips remain a query module, same
+as Bank Sheets/Cash Receiving) and this checkpoint's own frozen decision.
+
+**Shared:** new `PERMISSIONS.PAYSLIPS_VIEW` (`payslips:view`), granted to all three roles (Master
+Admin implicitly; Payroll Staff and Finance explicitly in `ROLE_PERMISSIONS`) — a dedicated
+permission, not a reuse of `payroll:entry`/`payroll:view`/`bank-sheets:view` (see
+`docs/architecture/authentication.md`'s new "Payslips: a dedicated permission" section for the
+rationale). No new Zod schema needed — both endpoints are parameterless GETs, matching Bank
+Sheets/Cash Receiving's own convention of plain inline query parsing.
+
+**Backend:** new module `backend/src/modules/payslips/` (`payslips.service.ts`, `payslips.routes.ts`),
+mounted at `/api/v1/payroll-cycles/:cycleId/payslips`. Two endpoints only:
+- `GET /` — the picker/list (released, non-held employees; site + free-text search filter;
+  pagination matching `payroll-entry.service.ts`'s own convention). Not audited (see below).
+- `GET /:employeeId` — one assembled Payslip as JSON. Released/non-held enforced server-side
+  regardless of any client input; site-scoped (`assertSiteAccess`); writes exactly one
+  `payslip.viewed` `AuditLog` entry (actor, IP, user-agent, `{cycleId, employeeId}`); sets
+  `Cache-Control: no-store`.
+
+Both are route-agnostic in their underlying service functions by design (`getPayslip`/`listPayslips`
+take only `currentUser`/identifiers, no Express `Request`/`Response`) — intended to back PDF rendering
+(6.2), batch/ZIP generation (6.3), and a future Employee Self-Service endpoint without rewriting the
+assembly logic (`docs/architecture/overview.md`'s ESS composition note). All money arithmetic reuses
+`computeEntryCalc`/`calcNet` (`@payroll/shared`) exactly — nothing recomputed independently
+(Principle 6). `docs/architecture/system-conventions.md §3` gained a new subsection documenting the
+view-level audit convention this checkpoint introduces (a deliberate step beyond Bank
+Sheets/Cash Receiving's export-only audit precedent).
+
+**Known, explicitly out-of-scope gap:** there is not yet any route that lets `employeeNameSnapshot`/
+`fatherNameSnapshot` be corrected directly on a Draft `PayrollEntry` — a genuine name-spelling
+correction currently requires direct database intervention. Future work, not part of this
+checkpoint's approved scope (see `payroll-processing.service.ts`'s own doc comment).
+
+**Testing:** new `backend/tests/payslips.test.ts` (17 tests) — Master User/Payroll Staff/Finance
+access, missing-permission rejection, manipulated site-filter rejection, out-of-scope detail
+rejection, nonexistent-combination 404, Draft/held exclusion, released-non-held inclusion, `calcNet`
+parity (single-line and split-by-unit), employee name/father-name/banking historical-snapshot
+integrity, Advance-outstanding-balance non-recalculation, historical-cycle viewability,
+`payslip.viewed` audit correctness (written once, never on the list endpoint), `Cache-Control:
+no-store`, and no unrelated Employee/User field leakage. Full backend suite: **304/304** (287 prior +
+17 new). Typecheck/lint/build clean across shared/backend/frontend. `prisma validate`/`generate`/
+`migrate deploy` clean, zero drift.
+
+**Real-stack verification:** a real local PostgreSQL (embedded-postgres, session-scratchpad) plus a
+live `tsx src/server.ts` instance, driven via real HTTP (`curl`, real cookie/CSRF/session flow, real
+login as the seeded Master Admin and freshly-created Payroll Staff/Finance/no-permission users) —
+confirmed end-to-end: bootstrap-created entries carry the new snapshot fields correctly; the
+list/detail endpoints return correct data; 401 unauthenticated, 403 missing-permission, 403
+manipulated/out-of-scope site, 404 unreleased; `Cache-Control: no-store` present; `AuditLog` rows
+written with real IP/user-agent and correct actor per caller. No browser-automation tool was available
+this session — no frontend surface exists yet for this checkpoint regardless, so none was needed.
+
+**Documentation updated this pass:** `database/payroll-entry.md §12` (new columns + bootstrap
+carry-forward-vs-refresh note), `docs/architecture/authentication.md` (new permission), this file, and
+the stale post-Phase-4-refinement "not yet committed" narrative reconciled against `git log` (above).
+
+**Implemented and verified, not yet committed** — nothing staged or committed this session, per
+explicit instruction. Waiting for review and commit approval before beginning Checkpoint 6.2 (PDF
+Engine).
+
+### Phase 4, Checkpoint 6.2 — Payslip PDF Engine (2026-07-12, implemented and verified, not yet committed)
+
+Preceded by a dedicated, read-only architecture review (no files touched), approved before this
+implementation began. Builds the complete backend PDF-generation engine for Payslips — no frontend,
+no batch/ZIP generation (both explicitly out of scope, Checkpoint 6.3).
+
+**Dependencies:** `puppeteer` (`^25.3.0`) added to `backend/package.json`. Chrome fetched via
+`npx puppeteer browsers install chrome` (the postinstall script itself is blocked by this session's
+sandboxing; a normal `npm install` on Render will run it automatically — see the deviation below).
+
+**`backend/src/lib/pdf/` (new, reusable, document-agnostic on purpose):**
+- `browser.ts` — a lazily-launched, reused-across-requests Puppeteer browser singleton, with
+  crash/disconnect detection and relaunch. `closeBrowser()` wired into `server.ts`'s existing
+  graceful-shutdown handler alongside `prisma.$disconnect()`.
+- `render-pdf.ts` — `renderHtmlToPdf(html, options?)`, a generic `page.setContent()`+`page.pdf()`
+  wrapper (A4, print backgrounds on, 15mm margins, `displayHeaderFooter`/header/footer template
+  passthrough for a future multi-page document) — zero Payslip-specific knowledge.
+- `html-escape.ts` — `escapeHtml()`, the one escaping utility every interpolated value in the
+  template goes through, no exceptions.
+- `print-styles.ts` — the shared serif "paper document" stylesheet (`docs/design-system.md §3`),
+  reusable by future Bank Sheet/Cash Sheet/Statement PDF templates.
+- `templates/payslip.ts` — `renderPayslipHtml(payslip, meta)`, self-contained per this checkpoint's
+  own instruction (no speculative shared "document header" module extracted yet — only one
+  consumer exists). Reproduces `reference/PROJECT_SPEC.md`'s frozen Sample Payslip Format's exact
+  row labels and layout order (title row → centered company name → two-column identity grid →
+  side-by-side Earning/Deduction tables → centered Net Salary line). Reserves, but does not yet
+  populate, the Balance Settlement line slot `docs/design-system.md §3` calls for (Phase 6 doesn't
+  exist yet).
+
+**`payslips.service.ts` extended, not duplicated:** `Payslip.periodStartDate`/`.periodEndDate`
+(ISO `YYYY-MM-DD`, first/last calendar day of `cycleYear`/`cycleMonth`, computed via
+`Date.UTC(...)`, never stored) added to the Checkpoint 6.1 JSON shape — closes the one JSON-shape
+gap the architecture review identified against the frozen sample format's "Pay Period" header
+field. New `generatePayslipPdf(currentUser, cycleId, employeeId, meta)`: calls `getPayslip()` for
+every field and every authorization check (no independent Prisma query, no independent
+calculation), renders via `renderPayslipHtml`/`renderHtmlToPdf`, returns
+`{ buffer, entryId, employeeName }` — the latter two so the route can build its audit entry and
+filename without a second database round trip.
+
+**New endpoint:** `GET /api/v1/payroll-cycles/:cycleId/payslips/:employeeId/pdf` — identical
+`payslips:view` permission, identical site-scoping, identical released/non-held gate as the JSON
+route (all inherited from `getPayslip()`). `Cache-Control: no-store`, `Content-Type:
+application/pdf`. **One PDF artifact serves both in-app preview and explicit download** —
+`?disposition=inline` (default) vs `?disposition=attachment` — rather than a second raw-HTML
+preview route, per the architecture review's own refined recommendation (a browser's native PDF
+viewer is a narrower, better-understood sandbox than a second `text/html` surface, for no loss of
+the "reused, not re-implemented" preview requirement `docs/design-system.md §3` calls for). New
+`payslip.exported` audit action, written once per request regardless of disposition
+(`metadata.disposition` records which); the JSON route's `payslip.viewed` is never also written,
+since the PDF route calls `getPayslip()` directly as a function, never via the JSON route's own
+HTTP handler.
+
+**Security — HTML injection, the one genuinely new risk this checkpoint's own architecture review
+flagged:** every interpolated value in `renderPayslipHtml` goes through `escapeHtml()` — employee
+name, father name, designation, site name, generated-by name — no exceptions, since none of these
+fields have any character restriction upstream (`shared/src/schemas/employee.ts`/`payroll-entry.ts`
+impose length limits only). Verified directly, both as pure unit tests
+(`tests/pdf-template.test.ts`) and end-to-end through the real HTTP endpoint with a genuinely
+hostile employee name (`<script>alert(document.cookie)</script>`) against the compiled production
+build — the script tag renders as literal, visible text in the PDF, never executes.
+
+**Verification:** `prisma validate`/`generate`/`migrate deploy` clean (no schema change this pass);
+typecheck/lint/build clean across shared/backend/frontend; **backend 325/325** (304 prior + 21 new:
+9 HTTP-integration tests in `payslips.test.ts`, 12 pure unit tests in the new
+`tests/pdf-template.test.ts`); real-stack verification against a real local PostgreSQL plus the
+**actual compiled production build** (`node dist/src/server.js`, not just `tsx`/Jest), driven via
+real HTTP (login, CSRF, cookies) — confirmed correct headers, correct `%PDF-` magic bytes, correct
+`Content-Disposition` behavior for both dispositions, correct audit trail, and visually inspected
+(via a Puppeteer screenshot of the same HTML the real endpoint rendered) against
+`reference/PROJECT_SPEC.md`'s frozen sample layout — company header, identity grid,
+Earning/Deduction tables, and Net Salary line all match.
+
+**Deviation from the approved architecture review, discovered during implementation, not silently
+worked around:** Puppeteer 22+ ships **ESM-only** (`"type": "module"`, no CJS build), while this
+backend compiles to CommonJS (`backend/tsconfig.json`). A plain `import puppeteer from 'puppeteer'`
+fails immediately under Jest/ts-jest (`SyntaxError: Unexpected token 'export'`). TypeScript's own
+dynamic `import()` syntax does not help either — verified directly by compiling a minimal
+reproduction: under a CommonJS module target, `tsc` downlevels `await import('puppeteer')` to
+`await Promise.resolve().then(() => require('puppeteer'))`, which fails identically
+(`ERR_REQUIRE_ESM`). Fixed via the standard, documented ESM-from-CJS interop pattern: loading the
+specifier through `new Function('return import("puppeteer")')`, which hides the `import(...)` call
+from TypeScript's static analysis so it survives as a genuine native dynamic import at runtime —
+verified working across `tsc --noEmit`, Jest, and the actual compiled `dist/` output. A second,
+related discovery: Jest's own CJS test runner cannot execute a real dynamic `import()` without the
+`--experimental-vm-modules` Node flag (`backend/package.json`'s `test` script updated to set
+`NODE_OPTIONS=--experimental-vm-modules`) — confirmed this addition is purely additive and doesn't
+change behavior for any of the 304 pre-existing tests. A third, minor discovery during the full
+(not per-file) test-suite run: the one test in `tests/pdf-template.test.ts` that directly invoked
+`renderHtmlToPdf()` was intermittently flaky specifically under the full multi-file suite
+(`Test environment has been torn down`) — a Jest/`--experimental-vm-modules` interaction with
+Node's process-wide ESM module cache when multiple test files each dynamically `import()` the same
+ESM-only package, not an application bug. Removed as redundant (the identical rendering pipeline is
+already reliably covered end-to-end by `payslips.test.ts`'s real-HTTP tests, including with hostile
+input), keeping `tests/pdf-template.test.ts` a pure, fast, no-I/O suite matching
+`tests/calc-net.test.ts`'s own philosophy.
+
+**Known limitation, not resolved this session:** no actual Render (or equivalent Linux container)
+deployment smoke test was performed — this sandboxed macOS session has neither Docker nor live
+Render deploy access. `--no-sandbox`/`--disable-setuid-sandbox` (the standard flags for
+containerized Puppeteer deployments) are already included, Chrome-fetching was verified working via
+Puppeteer's own CLI, and the font stack (`"Times New Roman", Times, Georgia, serif`) already
+anticipates a bare Linux container substituting a metric-compatible serif font — but none of this
+substitutes for an actual staging deploy confirming Chromium starts and fonts render correctly on
+Render itself. Flagged as required before this checkpoint is considered fully production-ready, not
+silently assumed fine.
+
+**Implemented and verified, not yet committed** — nothing staged or committed this session, per
+explicit instruction. Waiting for review and commit approval before beginning Checkpoint 6.3
+(Frontend, Batch Generation, and Phase Close-Out).
+
+**Final narrow pre-commit verification (2026-07-12), approved-in-principle review's own explicit
+checklist — one correction made, six confirmed clean:**
+1. The ESM/CJS interop workaround (`new Function('return import("puppeteer")')`) is confirmed
+   isolated to `browser.ts` alone — the only other `puppeteer` reference anywhere in `backend/src`
+   is `render-pdf.ts`'s `import type { PDFOptions }`, which is erased at compile time and has no
+   runtime footprint.
+2. **Corrected**: `getBrowser()`'s crash/disconnect relaunch previously reassigned the module-level
+   `browserPromise` unconditionally, which under concurrent requests racing against the same dead
+   browser could trigger two independent relaunches — orphaning one Chrome process that
+   `closeBrowser()` could never subsequently reach (it only ever closes whatever `browserPromise`
+   currently points to). Fixed with a compare-and-swap: each call captures the promise it started
+   with and only relaunches if `browserPromise` still equals that captured value, so a losing
+   concurrent caller simply awaits whichever relaunch actually won, rather than starting a second,
+   silently-leaked one.
+3. Confirmed: `render-pdf.ts`'s `finally { await page.close(); }` wraps both `page.setContent()`
+   and `page.pdf()` — a page is closed even if either throws.
+4. Confirmed, verified empirically (not just by inspection) with a hostile filename input
+   containing a double quote, CR, LF, forward slash, and backslash together: the existing
+   `employeeName.toLowerCase().replace(/[^a-z0-9]+/g, '-')` already strips every one of them, since
+   the character class matches (and collapses) anything outside `a-z0-9` — no change needed.
+5. Confirmed: `page.pdf()`'s `Uint8Array` is converted via `Buffer.from(uint8)` (a lossless binary
+   copy, never a string round-trip); the route calls `res.status(200).send(buffer)` with no manual
+   `Content-Length` anywhere — Express computes it correctly from the buffer's own byte length.
+6. Confirmed: the only logging calls anywhere in `backend/src/lib/pdf/` or
+   `backend/src/modules/payslips/` are `browser.ts`'s two generic operational messages (launch
+   failure, disconnect) — neither logs HTML, PDF bytes, or any Payslip field. The global
+   `pino-http` request logger and error handler (both pre-existing, shared by every module) log
+   method/path/error object only, never request/response bodies. `payslip.exported`'s `AuditLog`
+   metadata (`{ cycleId, employeeId, disposition }`) contains no name/salary/banking value — this
+   is the one deliberate, access-controlled exception the check's own wording ("application logs")
+   doesn't cover, not an oversight.
+7. Re-ran in full after the correction: typecheck/lint/build clean across shared/backend/frontend;
+   **backend 325/325**, unchanged.
+
+No other Checkpoint 6.2 file required a change. Ready for commit.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -2608,7 +2852,7 @@ typecheck/lint/build clean across shared/backend/frontend (0 lint errors, same 4
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances | **Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; see §1. Remaining scope: Payslip generation, per `docs/IMPLEMENTATION_PLAN.md`'s Phase 4 section — not yet started (Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope, not part of "remaining"). **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement CLOSED and committed — `3b74c32`, `9d9bc32`, `372eeba`; see §1. **Payslip generation, per the dedicated 2026-07-12 architecture review, is split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out). Checkpoints 6.1 and 6.2 implemented and verified this session — not yet committed, pending review** (see §1's own Checkpoint 6.1/6.2 entries). Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |

@@ -27,6 +27,7 @@ import {
 import { payrollUnitReleasesRouter } from './modules/payroll-release/payroll-release.routes';
 import { bankSheetRouter } from './modules/bank-sheets/bank-sheets.routes';
 import { cashReceivingRouter } from './modules/cash-receiving/cash-receiving.routes';
+import { payslipsRouter } from './modules/payslips/payslips.routes';
 import { advancesRouter } from './modules/advances/advances.routes';
 import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
 
@@ -119,6 +120,9 @@ export function createApp(): Express {
   // Same reasoning again — a dedicated module, not a bolt-on of bank-sheet above (Phase 4
   // Checkpoint 4).
   app.use('/api/v1/payroll-cycles/:cycleId/cash-receiving', cashReceivingRouter);
+  // Same reasoning again — a dedicated module, not a bolt-on of Bank Sheets/Cash Receiving above
+  // (Phase 4 Checkpoint 6.1).
+  app.use('/api/v1/payroll-cycles/:cycleId/payslips', payslipsRouter);
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
   app.use('/api/v1/payroll-entries', payrollEntriesRouter);
   app.use('/api/v1/work-lines', workLinesRouter);

@@ -50,6 +50,16 @@ export const PERMISSIONS = {
    * complete — ownership-based visibility, not a permission grant
    * (docs/architecture/authentication.md's "Tasks: ownership-based visibility" section). */
   TASKS_MANAGE: 'tasks:manage',
+  /** Added Phase 4 Checkpoint 6.1 (Payslips backend foundation) — a dedicated permission, not a
+   * reuse of `PAYROLL_ENTRY`/`PAYROLL_VIEW`/`BANK_SHEETS_VIEW` (explicit architecture decision):
+   * a Payslip exposes one employee's individual net-salary breakdown, a materially more sensitive
+   * per-person disclosure than any aggregate sheet those permissions already gate. Granted to
+   * Master Admin, Payroll Staff, and Finance (all three role grants below) — Payroll Staff already
+   * prepares and sees individual payroll detail via `PAYROLL_ENTRY`; Finance handles released
+   * salary outputs via `PAYROLL_VIEW`/`BANK_SHEETS_VIEW`. Gates view, print, export, and download
+   * uniformly — there is no separate "generate" action, since a Payslip is never persisted
+   * (derived on demand from released `PayrollEntry` data, Principle 1). */
+  PAYSLIPS_VIEW: 'payslips:view',
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -81,9 +91,15 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionKey[]> = {
     PERMISSIONS.PAYROLL_ENTRY,
     PERMISSIONS.ADVANCES_MANAGE,
     PERMISSIONS.REPORTS_VIEW,
+    PERMISSIONS.PAYSLIPS_VIEW,
   ],
   /** Deliberately narrow (docs/architecture/authentication.md "Finance's permission set") — no
    * payroll-edit permission, no `payroll:mark-ready`, no corrections approval. Cash Receiving's
    * own view permission is deferred to the checkpoint that actually builds that module. */
-  [ROLE_CODES.FINANCE]: [PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_RELEASE, PERMISSIONS.BANK_SHEETS_VIEW],
+  [ROLE_CODES.FINANCE]: [
+    PERMISSIONS.PAYROLL_VIEW,
+    PERMISSIONS.PAYROLL_RELEASE,
+    PERMISSIONS.BANK_SHEETS_VIEW,
+    PERMISSIONS.PAYSLIPS_VIEW,
+  ],
 };

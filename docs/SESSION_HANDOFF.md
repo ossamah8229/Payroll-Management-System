@@ -47,24 +47,57 @@ be enough to resume correctly without re-deriving context from scratch — per
   closing Checkpoint 4) → `75c5e64` (Phase 4 Checkpoint 5 — Advances — implementation, reviewed,
   verified, and committed) → `f002072` (doc-only commit hash record, closing Checkpoint 5) →
   `3c05f5e` (Phase 1–3 HTML prototype reconciliation, docs-only).
-- **Uncommitted, current working tree (2026-07-11): a post-Phase-4 banking refinement — explicitly
-  NOT Phase 4 Checkpoint 6, not Payslips, not Company Bank Account.** `Employee`/`PayrollEntry.
+- **Post-Phase-4 banking refinement — COMMITTED as `3b74c32`.** `Employee`/`PayrollEntry.
   accountTitle` removed entirely (clean, destructive migration); `iban` added to both; a new
   banking invariant (bank employee requires Account Number, cash employee has neither); Bank
   Sheet's "Title of Account" now derives from the employee name instead of a stored field; a
   permanent Layout Integrity Rule for business-critical identifiers. Full record:
   `docs/PROJECT_PROGRESS.md` §1's "Post-Phase-4 refinement" entry.
-- **That same working tree, corrected 2026-07-12: the 2026-07-11 pass's Layout Integrity fix was
-  rejected on review and re-done.** Root cause was not the column-width numbers alone — Payroll
-  Entry's Bank `<select>` showed only `bank.code`, and `ReadOnlyCell` silently ellipsis-clipped
-  Employee Code. Fixed, and this time verified with a real, in-session-provisioned headless
-  browser (live DOM measurements: zero `scrollWidth`/`clientWidth` overflow for Bank/Account
-  Number/IBAN across Payroll Entry, Employee Registry, and Bank Sheet). 286/286 backend tests,
-  typecheck/lint/build all clean. Full record: `docs/PROJECT_PROGRESS.md` §1's dated correction
-  under the "Post-Phase-4 refinement" entry. **Per explicit instruction, still nothing staged or
-  committed; still pending review.** The next session's first action, if this hasn't been reviewed
-  yet, is to pick up review from here rather than assuming it's safe to build on top of or to start
-  Payslip generation.
+- **That same refinement's Layout Integrity corrections — COMMITTED as `9d9bc32`** (the corrected,
+  final version — see `docs/PROJECT_PROGRESS.md` §1 for the two intermediate "rejected on review"
+  iterations this superseded, 2026-07-12 and 2026-07-13). Root cause was not the column-width numbers
+  alone — Payroll Entry's Bank `<select>` showed only `bank.code`, and `ReadOnlyCell` silently
+  ellipsis-clipped Employee Code; a Dynamic Width Rule replaced every guessed fixed pixel width with
+  a content-driven calculation. Verified with a real, in-session-provisioned headless browser (live
+  DOM measurements: zero `scrollWidth`/`clientWidth` overflow for Bank/Account Number/IBAN across
+  Payroll Entry, Employee Registry, and Bank Sheet). Both this commit and `3b74c32` were closed out by
+  a doc-only commit, `372eeba`. **Reconciled 2026-07-12 (Phase 4 Checkpoint 6.1's own preflight):**
+  `372eeba`'s own prose still read "not yet committed"/"pending review" in several places, narrating
+  the working tree's state as it stood *before* these two commits existed — corrected in place in
+  `docs/PROJECT_PROGRESS.md` §1, since `git log` was never actually in doubt.
+- **Phase 4, Checkpoint 6.1 (Payslips backend foundation) — implemented and verified this session,
+  NOT YET COMMITTED.** Preceded by a dedicated, approved Payslip architecture review. Payslip
+  generation is now explicitly three checkpoints — **6.1 Backend Foundation → 6.2 PDF Engine → 6.3
+  Frontend, Batch Generation, and Phase Close-Out** — superseding this file's own earlier informal
+  "Payslip generation" framing as one undivided item. `PayrollEntry.employeeNameSnapshot`/
+  `.fatherNameSnapshot` (new, additive migration), a dedicated `payslips:view` permission (Master
+  Admin/Payroll Staff/Finance), and a new `backend/src/modules/payslips/` module exposing two
+  read-only endpoints only (list/picker + one assembled Payslip JSON) — no PDF, no batch/ZIP, no
+  frontend surface, those are 6.2/6.3. **304/304 backend tests** (287 prior + 17 new); real-stack
+  verification via a real local Postgres + live server + real HTTP login/session flow. Full detail:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.1" entry.
+- **Phase 4, Checkpoint 6.2 (Payslip PDF Engine) — implemented and verified this session, NOT YET
+  COMMITTED.** Preceded by its own dedicated, approved architecture review. `puppeteer` added;
+  `backend/src/lib/pdf/` (browser singleton, generic HTML→PDF renderer, HTML-escaping utility,
+  shared print stylesheet, the Payslip template); one new `GET .../payslips/:employeeId/pdf`
+  endpoint — identical permission/site-scoping/released-gate as the JSON route, one PDF artifact
+  serving both preview and download via `Content-Disposition` (never a second HTML route), a new
+  `payslip.exported` audit action. `Payslip.periodStartDate`/`.periodEndDate` added to 6.1's JSON
+  shape (derived, not stored). Fully stateless — no persistence, no cache, no `StorageProvider`
+  dependency (that section's own wording clarified this same checkpoint,
+  `docs/architecture/system-conventions.md §2`). **325/325 backend tests** (304 prior + 21 new);
+  real-stack verification against the actual compiled production build (`dist/`), including a
+  hostile-input employee name through the real endpoint, verified escaped, not executed. **Real
+  deviation found during implementation**: Puppeteer 22+ is ESM-only and this backend compiles to
+  CommonJS — TypeScript's own dynamic `import()` doesn't solve this either (downlevels to a failing
+  `require()`); fixed via the standard `new Function('return import("puppeteer")')` ESM-from-CJS
+  interop pattern, plus `NODE_OPTIONS=--experimental-vm-modules` added to the `test` script so Jest
+  itself can execute it. **Known limitation, not resolved**: no actual Render/Linux-container
+  deployment smoke test was possible this session (no Docker, no live Render access in this
+  sandboxed environment) — required before this checkpoint is fully production-ready. Full detail:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.2" entry. **The next session's first
+  action, if this hasn't been reviewed yet, is to pick up review from here before beginning
+  Checkpoint 6.3 (Frontend, Batch Generation, and Phase Close-Out).**
 - **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
   `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
   blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`

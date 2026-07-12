@@ -79,6 +79,8 @@ Site-scoped (below), read-mostly, and deliberately narrow:
   (unrestricted, all sites); **not** held by Payroll Staff.
 - **`bank-sheets:view`** / **`cash-receiving:view`** — view/download the resulting documents for their
   assigned sites, to actually process the payment.
+- **`payslips:view`** — added Phase 4 Checkpoint 6.1 (2026-07-12). See "Payslips: a dedicated
+  permission, not a reuse," below — held here for the same reason as `bank-sheets:view`.
 - **Explicitly withheld:** no payroll-edit permission (cannot change any `PayrollEntry` field), no
   `payroll:mark-ready` (cannot mark or un-mark a Unit's `PayrollUnitReadiness` — that stays Payroll
   Staff's/Master User's own signal to Finance, not something Finance sets for itself), and no
@@ -88,6 +90,21 @@ Site-scoped (below), read-mostly, and deliberately narrow:
   `database/advances.md` §15/§15a) — deferring a scheduled deduction is a payroll-edit
   action (it mutates a `PayrollEntry` field), not a release action, so it requires the payroll-edit
   permission Finance does not hold.
+
+### Payslips: a dedicated permission, not a reuse
+
+**Added Phase 4 Checkpoint 6.1 (2026-07-12).** `payslips:view` is granted to all three roles —
+Master User, Payroll Staff, and Finance — but is deliberately its own permission key, not a reuse of
+`payroll:entry`, `payroll:view`, or `bank-sheets:view`. Rationale: an individual Payslip discloses one
+employee's own net-salary breakdown, a materially more sensitive per-person view than any aggregate
+sheet those other permissions already gate; neither existing key cleanly covers "whoever should see
+an individual Payslip" (Payroll Staff holds `payroll:entry` but not `bank-sheets:view`; Finance holds
+`payroll:view`/`bank-sheets:view` but not `payroll:entry`). Payroll Staff is granted it because it
+already prepares and sees individual payroll detail; Finance because it handles released salary
+outputs. Site-scoped identically to every other permission in this document — see "Site-Based
+Permissions," below. Gates view, print, export, and download uniformly; there is no separate
+"generate" action, since a Payslip is never persisted (derived on demand from released `PayrollEntry`
+data, `docs/PROJECT_PRINCIPLES.md` Principle 1).
 
 ## Site-Based Permissions
 

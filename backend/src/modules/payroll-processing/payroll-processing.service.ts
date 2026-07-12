@@ -110,6 +110,20 @@ export async function getPayrollCycle(id: string) {
  * attendance is a fresh decision made each cycle (§12a), never carried forward. A genuinely new
  * employee (no prior entry) seeds entirely fresh from `Employee`'s own defaults.
  *
+ * **`employeeNameSnapshot`/`fatherNameSnapshot` (Phase 4 Checkpoint 6.1) deliberately follow the
+ * carry-forward rule, not the designation/banking refresh rule**, even though they are identity
+ * fields: once first captured, a continuing employee's snapshot is copied forward from their prior
+ * entry unchanged, never resynced from `Employee`'s current name, so a Payslip's name/father name
+ * stays historically stable across cycles the same way an already-released cycle's own figures do.
+ * This is the explicit, approved behavior for this checkpoint; a genuinely new employee (no prior
+ * entry) still seeds fresh from `Employee`'s own current record, same as every other field above.
+ * **Known gap, explicitly out of this checkpoint's scope**: there is not yet any route that lets
+ * either snapshot field be corrected directly on a Draft `PayrollEntry` the way `designation`/
+ * banking fields can — a genuine name-spelling correction currently requires a direct database
+ * intervention. Exposing that edit path (mirroring `updatePayrollEntrySchema`'s existing
+ * Draft-editable fields) is future work, not part of this checkpoint's approved backend-foundation
+ * scope.
+ *
  * **Performance (Principle 10):** seeds every entry via two chunked `createMany` calls rather than
  * one `create` per employee — this must not become an N-round-trip loop at the 10,000-employee
  * design floor. IDs are generated client-side (`randomUUID()`) so a `PayrollEntry` and its first
@@ -171,6 +185,9 @@ export async function createPayrollCycle(
       cycleId: '', // placeholder, filled in once the cycle itself is created inside the transaction
       employeeId: employee.id,
       siteId: employee.siteId,
+      // Phase 4 Checkpoint 6.1 — carry-forward, not refresh (see this function's own doc comment).
+      employeeNameSnapshot: sourceEntry?.employeeNameSnapshot ?? employee.name,
+      fatherNameSnapshot: sourceEntry?.fatherNameSnapshot ?? employee.fatherName,
       designation: employee.designation,
       bankId: employee.bankId,
       branchCode: employee.branchCode,

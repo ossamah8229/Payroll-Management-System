@@ -1311,7 +1311,9 @@ forward automatically without the system ever computing the amount itself. No ne
 Finance receives none, unchanged. Cash Advances, Advance-only Bank Sheets, and Company Bank Account
 management remain explicitly out of scope. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 4,
 Checkpoint 5" entry. **Phase 4's remaining scope is Payslip generation** — the last item before this
-phase's own 🛑 review checkpoint.
+phase's own 🛑 review checkpoint. **Split, per a dedicated 2026-07-12 architecture review, into three
+sub-checkpoints: 6.1 Backend Foundation → 6.2 PDF Engine → 6.3 Frontend, Batch Generation, and Phase
+Close-Out** — see the Checkpoint 6.1 entry below.
 
 **Post-Phase-4 refinement (2026-07-11) — explicitly NOT Checkpoint 6, not Payslips, not Company
 Bank Account.** Employee/PayrollEntry `accountTitle` removed entirely (clean, destructive migration
@@ -1320,7 +1322,7 @@ trimmed, stored uppercase); a new banking invariant (bank employee requires Acco
 employee has neither); Bank Sheet's "Title of Account" column (still required by the frozen
 `reference/PROJECT_SPEC.md` format) now derives from the entry's employee name instead of a stored
 field; permanent Layout Integrity Rule for business-critical identifiers. Full record:
-`docs/PROJECT_PROGRESS.md` §1's "Post-Phase-4 refinement" entry. Implemented, not yet committed.
+`docs/PROJECT_PROGRESS.md` §1's "Post-Phase-4 refinement" entry. **Committed as `3b74c32`.**
 
 **Rejected on review, 2026-07-12 — the Layout Integrity Rule was not actually satisfied.** Root
 cause: Payroll Entry's Bank `<select>` showed only `bank.code`, never the full `bank.name`, and
@@ -1328,7 +1330,40 @@ cause: Payroll Entry's Bank `<select>` showed only `bank.code`, never the full `
 either. Fixed, and this time verified with a real, in-session-provisioned headless browser (Live
 DOM measurements: `scrollWidth`/`clientWidth` parity, zero overflow, for Bank/Account Number/IBAN
 in Payroll Entry, Employee Registry, and Bank Sheet). Full record: `docs/PROJECT_PROGRESS.md` §1's
-dated correction under the same entry. Still not committed.
+dated correction under the same entry. **Committed as `9d9bc32`** (the final, corrected version,
+after a further 2026-07-13 correction recorded in full in `docs/PROJECT_PROGRESS.md` §1). **Doc
+reconciliation note (2026-07-12, Checkpoint 6.1's own preflight):** this paragraph and the one above
+previously read "not yet committed"/"still not committed," narrating the working tree's state as it
+stood before these commits existed — corrected here against `git log`.
+
+**Phase 4, Checkpoint 6.1 — Payslips backend foundation (2026-07-12, implemented and verified, not
+yet committed).** `PayrollEntry.employeeNameSnapshot`/`.fatherNameSnapshot` (additive migration,
+carried forward at cycle bootstrap rather than refreshed, unlike designation/banking); a dedicated
+`payslips:view` permission (Master Admin/Payroll Staff/Finance); a new `backend/src/modules/
+payslips/` module exposing exactly two read-only endpoints (list/picker + one assembled Payslip
+JSON) — no PDF, no batch/ZIP, no frontend, those are 6.2/6.3. 304/304 backend tests (287 prior + 17
+new); real-stack HTTP verification against a real local Postgres + live server. Full record:
+`docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.1" entry.
+
+**Phase 4, Checkpoint 6.2 — Payslip PDF Engine (2026-07-12, implemented and verified, not yet
+committed).** Preceded by its own dedicated, approved architecture review. Adds `puppeteer`;
+`backend/src/lib/pdf/` (`browser.ts` singleton, `render-pdf.ts` generic HTML→PDF wrapper,
+`html-escape.ts`, `print-styles.ts`, `templates/payslip.ts`); a new
+`GET /api/v1/payroll-cycles/:cycleId/payslips/:employeeId/pdf` endpoint (identical permission/
+site-scoping/released-gate as the JSON route, `Cache-Control: no-store`, one PDF artifact serving
+both preview (`?disposition=inline`, default) and download (`?disposition=attachment`) rather than
+a second HTML preview route, a new `payslip.exported` audit action never double-logged against
+`payslip.viewed`); `Payslip.periodStartDate`/`.periodEndDate` added to the Checkpoint 6.1 JSON
+shape (derived from the cycle, not stored). Stateless throughout — no filesystem writes, no
+caching, no `StorageProvider` dependency (`docs/architecture/system-conventions.md §2`, clarified
+this same checkpoint). 325/325 backend tests (304 prior + 21 new); real-stack HTTP verification
+against a real local Postgres + the actual compiled production build (`dist/`), including a
+hostile-input employee name through the real endpoint. **One real deviation from the architecture
+review, discovered during implementation, not assumed away**: Puppeteer 22+ ships ESM-only, which
+a plain `import`/TypeScript's own dynamic `import()` cannot load from this backend's CommonJS
+build — resolved via the standard ESM-from-CJS interop pattern (`new Function('return
+import("puppeteer")')`), verified working across typecheck, Jest, and the compiled build. Full
+record: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.2" entry.
 
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
