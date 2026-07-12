@@ -19,7 +19,10 @@ export interface BankSheetRow {
   bankName: string | null;
   branchCode: string | null;
   accountNumber: string | null;
-  accountTitle: string | null;
+  iban: string | null;
+  /** Derived — never stored (banking refinement, 2026-07-11): always the entry's own frozen
+   * `Employee.name` snapshot, matching the frozen client Bank Sheet format's "Title of Account". */
+  accountTitle: string;
   netSalary: string;
   releasedAt: string | null;
 }

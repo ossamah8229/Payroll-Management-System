@@ -49,7 +49,12 @@ export interface BankSheetRow {
   bankName: string | null;
   branchCode: string | null;
   accountNumber: string | null;
-  accountTitle: string | null;
+  iban: string | null;
+  /** Banking refinement (2026-07-11): **derived, never stored** — the frozen client Bank Sheet
+   * format (`reference/PROJECT_SPEC.md`, "Sample Bank Sheet Format") requires a "Title of Account"
+   * column; Account Title itself is no longer a stored field anywhere, so this is always exactly
+   * the entry's own frozen `employee.name` snapshot, never a separately-entered/stored string. */
+  accountTitle: string;
   netSalary: string;
   releasedAt: string | null;
 }
@@ -99,7 +104,13 @@ function buildRow(entry: EntryForSheet, bankLabel: string): BankSheetRow {
     bankName: entry.bankId ? bankLabel : null,
     branchCode: entry.branchCode,
     accountNumber: entry.accountNumber,
-    accountTitle: entry.accountTitle,
+    iban: entry.iban,
+    // "Title of Account" (2026-07-11 refinement) — derived from the employee's own name, never a
+    // separately stored field. `entry.employee.name` is read here rather than `entry.designation`'s
+    // sibling frozen columns because `Employee.name` itself has no PayrollEntry-level snapshot copy
+    // (only banking/designation/site fields do, per §12) — an employee's legal name is not expected
+    // to change the way a bank account might, so this one field is intentionally read live.
+    accountTitle: entry.employee.name,
     netSalary: computeEntryCalc(entry).netSalary,
     releasedAt: entry.releasedAt?.toISOString() ?? null,
   };
@@ -171,6 +182,7 @@ const BANK_SHEET_HEADERS = [
   'Bank',
   'Branch Code',
   'Account Number',
+  'IBAN',
   'Account Title',
   'Net Salary',
 ] as const;
@@ -185,7 +197,8 @@ function buildExportRow(row: BankSheetRow): string[] {
     row.bankName ?? 'Cash',
     row.branchCode ?? '',
     row.accountNumber ?? '',
-    row.accountTitle ?? '',
+    row.iban ?? '',
+    row.accountTitle,
     row.netSalary,
   ];
 }
@@ -204,7 +217,7 @@ export async function exportBankSheetToCsv(
 ): Promise<BankSheetExportResult> {
   const sheet = await getBankSheet(currentUser, cycleId, bankFilter, siteIds);
   const rows = sheet.rows.map(buildExportRow);
-  const totalRow = ['', '', '', '', '', '', '', '', 'Total', sheet.totalNetSalary];
+  const totalRow = ['', '', '', '', '', '', '', '', '', 'Total', sheet.totalNetSalary];
   const csv = stringifyCsvSync([
     BANK_SHEET_HEADERS as unknown as string[],
     ...rows,
@@ -229,13 +242,15 @@ export async function exportBankSheetToXlsx(
   worksheet.getRow(1).font = { bold: true };
 
   if (rows.length > 0) {
-    const totalRow = worksheet.addRow(['', '', '', '', '', '', '', '', 'Total', sheet.totalNetSalary]);
+    const totalRow = worksheet.addRow(['', '', '', '', '', '', '', '', '', 'Total', sheet.totalNetSalary]);
     totalRow.font = { bold: true };
   }
 
-  // Never truncate the account number column, per this checkpoint's own layout-integrity rule —
-  // ExcelJS's own column width, unlike CSS, has no overflow-scroll fallback if left too narrow.
+  // Never truncate the account number/IBAN columns, per this checkpoint's own layout-integrity
+  // rule — ExcelJS's own column width, unlike CSS, has no overflow-scroll fallback if left too
+  // narrow.
   worksheet.getColumn(8).width = 24;
+  worksheet.getColumn(9).width = 36;
   worksheet.getColumn(3).width = 28;
 
   const buffer = await workbook.xlsx.writeBuffer();

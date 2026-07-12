@@ -62,7 +62,7 @@ function buildEmployeeForm(employee: Employee | undefined, defaultSiteId: string
     bankId: employee?.bankId ?? '',
     branchCode: employee?.branchCode ?? '',
     accountNumber: employee?.accountNumber ?? '',
-    accountTitle: employee?.accountTitle ?? '',
+    iban: employee?.iban ?? '',
     defaultEobiAmount: employee?.defaultEobiAmount ?? '',
     defaultEobiApplicable: employee?.defaultEobiApplicable ?? true,
   };
@@ -108,6 +108,13 @@ function EmployeeFormModal({
 
   function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Banking rule (2026-07-11 refinement): a cash employee (no bank selected) never has an Account
+  // Number/IBAN on file — the server normalizes this regardless, but clearing it here too means the
+  // form never *displays* a stale value the submission is about to silently drop.
+  function setBankField(bankId: string) {
+    setForm((prev) => (bankId ? { ...prev, bankId } : { ...prev, bankId: '', accountNumber: '', iban: '' }));
   }
 
   const [cnicAvailability, setCnicAvailability] = useState<CnicAvailability | undefined>(undefined);
@@ -164,7 +171,7 @@ function EmployeeFormModal({
       bankId: form.bankId || null,
       branchCode: form.branchCode || null,
       accountNumber: form.accountNumber || null,
-      accountTitle: form.accountTitle || null,
+      iban: form.iban || null,
       defaultEobiAmount: form.defaultEobiAmount || undefined,
       defaultEobiApplicable: form.defaultEobiApplicable,
     };
@@ -337,7 +344,7 @@ function EmployeeFormModal({
                   id="emp-bank"
                   className={selectClassName}
                   value={form.bankId}
-                  onChange={(e) => setField('bankId', e.target.value)}
+                  onChange={(e) => setBankField(e.target.value)}
                 >
                   <option value="">None (cash payment)</option>
                   {(banks.data ?? []).map((bank) => (
@@ -352,19 +359,24 @@ function EmployeeFormModal({
                 <Input id="emp-branch-code" value={form.branchCode} onChange={(e) => setField('branchCode', e.target.value)} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="emp-account-number">Account number</Label>
+                <Label htmlFor="emp-account-number">
+                  Account number{form.bankId && <span className="text-danger"> *</span>}
+                </Label>
                 <Input
                   id="emp-account-number"
+                  required={Boolean(form.bankId)}
                   value={form.accountNumber}
                   onChange={(e) => setField('accountNumber', e.target.value)}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="emp-account-title">Account title</Label>
+                <Label htmlFor="emp-iban">IBAN</Label>
                 <Input
-                  id="emp-account-title"
-                  value={form.accountTitle}
-                  onChange={(e) => setField('accountTitle', e.target.value)}
+                  id="emp-iban"
+                  value={form.iban}
+                  onChange={(e) => setField('iban', e.target.value)}
+                  placeholder="Optional — e.g. PK36SCBL0000001123456702"
+                  maxLength={34}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -480,7 +492,7 @@ function ReactivateEmployeeModal({
     bankId: '',
     branchCode: '',
     accountNumber: '',
-    accountTitle: '',
+    iban: '',
   });
 
   useEffect(() => {
@@ -494,12 +506,17 @@ function ReactivateEmployeeModal({
       bankId: employee.bankId ?? '',
       branchCode: employee.branchCode ?? '',
       accountNumber: employee.accountNumber ?? '',
-      accountTitle: employee.accountTitle ?? '',
+      iban: employee.iban ?? '',
     });
   }, [employee]);
 
   function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Banking rule (2026-07-11 refinement): see EmployeeFormModal's identical helper above.
+  function setBankField(bankId: string) {
+    setForm((prev) => (bankId ? { ...prev, bankId } : { ...prev, bankId: '', accountNumber: '', iban: '' }));
   }
 
   async function handleSubmit() {
@@ -515,7 +532,7 @@ function ReactivateEmployeeModal({
           bankId: form.bankId || null,
           branchCode: form.branchCode || null,
           accountNumber: form.accountNumber || null,
-          accountTitle: form.accountTitle || null,
+          iban: form.iban || null,
         },
       });
       toast.success(`${employee?.name ?? 'Employee'} reactivated`);
@@ -584,7 +601,7 @@ function ReactivateEmployeeModal({
                   id="reactivate-bank"
                   className={selectClassName}
                   value={form.bankId}
-                  onChange={(e) => setField('bankId', e.target.value)}
+                  onChange={(e) => setBankField(e.target.value)}
                 >
                   <option value="">None (cash payment)</option>
                   {(banks.data ?? []).map((bank) => (
@@ -603,19 +620,24 @@ function ReactivateEmployeeModal({
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="reactivate-account-number">Account number</Label>
+                <Label htmlFor="reactivate-account-number">
+                  Account number{form.bankId && <span className="text-danger"> *</span>}
+                </Label>
                 <Input
                   id="reactivate-account-number"
+                  required={Boolean(form.bankId)}
                   value={form.accountNumber}
                   onChange={(e) => setField('accountNumber', e.target.value)}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="reactivate-account-title">Account title</Label>
+                <Label htmlFor="reactivate-iban">IBAN</Label>
                 <Input
-                  id="reactivate-account-title"
-                  value={form.accountTitle}
-                  onChange={(e) => setField('accountTitle', e.target.value)}
+                  id="reactivate-iban"
+                  value={form.iban}
+                  onChange={(e) => setField('iban', e.target.value)}
+                  placeholder="Optional — e.g. PK36SCBL0000001123456702"
+                  maxLength={34}
                 />
               </div>
             </div>

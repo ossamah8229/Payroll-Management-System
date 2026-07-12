@@ -239,7 +239,7 @@ export async function createPayrollEntry(
         bankId: employee.bankId,
         branchCode: employee.branchCode,
         accountNumber: employee.accountNumber,
-        accountTitle: employee.accountTitle,
+        iban: employee.iban,
         grossPay: employee.grossPay,
         eobiAmount: employee.defaultEobiAmount,
         eobiApplicable: employee.defaultEobiApplicable,
@@ -290,7 +290,7 @@ export function mapUpdateInputToEntryData(
     ...(input.bankId !== undefined && { bankId: input.bankId }),
     ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
     ...(input.accountNumber !== undefined && { accountNumber: input.accountNumber }),
-    ...(input.accountTitle !== undefined && { accountTitle: input.accountTitle }),
+    ...(input.iban !== undefined && { iban: input.iban }),
     ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
     ...(input.allowance !== undefined && { allowance: input.allowance }),
     ...(input.leaveDays !== undefined && { leaveDays: input.leaveDays }),
@@ -326,6 +326,17 @@ export async function updatePayrollEntry(
 
   const { version, ...fields } = input;
   const data = mapUpdateInputToEntryData(fields);
+  // Banking rule (2026-07-11 refinement): clearing the bank on this request also clears Account
+  // Number/IBAN — a cash entry never carries stale bank details. Deliberately *not* the mirror
+  // "bank set ⇒ Account Number required" hard rejection `employees.service.ts` applies: this grid
+  // autosaves one field at a time (docs/architecture/database/payroll-entry.md §12's Draft-editable
+  // convention), so a user who has just picked a bank and hasn't typed the account number yet must
+  // not have that in-progress edit rejected — the same tolerance `InlineNumberCell`'s `invalid` prop
+  // already gives every other field here.
+  if (data.bankId === null) {
+    data.accountNumber = null;
+    data.iban = null;
+  }
   const changes = diffFields(
     existing as unknown as Record<string, unknown>,
     data as unknown as Record<string, unknown>,

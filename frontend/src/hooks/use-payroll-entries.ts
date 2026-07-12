@@ -41,7 +41,7 @@ export interface PayrollEntry {
   bankId: string | null;
   branchCode: string | null;
   accountNumber: string | null;
-  accountTitle: string | null;
+  iban: string | null;
   grossPay: string;
   allowance: string;
   leaveDays: string;

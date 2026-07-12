@@ -100,7 +100,7 @@ export async function getPayrollCycle(id: string) {
  * represent payroll history and stay stable across cycles until intentionally changed in Payroll
  * Entry itself (Employee.grossPay is documented, §9, as a "template value only" — reverting to it
  * would silently discard a deliberate adjustment). Conversely, `designation`, `bankId`,
- * `branchCode`, `accountNumber`, `accountTitle`, the new line's `unitId` (Primary Project Unit),
+ * `branchCode`, `accountNumber`, `iban`, the new line's `unitId` (Primary Project Unit),
  * and `siteId` always refresh from `Employee`'s CURRENT record, never the prior entry's — Employee
  * master data should always reflect the employee's latest assignment/banking information. This
  * also keeps the new entry's `siteId` consistent with whichever site the employee's current
@@ -175,7 +175,7 @@ export async function createPayrollCycle(
       bankId: employee.bankId,
       branchCode: employee.branchCode,
       accountNumber: employee.accountNumber,
-      accountTitle: employee.accountTitle,
+      iban: employee.iban,
       grossPay: sourceEntry?.grossPay ?? employee.grossPay,
       eobiAmount: sourceEntry?.eobiAmount ?? employee.defaultEobiAmount,
       eobiApplicable: sourceEntry?.eobiApplicable ?? employee.defaultEobiApplicable,

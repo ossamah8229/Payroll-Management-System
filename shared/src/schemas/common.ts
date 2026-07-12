@@ -9,6 +9,15 @@ export const emptyToUndefined = (val: unknown) => (val === '' ? undefined : val)
 export const optionalTrimmedString = (max: number) =>
   z.preprocess(emptyToNull, z.string().trim().max(max).nullable().optional());
 
+/** Same shape as `optionalTrimmedString`, uppercased — the single implementation of "trimmed,
+ * optional, stored uppercase" (currently just `iban`, Employee/PayrollEntry banking refinement) so
+ * a future uppercase-stored identifier never redefines the same transform inline. */
+export const optionalUppercaseString = (max: number) =>
+  z.preprocess(
+    (val) => emptyToNull(typeof val === 'string' ? val.trim().toUpperCase() : val),
+    z.string().max(max).nullable().optional(),
+  );
+
 /** numeric(12,2)/numeric(10,2)-safe: transported as a decimal string, never a float, per Principle 5.
  * The single implementation of this pattern — every schema that validates a monetary or
  * decimal-precision figure (Employee, Payroll Entry, Payroll Entry Work Line, and any future

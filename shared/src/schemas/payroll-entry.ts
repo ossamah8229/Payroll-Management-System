@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { decimalString, emptyToNull, optionalTrimmedString } from './common';
+import { decimalString, emptyToNull, optionalTrimmedString, optionalUppercaseString } from './common';
 
 /**
  * The initial work line(s) supplied at `PayrollEntry` creation time (docs/architecture/
@@ -58,7 +58,9 @@ export const updatePayrollEntrySchema = z.object({
   bankId: z.preprocess(emptyToNull, z.string().uuid().nullable().optional()),
   branchCode: optionalTrimmedString(20),
   accountNumber: optionalTrimmedString(40),
-  accountTitle: optionalTrimmedString(160),
+  /** Banking refinement (2026-07-11): replaces `accountTitle`. Same "copied, not linked" snapshot
+   * convention as every other field here — see `payroll-entry.service.ts`. */
+  iban: optionalUppercaseString(34),
   grossPay: decimalString.optional(),
   allowance: decimalString.optional(),
   leaveDays: decimalString.optional(),

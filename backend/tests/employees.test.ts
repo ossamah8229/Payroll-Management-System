@@ -530,4 +530,133 @@ describe('Employee Registry', () => {
       expect(reactivatedEntries.some((e) => e.entityId === employeeId)).toBe(true);
     });
   });
+
+  describe('Banking refinement (2026-07-11) — Account Title removed, IBAN added', () => {
+    // "TB" prefix matches cleanTestData()'s own cleanup filter (tests/helpers.ts) — without it,
+    // this test bank would persist across runs and collide on Bank.code's unique constraint.
+    async function makeBank(code: string, name: string) {
+      return prisma.bank.create({ data: { code: `TB${code}`, name } });
+    }
+
+    it('creates a bank employee with an IBAN, stored trimmed and uppercase', async () => {
+      const site = await makeSite('Test Site Banking IBAN Create');
+      const bank = await makeBank('IBC1', 'IBAN Create Bank');
+      const { agent, csrfToken } = await masterAdminAgent('emp-iban-create@test.local');
+
+      const res = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(
+          baseEmployeePayload(site.id, await unitIdForSite(site.id), {
+            bankId: bank.id,
+            accountNumber: '001234567890',
+            iban: '  pk36scbl0000001123456702  ',
+          }),
+        );
+
+      expect(res.status).toBe(201);
+      expect(res.body.employee.iban).toBe('PK36SCBL0000001123456702');
+      expect(res.body.employee).not.toHaveProperty('accountTitle');
+    });
+
+    it('rejects creating a bank employee with no Account Number (400)', async () => {
+      const site = await makeSite('Test Site Banking No Account Number');
+      const bank = await makeBank('IBC2', 'No Account Number Bank');
+      const { agent, csrfToken } = await masterAdminAgent('emp-no-acct-num@test.local');
+
+      const res = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, await unitIdForSite(site.id), { bankId: bank.id }));
+
+      expect(res.status).toBe(400);
+    });
+
+    it('creates a cash employee with no bank, Account Number, or IBAN', async () => {
+      const site = await makeSite('Test Site Banking Cash Create');
+      const { agent, csrfToken } = await masterAdminAgent('emp-cash-create@test.local');
+
+      const res = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, await unitIdForSite(site.id)));
+
+      expect(res.status).toBe(201);
+      expect(res.body.employee.bankId).toBeNull();
+      expect(res.body.employee.accountNumber).toBeNull();
+      expect(res.body.employee.iban).toBeNull();
+    });
+
+    it('rejects adding a bank via update with no Account Number, checked against the merged post-update state', async () => {
+      const site = await makeSite('Test Site Banking Update Reject');
+      const bank = await makeBank('IBC3', 'Update Reject Bank');
+      const { agent, csrfToken } = await masterAdminAgent('emp-update-reject@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, await unitIdForSite(site.id)));
+
+      // This request only sends bankId — Account Number is not in the request body at all, but
+      // the merged effective state (existing accountNumber: null + this bankId) must still fail.
+      const res = await agent
+        .patch(`/api/v1/employees/${createRes.body.employee.id}`)
+        .set('x-csrf-token', csrfToken)
+        .send({ bankId: bank.id });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('clears Account Number and IBAN when a bank is cleared via update, even though this request does not mention them', async () => {
+      const site = await makeSite('Test Site Banking Update Clear');
+      const bank = await makeBank('IBC4', 'Update Clear Bank');
+      const { agent, csrfToken } = await masterAdminAgent('emp-update-clear@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(
+          baseEmployeePayload(site.id, await unitIdForSite(site.id), {
+            bankId: bank.id,
+            accountNumber: '001234567890',
+            iban: 'PK36SCBL0000001123456702',
+          }),
+        );
+
+      const res = await agent
+        .patch(`/api/v1/employees/${createRes.body.employee.id}`)
+        .set('x-csrf-token', csrfToken)
+        .send({ bankId: null });
+
+      expect(res.status).toBe(200);
+      expect(res.body.employee.bankId).toBeNull();
+      expect(res.body.employee.accountNumber).toBeNull();
+      expect(res.body.employee.iban).toBeNull();
+    });
+
+    it('reactivate rejects assigning a bank with no Account Number, the same way create/update do', async () => {
+      const site = await makeSite('Test Site Banking Reactivate Reject');
+      const bank = await makeBank('IBC5', 'Reactivate Reject Bank');
+      const unitId = await unitIdForSite(site.id);
+      const { agent, csrfToken } = await masterAdminAgent('emp-reactivate-reject@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send(baseEmployeePayload(site.id, unitId, { name: 'Reactivate Banking Rule' }));
+      const employeeId = createRes.body.employee.id;
+
+      await agent
+        .post(`/api/v1/employees/${employeeId}/leave`)
+        .set('x-csrf-token', csrfToken)
+        .send({ dateOfLeaving: '2026-01-15' });
+
+      const res = await agent
+        .post(`/api/v1/employees/${employeeId}/reactivate`)
+        .set('x-csrf-token', csrfToken)
+        .send({ bankId: bank.id });
+
+      expect(res.status).toBe(400);
+    });
+  });
 });

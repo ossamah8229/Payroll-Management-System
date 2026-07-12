@@ -27,7 +27,7 @@ export interface Employee {
   bank: Bank | null;
   branchCode: string | null;
   accountNumber: string | null;
-  accountTitle: string | null;
+  iban: string | null;
   defaultEobiAmount: string;
   defaultEobiApplicable: boolean;
   createdAt: string;

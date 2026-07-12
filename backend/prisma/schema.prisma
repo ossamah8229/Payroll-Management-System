@@ -252,7 +252,11 @@ model Employee {
   bankId                String?   @db.Uuid
   branchCode            String?   @db.VarChar(20)
   accountNumber         String?   @db.VarChar(40)
-  accountTitle          String?   @db.VarChar(160)
+  /// **Added Phase 4 banking refinement (2026-07-11).** Optional; stored trimmed and uppercase.
+  /// Replaces `accountTitle` (removed the same pass) — the account holder is now always the
+  /// employee's own legal `name`, never a separately entered/stored string. VARCHAR(34) is the
+  /// ISO 13616 international maximum (a Pakistani IBAN is 24 characters).
+  iban                  String?   @db.VarChar(34)
   defaultEobiAmount     Decimal   @default(400.00) @db.Decimal(10, 2)
   defaultEobiApplicable Boolean   @default(true)
   createdAt             DateTime  @default(now()) @db.Timestamptz(6)
@@ -405,13 +409,13 @@ model PayrollCycle {
   archivedAt    DateTime?          @db.Timestamptz(6)
   archivedBy    String?            @db.Uuid
 
-  sourceCycle    PayrollCycle?  @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
-  derivedCycles  PayrollCycle[] @relation("PayrollCycleSource")
-  createdByUser  User           @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  releasedByUser User?          @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  archivedByUser User?          @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
-  entries        PayrollEntry[]
-  unitReleases   PayrollUnitRelease[]
+  sourceCycle             PayrollCycle?            @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  derivedCycles           PayrollCycle[]           @relation("PayrollCycleSource")
+  createdByUser           User                     @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  releasedByUser          User?                    @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  archivedByUser          User?                    @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  entries                 PayrollEntry[]
+  unitReleases            PayrollUnitRelease[]
   scheduledPayrollPeriods ScheduledPayrollPeriod[]
 
   @@unique([year, month])
@@ -425,19 +429,19 @@ model PayrollCycle {
 /// foreign key into this table, never creates/resolves/mutates/deletes a row directly — it calls
 /// Payroll Processing's own exposed find-or-create function instead.
 model ScheduledPayrollPeriod {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  year          Int       @db.SmallInt
-  month         Int       @db.SmallInt
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  year           Int       @db.SmallInt
+  month          Int       @db.SmallInt
   /// Null until a `PayrollCycle` is actually created for this `(year, month)` — set exactly once,
   /// never again.
-  payrollCycleId String?  @db.Uuid
-  resolvedAt    DateTime? @db.Timestamptz(6)
-  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  payrollCycleId String?   @db.Uuid
+  resolvedAt     DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
 
   payrollCycle PayrollCycle? @relation(fields: [payrollCycleId], references: [id], onDelete: Restrict)
 
-  originalForAdvances Advance[] @relation("AdvanceOriginalPeriod")
-  currentForAdvances  Advance[] @relation("AdvanceCurrentPeriod")
+  originalForAdvances Advance[]               @relation("AdvanceOriginalPeriod")
+  currentForAdvances  Advance[]               @relation("AdvanceCurrentPeriod")
   scheduleChangesFrom AdvanceScheduleChange[] @relation("AdvanceScheduleChangeFromPeriod")
   scheduleChangesTo   AdvanceScheduleChange[] @relation("AdvanceScheduleChangeToPeriod")
 
@@ -472,7 +476,11 @@ model PayrollEntry {
   bankId              String?   @db.Uuid
   branchCode          String?   @db.VarChar(20)
   accountNumber       String?   @db.VarChar(40)
-  accountTitle        String?   @db.VarChar(160)
+  /// **Added Phase 4 banking refinement (2026-07-11).** Copied from `Employee` at entry creation
+  /// (or carried forward at new-cycle creation), then ordinarily Draft-editable — same "copied,
+  /// not linked" convention as every other field in this group. Replaces `accountTitle` (removed
+  /// the same pass); the account holder is always the entry's own `Employee.name` snapshot.
+  iban                String?   @db.VarChar(34)
   grossPay            Decimal   @db.Decimal(12, 2)
   allowance           Decimal   @default(0) @db.Decimal(12, 2)
   leaveDays           Decimal   @default(0) @db.Decimal(5, 2)
@@ -507,14 +515,14 @@ model PayrollEntry {
   createdAt           DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt           DateTime  @updatedAt @db.Timestamptz(6)
 
-  cycle          PayrollCycle           @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  employee       Employee               @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  site           ProjectSite            @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  bank           Bank?                  @relation(fields: [bankId], references: [id], onDelete: Restrict)
-  releasedByUser User?                  @relation("PayrollEntryReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  workLines      PayrollEntryWorkLine[]
-  advance        Advance?               @relation("PayrollEntryAdvance", fields: [advanceId], references: [id], onDelete: Restrict)
-  eidAdvance     Advance?               @relation("PayrollEntryEidAdvance", fields: [eidAdvanceId], references: [id], onDelete: Restrict)
+  cycle                  PayrollCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  employee               Employee                @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  site                   ProjectSite             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  bank                   Bank?                   @relation(fields: [bankId], references: [id], onDelete: Restrict)
+  releasedByUser         User?                   @relation("PayrollEntryReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  workLines              PayrollEntryWorkLine[]
+  advance                Advance?                @relation("PayrollEntryAdvance", fields: [advanceId], references: [id], onDelete: Restrict)
+  eidAdvance             Advance?                @relation("PayrollEntryEidAdvance", fields: [eidAdvanceId], references: [id], onDelete: Restrict)
   advanceScheduleChanges AdvanceScheduleChange[]
 
   @@unique([cycleId, employeeId])
@@ -739,32 +747,32 @@ enum AdvanceStatus {
 /// protected Cash row). "Amount recovered" (`totalAmount - outstandingBalance`) is calculated on
 /// read, never stored, per Principle 5/6 — the same convention `netSalary` already follows.
 model Advance {
-  id                        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeId                String               @db.Uuid
-  type                      AdvanceType
-  totalAmount               Decimal              @db.Decimal(12, 2)
+  id                         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId                 String               @db.Uuid
+  type                       AdvanceType
+  totalAmount                Decimal              @db.Decimal(12, 2)
   /// Decremented as matching `PayrollEntry` deductions materialize; reaching zero flips `status`
   /// to `PAID_OFF`. The only two paths that ever change this: the automatic cycle-bootstrap
   /// materialization below, and (once Phase 6 exists) an approved Correction reconciliation.
-  outstandingBalance        Decimal              @db.Decimal(12, 2)
-  dateGiven                 DateTime             @db.Date
-  repaymentType             AdvanceRepaymentType
+  outstandingBalance         Decimal              @db.Decimal(12, 2)
+  dateGiven                  DateTime             @db.Date
+  repaymentType              AdvanceRepaymentType
   /// See the model-level doc comment above.
-  scheduledInstallmentAmount Decimal?            @db.Decimal(12, 2)
-  notes                     String?
-  status                    AdvanceStatus        @default(ACTIVE)
-  originalScheduledPeriodId String?              @db.Uuid
-  currentScheduledPeriodId  String?              @db.Uuid
-  paidOffAt                 DateTime?            @db.Timestamptz(6)
-  createdAt                 DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt                 DateTime             @updatedAt @db.Timestamptz(6)
+  scheduledInstallmentAmount Decimal?             @db.Decimal(12, 2)
+  notes                      String?
+  status                     AdvanceStatus        @default(ACTIVE)
+  originalScheduledPeriodId  String?              @db.Uuid
+  currentScheduledPeriodId   String?              @db.Uuid
+  paidOffAt                  DateTime?            @db.Timestamptz(6)
+  createdAt                  DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt                  DateTime             @updatedAt @db.Timestamptz(6)
 
-  employee               Employee                @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  originalScheduledPeriod ScheduledPayrollPeriod? @relation("AdvanceOriginalPeriod", fields: [originalScheduledPeriodId], references: [id], onDelete: Restrict)
-  currentScheduledPeriod  ScheduledPayrollPeriod? @relation("AdvanceCurrentPeriod", fields: [currentScheduledPeriodId], references: [id], onDelete: Restrict)
-  scheduleChanges         AdvanceScheduleChange[]
-  payrollEntriesAsAdvance    PayrollEntry[] @relation("PayrollEntryAdvance")
-  payrollEntriesAsEidAdvance PayrollEntry[] @relation("PayrollEntryEidAdvance")
+  employee                   Employee                @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  originalScheduledPeriod    ScheduledPayrollPeriod? @relation("AdvanceOriginalPeriod", fields: [originalScheduledPeriodId], references: [id], onDelete: Restrict)
+  currentScheduledPeriod     ScheduledPayrollPeriod? @relation("AdvanceCurrentPeriod", fields: [currentScheduledPeriodId], references: [id], onDelete: Restrict)
+  scheduleChanges            AdvanceScheduleChange[]
+  payrollEntriesAsAdvance    PayrollEntry[]          @relation("PayrollEntryAdvance")
+  payrollEntriesAsEidAdvance PayrollEntry[]          @relation("PayrollEntryEidAdvance")
 
   // Partial unique index `(employeeId, type) WHERE status = 'ACTIVE'` and the check constraints
   // (`totalAmount > 0`, `outstandingBalance >= 0 AND outstandingBalance <= totalAmount`,

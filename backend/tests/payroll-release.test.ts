@@ -411,12 +411,14 @@ describe('Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation', 
         grossPay: '30000',
         bankId: bankBefore.id,
         accountNumber: '1111111111',
+        iban: 'PK36SCBL0000001123456702',
       },
     });
     const entry = await createEntry(admin, cycle.id, employee.id);
     const beforeRelease = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
     expect(beforeRelease.bankId).toBe(bankBefore.id);
     expect(beforeRelease.accountNumber).toBe('1111111111');
+    expect(beforeRelease.iban).toBe('PK36SCBL0000001123456702');
     expect(beforeRelease.designation).toBe('Guard');
 
     await admin.agent
@@ -424,18 +426,25 @@ describe('Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation', 
       .set('x-csrf-token', admin.csrfToken)
       .send({});
 
-    // The employee changes bank, account number, and designation AFTER release.
+    // The employee changes bank, account number, IBAN, and designation AFTER release.
     await prisma.employee.update({
       where: { id: employee.id },
-      data: { bankId: bankAfter.id, accountNumber: '2222222222', designation: 'Supervisor' },
+      data: {
+        bankId: bankAfter.id,
+        accountNumber: '2222222222',
+        iban: 'PK99AFTR0000009999999999',
+        designation: 'Supervisor',
+      },
     });
 
     // The already-released PayrollEntry must still reflect exactly what it did at release time —
     // Employee changes never cascade into an existing PayrollEntry, released or not
-    // (docs/architecture/database/payroll-entry.md §12).
+    // (docs/architecture/database/payroll-entry.md §12; banking refinement 2026-07-11: iban
+    // snapshots exactly the same way bankId/accountNumber always have).
     const afterEmployeeChange = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
     expect(afterEmployeeChange.bankId).toBe(bankBefore.id);
     expect(afterEmployeeChange.accountNumber).toBe('1111111111');
+    expect(afterEmployeeChange.iban).toBe('PK36SCBL0000001123456702');
     expect(afterEmployeeChange.designation).toBe('Guard');
     expect(afterEmployeeChange.released).toBe(true);
   });

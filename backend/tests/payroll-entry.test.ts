@@ -218,6 +218,51 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     expect(metadata.changes).toHaveProperty('allowance');
   });
 
+  it('banking refinement (2026-07-11): stores IBAN trimmed/uppercase, and clearing the bank also clears Account Number/IBAN', async () => {
+    const admin = await masterAdminAgent('entry-banking@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Entry Banking');
+    const cycle = await makeDraftCycle(admin, 6);
+    // "TB" prefix matches cleanTestData()'s own cleanup filter (tests/helpers.ts).
+    const bank = await prisma.bank.create({ data: { code: 'TBENTB', name: 'Entry Banking Test Bank' } });
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Banking Entry Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        bankId: bank.id,
+        accountNumber: '5551234567',
+      },
+    });
+
+    const created = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeId: employee.id });
+    const entryId = created.body.entry.id;
+    expect(created.body.entry.bankId).toBe(bank.id);
+    expect(created.body.entry.accountNumber).toBe('5551234567');
+
+    const withIban = await admin.agent
+      .patch(`/api/v1/payroll-entries/${entryId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: created.body.entry.version, iban: '  pk36scbl0000001123456702  ' });
+    expect(withIban.status).toBe(200);
+    expect(withIban.body.entry.iban).toBe('PK36SCBL0000001123456702');
+
+    // Clearing the bank in this request must also clear Account Number/IBAN, even though this
+    // request only mentions bankId — a cash entry never carries stale bank details.
+    const cleared = await admin.agent
+      .patch(`/api/v1/payroll-entries/${entryId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: withIban.body.entry.version, bankId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.entry.bankId).toBeNull();
+    expect(cleared.body.entry.accountNumber).toBeNull();
+    expect(cleared.body.entry.iban).toBeNull();
+  });
+
   it('rejects editing an entry whose cycle is no longer Draft — released payroll is immutable', async () => {
     const admin = await masterAdminAgent('entry-immutable@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Entry Immutable');

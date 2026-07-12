@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { normalizeCnic } from '../lib/cnic';
-import { decimalString, emptyToNull, emptyToUndefined, optionalDate, optionalTrimmedString } from './common';
+import {
+  decimalString,
+  emptyToNull,
+  emptyToUndefined,
+  optionalDate,
+  optionalTrimmedString,
+  optionalUppercaseString,
+} from './common';
 
 /** Strips non-digit characters (e.g. a "#####-#######-#" formatted CNIC) before validating, not
  * just before storing — docs/architecture/database/schema-invariants.md §26 item 6. Applied here, once, so
@@ -8,7 +15,10 @@ import { decimalString, emptyToNull, emptyToUndefined, optionalDate, optionalTri
  * identically. */
 const normalizeCnicInput = (val: unknown) => (typeof val === 'string' ? normalizeCnic(val) : val);
 
-export const createEmployeeSchema = z.object({
+/** The plain object shape, kept separate from `createEmployeeSchema`'s cross-field refinement below
+ * so `updateEmployeeSchema` can still call `.partial()` on it directly — `.partial()` is only
+ * defined on a `ZodObject`, not on the `ZodEffects` a `.superRefine()` produces. */
+const employeeObjectSchema = z.object({
   employeeCode: optionalTrimmedString(30),
   cnic: z.preprocess(
     (val) => emptyToNull(normalizeCnicInput(val)),
@@ -32,9 +42,27 @@ export const createEmployeeSchema = z.object({
   bankId: z.preprocess(emptyToNull, z.string().uuid().nullable().optional()),
   branchCode: optionalTrimmedString(20),
   accountNumber: optionalTrimmedString(40),
-  accountTitle: optionalTrimmedString(160),
+  /** Banking refinement (2026-07-11): replaces `accountTitle`, which is no longer stored anywhere
+   * — the account holder is always the employee's own `name`. Optional; never required, since many
+   * employees operationally don't know or provide it. */
+  iban: optionalUppercaseString(34),
   defaultEobiAmount: z.preprocess(emptyToUndefined, decimalString.optional()),
   defaultEobiApplicable: z.boolean().optional(),
+});
+
+/** Banking rule (2026-07-11): a bank employee (`bankId` set) must have an Account Number on file —
+ * a cash employee (no `bankId`) is defined entirely by the *absence* of banking details. Checked
+ * here, at creation, where the full record is always present in one submission; `updateEmployee`
+ * enforces the same rule server-side against the merged post-update state, since an update is a
+ * partial patch and cannot be validated by shape alone (see `employees.service.ts`). */
+export const createEmployeeSchema = employeeObjectSchema.superRefine((data, ctx) => {
+  if (data.bankId && !data.accountNumber) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Account Number is required when a bank is selected',
+      path: ['accountNumber'],
+    });
+  }
 });
 
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
@@ -46,7 +74,7 @@ export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
  * site/unit against the submitted one, the same way an ordinary field edit is. Ignored by the
  * service layer when no transfer is actually happening.
  */
-export const updateEmployeeSchema = createEmployeeSchema.partial().extend({
+export const updateEmployeeSchema = employeeObjectSchema.partial().extend({
   /** Defaults to today (server-side) if a transfer occurs and this isn't provided. */
   transferEffectiveDate: z.preprocess(emptyToNull, z.string().date().nullable().optional()),
   transferReason: optionalTrimmedString(500),

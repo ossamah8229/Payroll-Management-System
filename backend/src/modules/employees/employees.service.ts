@@ -199,8 +199,12 @@ export async function createEmployee(currentUser: SessionUser, input: CreateEmpl
       grossPay: input.grossPay,
       bankId: input.bankId ?? null,
       branchCode: input.branchCode ?? null,
-      accountNumber: input.accountNumber ?? null,
-      accountTitle: input.accountTitle ?? null,
+      // A cash employee (no bank) never has an Account Number/IBAN on file — enforced here even
+      // though `createEmployeeSchema` already rejects "bank set, no Account Number", since the
+      // reverse (no bank, but an Account Number/IBAN supplied anyway) is a normalization, not a
+      // rejection (docs/architecture/database/employee.md §7's banking-fields note).
+      accountNumber: input.bankId ? (input.accountNumber ?? null) : null,
+      iban: input.bankId ? (input.iban ?? null) : null,
       ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount ?? undefined }),
       ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
     },
@@ -304,10 +308,39 @@ function mapUpdateInputToData(input: UpdateEmployeeInput): Prisma.EmployeeUnchec
     ...(input.bankId !== undefined && { bankId: input.bankId }),
     ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
     ...(input.accountNumber !== undefined && { accountNumber: input.accountNumber }),
-    ...(input.accountTitle !== undefined && { accountTitle: input.accountTitle }),
+    ...(input.iban !== undefined && { iban: input.iban }),
     ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount }),
     ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
   };
+}
+
+/**
+ * Banking rule (2026-07-11 refinement): a bank employee (non-null `bankId`) must have an Account
+ * Number on file; a cash employee (`bankId` null) never has an Account Number or IBAN. `update`/
+ * `reactivate` are partial patches, so this must be checked against the **merged** effective state
+ * (existing row + this request's changes), never the request body alone — a request that only
+ * touches `accountNumber` while `bankId` was already set on the existing row must still pass, and a
+ * request that clears `bankId` must still force `accountNumber`/`iban` to null even if this request
+ * didn't mention them, so a cash employee can never be left with stale bank details on file.
+ * Mutates `data` in place to add the forced-null normalization; throws on the "bank with no
+ * account number" violation, matching `createEmployeeSchema`'s own rejection for the create path.
+ */
+function applyBankingInvariant(
+  existing: { bankId: string | null; accountNumber: string | null },
+  data: Prisma.EmployeeUncheckedUpdateInput,
+): void {
+  const nextBankId = 'bankId' in data ? (data.bankId as string | null) : existing.bankId;
+  const nextAccountNumber = 'accountNumber' in data ? (data.accountNumber as string | null) : existing.accountNumber;
+
+  if (!nextBankId) {
+    data.accountNumber = null;
+    data.iban = null;
+    return;
+  }
+
+  if (!nextAccountNumber) {
+    throw badRequest('Account Number is required when a bank is selected');
+  }
 }
 
 /**
@@ -345,6 +378,7 @@ export async function updateEmployee(
   }
 
   const data = mapUpdateInputToData(input);
+  applyBankingInvariant(existing, data);
 
   const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,
@@ -462,6 +496,7 @@ export async function reactivateEmployee(
     ...mapUpdateInputToData(input),
     dateOfLeaving: null,
   };
+  applyBankingInvariant(existing, data);
 
   const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,

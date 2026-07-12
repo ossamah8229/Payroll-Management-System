@@ -203,6 +203,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                     <TableHead className="whitespace-nowrap">Bank</TableHead>
                     <TableHead className="whitespace-nowrap">Branch Code</TableHead>
                     <TableHead className="whitespace-nowrap">Account Number</TableHead>
+                    <TableHead className="whitespace-nowrap">IBAN</TableHead>
                     <TableHead className="whitespace-nowrap">Account Title</TableHead>
                     <TableHead className="whitespace-nowrap text-right">Net Salary</TableHead>
                   </TableRow>
@@ -221,7 +222,11 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                           own horizontal scroll container is what guarantees this, not a fixed
                           column width that could clip a longer number. */}
                       <TableCell className="whitespace-nowrap tabular-nums">{row.accountNumber ?? '—'}</TableCell>
-                      <TableCell className="whitespace-nowrap">{row.accountTitle ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums">{row.iban ?? '—'}</TableCell>
+                      {/* Account Title is derived, never stored (banking refinement, 2026-07-11) —
+                          always the entry's own frozen Employee.name snapshot; see
+                          bank-sheets.service.ts's buildRow. */}
+                      <TableCell className="whitespace-nowrap">{row.accountTitle}</TableCell>
                       <TableCell className="whitespace-nowrap text-right tabular-nums">
                         {formatMoney(row.netSalary)}
                       </TableCell>
@@ -238,7 +243,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                     of the table, exactly where a reader expects a total. */}
                 <tfoot className="border-t-2 border-border bg-surface-2">
                   <TableRow>
-                    <TableCell colSpan={9} className="whitespace-nowrap text-right font-semibold">
+                    <TableCell colSpan={10} className="whitespace-nowrap text-right font-semibold">
                       Total ({bankSheet.data.rows.length} employee{bankSheet.data.rows.length === 1 ? '' : 's'})
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-right font-semibold tabular-nums">
