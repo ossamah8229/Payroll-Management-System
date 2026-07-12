@@ -1313,6 +1313,23 @@ management remain explicitly out of scope. Full record: `docs/PROJECT_PROGRESS.m
 Checkpoint 5" entry. **Phase 4's remaining scope is Payslip generation** — the last item before this
 phase's own 🛑 review checkpoint.
 
+**Post-Phase-4 refinement (2026-07-11) — explicitly NOT Checkpoint 6, not Payslips, not Company
+Bank Account.** Employee/PayrollEntry `accountTitle` removed entirely (clean, destructive migration
+— this project's second, `database/schema-invariants.md` §25); `iban` added to both (optional,
+trimmed, stored uppercase); a new banking invariant (bank employee requires Account Number; cash
+employee has neither); Bank Sheet's "Title of Account" column (still required by the frozen
+`reference/PROJECT_SPEC.md` format) now derives from the entry's employee name instead of a stored
+field; permanent Layout Integrity Rule for business-critical identifiers. Full record:
+`docs/PROJECT_PROGRESS.md` §1's "Post-Phase-4 refinement" entry. Implemented, not yet committed.
+
+**Rejected on review, 2026-07-12 — the Layout Integrity Rule was not actually satisfied.** Root
+cause: Payroll Entry's Bank `<select>` showed only `bank.code`, never the full `bank.name`, and
+`ReadOnlyCell` was silently ellipsis-clipping Employee Code — no column width could have fixed
+either. Fixed, and this time verified with a real, in-session-provisioned headless browser (Live
+DOM measurements: `scrollWidth`/`clientWidth` parity, zero overflow, for Bank/Account Number/IBAN
+in Payroll Entry, Employee Registry, and Bank Sheet). Full record: `docs/PROJECT_PROGRESS.md` §1's
+dated correction under the same entry. Still not committed.
+
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
 superseded by the frozen design in `docs/architecture/workflows/payroll-lifecycle.md` §4 and

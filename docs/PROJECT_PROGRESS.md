@@ -2398,6 +2398,207 @@ checkpoint's commit. **Checkpoint 5 is complete and closed. Do not begin the nex
 
 ---
 
+### Post-Phase-4 refinement — Employee/Payroll Entry/Bank Sheet banking fields (2026-07-11)
+
+**Explicitly not Phase 4 Checkpoint 6, not Payslips, not Company Bank Account** — a refinement of
+already-shipped Employee, Payroll Entry, and Bank Sheet functionality only, preceded by a dedicated
+read-only architecture review (no files touched) that surfaced one real conflict with frozen
+architecture: `reference/PROJECT_SPEC.md`'s frozen "Sample Bank Sheet Format" requires a "Title of
+Account" column. Resolved, with explicit sign-off, by keeping that column on the Bank Sheet as a
+**derived** value (the entry's own `employee.name`), never a separately stored field — satisfying
+both the frozen spec and the new requirement that Account Title is "no longer entered separately."
+
+**Approved decisions, implemented in full:**
+- `Employee.accountTitle`/`PayrollEntry.accountTitle` **removed entirely** — a clean, destructive
+  migration (`20260711200000_employee_banking_refinement`), not a soft-deprecation, per explicit
+  instruction ("this project is still pre-production... do not leave deprecated columns behind").
+  This is this project's **second** genuinely destructive migration (`database/schema-invariants.md
+  §25`) and, unlike the first (`ProjectSite.branchCode`, never applied to a live database), a
+  materially higher-risk one since both columns had been live since Phase 2/Phase 3 Checkpoint 0.
+- `Employee.iban`/`PayrollEntry.iban` **added** (varchar(34), nullable, optional even for a bank
+  employee) — trimmed and stored uppercase (`shared/src/schemas/common.ts`'s new
+  `optionalUppercaseString`, reused by both schemas rather than duplicated).
+- **Banking invariant, new:** a bank employee (`bankId` set) must have an Account Number —
+  `Employee` create/update/reactivate hard-reject the violation, checked against the *merged*
+  post-update state for partial patches (`employees.service.ts`'s `applyBankingInvariant`); a cash
+  employee (`bankId` null) always has `accountNumber`/`iban` both null, enforced by normalization
+  (never a rejection) everywhere, including `PayrollEntry`'s own independent Draft-editable banking
+  fields. `PayrollEntry`'s per-field autosave grid deliberately does **not** hard-reject "bank set,
+  Account Number not yet typed" the way `Employee`'s full-form submission does — a user who just
+  picked a bank and hasn't typed the account number yet must not have that in-progress edit
+  rejected; see `database/payroll-entry.md`'s new banking-rule note for the full reasoning.
+- **Bank Sheet**: `accountTitle` is now derived (`entry.employee.name`, read live — the Bank Sheet
+  export's already-established exception for Employee Name/CNIC, same as before), never a stored
+  `PayrollEntry` column; verified this holds for Cash rows too (Account Title was never tied to
+  having a bank account). IBAN added as a new export column (CSV/Excel headers and on-screen table).
+  Excel column widths extended to every business-critical identifier (Employee Code, CNIC, Bank,
+  Account Number, IBAN), not just Account Number as before.
+- **Permanent Layout Integrity Rule, introduced**: Employee Code, CNIC, Bank, Account Number, and
+  IBAN must never be squashed, clipped, or ellipsized — widen columns or scroll horizontally,
+  never truncate. Bank Sheet already had this pattern (`whitespace-nowrap` + horizontal-scroll
+  table); Payroll Entry's grid columns (`columns.ts`) were widened to match (Bank 110→120, Branch
+  Code 100→110, Account No. 130→190, new IBAN column at 200).
+- **Employee Registry's bulk CSV/Excel template intentionally left untouched** — its exact header
+  set is extracted verbatim from `reference/PROJECT_SPEC.md`'s frozen "Official Data Template" and
+  never included Account Title in the first place; adding IBAN there would be a separate,
+  explicitly-authorized amendment to that frozen template, not assumed as part of this refinement.
+  IBAN is settable via the single-employee Create/Edit/Reactivate form only.
+
+**Verification:** `prisma validate`/`generate`/`migrate deploy` clean, zero drift; typecheck/lint/
+build clean across shared/backend/frontend; backend tests 285/285 (276 prior + 9 new, covering the
+banking invariant on create/update/reactivate, the derived Account Title including for Cash rows,
+and `PayrollEntry`'s own snapshot immutability for `iban`); real-stack verification via direct API
+calls against the live dev Postgres (no browser-automation tool available this session) — employee
+creation/update covering both the rejection and normalization paths, full cycle→release→Bank Sheet
+flow confirming the derived title and IBAN snapshot end-to-end, CSV export header/value correctness.
+HTML prototypes (`phase2-employee-registry-preview.html`, `phase3-payroll-entry-preview.html`,
+`phase4-bank-sheets-preview.html`) updated to match.
+
+**Not yet committed** — implementation complete, pending review. No conflicts with frozen
+architecture remain unresolved; the one identified (Bank Sheet's "Title of Account") was resolved
+as described above, with explicit sign-off, before implementation began.
+
+**Rejected on review, 2026-07-12 — the 2026-07-11 column-width increase did not fix the actual
+defect.** Root cause, found by tracing the full width path rather than assuming: (1) Payroll
+Entry's Bank `<select>` (`payroll-entry-row.tsx`) was rendering only `bank.code` (e.g. "MCB"), a
+genuinely separate, short abbreviation field — never the full `bank.name` — so no column width
+could ever have fixed it, since the *displayed value itself* was never the long string in the
+first place; this was inconsistent with Employee Registry's own already-correct `"{name} ({code})"`
+convention. (2) `ReadOnlyCell` (`inline-cells.tsx`) unconditionally applied Tailwind's `truncate`
+class, silently ellipsis-clipping Employee Code — exactly the "hidden overflow" the permanent rule
+forbids — independent of any column-width number. (3) The 2026-07-11 widths themselves (Bank 120,
+Account No. 190, IBAN 200) were also genuinely too tight once measured against a real character-
+width budget, not just masked by (1)/(2).
+
+**Fixed**: Bank select now renders `"{bank.name} ({bank.code})"`; `ReadOnlyCell` gained a
+`truncate` opt-out, applied to Employee Code; columns widened again from an explicit character-
+width budget documented in `columns.ts`'s own comment (Employee Code 140, Bank 280, Branch Code
+140, Account No. 260, IBAN 300 — deliberate margin, not a bare fit); Excel export column widths
+increased to match (Bank 32, Account Number 30, IBAN 36). `phase3-payroll-entry-preview.html`
+gained matching `min-width` CSS and now renders the exact canonical IBAN test value
+(`PK36SCBL0000001123456702`) and full bank names in its actual table, not just its footer text; all
+three prototypes were corrected the same way.
+
+**Real-stack Playwright verification this time** — a genuine browser was provisioned in-session
+(`playwright` + Chromium, installed into the scratchpad; no browser-automation tool was available
+via the harness) and driven against the live Vite dev server + backend + Postgres. Live DOM
+measurements confirmed `scrollWidth`/`clientWidth` parity (no internal overflow) for the Bank cell/
+control, Account Number cell/control, and IBAN cell/control in the Payroll Entry grid, the Employee
+Registry Edit modal, and the Bank Sheet table, all showing the complete test values
+(`PK36SCBL0000001123456702`, a 20-digit account number, "National Bank of Pakistan (NBP)") with
+zero clipping — screenshots captured as corroborating evidence, not just DOM measurements.
+
+**Snapshot-name finding, unresolved, requires your decision, not silently assumed:** Bank Sheet's
+Account Title is confirmed to read `entry.employee.name` — a **live** `Employee` relation, not a
+frozen `PayrollEntry` snapshot the way `bankId`/`accountNumber`/`iban` are. A dedicated test
+(`bank-sheets.test.ts`, "derives Account Title from the employee name, live") proves this
+directly: correcting an employee's name *after* release changes a previously-generated Bank
+Sheet's Account Title, while its bank/account/IBAN stay frozen. This exact behavior already existed
+for the Bank Sheet's "Employee Name" column before this refinement (pre-existing precedent, not
+newly introduced), and was already disclosed in the 2026-07-11 entry above — restated here because
+this review explicitly asked it not be softened. Preserving a frozen historical name would require
+a new `PayrollEntry`-level name-snapshot column, which is a schema decision beyond this approved
+banking refinement's scope — not implemented, not silently assumed away.
+
+Verification re-run in full after the fix: `prisma validate`/`generate`/`migrate deploy` clean, zero
+drift (no schema change this pass); typecheck/lint/build clean across shared/backend/frontend;
+backend tests 286/286 (one new XLSX-cell-value assertion added; one unrelated, pre-existing flaky
+performance test — `payroll-entry-performance.test.ts`'s query-plan check — failed once in the full
+suite and passed cleanly both standalone and on re-run, confirmed unrelated to this change by code
+inspection). **Still not committed** — pending this review's approval.
+
+**Rejected on review again, 2026-07-13 — two architectural corrections, superseding the 2026-07-12
+entry above.** (1) The "full `bank.name (code)`" display, added by the 2026-07-12 fix, was itself
+wrong for the Payroll Entry grid and the Bank Sheet table: both are dense grids where only the
+**Bank Code** should render (e.g. "HABIBMETRO", not "Habib Metropolitan Bank (HABIBMETRO)") —
+Employee Registry's own Bank dropdown is the one place the full "Bank Name (Code)" form stays,
+since it is a single selection control, not a dense grid, and the extra context is useful there.
+(2) The 2026-07-12 fix's own "explicit character-width budget" (Bank 280px, Account No. 260px,
+IBAN 300px) was itself exactly the kind of guessed fixed width the Layout Integrity rule always
+meant to forbid — a wide-enough guess still silently truncates the next value that happens to be
+longer. **Permanent Dynamic Width Rule, added this pass**: no column may use a guessed fixed pixel
+width; every business-data column sizes itself from the actual longest loaded header/value plus
+padding, with a fixed width reserved only for true UI controls (toggles, the serial column, the
+Units pill, Cash Receiving's Signature/Thumb Impression column) — never for text, numeric,
+identifier, or monetary columns.
+
+**Fixed**: `frontend/src/components/payroll-entry/measure-column-width.ts` (new) — a pure,
+dependency-free `measureColumnWidth({ header, values, paddingPx, minimumPx })` helper using
+verified per-character-class width estimates (digit/upper/lower/space/other, calibrated against
+real Playwright-measured font metrics), chosen over a Canvas/DOM measurement so it stays unit-
+testable in Node. `columns.ts` rewritten around a single `computeColumnWidths(entries, banks)`
+that resolves every `PAYROLL_COLUMNS` entry exactly once — `fixedWidth` for true controls,
+`measureColumnWidth` against the full loaded dataset for everything else — producing one
+`ResolvedPayrollColumnDef[]` that `gridTemplateColumns()`/`totalGridWidth()` both consume, so the
+grouped header, column header, virtualized body rows, and sticky totals row all share the exact
+same computed template (unchanged from the existing four-layer architecture, just now fed by one
+shared calculation instead of a static constant). Bank `<select>` reverted to rendering
+`bank.code` only. Bank Sheet's `BankSheetRow.bankName` renamed to `bankCode`
+(`bank-sheets.service.ts`), with a new `excelColumnWidth(header, values)` helper replacing the
+service's own hardcoded per-column Excel widths with a content-driven calculation; the Bank
+Sheet's own filter dropdown correctly keeps the full bank name (a selection control, same
+reasoning as Employee Registry). `ReadOnlyCell`'s `truncate` opt-out (added 2026-07-12) is
+retained. Guessed `min-w-[NNNpx]` wrapper widths removed from Bank Sheet, Cash Receiving, Advances,
+and Project Sites in favor of `min-w-full`/`overflow-x-auto` plus natural per-cell sizing; Project
+Sites' Address column's `max-w-[260px] truncate` + tooltip pattern removed in favor of
+`whitespace-nowrap` (full address always directly visible, not tooltip-only).
+
+**Historical-name finding restated, still unresolved, still not silently expanded:** Bank Sheet's
+Account Title remains a **live** `entry.employee.name` relation, not a frozen `PayrollEntry`
+snapshot — unchanged from the 2026-07-12 finding above. No new snapshot column was added this pass
+either; it remains a separate, explicitly-approved future decision.
+
+**Tests added**: `frontend/src/components/payroll-entry/measure-column-width.test.ts` (7 cases —
+header-floor, longest-value-wins, the 24-vs-34-character IBAN case, multi-row longest-wins, the
+explicit minimum floor, header-vs-content, determinism) and `columns.test.ts` (7 cases — Bank Code,
+not Name, drives the Bank column's width; a cash entry contributes "Cash"; IBAN widens for the
+34-character schema maximum; Account Number reflects the longest value across the whole dataset,
+not one row; fixed-width controls never resize; every `PAYROLL_COLUMNS` entry resolved exactly
+once, in order; the grouped-header/body/totals shared template sums to `totalGridWidth`) — the
+frontend workspace's first unit tests, run via a new Vitest config (Node environment, no jsdom,
+since only pure logic needed testing). `backend/tests/bank-sheets.test.ts` updated for
+`bankCode`, plus a new case rendering a full 34-character IBAN completely and an Excel
+column-width assertion matched to the new dynamic calculation instead of a stale hardcoded
+expectation.
+
+Verification re-run in full after this fix: `prisma validate`/`generate`/`migrate deploy` clean,
+zero drift; typecheck/lint/build clean across shared/backend/frontend (0 errors, same 4
+pre-existing `react-refresh` warnings); **backend 287/287**, **frontend unit tests 14/14** (new);
+real-stack Playwright verification against the live dev stack confirmed `scrollWidth`/`clientWidth`
+parity (zero internal overflow) for the Bank Code cell/control, Account Number cell/control, and
+IBAN cell/control in the Payroll Entry grid (using "HABIBMETRO", a 20-digit account number, both
+the 24-character canonical IBAN and a 34-character maximum-length IBAN), the Employee Registry Edit
+modal's Bank dropdown (confirmed still rendering "Habib Metropolitan Bank (HABIBMETRO)"), and the
+Bank Sheet table (Bank Code column, full Account Number, full IBAN) — screenshots captured as
+corroborating evidence. `phase3-payroll-entry-preview.html` and `phase4-bank-sheets-preview.html`
+updated to match (Bank Code only in the rendered table rows, natural `table-layout: auto` sizing,
+horizontal scroll as the escape valve); the other nine prototypes in scope were reviewed and found
+to already comply, so left unmodified. **Still not committed** — pending this review's approval.
+
+**One further defect found and fixed during this entry's own mandatory re-verification pass, before
+commit:** `measureColumnWidth`'s header-width estimate used a column header's literal-case label
+string (e.g. "Branch Code"), but the header cell itself renders with CSS `text-transform: uppercase`
+(`payroll-entry-grid.tsx`'s `role="columnheader"` class) — real uppercase glyphs are wider than the
+lowercase ones the estimate was weighting, so the "Branch Code" header underestimated its own real
+width and truncated by 3px (confirmed via Playwright DOM measurement: `scrollWidth` 91 vs
+`clientWidth` 88, `text-overflow: ellipsis` engaged). Every other header happened to have enough
+slack from its own content column to mask the same underlying gap. Fixed in
+`measure-column-width.ts` by measuring `header.toUpperCase()` for the header-width half of the
+calculation. Re-verified after the fix: frontend unit tests still 14/14 (no test asserted an exact
+header-width number), and a fresh Playwright pass against realistic longer values
+("DYNVERIFY-0001"/"DYNVERIFY-0002", `HABIBMETRO`, `PK36SCBL0000001123456702`, the 34-character IBAN
+maximum, a 20-digit and a 10-digit account number) found zero overflowing cells across Payroll
+Entry, Employee Registry, Bank Sheet (with entries actually released this time, not merely
+Draft), Cash Receiving, Advances, Project Sites, Settings → Banks, Salary Release, and Tasks — no
+console errors, no failed requests (one pre-existing, unrelated `401` on `/auth/me` at the
+unauthenticated `/login` boot check, confirmed present before any of this session's changes and
+reproducible with zero navigation). Full Definition of Done re-run clean after this fix:
+`prisma validate`/`generate`/`migrate deploy` (12 migrations, none pending, no drift);
+typecheck/lint/build clean across shared/backend/frontend (0 lint errors, same 4 pre-existing
+`react-refresh` warnings); **backend 287/287**; **frontend 14/14**.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

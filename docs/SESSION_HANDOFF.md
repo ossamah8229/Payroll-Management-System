@@ -45,7 +45,26 @@ be enough to resume correctly without re-deriving context from scratch — per
   Phase 7 — documentation-only) → `477fbb1` (Phase 4 Checkpoint 4 — Cash Receiving Sheets —
   implementation, reviewed, verified, and committed) → `d1c9dd1` (doc-only commit hash record,
   closing Checkpoint 4) → `75c5e64` (Phase 4 Checkpoint 5 — Advances — implementation, reviewed,
-  verified, and committed).
+  verified, and committed) → `f002072` (doc-only commit hash record, closing Checkpoint 5) →
+  `3c05f5e` (Phase 1–3 HTML prototype reconciliation, docs-only).
+- **Uncommitted, current working tree (2026-07-11): a post-Phase-4 banking refinement — explicitly
+  NOT Phase 4 Checkpoint 6, not Payslips, not Company Bank Account.** `Employee`/`PayrollEntry.
+  accountTitle` removed entirely (clean, destructive migration); `iban` added to both; a new
+  banking invariant (bank employee requires Account Number, cash employee has neither); Bank
+  Sheet's "Title of Account" now derives from the employee name instead of a stored field; a
+  permanent Layout Integrity Rule for business-critical identifiers. Full record:
+  `docs/PROJECT_PROGRESS.md` §1's "Post-Phase-4 refinement" entry.
+- **That same working tree, corrected 2026-07-12: the 2026-07-11 pass's Layout Integrity fix was
+  rejected on review and re-done.** Root cause was not the column-width numbers alone — Payroll
+  Entry's Bank `<select>` showed only `bank.code`, and `ReadOnlyCell` silently ellipsis-clipped
+  Employee Code. Fixed, and this time verified with a real, in-session-provisioned headless
+  browser (live DOM measurements: zero `scrollWidth`/`clientWidth` overflow for Bank/Account
+  Number/IBAN across Payroll Entry, Employee Registry, and Bank Sheet). 286/286 backend tests,
+  typecheck/lint/build all clean. Full record: `docs/PROJECT_PROGRESS.md` §1's dated correction
+  under the "Post-Phase-4 refinement" entry. **Per explicit instruction, still nothing staged or
+  committed; still pending review.** The next session's first action, if this hasn't been reviewed
+  yet, is to pick up review from here rather than assuming it's safe to build on top of or to start
+  Payslip generation.
 - **Phase 4, Checkpoint 1 (Bank Registry) is reviewed, approved, verified, and COMMITTED as
   `7c2cdb5`.** Master User management of the Bank Registry (create/edit/activate/deactivate, delete
   blocked while referenced, the reserved/protected `CASH` system record, `banks:manage`

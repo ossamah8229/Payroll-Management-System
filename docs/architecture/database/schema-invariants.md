@@ -233,6 +233,12 @@ changes to `PayrollEntry`'s calculation logic or `PayrollCycle`'s state machine:
   genuinely destructive migration** — low practical risk only because it has never been applied to a
   live database (it shipped in Phase 1's initial migration but no Postgres instance has run it yet),
   and it carries the explicit sign-off this bullet requires, recorded in `docs/PROJECT_PROGRESS.md`.
+  **The 2026-07-11 `Employee.accountTitle`/`PayrollEntry.accountTitle` removal is this project's
+  second** — a materially higher-risk case than the first, since both columns had been live since
+  Phase 2/Phase 3 Checkpoint 0 respectively (unlike `branchCode`, never applied to a live database).
+  Explicitly authorized with full awareness of that risk ("this project is still pre-production... do
+  not leave deprecated columns behind"), rather than this bullet's own default recommendation of a
+  non-destructive soft-deprecation — recorded in `docs/PROJECT_PROGRESS.md`.
 - Initial migration creates tables in dependency order: `Role`, `Permission`, `RolePermission`,
   `Bank`, `AdjustmentType` → `User`, `ProjectSite` → `ProjectUnit` → `UserSiteAssignment`, `Employee` →
   `EmployeeTransferHistory` → `PayrollCycle` → `PayrollEntry` → `PayrollEntryWorkLine` → `Correction` →

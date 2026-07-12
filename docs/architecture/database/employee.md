@@ -122,8 +122,8 @@ cycle (`PayrollEntryWorkLine`, `database/payroll-entry.md §12a`) leaves this de
 | `grossPay` | numeric(12,2) | no | — | current/base gross pay — **template value only**; each cycle's actual `PayrollEntry.grossPay` is what's authoritative for that month, see `database/payroll-entry.md §12`. **Verified 2026-07-03**: nothing in `reference/PROJECT_SPEC.md` or this schema suggests gross pay varies by which unit an employee works — only the day-rate *basis* (cycle days, OT rate, leave rate) is documented as location-varying, previously by site and now by unit (`database/payroll-entry.md §12a`). `grossPay` stays a single scalar here and on `PayrollEntry`. |
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT`; null = no bank on file |
 | `branchCode` | varchar(20) | yes | — | **the employee's own bank branch code** — unrelated to `ProjectUnit.code` (`database/sites-and-units.md §8a`) or the removed `ProjectSite.branchCode` (`database/sites-and-units.md §8`); three different "branch code" concepts have existed across this schema's history, and this is the one that survives unchanged: an employee's bank account's branch code, nothing to do with where they're deputed |
-| `accountNumber` | varchar(40) | yes | — | null + null `bankId` ⇒ cash payment (derived rule, applied wherever bank-account presence is checked — e.g. Bank Sheet vs. Cash Receiving eligibility) |
-| `accountTitle` | varchar(160) | yes | — | |
+| `accountNumber` | varchar(40) | yes | — | null + null `bankId` ⇒ cash payment (derived rule, applied wherever bank-account presence is checked — e.g. Bank Sheet vs. Cash Receiving eligibility). **Banking rule (2026-07-11):** required whenever `bankId` is set — enforced server-side against the merged post-update state (`employees.service.ts`'s `applyBankingInvariant`), never entered-but-ignored |
+| `iban` | varchar(34) | yes | — | **Added 2026-07-11, replacing `accountTitle` (removed the same pass — no longer stored anywhere).** Optional even for a bank employee (many employees operationally don't know or provide one); stored trimmed and uppercase, displayed exactly as stored, never truncated (the permanent Layout Integrity Rule). 34 chars is the ISO 13616 international maximum; a Pakistani IBAN is 24. A cash employee (`bankId` null) always has `accountNumber`/`iban` both null too — enforced the same way |
 | `defaultEobiAmount` | numeric(10,2) | no | `400.00` | seeds a new `PayrollEntry.eobiAmount` when this employee is first added to a cycle |
 | `defaultEobiApplicable` | boolean | no | `true` | seeds `PayrollEntry.eobiApplicable`; some employees are exempt |
 | `createdAt` | timestamptz | no | `now()` | |
@@ -134,7 +134,10 @@ cycle (`PayrollEntryWorkLine`, `database/payroll-entry.md §12a`) leaves this de
   §26`; `(unitId, siteId)` composite FK target consumed from `ProjectUnit`, not a uniqueness rule on
   this table itself
 - **Check constraints:** `grossPay >= 0`; `defaultEobiAmount >= 0`; `cnic` matches a 13-digit numeric
-  pattern when present
+  pattern when present. **`iban` deliberately has no format/checksum constraint** (2026-07-11) — unlike
+  `cnic`, it follows `accountNumber`/`branchCode`'s existing precedent of a free-form, length-capped
+  string; a wrong-format IBAN is a data-entry problem for whoever submits the Bank Sheet to the bank,
+  not a condition this schema rejects
 - **Indexes:** partial unique(`cnic`) — this is also the primary lookup index for CNIC-based search;
   partial unique(`employeeCode`); (`siteId`); (`unitId`) for the "employees at this unit" query;
   partial index `WHERE dateOfLeaving IS NULL` (active employees, the common-case filter); optional

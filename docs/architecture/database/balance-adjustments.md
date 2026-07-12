@@ -119,7 +119,7 @@ than duplicating it.
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT` — snapshot copied from `Employee`/`PayrollEntry` at payment time, **copied not linked**, same convention as `PayrollEntry`'s own bank fields (`database/payroll-entry.md §12`), so a later `Employee` bank-detail change never retroactively alters a historical payment record |
 | `branchCode` | varchar(20) | yes | — | snapshot, same convention |
 | `accountNumber` | varchar(40) | yes | — | snapshot, same convention; null + null `bankId` ⇒ cash payment, same derived rule as everywhere else this is checked |
-| `accountTitle` | varchar(160) | yes | — | snapshot, same convention |
+| `iban` | varchar(34) | yes | — | snapshot, same convention. **Not `accountTitle`** — removed 2026-07-11 (Employee/PayrollEntry banking refinement) before this Phase 6 table was ever built; whoever implements this table should snapshot `iban`, matching `Employee`/`PayrollEntry`, never reintroduce a stored Account Title |
 | `paidAt` | timestamptz | no | `now()` | |
 | `paidById` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — the Finance user who executed the payment |
 

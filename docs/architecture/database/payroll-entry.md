@@ -59,7 +59,7 @@ of the Payroll Entry grid (a later, UI-focused checkpoint's concern).
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT` — copied from `Employee` at entry creation, then ordinarily Draft-editable |
 | `branchCode` | varchar(20) | yes | — | the employee's own bank branch code, copied from `Employee` at entry creation, then ordinarily Draft-editable — unrelated to `ProjectUnit.code` (`database/sites-and-units.md §8a`), same distinction noted in `database/employee.md §9` |
 | `accountNumber` | varchar(40) | yes | — | copied from `Employee` at entry creation, then ordinarily Draft-editable |
-| `accountTitle` | varchar(160) | yes | — | copied from `Employee` at entry creation, then ordinarily Draft-editable |
+| `iban` | varchar(34) | yes | — | **Added 2026-07-11, replacing `accountTitle` (removed the same pass — no longer stored anywhere on this table either).** Copied from `Employee` at entry creation, then ordinarily Draft-editable, same as every other banking field here. Bank Sheet's "Title of Account" column (the frozen client format still requires one) is derived from this entry's own `employee.name` at read time instead — see `database/relationships.md`'s Bank Sheets note and `bank-sheets.service.ts`'s `buildRow` |
 | `grossPay` | numeric(12,2) | no | — | this cycle's gross pay — editable in Draft; a single scalar regardless of how many units this cycle's work lines cover, see the 2026-07-03 revision note above |
 | `allowance` | numeric(12,2) | no | `0` | |
 | `leaveDays` | numeric(5,2) | no | `0` | claimed leave — stays employee-level, not attributed to a specific unit: leave is absence from work entirely, not location-specific attendance |
@@ -99,6 +99,15 @@ Sheets, Cash Receiving, and reports is always enforced against `PayrollEntry.sit
 `Employee.siteId`** — for both current and historical cycles, one consistent rule, with no time-based
 special case and no risk of a row disappearing from a Payroll Staff or Finance user's view mid-session
 because of an unrelated `Employee` edit.
+
+**Banking rule (2026-07-11):** a cash entry (`bankId` null) always has `accountNumber`/`iban` both
+null too. Unlike `Employee`'s own create/update, which hard-rejects setting a bank with no Account
+Number (full-form submission, `employees.service.ts`'s `applyBankingInvariant`), `updatePayrollEntry`
+only ever *normalizes* — clearing `bankId` in a request also clears `accountNumber`/`iban` in that
+same write, even if the request didn't mention them, but setting `bankId` alone is never rejected for
+a missing Account Number. This is a deliberate difference, not an inconsistency: this grid autosaves
+one field at a time as the user tabs between cells, so a user who has just picked a bank and hasn't
+yet typed the account number must not have that in-progress edit rejected.
 
 - **Unique constraints:** (`cycleId`, `employeeId`) — exactly one entry per employee per cycle
 - **Check constraints:** `grossPay >= 0`; `allowance >= 0`; `leaveDays >= 0`; `eobiAmount >= 0`;
