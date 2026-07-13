@@ -75,6 +75,15 @@ generation, under real measured load) decides a Payslip PDF *cache* is actually 
 would go through `StorageProvider` at that time — it does not exist today, and Checkpoint 6.2 does
 not depend on it.
 
+**Resolved 2026-07-13 (Phase 4 Checkpoint 6.3) — batch generation did not end up needing a cache or
+`StorageProvider` either.** The speculative note above is now closed: Checkpoint 6.3's batch/ZIP
+endpoint streams each Payslip PDF directly into the HTTP response as it's rendered
+(`archiver` piped straight to `res`), with bounded render concurrency, not a persisted or cached
+artifact. Under the measured load this checkpoint actually tested (up to the enforced 300-employee
+cap), a cache was not justified — the same "regenerate identically from a released `PayrollEntry`"
+guarantee that let Checkpoint 6.2 skip `StorageProvider` still holds. `StorageProvider` remains
+Phase 5's own prerequisite (`BackupPackage`), unchanged by this checkpoint.
+
 **Deletion is restricted and audited.** Generated payroll artifacts persisted via `StorageProvider`
 (bank sheets/statements once they exist as stored files, backup packages) are financial records —
 deleting one is itself an action that should go through the Audit Log, not a bare storage call

@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 4 Visual Preview — Payslips — Payroll Management System</title>
+<style>
+  :root {
+    --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
+    --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #9c978f;
+    --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
+    --color-green: #1a6b3a; --color-green-light: #e8f5ee;
+    --color-amber: #8b5e00; --color-amber-light: #fff8e6;
+    --color-red: #8b1a1a; --color-red-light: #fbe8e8;
+    --color-purple: #4a2080; --color-purple-light: #f0ebf8;
+    --radius: 8px; --radius-lg: 12px;
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; }
+  .meta-banner { background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .meta-banner strong { color: #fff; }
+  .meta-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
+  .meta-tabs button.is-active { background: #fff; color: var(--accent); }
+  .screen { display: none; }
+  .screen.is-active { display: block; }
+  .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 34px; font-size: 12px; }
+  .btn-sm { padding: 0 10px; height: 30px; font-size: 11px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:disabled { background: var(--color-border-strong); cursor: not-allowed; }
+  .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+  .app-shell { display: flex; height: calc(100vh - 37px); overflow: hidden; background: var(--color-bg); }
+  .sidebar { position: fixed; inset: 37px 0 0 0; width: 220px; display: flex; flex-direction: column; background: var(--accent); }
+  .sidebar-brand { border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px 16px 16px; }
+  .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
+  .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.35); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
+  .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .avatar-on-accent { background: rgba(255,255,255,0.2); color: #fff; }
+  .avatar-on-surface { background: var(--accent-light); color: var(--accent); }
+  .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
+  .sidebar-footer .who-role { font-size: 10px; color: rgba(255,255,255,0.5); }
+  .main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { flex-shrink: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
+  .topbar .title { font-size: 15px; font-weight: 600; }
+  .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .task-bell { position: relative; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-text-muted); background: transparent; border: none; }
+  .main-content { flex: 1; overflow-y: auto; padding: 28px; }
+  .card-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
+  .card-header-top { display: flex; align-items: center; gap: 10px; width: 100%; }
+  .card-title { font-size: 13px; font-weight: 600; margin: 0; }
+  .filters-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; width: 100%; margin-top: 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
+  .field .hint-inline { font-size: 10px; color: var(--color-text-faint); }
+  select, input[type="text"] { height: 34px; min-width: 150px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+  .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
+  .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
+  .badge-green { background: var(--color-green-light); color: var(--color-green); }
+  .badge-red { background: var(--color-red-light); color: var(--color-red); }
+  .muted { color: var(--color-text-muted); }
+  .selection-bar { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+  .selection-count { font-size: 11.5px; color: var(--color-text-muted); }
+  .selection-count.is-over { color: var(--color-red); font-weight: 600; }
+  .generating { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--color-text-muted); }
+  .spinner { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--color-border); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .banner-note { font-size: 11px; padding: 8px 18px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); }
+  .banner-note.is-warn { background: var(--color-amber-light); color: var(--color-amber); }
+  .table-scroll { overflow-x: auto; }
+  table.data-table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 12px; }
+  table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table td.actions { text-align: right; }
+  table.data-table td.actions .btn { margin-left: 6px; }
+  .hint { font-size: 11px; color: var(--color-text-muted); margin: 0; line-height: 1.5; padding: 14px 18px; }
+  footer.note { padding: 14px 28px 28px; font-size: 11px; color: var(--color-text-faint); }
+
+  /* Printable Payslip document — deliberately a second, separate typography system
+     (docs/design-system.md §3: "do not unify it with the UI font") */
+  .doc-paper { border: 1px solid #333; padding: 16px 20px; font-family: "Times New Roman", Times, Georgia, serif; color: #1a1a1a; background: #fff; max-width: 720px; margin: 24px auto; }
+  .doc-title-row { display: flex; justify-content: space-between; font-size: 11pt; border-top: 1px solid #333; border-bottom: 1px solid #333; padding: 4px 0; margin-bottom: 8px; }
+  .doc-company { text-align: center; margin-bottom: 12px; }
+  .doc-company .name { font-size: 15pt; font-weight: bold; }
+  .doc-company .detail { font-size: 9pt; color: #333; }
+  .doc-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 24px; font-size: 10.5pt; margin-bottom: 12px; }
+  .doc-info-grid b { font-weight: bold; }
+  .doc-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  table.doc-table { width: 100%; border-collapse: collapse; font-size: 10.5pt; }
+  table.doc-table caption { text-align: left; font-weight: bold; padding-bottom: 4px; caption-side: top; }
+  table.doc-table th, table.doc-table td { border-bottom: 1px solid #ccc; padding: 3px 4px; text-align: left; }
+  table.doc-table td.amt, table.doc-table th.amt { text-align: right; }
+  table.doc-table tfoot td { font-weight: bold; border-top: 2px solid #333; border-bottom: none; }
+  .doc-net { text-align: center; font-size: 13pt; font-weight: bold; margin-top: 14px; padding-top: 8px; border-top: 1px solid #333; }
+  .doc-footer { text-align: center; margin-top: 16px; font-size: 9pt; color: #333; }
+</style>
+</head>
+<body>
+
+  <div class="meta-banner">
+    <span><strong>Static visual preview</strong> — reproduces the implemented Payslips UI and the printable Payslip document (Phase 4 Checkpoints 6.1–6.3) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <div class="meta-tabs">
+      <button type="button" class="is-active" data-target="screen-list">List &amp; selection</button>
+      <button type="button" data-target="screen-overlimit">Over the 300 limit</button>
+      <button type="button" data-target="screen-generating">Batch generating</button>
+      <button type="button" data-target="screen-document">Printable Payslip</button>
+      <button type="button" data-target="screen-empty">Empty state</button>
+      <button type="button" data-target="screen-no-access">No access</button>
+    </div>
+  </div>
+
+  <!-- ================= LIST + SELECTION SCREEN ================= -->
+  <section id="screen-list" class="screen is-active">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Overview</div>
+          <a href="#" class="nav-item"><span>▦</span> Dashboard</a>
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item"><span>▤</span> Payroll Entry</a>
+          <a href="#" class="nav-item"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item"><span>🏦</span> Bank Sheet</a>
+          <a href="#" class="nav-item"><span>👛</span> Cash Receiving</a>
+          <a href="#" class="nav-item"><span>🤝</span> Advances</a>
+          <a href="#" class="nav-item is-active"><span>📄</span> Payslips</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">FN</div>
+          <div><div class="who-name">Farah Naveed</div><div class="who-role">Finance</div></div>
+        </div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar">
+          <div>
+            <div class="title">Payslips</div>
+            <div class="subtitle">Generate and download employee Payslips</div>
+          </div>
+          <div class="topbar-right">
+            <button class="task-bell">📋</button>
+            <div class="avatar avatar-on-surface">FN</div>
+          </div>
+        </header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-header-top">
+                <h3 class="card-title">Payslips</h3>
+                <span class="badge badge-gray">July 2026</span>
+              </div>
+              <div class="filters-row">
+                <div class="field"><label>Cycle</label><select><option>July 2026 (Draft)</option><option>June 2026</option></select></div>
+                <div class="field"><label>Site</label><select><option>All Sites</option></select></div>
+                <div class="field">
+                  <label>Unit</label>
+                  <select><option>All Units</option></select>
+                  <span class="hint-inline">Select one Site to filter by Unit</span>
+                </div>
+                <div class="field"><label>Search</label><input type="text" placeholder="Name, code, or CNIC" /></div>
+                <div class="selection-bar">
+                  <span class="selection-count">3 selected</span>
+                  <button class="btn btn-primary btn-sm">⬇ Download selected Payslips</button>
+                </div>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th style="width:32px;"><input type="checkbox" checked /></th>
+                    <th>Employee Code</th><th>Employee Name</th><th>Designation</th><th>Site</th>
+                    <th style="text-align:right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><input type="checkbox" checked /></td>
+                    <td>EMP-0305</td><td>Imran Sheikh</td><td>Security Guard</td><td>ABL City Region Lahore</td>
+                    <td class="actions"><button class="btn btn-secondary btn-sm">👁 Preview</button><button class="btn btn-secondary btn-sm">⬇ Download</button></td>
+                  </tr>
+                  <tr>
+                    <td><input type="checkbox" checked /></td>
+                    <td>EMP-0341</td><td>Rashid Nawaz</td><td>Office Assistant</td><td>ABL City Region Lahore</td>
+                    <td class="actions"><button class="btn btn-secondary btn-sm">👁 Preview</button><button class="btn btn-secondary btn-sm">⬇ Download</button></td>
+                  </tr>
+                  <tr>
+                    <td><input type="checkbox" checked /></td>
+                    <td>EMP-0378</td><td>Kiran Bibi</td><td>Cash Van Driver</td><td>Islamabad Corporate Tower</td>
+                    <td class="actions"><button class="btn btn-secondary btn-sm">👁 Preview</button><button class="btn btn-secondary btn-sm">⬇ Download</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              "Select all" (the header checkbox) means every employee currently loaded by this
+              picker under the active filters — never the whole company, never an employee outside
+              the caller's own site scope. Changing Cycle, Site, Unit, or Search always clears the
+              current selection outright, so a filter change can never silently submit a
+              no-longer-visible employeeId. The backend independently re-verifies site scope,
+              released/non-held status, and the 300-employee cap on every request regardless — this
+              page's own bookkeeping is a convenience, never the real control.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OVER THE 300 LIMIT SCREEN ================= -->
+  <section id="screen-overlimit" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span>📄</span> Payslips</a>
+        </nav>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Payslips</div></header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-header-top"><h3 class="card-title">Payslips</h3><span class="badge badge-gray">July 2026</span></div>
+              <div class="filters-row">
+                <div class="field"><label>Site</label><select><option>All Sites</option></select></div>
+                <div class="selection-bar">
+                  <span class="selection-count is-over">312 selected — exceeds the 300 limit, deselect some</span>
+                  <button class="btn btn-primary btn-sm" disabled>⬇ Download selected Payslips</button>
+                </div>
+              </div>
+            </div>
+            <div class="banner-note is-warn">
+              312 of 850 matching employees are currently selected, above the 300-Payslip maximum
+              per batch request. The Download button stays disabled until the selection is at or
+              below the limit — narrow the Site/Unit/Search filters, or manually deselect rows, to
+              continue. This limit is enforced server-side regardless of anything shown here.
+            </div>
+            <p class="hint" style="padding-top: 4px;">
+              850 of 850 matching employees shown (page size ceiling) — narrowing filters also
+              reduces how many rows exist to select from in the first place.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= BATCH GENERATING SCREEN ================= -->
+  <section id="screen-generating" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span>📄</span> Payslips</a>
+        </nav>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Payslips</div></header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-header-top"><h3 class="card-title">Payslips</h3><span class="badge badge-gray">July 2026</span></div>
+              <div class="filters-row">
+                <div class="field"><label>Site</label><select><option>All Sites</option></select></div>
+                <div class="selection-bar">
+                  <span class="generating"><span class="spinner"></span> Generating 47 Payslips…</span>
+                  <button class="btn btn-secondary btn-sm">✕ Cancel</button>
+                </div>
+              </div>
+            </div>
+            <p class="hint">
+              A real, streamed HTTP response — bytes start arriving as soon as the first Payslip is
+              ready, there is no percentage progress to report honestly (no fake progress bar), and
+              no job/queue is involved. Cancel aborts the in-flight request; the server stops
+              scheduling any further Payslip renders as soon as it observes the disconnect (renders
+              already in flight are allowed to finish), and records the batch as cancelled in the
+              Audit Log with whatever counts were achieved so far.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PRINTABLE PAYSLIP DOCUMENT ================= -->
+  <section id="screen-document" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span>📄</span> Payslips</a>
+        </nav>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Payslip Preview — Imran Sheikh</div></header>
+        <main class="main-content">
+          <div class="doc-paper">
+            <div class="doc-title-row">
+              <span>Salary Slip FTM of: July 2026</span>
+              <span>Pay Period: 01-07-2026 &ndash; 31-07-2026</span>
+            </div>
+            <div class="doc-company">
+              <div class="name">Broom Services (Private) Limited</div>
+              <div class="detail">Plot 1, Blue Area, Islamabad</div>
+            </div>
+            <div class="doc-info-grid">
+              <div><b>Employee Name:</b> Imran Sheikh</div>
+              <div><b>Father Name:</b> Muhammad Sheikh</div>
+              <div><b>Account Number:</b> 1234567890123</div>
+              <div><b>CNIC:</b> 35201-9988877-1</div>
+              <div><b>Designation:</b> Security Guard</div>
+              <div><b>Deputed Location:</b> ABL City Region Lahore</div>
+            </div>
+            <div class="doc-columns">
+              <table class="doc-table">
+                <caption>EARNING</caption>
+                <thead><tr><th>Description</th><th class="amt">Days/Hours</th><th class="amt">Amount</th></tr></thead>
+                <tbody>
+                  <tr><td>Basic Pay</td><td class="amt"></td><td class="amt">PKR 30,000.00</td></tr>
+                  <tr><td>Working Days</td><td class="amt">28</td><td class="amt">PKR 28,000.00</td></tr>
+                  <tr><td>Overtime</td><td class="amt">6</td><td class="amt">PKR 750.00</td></tr>
+                  <tr><td>Allowance</td><td class="amt"></td><td class="amt">PKR 1,500.00</td></tr>
+                  <tr><td>Claimed Leaves</td><td class="amt">1</td><td class="amt">PKR 1,000.00</td></tr>
+                </tbody>
+                <tfoot><tr><td>Total Earning</td><td></td><td class="amt">PKR 31,250.00</td></tr></tfoot>
+              </table>
+              <table class="doc-table">
+                <caption>DEDUCTION</caption>
+                <thead><tr><th>Description</th><th class="amt">Amount</th></tr></thead>
+                <tbody>
+                  <tr><td>Absent/Late</td><td class="amt">PKR 0.00</td></tr>
+                  <tr><td>EOBI Contribution</td><td class="amt">PKR 400.00</td></tr>
+                  <tr><td>Advance salaries/loan</td><td class="amt">PKR 2,000.00</td></tr>
+                  <tr><td>Eid Advance</td><td class="amt">PKR 0.00</td></tr>
+                </tbody>
+                <tfoot><tr><td>Total Deduction</td><td class="amt">PKR 2,400.00</td></tr></tfoot>
+              </table>
+            </div>
+            <div class="doc-net">Net Salary: PKR 28,850.00</div>
+            <div class="doc-footer">Generated by Farah Naveed on 12-07-2026</div>
+          </div>
+          <p class="hint" style="max-width:720px; margin:0 auto;">
+            Opened via the existing single-PDF endpoint (<code>GET .../payslips/:employeeId/pdf</code>)
+            in a new browser tab for preview (<code>?disposition=inline</code>, the browser's own
+            native PDF viewer) or downloaded directly (<code>?disposition=attachment</code>) — there
+            is no separate HTML preview route and no second React implementation of this layout
+            (Checkpoint 6.2's own architecture decision). Every figure shown is read from the
+            already-assembled Payslip JSON (<code>calcNet</code>'s own output), formatted via the
+            shared <code>formatMoney</code>/<code>formatDate</code> utilities, never recomputed.
+          </p>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= EMPTY STATE SCREEN ================= -->
+  <section id="screen-empty" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span>📄</span> Payslips</a>
+        </nav>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Payslips</div></header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-header-top"><h3 class="card-title">Payslips</h3><span class="badge badge-gray">July 2026</span></div>
+              <div class="filters-row">
+                <div class="field"><label>Cycle</label><select><option>July 2026 (Draft)</option></select></div>
+                <div class="field"><label>Site</label><select><option>Islamabad Corporate Tower</option></select></div>
+              </div>
+            </div>
+            <div style="padding:56px 20px; text-align:center;">
+              <p style="font-weight:600; margin:0 0 4px;">No released Payslips for this selection</p>
+              <p class="muted" style="margin:0; max-width:440px; margin-inline:auto;">
+                Payslips are only available for released, non-held payroll — release the relevant
+                Project Unit(s) first (Salary Release), or try a different filter.
+              </p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= NO ACCESS SCREEN ================= -->
+  <section id="screen-no-access" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item"><span>💵</span> Salary Release</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">NA</div>
+          <div><div class="who-name">No Access Demo</div><div class="who-role">Custom role, no payslips:view</div></div>
+        </div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div class="title">Payslips</div></header>
+        <main class="main-content">
+          <div class="card">
+            <div style="padding:56px 20px; text-align:center;">
+              <p style="font-weight:600; margin:0 0 4px;">You don't have access to Payslips</p>
+              <p class="muted" style="margin:0;">Contact a Master Admin if you believe this is a mistake.</p>
+            </div>
+          </div>
+          <p class="hint" style="max-width:640px; margin: 12px auto 0;">
+            "Payslips" is absent from the sidebar entirely for a user without <code>payslips:view</code>
+            (a UX convenience only — Sidebar visibility is never the real access control). Direct
+            navigation to <code>/payslips</code>, or a direct API call to any Payslips route, is
+            independently rejected server-side (403) regardless of the sidebar. Verified with a real
+            headless-browser session against the live app, not just by inspection.
+          </p>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <footer class="note">
+    Generated 2026-07-12 for Phase 4 Checkpoints 6.1–6.3 (Payslips: backend foundation, PDF Engine,
+    Frontend/Batch Generation/Close-Out) from <code>frontend/src/routes/payslips-page.tsx</code>,
+    <code>frontend/src/hooks/use-payslips.ts</code>, <code>backend/src/modules/payslips/</code>, and
+    <code>backend/src/lib/pdf/</code>.
+    <br /><br />
+    <strong>Scope, matching the implemented checkpoints exactly:</strong> a dedicated
+    <code>payslips:view</code> permission (Master Admin, Payroll Staff, Finance) — never a reuse of
+    <code>payroll:entry</code>/<code>payroll:view</code>/<code>bank-sheets:view</code>, since an
+    individual Payslip discloses one employee's own net-salary breakdown, materially more sensitive
+    than any aggregate sheet. Individual PDF preview/download reuses the single-PDF endpoint
+    directly (<code>?disposition=inline|attachment</code>) — no second HTML template. Batch
+    generation is bounded, stateless ZIP streaming (<code>archiver</code>, a warm shared Puppeteer
+    browser, bounded render concurrency) capped at exactly 300 Payslips per request
+    (<code>MAX_BATCH_PAYSLIPS_PER_REQUEST</code>) — never a queue, job table, or persisted archive.
+    A single employee's render failure never aborts the batch; the resulting ZIP gains a
+    <code>_summary.txt</code> naming any failures by employee code/id only (never a stack trace, SQL
+    detail, or filesystem path). One <code>payslip.batch_exported</code> Audit Log entry is written
+    per batch request (never one per employee); the existing <code>payslip.exported</code> action
+    stays reserved for the single-PDF endpoint alone.
+    <br /><br />
+    <strong>Explicitly deferred, not silently carried into this phase or the next without saying
+    so:</strong> a genuinely company-wide "generate every Payslip in the cycle at once" archive is
+    Phase 5's job (<code>BackupPackage</code>/<code>StorageProvider</code>, a persisted artifact, not
+    yet built) — this checkpoint's batch endpoint is for realistic, operator-filtered selections up
+    to the 300 cap, not an unconditional whole-company export. <code>CompanySettings</code> is read
+    live at render time, not snapshotted (an accepted, documented gap, same category as the
+    pre-6.1 employee-name gap it closed). Employee Statements remain Phase 7 scope, unaffected by
+    any of this work.
+  </footer>
+
+  <script>
+    document.querySelectorAll('.meta-tabs button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.meta-tabs button').forEach(function (b) { b.classList.remove('is-active'); });
+        document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
+        btn.classList.add('is-active');
+        document.getElementById(btn.dataset.target).classList.add('is-active');
+      });
+    });
+  </script>
+</body>
+</html>

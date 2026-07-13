@@ -2842,6 +2842,187 @@ checklist — one correction made, six confirmed clean:**
 
 No other Checkpoint 6.2 file required a change. Committed as `093a9df`.
 
+### Phase 4, Checkpoint 6.3 — Payslip Frontend, Batch Generation, and Phase 4 Close-Out (2026-07-13)
+
+Preceded by a dedicated, read-only architecture review (no files touched), approved with
+refinements: bounded stateless ZIP streaming, no Redis/queue/job table/persisted artifact, a named
+`300` constant (not an approximate range), validation completed before any streaming begins.
+
+**Checkpoint 6.3.1 — Bulk Payslip assembly, one shared builder.** `payslips.service.ts` gained
+`toPayslipCompany()` (factored out of `getPayslip()`, now shared) and `getPayslipsBulk(currentUser,
+cycleId, filters)`: one `PayrollEntry.findMany` (same `include` shape as the individual endpoint),
+one `CompanySettings` read, every row mapped through the same `buildPayslip()` — no duplicated
+`calcNet`/release/hold/snapshot/formatting rule anywhere. `BulkPayslipFilters` supports explicit
+`employeeIds` plus `siteIds`/`unitIds`/`search`; site scope is enforced the same way
+`listPayslips()` already enforces it (silent exclusion of out-of-scope IDs, never a 403 for a
+mixed valid/invalid batch). `ListPayslipsFilters` gained `unitIds` for parity. `generatePayslipPdf`
+was refactored to call a new extracted `renderPayslipPdfBuffer(payslip, meta)` — the same function
+the batch route calls once per employee, so there is exactly one PDF-rendering call path for both
+individual and batch generation.
+
+**Checkpoint 6.3.2 — Batch PDF/ZIP endpoint.** `POST /api/v1/payroll-cycles/:cycleId/payslips/
+batch`, gated by the existing `payslips:view` permission (no new key — see the "Payslips: a
+dedicated permission" note in `docs/architecture/authentication.md`, extended this checkpoint to
+cover batch/ZIP generation explicitly). Request body validated by `shared/src/schemas/payslip.ts`'s
+`batchPayslipsSchema` (`employeeIds: z.array(z.string().uuid()).min(1).max(MAX_BATCH_PAYSLIPS_PER_
+REQUEST)`) **before any database query** — the 301-item case is rejected at the schema layer,
+never touching Prisma. `MAX_BATCH_PAYSLIPS_PER_REQUEST = 300` (`shared/src/constants/payslips.ts`,
+an exact named constant, not an approximate range). After `getPayslipsBulk()` resolves the eligible
+set (server-side site scope + released/non-held enforced identically to every other Payslip read),
+a **canary render**: the first Payslip is fully rendered before any HTTP header is sent, so a
+systemic Puppeteer failure (e.g. the shared browser singleton is dead) produces a clean JSON error
+rather than a truncated ZIP already in flight. Only after the canary succeeds does the route set
+`Cache-Control: no-store`, `Content-Type: application/zip`, `Content-Disposition: attachment`, and
+begin piping an `archiver('zip', { zlib: { level: 6 } })` stream directly into `res` — no temp file,
+no full-ZIP memory buffer, no persisted artifact. Remaining employees render in chunks of
+`BATCH_RENDER_CONCURRENCY = 4` (the same bounded-`Promise.allSettled`-over-chunks pattern already
+used by `payroll-processing.service.ts`), reusing the one warm Chromium instance from Checkpoint
+6.2; every Puppeteer page is closed via the existing `render-pdf.ts` `finally` block regardless of
+success or failure. `res.on('close')` is checked before scheduling each further chunk, so a client
+disconnect stops new PDF work immediately (renders already in flight are allowed to finish, not
+aborted mid-page). Archive entry names are collision-proof:
+`buildArchiveEntryName()`/`slugify()` (exported, pure functions) strip everything outside
+`[a-z0-9]` from `{employeeCode-or-shortId}-{employeeName}`, guaranteeing no path traversal,
+slash/backslash, quote, or CR/LF can reach the ZIP's central directory, with a `usedNames: Set`
+providing a numeric-suffix fallback for genuine collisions (verified as pure unit tests — a real
+duplicate-`employeeCode` HTTP test was blocked by the DB's own unique constraint, which is itself
+evidence the constraint works).
+
+**Partial failure, deliberately defined:** one employee's render failure never aborts the batch —
+it's logged (employeeId/entryId only, never the underlying error's message/stack/SQL) and the ZIP
+gains a `_summary.txt` listing which employees failed, by code/ID, with a generic reason string,
+whenever `failureCount > 0`. **All-fail-via-canary, deliberately defined:** if the very first
+(canary) employee fails, the whole request fails with a clean JSON error and zero bytes are ever
+sent — there is nothing to summarize inside a ZIP that was never started, so this case does not
+produce a `_summary.txt`-only empty archive; it produces a normal error response, consistent with
+every other Payslip failure mode in this codebase. No automatic retry this checkpoint, per the
+approved scope.
+
+**Audit — exactly one row per batch, never one per employee.** A single `payslip.batch_exported`
+`AuditLog` entry is written after the stream ends (`res.on('finish')`/`res.on('close')`), with
+`cycleId`, the applicable site/filter summary, `requestedCount`, `eligibleCount`, `successCount`,
+`failureCount`, failed employee codes/IDs (only while the list stays small — never an unbounded
+dump), and `cancelled: true/false`. `payslip.exported` (the individual-download action) is never
+triggered per employee inside a batch. **Cancellation before the canary completes** (i.e. before
+any header is sent) writes no audit entry at all — a defensive `res.writableEnded || res.destroyed`
+guard added after the canary prevents a doomed `res.setHeader()` call on an already-dead connection
+from throwing down the generic error path; this is a deliberate design choice (nothing meaningful
+happened yet to summarize), consistent with the all-fail-via-canary case above, not an oversight.
+
+**Checkpoint 6.3.3 — Frontend Payslips workspace.** New route `/payslips`
+(`frontend/src/routes/payslips-page.tsx`), nav entry gated by `payslips:view`
+(`nav-config.ts`), and `frontend/src/hooks/use-payslips.ts` (`usePayslips()` query hook,
+`payslipPdfUrl()`, `downloadPayslipPdf()`, `downloadPayslipsBatch(cycleId, employeeIds, signal)`).
+Cycle select, Site `MultiSelectFilter`, Unit `MultiSelectFilter` (populated only once a single Site
+is selected — Units are Site-scoped), employee search, a table with header + per-row checkboxes.
+**Selection semantics, one unambiguous rule:** "select all" means every employee **currently
+loaded by this picker under the active server-side filters** — never the whole company, never an
+employee outside the caller's own site scope. Changing Cycle, Site, Unit, or Search clears the
+current selection outright (a `useEffect` keyed on the filter values), so a filter change can never
+silently submit a no-longer-visible `employeeId`. Selected count, eligible/loaded count, and the
+300 maximum are always visible; exceeding 300 disables the download button with an explicit "narrow
+your filters" message. **The frontend limit is UX only — the backend's own `batchPayslipsSchema`
+independently re-validates and re-scopes every request regardless of what the client claims was
+selected.** Individual preview opens the existing single-PDF endpoint
+(`?disposition=inline`) in a new tab via `window.open()`; individual download uses
+`?disposition=attachment` — no second HTML preview route, no duplicated template in React, per
+Checkpoint 6.2's own architecture decision. Batch download is a `fetch()` + `AbortController` +
+Blob + anchor-click flow with a "Generating N Payslips…" busy state (no fake percentage progress
+bar — a real streamed HTTP response has no accurate percentage to report) and a Cancel button that
+aborts the in-flight request and cleans up any created object URL.
+
+**Checkpoint 6.3.4 — Prototype, verification, and Phase 4 close-out.**
+`docs/prototypes/phase4-payslips-preview.html` (new, modeled on the existing Cash Receiving
+prototype's structure) — six tab-switchable screens: List & selection, Over the 300 limit, Batch
+generating, the printable Payslip document, Empty state, No access. Visually verified via a
+headless-browser screenshot of all six tabs — zero console errors. **Verification, this pass:**
+`prisma validate`/`migrate status` clean, zero drift; typecheck/lint/build clean across
+shared/backend/frontend; **backend 346/346** (325 prior + 21 new: N+1 query-count proof,
+individual/bulk DTO parity, released/held-exclusion, site-scope enforcement, no-sensitive-leak,
+301-rejection, exact-300-acceptance, permission rejection, site-scope-via-HTTP, zero-eligible
+rejection, Draft/held exclusion, duplicate-name distinct-entries, partial-failure/`_summary.txt`,
+all-fail-via-canary, audit correctness, cancellation, and 5 pure `slugify`/`buildArchiveEntryName`
+unit tests) against a real local PostgreSQL; real production-build HTTP verification; real
+Playwright browser verification of the actual React page (login, filter, select-all, individual
+preview/download, batch ZIP download, empty state, permission-denied state) — a real multi-entry
+ZIP was downloaded and structurally inspected (correct, collision-free filenames), a real individual
+PDF was downloaded and inspected (`%PDF-` magic bytes, correct filename), zero unexpected browser
+console/page errors. **One flaky test found and fixed, not just re-run around:** the N+1
+query-count test occasionally reported an off-by-one query count (`8` vs `7`) under a full-suite
+run — root cause was the very first query on a fresh Prisma connection carrying one-off setup cost
+unrelated to N+1 shape; fixed by adding a throwaway warm-up call before the two measured calls, and
+confirmed non-flaky across 5 consecutive isolated runs. **Unrelated, pre-existing infrastructure
+observation, not a regression:** running the full `npm run test` suite twice in immediate
+succession can intermittently surface a batch of unrelated failures (FK violations, "record not
+found") in older test files — root-caused to the "Jest did not exit one second after…" lingering
+Node process from the *previous* invocation still holding open Postgres connections (`max_
+connections = 100`, no `$disconnect()` between the 24 per-file `PrismaClient` instances) and
+competing with the new run; confirmed by observing `pg_stat_activity` return to baseline (9
+connections) once the prior process fully exited, after which a clean run reliably produces
+346/346. Not fixed this checkpoint (a global-teardown refactor touching all 24 test files is
+outside Checkpoint 6.3's scope) — recorded here as a known artifact so a future session
+re-encountering apparent flakiness doesn't mistake it for a code defect.
+
+**Mandatory deployment verification — genuinely attempted, could not be completed, recorded
+honestly.** Checked this session for Docker, Podman, Colima, a Render CLI/API token, and a
+configured git remote — none present in this sandboxed macOS environment (the same constraint
+already recorded as a known limitation under Checkpoint 6.2, still unresolved). **No Render or
+equivalent Linux-container smoke test was performed.** A local macOS run does not substitute for
+this per explicit instruction, so this checkpoint's deployment-readiness status is **implementation
+complete and locally verified, not production-verified.** Everything a local session can check —
+`--no-sandbox`/`--disable-setuid-sandbox` present, the ESM/CJS Puppeteer interop working under the
+actual compiled `dist/` build, the serif font stack's documented fallback reasoning — remains as
+recorded under Checkpoint 6.2; none of it has been confirmed against an actual container.
+
+**Documentation updated this pass:** this file; `docs/IMPLEMENTATION_PLAN.md` (Checkpoint 6.3 entry
++ Phase 4 review-checkpoint marker); `docs/SESSION_HANDOFF.md`; `docs/architecture/authentication.md`
+(batch/ZIP generation confirmed covered by the existing `payslips:view` permission, no new key);
+`docs/architecture/system-conventions.md` (closes the speculative note left by Checkpoint 6.2 —
+batch generation did **not** end up needing a PDF cache or `StorageProvider`; it stayed fully
+stateless, per the approved architecture review).
+
+**Committed as `<pending — recorded in the doc-only follow-up commit>`.**
+
+### Phase 4 close-out review (2026-07-13)
+
+Reviewed against every Phase 4 checkpoint and `docs/PROJECT_PRINCIPLES.md`:
+
+- **Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances** —
+  unchanged since their own closes (`7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`,
+  `75c5e64`); no regression introduced by Checkpoint 6.1–6.3 (full backend suite, including every
+  pre-existing test file, passes at 346/346 alongside the new Payslip tests).
+- **Payslips (6.1 backend, 6.2 PDF engine, 6.3 frontend/batch/close-out)** — complete, tested, and
+  locally verified end to end (backend HTTP, compiled production build, real browser).
+- **Principle 1 (derived, read-only views)** — a Payslip is never persisted; both the individual
+  and batch paths render from live `PayrollEntry`/`CompanySettings` data on every request.
+- **Principle 6 (exported values match underlying data)** — batch and individual generation share
+  one assembly function (`buildPayslip()`) and one PDF-rendering function
+  (`renderPayslipPdfBuffer()`); there is no second calculation or formatting path to drift.
+- **Principle 9 (released payroll is immutable)** — both Payslip paths only ever read released,
+  non-held `PayrollEntry` rows; neither can be reached for Draft or held entries.
+- **Principle 10 (10,000-employee design floor)** — the 300-per-request cap plus bounded
+  concurrency is this checkpoint's own answer to that floor: an unbounded whole-company export is
+  explicitly Phase 5's job (`BackupPackage`/`StorageProvider`), not this checkpoint's.
+- **Two accepted, explicitly-documented gaps, not silently carried forward:**
+  1. `CompanySettings` is read live, never snapshotted (`payslips.service.ts`'s own doc comment,
+     `docs/architecture/database/access-control.md §19`) — a company rename would change how a
+     historical Payslip regenerates. Accepted as lower-probability than an employee's own identity
+     changing (which Checkpoint 6.1's snapshot columns already close) and out of this checkpoint's
+     schema scope.
+  2. There is still no route to correct `employeeNameSnapshot`/`fatherNameSnapshot` on a Draft
+     `PayrollEntry` (Checkpoint 6.1's own recorded gap) — a genuine spelling correction still
+     requires direct database intervention. Unchanged by 6.3, not this checkpoint's scope.
+- **Deliberately deferred to Phase 5, not silently carried in:** a genuinely company-wide "every
+  Payslip in the cycle" export (would require `BackupPackage`/`StorageProvider`, a persisted
+  artifact); any Payslip caching; any background/queued generation. This checkpoint's 300-item cap
+  is for realistic, operator-filtered batches, not an unconditional whole-company archive.
+- **Employee Statements — reconfirmed Phase 7 scope**, unaffected by any Payslip work (originally
+  settled 2026-07-11, reaffirmed here since Payslips and Employee Statements are easy to conflate).
+- **The one condition that did not pass:** real Render/container deployment verification — see
+  Checkpoint 6.3's own "Mandatory deployment verification" note above. Because of this, **Phase 4
+  is marked code-complete, not fully closed** — the summary table in §2 below reflects this
+  precisely rather than rounding up to "closed."
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -2853,7 +3034,7 @@ No other Checkpoint 6.2 file required a change. Committed as `093a9df`.
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
-| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED and committed** — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement CLOSED and committed — `3b74c32`, `9d9bc32`, `372eeba`; see §1. **Payslip generation, per the dedicated 2026-07-12 architecture review, is split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out). Checkpoints 6.1 and 6.2 CLOSED and committed together as `093a9df`** (see §1's own Checkpoint 6.1/6.2 entries). Checkpoint 6.3 not yet started. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work** |
+| 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
@@ -3166,45 +3347,52 @@ No other Checkpoint 6.2 file required a change. Committed as `093a9df`.
   upload UI was deliberately left out of Phase 2's Settings module for this reason.
 - `README.md` previously stated "Phase 1 complete" without this verification caveat; corrected in a
   prior session's documentation pass, and kept current at the end of every checkpoint since.
+- **Render/Linux-container deployment verification — OUTSTANDING, not resolved as of Phase 4
+  Checkpoint 6.3 (2026-07-13).** First flagged under Checkpoint 6.2 (2026-07-12) and genuinely
+  re-attempted, not skipped, this session: no Docker/Podman/Colima, no Render API token, and no git
+  remote are available in this sandboxed macOS environment, so Chromium's real container launch
+  behavior, sandbox flags, and font-fallback rendering have never been confirmed against the actual
+  Render deployment target — only locally, against `tsx` and the compiled `dist/` build on macOS.
+  This is the single condition keeping Phase 4 from being marked fully closed (§1's "Phase 4
+  close-out review," §2's Phase 4 row). Must be closed with a real deploy (or genuine Linux
+  container) smoke test — a further local run does not satisfy it.
 
 ---
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-10 — this section previously described a pre-Phase-3 state and is now stale;
-corrected here rather than left contradicting §1/§2's current status. Phase 1, Phase 2, Phase 2.5,
-and now Phase 3 (all seven checkpoints, 0–6) are fully closed with DB-backed evidence complete — see
-§1. The database-verification debt remains CLOSED (2026-07-04, §1). Phase 3's own 🛑 review
-checkpoint has passed (`docs/IMPLEMENTATION_PLAN.md`).**
+**Updated 2026-07-13 — Phase 4 (all six checkpoints) is implemented, tested, and committed, but is
+code-complete rather than fully closed; Phase 5 has not been authorized or started.** See §1's
+"Phase 4 close-out review" and §2's Phase 4 row for the exact reason (deployment verification
+outstanding).
 
 1. **Re-provision the local database before running DB-backed tests** — it does not survive between
    sessions. Recipe unchanged: `@embedded-postgres/darwin-x64` in the scratchpad, `initdb`, start
    TCP-only, create the `payroll`/`payroll_dev` role/database, `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed twice (confirm idempotency), `npm run test --workspace backend`
-   (expect **184/184** as of Checkpoint 6's close).
-2. **Phase 4 (Release, Payment Artifacts, and Advances) implementation is next — architecture is
-   frozen (2026-07-05 Phase 3 Architecture Review, §1), but still requires its own separate, explicit
-   authorization to begin**, per this project's standing per-checkpoint/per-phase practice. When
-   authorized, implement directly against the frozen design in `database/release.md` §12b,
-   `docs/architecture/workflows/payroll-lifecycle.md` §4,
-   `docs/architecture/workflows/corrections-and-balance-adjustments.md`, and
-   `docs/architecture/authentication.md` (Finance role) — no further architecture review of that
-   frozen design is needed before starting. Follow the standing Definition of Done: architecture
-   compliance → implementation → typecheck → lint → build → backend tests → real-stack Playwright →
-   documentation updates → ask before committing. **Updated 2026-07-11**: Checkpoints 1–5 (Bank
-   Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) are now closed
-   and committed — see §1/§2. Remaining Phase 4 scope is Payslip generation only.
-   **Employee Statements is confirmed not part of this phase** (2026-07-11 architecture review, §1)
-   — it was never "Checkpoint 4"; it remains Phase 7 work, gated on Phase 6.
-3. Build `StorageProvider` — confirmed deferred until **before Phase 5** (§3 item 4; Backup Package
-   generation hard-requires it). Not scheduled into Phase 2.5, 3, or 4. File uploads (logo/avatar)
-   stay unavailable until then. **New consideration (§3 item 13)**: design it for portability to
-   whatever hosting a given customer provides, not assumed cloud-provider-specific.
-4. Confirm the two still-open design assumptions from `database/schema-invariants.md` §26:
-   item 5 (calendar-month-only cycles) before Phase 3, item 3 (at-most-one-`ACTIVE`-`Advance`-per-type)
-   before Phase 4. **Unrelated to tonight's session** — carried forward unchanged.
-5. Decide the two Company Bank Account sub-questions (§3 item 7) before Phase 4 schema work begins.
-   **Unrelated to tonight's session** — carried forward unchanged.
-6. When Phase 3 is explicitly authorized to start, its Definition of Done includes Playwright-driven
-   visual verification (§3 item 15) and a Principle-10 performance review, not just
-   typecheck/lint/build. **Not yet authorized as of this session.**
+   (expect **346/346** as of Checkpoint 6.3's close — run via the `npm run test` script, which sets
+   `NODE_ENV=test` and `--runInBand`; do not run `npx jest` directly with a sourced `.env`, which
+   overrides `NODE_ENV` to `development` and drops the login rate limit from 1000/window to
+   10/window, producing spurious 429s).
+2. **Close the one outstanding Phase 4 condition: a real Render (or genuine Linux container)
+   deployment smoke test.** Genuinely attempted and genuinely blocked in this sandboxed macOS
+   session (no Docker/Podman/Colima, no Render API token, no git remote) — see §4's "Render/
+   Linux-container deployment verification" entry and Checkpoint 6.3's own note in §1. Once real
+   deploy access exists, confirm: production build, Chromium launch under `--no-sandbox`/
+   `--disable-setuid-sandbox`, PDF generation (individual and a representative batch), font
+   rendering (Times New Roman or its documented fallback), memory stability under a real batch,
+   graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
+3. **Phase 5 (Cycle Finalization, Archiving, and Backups) requires its own separate, explicit
+   authorization to begin**, per this project's standing per-checkpoint/per-phase practice — do not
+   start it opportunistically just because Phase 4 is code-complete. It also needs `StorageProvider`
+   built first (§3 item 4; Backup Package generation hard-requires it, and it was deliberately kept
+   out of Phases 2.5–4). **New consideration (§3 item 13)**: design it for portability to whatever
+   hosting a given customer provides, not assumed cloud-provider-specific.
+4. Confirm the two still-open design assumptions from `database/schema-invariants.md` §26: item 5
+   (calendar-month-only cycles, already effectively settled by Phase 3's shipped design) and item 3
+   (at-most-one-`ACTIVE`-`Advance`-per-type, already confirmed and enforced by Phase 4 Checkpoint 5)
+   — both carried forward here only because §3 has not been swept to mark them formally resolved;
+   low priority, no functional ambiguity remains.
+5. Decide the two Company Bank Account sub-questions (§3 item 7) — still open, unrelated to
+   Payslips, relevant whenever Company Bank Account management is scheduled (not yet part of any
+   phase's frozen scope).

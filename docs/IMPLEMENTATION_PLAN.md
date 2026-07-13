@@ -1365,6 +1365,28 @@ build — resolved via the standard ESM-from-CJS interop pattern (`new Function(
 import("puppeteer")')`), verified working across typecheck, Jest, and the compiled build. Full
 record: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.2" entry.
 
+**Phase 4, Checkpoint 6.3 — Payslip Frontend, Batch Generation, and Phase 4 Close-Out
+(2026-07-13).** Preceded by its own read-only architecture review (approved with refinements).
+Adds bounded, stateless ZIP batch generation — explicitly no Redis, no queue, no job table, no
+persisted ZIP, no `StorageProvider` — reusing the same warm Puppeteer browser singleton as
+Checkpoint 6.2. `getPayslipsBulk()` is the one shared bulk-assembly path (one `PayrollEntry`
+query, one `CompanySettings` read, every row through the same `buildPayslip()`/`calcNet` as the
+individual endpoint — no duplicated rules). New `POST /api/v1/payroll-cycles/:cycleId/payslips/
+batch`, gated by the same `payslips:view` permission (no new key), capped at exactly
+`MAX_BATCH_PAYSLIPS_PER_REQUEST = 300` (`@payroll/shared`), validated before any streaming
+begins, bounded render concurrency (`BATCH_RENDER_CONCURRENCY = 4`), a "canary render" of the
+first Payslip before any header is sent so a systemic failure returns clean JSON rather than a
+truncated ZIP, per-employee failures continue the batch and produce a `_summary.txt` (never a
+stack trace/SQL detail/filesystem path), collision-proof archive filenames, and exactly one
+`payslip.batch_exported` audit entry per request (never one per employee). New frontend
+`/payslips` route: cycle/site/unit/search filters, "select all currently loaded" semantics only
+(never company-wide, never outside site scope; any filter change clears the selection), individual
+preview/download reusing Checkpoint 6.2's single PDF endpoint (no second HTML template), batch
+download with `AbortController` cancellation and honest non-percentage progress messaging. Backend
+**346/346** (325 prior + 21 new). Full record, including the deployment-verification finding and
+final Phase 4 close-out review: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.3" entry and
+"Phase 4 close-out review" entry.
+
 **Revised 2026-07-05 (Phase 3 architecture review) — release moves to Project Unit granularity.**
 The plan text below (originally "per-employee release, bulk Release All/Hold All scoped by site") is
 superseded by the frozen design in `docs/architecture/workflows/payroll-lifecycle.md` §4 and
@@ -1520,6 +1542,19 @@ can be performed end to end and the client (or someone standing in for them) con
 are usable as-is. **Added 2026-07-05:** also demonstrated end to end — a multi-unit split employee's
 entry stays unreleased until every touched Unit has released; a Late Entry added to an already-
 released Unit is released via its own one-off action with a mandatory reason and its own document.
+
+**🛑 Review checkpoint — Phase 4 is code-complete but NOT marked fully closed, 2026-07-13.** All
+six checkpoints (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets,
+Advances, Payslips 6.1–6.3) are implemented, tested (backend 346/346), and locally
+production-build-verified. **One mandatory close-out condition genuinely could not be
+completed**: a real Render (or equivalent Linux container) deployment smoke test — this sandboxed
+macOS environment has no Docker/Podman/Colima, no Render API token, and no git remote configured
+for a push-triggered deploy, so Chromium's actual container launch behavior, sandbox flags, and
+font-fallback rendering remain locally verified only, never confirmed on the real deployment
+target. Per explicit instruction, this is recorded honestly rather than marked passed. Full
+close-out review, including every other checkpoint's status against `docs/PROJECT_PRINCIPLES.md`
+and the deliberately-deferred items carried into Phase 5+: `docs/PROJECT_PROGRESS.md` §1's "Phase 4
+close-out review" entry.
 
 ---
 

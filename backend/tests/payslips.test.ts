@@ -1,7 +1,12 @@
-import { PERMISSIONS, ROLE_CODES, calcNet } from '@payroll/shared';
+import AdmZip from 'adm-zip';
+import { PERMISSIONS, ROLE_CODES, MAX_BATCH_PAYSLIPS_PER_REQUEST, calcNet } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
 import { closeBrowser } from '../src/lib/pdf/browser';
+import * as payslipsService from '../src/modules/payslips/payslips.service';
+import { getPayslip, getPayslipsBulk } from '../src/modules/payslips/payslips.service';
+import { buildArchiveEntryName, slugify } from '../src/modules/payslips/payslips.routes';
+import { loadSessionUser } from '../src/modules/auth/auth.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
@@ -799,5 +804,662 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     expect(exportedEntry).not.toBeNull();
     expect(exportedEntry!.entityId).toBe(viewedEntry!.entityId);
     expect(exportedEntry!.entityId).toBe(jsonRes.body.entryId);
+  });
+
+  // ================================================================================================
+  // Phase 4 Checkpoint 6.3.1 — Bulk Payslip assembly
+  // ================================================================================================
+
+  it('issues a constant number of queries regardless of batch size (no N+1)', async () => {
+    const admin = await masterAdminAgent('ps-bulk-n1-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Bulk N1');
+    const cycle = await makeDraftCycle(admin, 1);
+
+    const employees: { id: string }[] = [];
+    for (let i = 0; i < 10; i += 1) {
+      const employee = await makeEmployee(site.id, unit.id, `Bulk N1 Employee ${i}`);
+      await createEntry(admin, cycle.id, employee.id);
+      employees.push(employee);
+    }
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const sessionUser = await loadSessionUser(admin.userId);
+    if (!sessionUser) throw new Error('expected a loadable session user');
+
+    let queryCount = 0;
+    const listener = () => {
+      queryCount += 1;
+    };
+    // Prisma's typed client exposes no $off() — acceptable here since this is the only test in the
+    // suite that installs a listener, and it reads the count immediately after each call.
+    prisma.$on('query', listener);
+
+    // Warm the connection/prepared-statement cache with a throwaway call before measuring. The
+    // very first query on a given connection can carry extra one-off setup cost that has nothing
+    // to do with N+1 shape, which otherwise makes the two measured counts flaky by +/-1.
+    await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: [employees[0]!.id] });
+
+    queryCount = 0;
+    const small = await getPayslipsBulk(sessionUser, cycle.id, {
+      employeeIds: [employees[0]!.id, employees[1]!.id],
+    });
+    const smallBatchQueries = queryCount;
+
+    queryCount = 0;
+    const large = await getPayslipsBulk(sessionUser, cycle.id, {
+      employeeIds: employees.map((e) => e.id),
+    });
+    const largeBatchQueries = queryCount;
+
+    expect(small).toHaveLength(2);
+    expect(large).toHaveLength(10);
+    expect(smallBatchQueries).toBeGreaterThan(0);
+    // The fixed cost (cycle lookup + one findMany + one CompanySettings read) must not grow with
+    // row count — a real N+1 would make the 10-employee call issue roughly 5x as many queries as
+    // the 2-employee call; this asserts they are exactly equal instead.
+    expect(largeBatchQueries).toBe(smallBatchQueries);
+    // A generous, non-tight upper bound — Prisma's query engine can split one logical `findMany`
+    // with several relational `include`s into more than one SQL statement; what matters is that
+    // this fixed cost never scales with row count, which the equality assertion above already
+    // proves. 20 is comfortably above the actual observed cost (~8) while still ruling out any
+    // per-row query.
+    expect(largeBatchQueries).toBeLessThanOrEqual(20);
+  });
+
+  it('individual getPayslip() and bulk getPayslipsBulk() produce identical Payslip DTOs for the same employee', async () => {
+    const admin = await masterAdminAgent('ps-bulk-parity-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Bulk Parity');
+    const cycle = await makeDraftCycle(admin, 2);
+    const employeeA = await makeEmployee(site.id, unit.id, 'Bulk Parity Employee A', { grossPay: '32000' });
+    const employeeB = await makeEmployee(site.id, unit.id, 'Bulk Parity Employee B', { grossPay: '47000.50' });
+    await createEntry(admin, cycle.id, employeeA.id);
+    await createEntry(admin, cycle.id, employeeB.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const sessionUser = await loadSessionUser(admin.userId);
+    if (!sessionUser) throw new Error('expected a loadable session user');
+
+    const individualA = await getPayslip(sessionUser, cycle.id, employeeA.id);
+    const individualB = await getPayslip(sessionUser, cycle.id, employeeB.id);
+
+    const bulk = await getPayslipsBulk(sessionUser, cycle.id, {
+      employeeIds: [employeeA.id, employeeB.id],
+    });
+    expect(bulk).toHaveLength(2);
+    const bulkA = bulk.find((p) => p.employeeId === employeeA.id);
+    const bulkB = bulk.find((p) => p.employeeId === employeeB.id);
+
+    expect(bulkA).toEqual(individualA);
+    expect(bulkB).toEqual(individualB);
+  });
+
+  it('bulk assembly returns only released, non-held entries — Draft and held excluded', async () => {
+    const admin = await masterAdminAgent('ps-bulk-gate-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Bulk Gate');
+    const cycle = await makeDraftCycle(admin, 3);
+
+    const releasedEmployee = await makeEmployee(site.id, unit.id, 'Bulk Gate Released');
+    const heldEmployee = await makeEmployee(site.id, unit.id, 'Bulk Gate Held');
+
+    await createEntry(admin, cycle.id, releasedEmployee.id);
+    const heldEntry = await createEntry(admin, cycle.id, heldEmployee.id);
+    await admin.agent
+      .patch(`/api/v1/payroll-entries/${heldEntry.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: heldEntry.version, hold: true });
+
+    // The release sweep releases every non-held entry touching this unit at the time it runs —
+    // both releasedEmployee's and (were it not held) heldEmployee's. A genuinely Draft entry
+    // requires being created AFTER the unit has already released (the Late Entry case), same
+    // pattern already used elsewhere in this file.
+    await releaseUnit(admin, cycle.id, unit.id);
+    const draftEmployee = await makeEmployee(site.id, unit.id, 'Bulk Gate Draft');
+    await createEntry(admin, cycle.id, draftEmployee.id);
+
+    const sessionUser = await loadSessionUser(admin.userId);
+    if (!sessionUser) throw new Error('expected a loadable session user');
+
+    const bulk = await getPayslipsBulk(sessionUser, cycle.id, {
+      employeeIds: [releasedEmployee.id, heldEmployee.id, draftEmployee.id],
+    });
+
+    expect(bulk).toHaveLength(1);
+    expect(bulk[0]!.employeeId).toBe(releasedEmployee.id);
+  });
+
+  it('bulk assembly enforces site scope server-side — an out-of-scope employeeId is silently excluded, not processed', async () => {
+    const admin = await masterAdminAgent('ps-bulk-scope-admin@test.local');
+    const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site PS Bulk Scope A');
+    const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site PS Bulk Scope B');
+    const cycle = await makeDraftCycle(admin, 4);
+
+    const employeeA = await makeEmployee(siteA.id, unitA.id, 'Bulk Scope Employee A');
+    const employeeB = await makeEmployee(siteB.id, unitB.id, 'Bulk Scope Employee B');
+    await createEntry(admin, cycle.id, employeeA.id);
+    await createEntry(admin, cycle.id, employeeB.id);
+    await releaseUnit(admin, cycle.id, unitA.id);
+    await releaseUnit(admin, cycle.id, unitB.id);
+
+    const staffA = await payrollStaffAgent('ps-bulk-scope-staffA@test.local', [siteA.id]);
+    const staffASession = await loadSessionUser(staffA.userId);
+    if (!staffASession) throw new Error('expected a loadable session user');
+
+    const bulk = await getPayslipsBulk(staffASession, cycle.id, {
+      employeeIds: [employeeA.id, employeeB.id],
+    });
+
+    expect(bulk).toHaveLength(1);
+    expect(bulk[0]!.employeeId).toBe(employeeA.id);
+
+    // An explicitly out-of-scope siteId, rather than an implicit one via employeeIds, throws —
+    // matching listPayslips'/getPayslip's own `resolveSiteIdFilter`/`assertSiteAccess` behavior.
+    await expect(
+      getPayslipsBulk(staffASession, cycle.id, { siteIds: [siteB.id] }),
+    ).rejects.toThrow();
+  });
+
+  it('never leaks an unrelated Employee/User field in the bulk representation', async () => {
+    const admin = await masterAdminAgent('ps-bulk-leak-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Bulk Leak');
+    const cycle = await makeDraftCycle(admin, 5);
+    const employee = await makeEmployee(site.id, unit.id, 'Bulk Leak Employee', {
+      cnic: '1234512345671',
+      employeeCode: 'EMP-BULK-1',
+    });
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const sessionUser = await loadSessionUser(admin.userId);
+    if (!sessionUser) throw new Error('expected a loadable session user');
+
+    const bulk = await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: [employee.id] });
+    expect(bulk).toHaveLength(1);
+
+    const serialized = JSON.stringify(bulk);
+    expect(serialized).not.toContain('passwordHash');
+    expect(serialized).not.toContain('religion');
+    expect(serialized).not.toContain('mobileNumber');
+    expect(serialized).not.toContain('dateOfBirth');
+    expect((bulk[0] as unknown as { employee?: unknown }).employee).toBeUndefined();
+  });
+
+  // ================================================================================================
+  // Phase 4 Checkpoint 6.3.2 — Batch PDF/ZIP endpoint
+  // ================================================================================================
+
+  function fakeUuid(seed: number): string {
+    const hex = seed.toString(16).padStart(12, '0');
+    return `00000000-0000-4000-8000-${hex}`;
+  }
+
+  it('rejects a batch of 301 employeeIds before touching the database (schema-level, before streaming)', async () => {
+    const admin = await masterAdminAgent('ps-batch-301-admin@test.local');
+    // No site/employee/release setup needed — batchPayslipsSchema's own `.max(300)` rejects an
+    // over-sized request body before any Prisma query runs, so even a cycle with zero eligible
+    // employees (or, as here, entirely fabricated employeeIds) still proves the boundary.
+    const cycle = await makeDraftCycle(admin, 1);
+
+    const tooMany = Array.from({ length: MAX_BATCH_PAYSLIPS_PER_REQUEST + 1 }, (_, i) => fakeUuid(i));
+    const res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeIds: tooMany });
+
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).not.toContain('application/zip');
+  });
+
+  it(
+    'accepts and correctly processes a batch of exactly 300 eligible employees',
+    async () => {
+      const admin = await masterAdminAgent('ps-batch-300-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site PS Batch 300');
+
+      const employeeRows = Array.from({ length: MAX_BATCH_PAYSLIPS_PER_REQUEST }, (_, i) => ({
+        name: `Batch300 Employee ${i}`,
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+      }));
+      await prisma.employee.createMany({ data: employeeRows });
+      const employees = await prisma.employee.findMany({ where: { siteId: site.id } });
+      expect(employees).toHaveLength(MAX_BATCH_PAYSLIPS_PER_REQUEST);
+
+      const cycle = await makeDraftCycle(admin, 2); // bootstraps one PayrollEntry per active employee
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeIds: employees.map((e) => e.id) })
+        .buffer(true)
+        .parse(binaryParser);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('application/zip');
+      expect(res.headers['cache-control']).toBe('no-store');
+
+      const zip = new AdmZip(res.body as Buffer);
+      const entries = zip.getEntries();
+      expect(entries).toHaveLength(MAX_BATCH_PAYSLIPS_PER_REQUEST);
+      expect(entries.every((e) => e.entryName.endsWith('.pdf'))).toBe(true);
+      // No _summary.txt should exist — a fully successful batch has nothing to report.
+      expect(entries.some((e) => e.entryName === '_summary.txt')).toBe(false);
+
+      const auditEntry = await prisma.auditLog.findFirst({
+        where: { action: 'payslip.batch_exported', entityId: cycle.id },
+        orderBy: { occurredAt: 'desc' },
+      });
+      expect(auditEntry).not.toBeNull();
+      const metadata = auditEntry!.metadata as { successCount: number; failureCount: number; eligibleCount: number };
+      expect(metadata.eligibleCount).toBe(MAX_BATCH_PAYSLIPS_PER_REQUEST);
+      expect(metadata.successCount).toBe(MAX_BATCH_PAYSLIPS_PER_REQUEST);
+      expect(metadata.failureCount).toBe(0);
+    },
+    120_000, // 300 real Puppeteer renders — generous, test-specific timeout (default is 15s)
+  );
+
+  it('rejects batch generation for a user without payslips:view', async () => {
+    const admin = await masterAdminAgent('ps-batch-noperm-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch NoPerm');
+    const cycle = await makeDraftCycle(admin, 3);
+    const employee = await makeEmployee(site.id, unit.id, 'Batch NoPerm Employee');
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const noPerm = await noPayslipsPermissionAgent('ps-batch-noperm-user@test.local', [site.id]);
+    const res = await noPerm.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', noPerm.csrfToken)
+      .send({ employeeIds: [employee.id] });
+    expect(res.status).toBe(403);
+  });
+
+  it('site-scopes the batch endpoint — an out-of-scope employee is silently excluded, not an error, as long as an eligible one remains', async () => {
+    const admin = await masterAdminAgent('ps-batch-scope-admin@test.local');
+    const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site PS Batch Scope A');
+    const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site PS Batch Scope B');
+    const cycle = await makeDraftCycle(admin, 4);
+
+    const employeeA = await makeEmployee(siteA.id, unitA.id, 'Batch Scope Employee A');
+    const employeeB = await makeEmployee(siteB.id, unitB.id, 'Batch Scope Employee B');
+    await createEntry(admin, cycle.id, employeeA.id);
+    await createEntry(admin, cycle.id, employeeB.id);
+    await releaseUnit(admin, cycle.id, unitA.id);
+    await releaseUnit(admin, cycle.id, unitB.id);
+
+    const staffA = await payrollStaffAgent('ps-batch-scope-staffA@test.local', [siteA.id]);
+    const res = await staffA.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', staffA.csrfToken)
+      .send({ employeeIds: [employeeA.id, employeeB.id] })
+      .buffer(true)
+      .parse(binaryParser);
+
+    expect(res.status).toBe(200);
+    const zip = new AdmZip(res.body as Buffer);
+    expect(zip.getEntries()).toHaveLength(1);
+  });
+
+  it('rejects the batch request cleanly when every requested employee is ineligible (none released, none in scope)', async () => {
+    const admin = await masterAdminAgent('ps-batch-zero-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch Zero');
+    const cycle = await makeDraftCycle(admin, 5);
+    const draftEmployee = await makeEmployee(site.id, unit.id, 'Batch Zero Draft Employee');
+    await createEntry(admin, cycle.id, draftEmployee.id);
+    // Deliberately never released.
+
+    const res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeIds: [draftEmployee.id] });
+
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).not.toContain('application/zip');
+  });
+
+  it('excludes Draft and held entries from the batch, including only released non-held ones', async () => {
+    const admin = await masterAdminAgent('ps-batch-gate-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch Gate');
+    const cycle = await makeDraftCycle(admin, 6);
+
+    const releasedEmployee = await makeEmployee(site.id, unit.id, 'Batch Gate Released');
+    const heldEmployee = await makeEmployee(site.id, unit.id, 'Batch Gate Held');
+    await createEntry(admin, cycle.id, releasedEmployee.id);
+    const heldEntry = await createEntry(admin, cycle.id, heldEmployee.id);
+    await admin.agent
+      .patch(`/api/v1/payroll-entries/${heldEntry.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: heldEntry.version, hold: true });
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const draftEmployee = await makeEmployee(site.id, unit.id, 'Batch Gate Draft');
+    await createEntry(admin, cycle.id, draftEmployee.id);
+
+    const res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeIds: [releasedEmployee.id, heldEmployee.id, draftEmployee.id] })
+      .buffer(true)
+      .parse(binaryParser);
+
+    expect(res.status).toBe(200);
+    const zip = new AdmZip(res.body as Buffer);
+    const entries = zip.getEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.entryName).toContain(slugify('Batch Gate Released'));
+  });
+
+  it('produces two distinct, valid archive entries for two employees sharing the exact same name', async () => {
+    const admin = await masterAdminAgent('ps-batch-dupname-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch DupName');
+    const cycle = await makeDraftCycle(admin, 7);
+
+    const employeeA = await makeEmployee(site.id, unit.id, 'Identical Name Employee');
+    const employeeB = await makeEmployee(site.id, unit.id, 'Identical Name Employee');
+    await createEntry(admin, cycle.id, employeeA.id);
+    await createEntry(admin, cycle.id, employeeB.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeIds: [employeeA.id, employeeB.id] })
+      .buffer(true)
+      .parse(binaryParser);
+
+    expect(res.status).toBe(200);
+    const zip = new AdmZip(res.body as Buffer);
+    const entries = zip.getEntries();
+    expect(entries).toHaveLength(2);
+    // Distinct filenames — no silent overwrite inside the archive.
+    expect(new Set(entries.map((e) => e.entryName)).size).toBe(2);
+    // Each entry decompresses to a real, non-empty PDF.
+    for (const entry of entries) {
+      const data = entry.getData();
+      expect(data.subarray(0, 5).toString()).toBe('%PDF-');
+    }
+  });
+
+  it('continues past a single employee\'s render failure, includes a safe _summary.txt, and never leaks internal error detail', async () => {
+    const admin = await masterAdminAgent('ps-batch-partial-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch Partial');
+    const cycle = await makeDraftCycle(admin, 8);
+
+    const goodEmployee = await makeEmployee(site.id, unit.id, 'AAA First Good Employee'); // sorts first (site name asc, sortOrder asc) so it survives as the canary
+    const failingEmployee = await makeEmployee(site.id, unit.id, 'ZZZ Failing Employee', { employeeCode: 'FAIL-001' });
+    await createEntry(admin, cycle.id, goodEmployee.id);
+    await createEntry(admin, cycle.id, failingEmployee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const original = payslipsService.renderPayslipPdfBuffer;
+    const spy = jest
+      .spyOn(payslipsService, 'renderPayslipPdfBuffer')
+      .mockImplementation(async (payslip, meta) => {
+        if (payslip.employeeId === failingEmployee.id) {
+          throw new Error(
+            'SENSITIVE_TEST_MARKER: /etc/secret/path SELECT * FROM users password=hunter2 at /internal/stack/trace.ts:42',
+          );
+        }
+        return original(payslip, meta);
+      });
+
+    try {
+      const res = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeIds: [goodEmployee.id, failingEmployee.id] })
+        .buffer(true)
+        .parse(binaryParser);
+
+      expect(res.status).toBe(200);
+      const zip = new AdmZip(res.body as Buffer);
+      const entries = zip.getEntries();
+      const names = entries.map((e) => e.entryName);
+      expect(names).toContain('_summary.txt');
+      expect(names.filter((n) => n.endsWith('.pdf'))).toHaveLength(1);
+
+      const summary = zip.getEntry('_summary.txt')!.getData().toString('utf-8');
+      expect(summary).toContain('FAIL-001');
+      expect(summary).toContain('Succeeded: 1');
+      expect(summary).toContain('Failed: 1');
+      // The generic failure line, never the underlying error's own message/stack/paths/SQL.
+      expect(summary).not.toContain('SENSITIVE_TEST_MARKER');
+      expect(summary).not.toContain('/etc/secret/path');
+      expect(summary).not.toContain('SELECT * FROM');
+      expect(summary).not.toContain('hunter2');
+      expect(summary).not.toContain('.ts:42');
+
+      const auditEntry = await prisma.auditLog.findFirst({
+        where: { action: 'payslip.batch_exported', entityId: cycle.id },
+        orderBy: { occurredAt: 'desc' },
+      });
+      const metadata = auditEntry!.metadata as {
+        successCount: number;
+        failureCount: number;
+        failedEmployeeIds: string[];
+      };
+      expect(metadata.successCount).toBe(1);
+      expect(metadata.failureCount).toBe(1);
+      expect(metadata.failedEmployeeIds).toEqual([failingEmployee.id]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('fails cleanly with no ZIP ever started when the sole (first/canary) employee\'s render fails', async () => {
+    const admin = await masterAdminAgent('ps-batch-allfail-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch AllFail');
+    const cycle = await makeDraftCycle(admin, 9);
+    const employee = await makeEmployee(site.id, unit.id, 'Batch AllFail Employee');
+    await createEntry(admin, cycle.id, employee.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const spy = jest.spyOn(payslipsService, 'renderPayslipPdfBuffer').mockImplementation(async () => {
+      throw new Error('simulated total Puppeteer failure');
+    });
+
+    try {
+      const res = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeIds: [employee.id] });
+
+      // Deliberate behavior (documented): a canary failure — the only way "every employee fails"
+      // can occur — always yields a clean error response, never a ZIP with zero usable content.
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.headers['content-type']).not.toContain('application/zip');
+
+      const auditEntry = await prisma.auditLog.findFirst({
+        where: { action: 'payslip.batch_exported', entityId: cycle.id },
+      });
+      // No batch audit entry either — the request never reached the point of having anything to
+      // summarize (this is the same "validation-stage rejection" class as the 301/zero-eligible
+      // cases above, not a completed-but-empty batch).
+      expect(auditEntry).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('writes exactly one payslip.batch_exported entry and never payslip.exported for any individual employee in the batch', async () => {
+    const admin = await masterAdminAgent('ps-batch-audit-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch Audit');
+    const cycle = await makeDraftCycle(admin, 10);
+    const employeeA = await makeEmployee(site.id, unit.id, 'Batch Audit Employee A');
+    const employeeB = await makeEmployee(site.id, unit.id, 'Batch Audit Employee B');
+    await createEntry(admin, cycle.id, employeeA.id);
+    await createEntry(admin, cycle.id, employeeB.id);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeIds: [employeeA.id, employeeB.id] })
+      .buffer(true)
+      .parse(binaryParser);
+    expect(res.status).toBe(200);
+
+    const batchEntries = await prisma.auditLog.findMany({
+      where: { action: 'payslip.batch_exported', entityId: cycle.id },
+    });
+    expect(batchEntries).toHaveLength(1);
+    const metadata = batchEntries[0]!.metadata as {
+      requestedCount: number;
+      eligibleCount: number;
+      successCount: number;
+      cancelled: boolean;
+      siteIds: string[];
+    };
+    expect(metadata.requestedCount).toBe(2);
+    expect(metadata.eligibleCount).toBe(2);
+    expect(metadata.successCount).toBe(2);
+    expect(metadata.cancelled).toBe(false);
+    expect(metadata.siteIds).toEqual([site.id]);
+
+    const individualExportEntries = await prisma.auditLog.findMany({
+      where: { action: 'payslip.exported', entityId: { in: [employeeA.id, employeeB.id] } },
+    });
+    expect(individualExportEntries).toHaveLength(0);
+  });
+
+  it('records cancelled: true and stops scheduling further renders when the client disconnects mid-batch', async () => {
+    const admin = await masterAdminAgent('ps-batch-cancel-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site PS Batch Cancel');
+    const cycle = await makeDraftCycle(admin, 11);
+
+    const employeeRows = Array.from({ length: 20 }, (_, i) => ({
+      name: `Batch Cancel Employee ${i}`,
+      designation: 'Guard',
+      siteId: site.id,
+      unitId: unit.id,
+      grossPay: '30000',
+    }));
+    await prisma.employee.createMany({ data: employeeRows });
+    const employees = await prisma.employee.findMany({ where: { siteId: site.id } });
+
+    const cycleForBatch = cycle.id;
+    for (const employee of employees) {
+      await createEntry(admin, cycleForBatch, employee.id);
+    }
+    await releaseUnit(admin, cycleForBatch, unit.id);
+
+    // Real Puppeteer render timing is too variable (system load, cold vs. warm page) to land an
+    // abort reliably "mid-stream" — this test isn't about PDF rendering (covered elsewhere), only
+    // about the cancellation *mechanism* itself, so every render is replaced with a small,
+    // deterministic, artificially-delayed fake buffer instead.
+    const spy = jest.spyOn(payslipsService, 'renderPayslipPdfBuffer').mockImplementation(async (payslip) => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return Buffer.from(`%PDF-fake-${payslip.employeeId}`);
+    });
+
+    try {
+      const request = admin.agent
+        .post(`/api/v1/payroll-cycles/${cycleForBatch}/payslips/batch`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ employeeIds: employees.map((e) => e.id) });
+
+      // The canary (200ms) plus the first concurrency chunk (also ~200ms, rendered together) puts
+      // streaming underway well before 500ms; the full batch (20 employees / concurrency 4 ≈ 5
+      // chunks × 200ms ≈ 1000ms+) has not yet finished — landing the abort deterministically
+      // inside the active streaming window this test targets.
+      setTimeout(() => request.abort(), 500);
+
+      await request.catch(() => {
+        // superagent rejects an aborted request — expected, not a test failure.
+      });
+
+      // The server-side handler keeps running after the client aborts; give it time to reach its
+      // own audit write before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const auditEntry = await prisma.auditLog.findFirst({
+        where: { action: 'payslip.batch_exported', entityId: cycleForBatch },
+        orderBy: { occurredAt: 'desc' },
+      });
+      expect(auditEntry).not.toBeNull();
+      const metadata = auditEntry!.metadata as { cancelled: boolean; successCount: number; eligibleCount: number };
+      expect(metadata.eligibleCount).toBe(20);
+      expect(metadata.cancelled).toBe(true);
+      // Cancelled before the full batch completed — strictly fewer successes than eligible.
+      expect(metadata.successCount).toBeLessThan(20);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 30_000);
+});
+
+describe('buildArchiveEntryName / slugify — pure (Phase 4 Checkpoint 6.3.2)', () => {
+  function fakePayslip(overrides: {
+    employeeId?: string;
+    employeeCode?: string | null;
+    employeeName?: string;
+  }): payslipsService.Payslip {
+    return {
+      employeeId: overrides.employeeId ?? 'aaaaaaaa-0000-0000-0000-000000000000',
+      identity: {
+        employeeCode: overrides.employeeCode ?? null,
+        employeeName: overrides.employeeName ?? 'Test Employee',
+      },
+    } as unknown as payslipsService.Payslip;
+  }
+
+  it('strips path traversal, slashes, backslashes, quotes, CR, and LF entirely', () => {
+    const hostile = '../../etc/passwd\\windows\\path"quoted"\r\nCRLF-injected';
+    const result = slugify(hostile);
+    expect(result).toMatch(/^[a-z0-9-]*$/);
+    expect(result).not.toContain('/');
+    expect(result).not.toContain('\\');
+    expect(result).not.toContain('"');
+    expect(result).not.toContain('\r');
+    expect(result).not.toContain('\n');
+    expect(result).not.toContain('..');
+  });
+
+  it('falls back to a literal "payslip" base when nothing survives slugification', () => {
+    const usedNames = new Set<string>();
+    const name = buildArchiveEntryName(fakePayslip({ employeeCode: '???', employeeName: '🎉🎉🎉' }), usedNames);
+    expect(name).toBe('payslip.pdf');
+  });
+
+  it('never produces an empty filename — an empty employeeCode falls back to the (always non-blank) employeeId prefix', () => {
+    const usedNames = new Set<string>();
+    const name = buildArchiveEntryName(
+      fakePayslip({ employeeId: 'aaaaaaaa-0000-0000-0000-000000000000', employeeCode: '', employeeName: '' }),
+      usedNames,
+    );
+    // `employeeCode: ''` is falsy, so `codeOrShortId` falls through to `employeeId.slice(0, 8)` —
+    // a real `employeeId` is a UUID and is never itself blank, so this path can never actually
+    // degenerate to the literal `'payslip'` fallback the way a fully-unslugifiable employeeCode
+    // (tested above) can.
+    expect(name).toBe('aaaaaaaa.pdf');
+    expect(name.length).toBeGreaterThan(4);
+  });
+
+  it('produces distinct, deterministically suffixed names for two genuinely colliding entries', () => {
+    const usedNames = new Set<string>();
+    const payslipA = fakePayslip({ employeeId: 'same', employeeCode: 'DUP', employeeName: 'Same Name' });
+    const payslipB = fakePayslip({ employeeId: 'same', employeeCode: 'DUP', employeeName: 'Same Name' });
+    const payslipC = fakePayslip({ employeeId: 'same', employeeCode: 'DUP', employeeName: 'Same Name' });
+
+    const nameA = buildArchiveEntryName(payslipA, usedNames);
+    const nameB = buildArchiveEntryName(payslipB, usedNames);
+    const nameC = buildArchiveEntryName(payslipC, usedNames);
+
+    expect(nameA).toBe('dup-same-name.pdf');
+    expect(nameB).toBe('dup-same-name-2.pdf');
+    expect(nameC).toBe('dup-same-name-3.pdf');
+    expect(new Set([nameA, nameB, nameC]).size).toBe(3);
+  });
+
+  it('prefers employeeCode over the id fallback when present', () => {
+    const usedNames = new Set<string>();
+    const name = buildArchiveEntryName(
+      fakePayslip({ employeeId: 'aaaaaaaa-1111-1111-1111-111111111111', employeeCode: 'EMP-42', employeeName: 'Jane Doe' }),
+      usedNames,
+    );
+    expect(name).toBe('emp-42-jane-doe.pdf');
+    expect(name).not.toContain('aaaaaaaa');
   });
 });

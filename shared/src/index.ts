@@ -7,6 +7,7 @@ export { PERMISSIONS, ROLE_CODES, ROLE_PERMISSIONS } from './constants/permissio
 export type { PermissionKey, RoleCode } from './constants/permissions';
 
 export { CASH_BANK_CODE } from './constants/bank';
+export { MAX_BATCH_PAYSLIPS_PER_REQUEST } from './constants/payslips';
 
 export { loginSchema } from './schemas/auth';
 export type { LoginInput } from './schemas/auth';
@@ -89,6 +90,9 @@ export type {
   TaskStatus,
   UpdateTaskInput,
 } from './schemas/task';
+
+export { batchPayslipsSchema } from './schemas/payslip';
+export type { BatchPayslipsInput } from './schemas/payslip';
 
 export type { SessionUser } from './types/session-user';
 

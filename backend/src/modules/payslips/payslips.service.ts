@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma, CompanySettings } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { notFound } from '../../common/http-error';
@@ -68,6 +68,10 @@ export interface ListPayslipsResult {
 
 export interface ListPayslipsFilters {
   siteIds?: string[];
+  /** Filters via `workLines.some.unitId` — `PayrollEntry` has no direct `unitId` column (§12a),
+   * same reasoning as `BulkPayslipFilters.unitIds` below. Added Checkpoint 6.3.3 so the frontend's
+   * Unit filter is genuinely functional, not decorative. */
+  unitIds?: string[];
   search?: string;
   page?: number;
   pageSize?: number;
@@ -113,6 +117,7 @@ export async function listPayslips(
     released: true,
     hold: false,
     ...(siteIdFilter && { siteId: { in: siteIdFilter } }),
+    ...(filters.unitIds && { workLines: { some: { unitId: { in: filters.unitIds } } } }),
     ...(search && {
       OR: [
         { employeeNameSnapshot: { contains: search, mode: 'insensitive' } },
@@ -160,6 +165,19 @@ export interface PayslipCompany {
   phone: string | null;
   email: string | null;
   logoStorageKey: string | null;
+}
+
+/** The one place `CompanySettings` maps onto `PayslipCompany` — used by both `getPayslip()` and
+ * `getPayslipsBulk()` (Checkpoint 6.3.1) so a batch of 300 Payslips still resolves company details
+ * exactly once, not once per row, without two copies of this trivial mapping drifting apart. */
+function toPayslipCompany(settings: CompanySettings): PayslipCompany {
+  return {
+    companyName: settings.companyName,
+    registeredAddress: settings.registeredAddress,
+    phone: settings.phone,
+    email: settings.email,
+    logoStorageKey: settings.logoStorageKey,
+  };
 }
 
 export interface PayslipIdentity {
@@ -394,15 +412,82 @@ export async function getPayslip(currentUser: SessionUser, cycleId: string, empl
   assertSiteAccess(currentUser, entry.siteId);
 
   const settings = await getCompanySettings();
-  const company: PayslipCompany = {
-    companyName: settings.companyName,
-    registeredAddress: settings.registeredAddress,
-    phone: settings.phone,
-    email: settings.email,
-    logoStorageKey: settings.logoStorageKey,
+  return buildPayslip(entry, toPayslipCompany(settings));
+}
+
+export interface BulkPayslipFilters {
+  siteIds?: string[];
+  unitIds?: string[];
+  employeeIds?: string[];
+  search?: string;
+}
+
+/**
+ * Bulk Payslip assembly — Checkpoint 6.3.1. The one place a caller needing *many* Payslips at once
+ * (the batch PDF/ZIP endpoint, Checkpoint 6.3.2) gets them, instead of calling `getPayslip()` in a
+ * loop (which would issue one `findUnique` per employee — a genuine N+1 this function exists to
+ * avoid). Issues exactly one `PayrollEntry` query and one `CompanySettings` read regardless of how
+ * many employees match, then maps every row through the exact same `buildPayslip()` function
+ * `getPayslip()` itself calls — there is only one Payslip-assembly implementation in this codebase,
+ * this function does not duplicate `calcNet`, the released/hold gate, the identity-snapshot
+ * reads, or any formatting rule.
+ *
+ * **Site-scoping is enforced twice, deliberately redundantly, for the same reason
+ * `getPayslip()`'s does**: `resolveSiteIdFilter` both validates any explicitly-requested `siteIds`
+ * against the caller's own assignment (a manipulated out-of-scope id throws) *and* is always
+ * applied to the query's `where` clause — so even an explicit `employeeIds` list containing an id
+ * outside the caller's site scope is silently excluded from the result, never processed. This is
+ * the server-side authority the frontend's own "select all" checkbox must not be trusted to
+ * provide (Checkpoint 6.3's own architecture review).
+ *
+ * `unitIds` filters via `workLines.some.unitId` — `PayrollEntry` itself has no direct `unitId`
+ * column (attendance units live on the child `PayrollEntryWorkLine`, §12a), so "this employee's
+ * cycle touches unit X" is necessarily a `some` relation filter, not a plain equality.
+ */
+export async function getPayslipsBulk(
+  currentUser: SessionUser,
+  cycleId: string,
+  filters: BulkPayslipFilters,
+): Promise<Payslip[]> {
+  await getPayrollCycle(cycleId); // 404s cleanly if the cycle doesn't exist
+  const siteIdFilter = await resolveSiteIdFilter(currentUser, filters.siteIds);
+  const search = filters.search?.trim();
+
+  const where: Prisma.PayrollEntryWhereInput = {
+    cycleId,
+    released: true,
+    hold: false,
+    ...(siteIdFilter && { siteId: { in: siteIdFilter } }),
+    ...(filters.employeeIds && { employeeId: { in: filters.employeeIds } }),
+    ...(filters.unitIds && { workLines: { some: { unitId: { in: filters.unitIds } } } }),
+    ...(search && {
+      OR: [
+        { employeeNameSnapshot: { contains: search, mode: 'insensitive' } },
+        { employee: { employeeCode: { contains: search, mode: 'insensitive' } } },
+        { employee: { cnic: { contains: search, mode: 'insensitive' } } },
+      ],
+    }),
   };
 
-  return buildPayslip(entry, company);
+  // The one query this whole function is built on — same include shape as `getPayslip()`'s own
+  // single-entry `findUnique`, just a `findMany` instead, so the exact same `buildPayslip()` call
+  // works unchanged for either one row or many.
+  const entries = await prisma.payrollEntry.findMany({
+    where,
+    include: {
+      employee: true,
+      site: true,
+      bank: true,
+      workLines: { include: { unit: true }, orderBy: { sortOrder: 'asc' } },
+      cycle: true,
+    },
+    orderBy: [{ site: { name: 'asc' } }, { sortOrder: 'asc' }],
+  });
+
+  const settings = await getCompanySettings();
+  const company = toPayslipCompany(settings);
+
+  return entries.map((entry) => buildPayslip(entry, company));
 }
 
 export interface PayslipPdfResult {
@@ -433,7 +518,20 @@ export async function generatePayslipPdf(
   meta: PayslipPdfMeta,
 ): Promise<PayslipPdfResult> {
   const payslip = await getPayslip(currentUser, cycleId, employeeId);
-  const html = renderPayslipHtml(payslip, meta);
-  const buffer = await renderHtmlToPdf(html);
+  const buffer = await renderPayslipPdfBuffer(payslip, meta);
   return { buffer, entryId: payslip.entryId, employeeName: payslip.identity.employeeName };
+}
+
+/**
+ * Renders one already-assembled `Payslip` to a PDF `Buffer` — the thin two-call wrapper
+ * (`renderPayslipHtml` then `renderHtmlToPdf`) both `generatePayslipPdf()` above and the batch
+ * PDF/ZIP route (Checkpoint 6.3.2) share, so there is exactly one place that turns a `Payslip`
+ * into bytes. The batch route calls this directly against `Payslip` objects already resolved by
+ * `getPayslipsBulk()` — never `generatePayslipPdf()` itself, which would re-run `getPayslip()`
+ * (and its own Prisma query) once per employee, reintroducing the exact N+1 this checkpoint exists
+ * to avoid.
+ */
+export async function renderPayslipPdfBuffer(payslip: Payslip, meta: PayslipPdfMeta): Promise<Buffer> {
+  const html = renderPayslipHtml(payslip, meta);
+  return renderHtmlToPdf(html);
 }

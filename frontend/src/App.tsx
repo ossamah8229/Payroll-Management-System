@@ -11,6 +11,7 @@ import { SalaryReleasePage } from '@/routes/salary-release-page';
 import { BankSheetPage } from '@/routes/bank-sheet-page';
 import { CashReceivingPage } from '@/routes/cash-receiving-page';
 import { AdvancesPage } from '@/routes/advances-page';
+import { PayslipsPage } from '@/routes/payslips-page';
 import { SettingsPage } from '@/routes/settings-page';
 import { UsersPage } from '@/routes/users-page';
 import { NotFoundPage } from '@/routes/not-found-page';
@@ -87,6 +88,12 @@ export function App() {
         path="/advances"
         element={
           <RequireSession>{(user) => <AdvancesPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/payslips"
+        element={
+          <RequireSession>{(user) => <PayslipsPage user={user} />}</RequireSession>
         }
       />
       <Route

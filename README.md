@@ -3,16 +3,15 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status:** Phase 1, Phase 2, and Phase 2.5 are all **closed, with full database-backed evidence**
-> (Phase 2.5's five checkpoints — shared date formatting, the Project Unit module, Employee ↔ Project
-> Unit transfer history, import/export remap, and CNIC normalization/Reactivate — all complete and
-> committed as of 2026-07-05). **A dedicated Phase 3 Architecture Review session then froze the
-> complete Payroll Entry, Payroll Processing, Release, and Corrections/Balance Adjustments design**
-> (per-Project-Unit release, a new site-scoped Finance role, a Correction Request/approval workflow,
-> immediate/deferred and installment-based settlement — see `docs/PROJECT_PROGRESS.md` §1's "Phase 3
-> Architecture Review" for the full record) — **architecture only, no application code.** Phase 3
-> implementation has **not** started and requires separate, explicit authorization to begin.
-> See "Current Status" below, `docs/PROJECT_PROGRESS.md`, and `docs/SESSION_HANDOFF.md` for details.
+> **Status (2026-07-13):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
+> evidence**. **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances, Payslips) is
+> code-complete and committed — all six checkpoints implemented and tested (backend 346/346) — but
+> is not yet marked fully closed**: one condition, a real Render/Linux-container deployment smoke
+> test, was genuinely attempted and could not be completed in the sandboxed development environment
+> used so far (no Docker/Podman/Colima, no Render API access). Phase 5 has **not** started and
+> requires separate, explicit authorization to begin. See "Current Status" below,
+> `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
+> `docs/SESSION_HANDOFF.md` for details.
 
 ## Getting Started
 
@@ -92,9 +91,26 @@ npm run dev:frontend          # http://localhost:5173
   balance may settle immediately or deferred (`CorrectionPayment` for the no-open-entry case); a
   negative balance may now recover across multiple cycles as an installment
   (`BalanceAdjustmentSettlement`); a Late Entry exception for payroll added after its Unit already
-  released. "Master Admin" renamed "Master User" throughout the architecture docs. **Phase 3
-  implementation has not started** — full decision record in `docs/PROJECT_PROGRESS.md` §1's "Phase 3
-  Architecture Review" subsection.
+  released. "Master Admin" renamed "Master User" throughout the architecture docs. Full decision
+  record in `docs/PROJECT_PROGRESS.md` §1's "Phase 3 Architecture Review" subsection.
+- **Phase 3 (Payroll Entry & Payroll Processing) — CLOSED, 2026-07-10.** All seven checkpoints
+  (schema foundation; cycle bootstrap + backend CRUD; the Payroll Entry grid frontend; "Split by
+  {unitLabel}"; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee
+  performance/concurrency validation) complete, tested, and committed. Full record:
+  `docs/PROJECT_PROGRESS.md` §1.
+- **Phase 3.5 (Tasks Workspace) — CLOSED, 2026-07-10.** Replaces the originally-planned Team
+  Collaboration/Chat panel. Full record: `docs/PROJECT_PROGRESS.md` §1.
+- **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances, Payslips) — CODE-COMPLETE, NOT
+  YET FULLY CLOSED, as of Checkpoint 6.3 (2026-07-13).** All six checkpoints implemented, tested, and
+  committed: Bank Registry; Salary Release foundation (per-Project-Unit release, new Finance role);
+  Bank Sheets; Cash Receiving Sheets; Advances; and Payslips (split into Checkpoint 6.1 backend
+  foundation, 6.2 PDF engine, 6.3 frontend + bounded batch ZIP generation + this close-out). Backend
+  test suite: **346/346**. Employee Statements confirmed out of this phase's scope (remains Phase 7).
+  **Held open by exactly one condition:** a real Render/Linux-container deployment smoke test was
+  genuinely attempted and could not be completed — no Docker/Podman/Colima, no Render API token, and
+  no git remote are available in the development environment used so far. Not falsely marked passed.
+  Full record, including the close-out review against every Phase 4 checkpoint and
+  `docs/PROJECT_PRINCIPLES.md`: `docs/PROJECT_PROGRESS.md` §1's "Phase 4 close-out review".
 - **Current git checkpoint:** see `docs/PROJECT_PROGRESS.md`'s header for the exact latest commit
   hash and full lineage — kept there rather than duplicated here to avoid drift between two copies
   of the same fact.
@@ -155,10 +171,11 @@ npm run dev:frontend          # http://localhost:5173
 
 ## Next Steps
 
-Phase 2.5 is fully closed and the Phase 3 Architecture Review is complete (both 2026-07-05) —
-Payroll Entry, Payroll Processing, Release, and Corrections/Balance Adjustments are now fully
-designed in `docs/architecture/*.md` and `docs/IMPLEMENTATION_PLAN.md`. **Phase 3 implementation is
-the next task, but requires separate, explicit authorization before any code is written** — no
-further architecture review is needed once that authorization is given. See
+Phase 4 is code-complete and committed but not yet fully closed — the one outstanding condition is a
+real Render (or genuine Linux container) deployment smoke test, which this development environment
+has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups)
+requires its own separate, explicit authorization before any code is written**, per this project's
+standing per-phase practice, and additionally needs the `StorageProvider` abstraction built first
+(never built despite being called for in Phase 0 — see `docs/PROJECT_PROGRESS.md` §3 item 4). See
 `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
 handoff to the next development session.

@@ -106,6 +106,13 @@ Permissions," below. Gates view, print, export, and download uniformly; there is
 "generate" action, since a Payslip is never persisted (derived on demand from released `PayrollEntry`
 data, `docs/PROJECT_PRINCIPLES.md` Principle 1).
 
+**Extended Phase 4 Checkpoint 6.3 (2026-07-13) — batch/ZIP generation is covered by this same
+permission, no new key.** `POST /payroll-cycles/:cycleId/payslips/batch` requires `payslips:view`
+identically to the individual list/detail/PDF routes; there is no separate "batch export" or
+"bulk download" permission. Site scope and the released/non-held gate are enforced the same way for
+every employee in a batch request as they are for a single one — a batch is simply many individual
+Payslip reads assembled together, not a distinct capability.
+
 ## Site-Based Permissions
 
 Orthogonal to role: **which project sites** a user may see or act on. Payroll Staff are assigned a
