@@ -1366,7 +1366,7 @@ import("puppeteer")')`), verified working across typecheck, Jest, and the compil
 record: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.2" entry.
 
 **Phase 4, Checkpoint 6.3 — Payslip Frontend, Batch Generation, and Phase 4 Close-Out
-(2026-07-13).** Preceded by its own read-only architecture review (approved with refinements).
+(2026-07-13, COMMITTED as `7ff696b`).** Preceded by its own read-only architecture review (approved with refinements).
 Adds bounded, stateless ZIP batch generation — explicitly no Redis, no queue, no job table, no
 persisted ZIP, no `StorageProvider` — reusing the same warm Puppeteer browser singleton as
 Checkpoint 6.2. `getPayslipsBulk()` is the one shared bulk-assembly path (one `PayrollEntry`

@@ -2981,7 +2981,7 @@ recorded under Checkpoint 6.2; none of it has been confirmed against an actual c
 batch generation did **not** end up needing a PDF cache or `StorageProvider`; it stayed fully
 stateless, per the approved architecture review).
 
-**Committed as `<pending — recorded in the doc-only follow-up commit>`.**
+**Committed as `7ff696b`.**
 
 ### Phase 4 close-out review (2026-07-13)
 

@@ -12,12 +12,12 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 - Branch: `main`
 - **This session's Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase 4
-  Close-Out, below) is reviewed, approved, verified, and being committed in this same session.** Per
-  explicit instruction, this file's own text (committed inside that same commit) cannot
-  self-reference its own not-yet-created hash — this session's own final action records it here as a
-  doc-only commit, matching this project's own established convention. Full prior lineage (the block
-  below was itself stale — several sessions out of date, still narrating a long-past Checkpoint 3
-  commit as "this session's work" — corrected here against `git log` rather than left compounding):
+  Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
+  follow-up pass records that hash here, matching this project's own established convention (the
+  implementation commit's own docs couldn't self-reference a hash that didn't exist yet at commit
+  time). Full prior lineage (the block below was itself stale — several sessions out of date, still
+  narrating a long-past Checkpoint 3 commit as "this session's work" — corrected here against
+  `git log` rather than left compounding):
   `674ab04` (Phase 2's substantive build) → `89ac6ff` (Phase 2 UI/UX polish pass) → `11cdc9d` (Phase
   2 checkpoint documentation) → `b7ba9cf` (pre-Phase-3 architecture review) → `74c124e` (further doc
   status update) → `0d9ea33` (Checkpoint 0) → `c60094c` (Checkpoint 1) → `70a45ad` (Checkpoint 2) →
@@ -51,9 +51,8 @@ be enough to resume correctly without re-deriving context from scratch — per
   committed) → `9d9bc32` (Layout Integrity corrections — implementation, committed) → `372eeba`
   (doc-only commit, closing out both of the above) → `093a9df` (Phase 4 Checkpoints 6.1 — Payslips
   backend foundation — and 6.2 — Payslip PDF Engine — implementation, reviewed, verified, and
-  committed together as one logical commit) → *(this session's commit — Phase 4 Checkpoint 6.3:
-  Payslip Frontend, Batch Generation, and Phase 4 Close-Out — hash recorded by this session's
-  doc-only follow-up commit, per convention)*.
+  committed together as one logical commit) → `7ff696b` (Phase 4 Checkpoint 6.3 — Payslip Frontend,
+  Batch Generation, and Phase 4 Close-Out — implementation, reviewed, verified, and committed).
 - **Post-Phase-4 banking refinement — COMMITTED as `3b74c32`.** `Employee`/`PayrollEntry.
   accountTitle` removed entirely (clean, destructive migration); `iban` added to both; a new
   banking invariant (bank employee requires Account Number, cash employee has neither); Bank
@@ -112,7 +111,7 @@ be enough to resume correctly without re-deriving context from scratch — per
     no live Render access in this sandboxed environment).
   - Full detail: `docs/PROJECT_PROGRESS.md` §1's "Phase 4, Checkpoint 6.1"/"Checkpoint 6.2" entries.
 - **Phase 4, Checkpoint 6.3 (Payslip Frontend, Batch Generation, and Phase 4 Close-Out) — reviewed,
-  approved, verified, and committed this session.** Preceded by its own read-only architecture
+  approved, verified, and COMMITTED as `7ff696b`.** Preceded by its own read-only architecture
   review, approved with refinements (bounded stateless ZIP streaming, no Redis/queue/job
   table/persisted artifact, exactly 300 as a named constant).
   - **6.3.1**: `getPayslipsBulk()` — one shared bulk-assembly builder (one `PayrollEntry` query, one
