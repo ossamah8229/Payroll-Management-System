@@ -97,17 +97,25 @@ depends on this interface only. This is what lets development run entirely on th
 while production later moves to cloud object storage with no business-logic changes, per the
 approved architecture.
 
-**Cross-system atomicity (Phase 5 Checkpoint 0 architecture decision, mechanism not yet
-implemented — the consuming checkpoint is `BackupPackage` generation).** A backup package's
+**Cross-system atomicity (Phase 5 Checkpoint 0 architecture decision — implemented Phase 5
+Checkpoint 2, `backup-packages.service.ts`'s `generateBackupPackage`).** A backup package's
 generation spans two systems — PostgreSQL and `StorageProvider` — that cannot share one
-transaction. The approved ordering: prepare and write all storage objects for the operation
-*first*; only once every storage write has succeeded does the single, final PostgreSQL transaction
-run (archiving the cycle, inserting `BackupPackage`/`BackupPackageFile` rows referencing the
-already-written keys, creating the new cycle). If the later database transaction fails, the
-already-written storage object(s) are best-effort cleaned up, but this is accepted as non-blocking —
-a late failure may leave a temporarily unreferenced storage object, but must never leave payroll
-database state partially advanced (Principle 2). This ordering is documented here as a frozen
-decision for the checkpoint that implements it; Checkpoint 0 itself performs no cross-system writes.
+transaction. The implemented ordering: reserve the next version (a `GENERATING` `BackupPackage` row,
+inside its own transaction, before any storage write — the concurrency backstop, see
+`docs/architecture/database/payroll-cycle.md §17`) → assemble every file's content in memory → write
+all five storage objects → one final PostgreSQL transaction (insert every `BackupPackageFile` row,
+flip the package to `READY`, write the audit entry) → commit. If anything fails after the version
+was reserved, this attempt's own already-written storage objects are best-effort deleted and the
+reserved row is marked `FAILED` with a short, non-sensitive diagnostic — this is accepted as
+non-blocking: a late failure may leave a temporarily unreferenced storage object, but must never
+leave a `BackupPackage` row falsely reporting `READY` (Principle 2). Checkpoint 2 generates
+**synchronously, within the HTTP request** — with Payslip PDFs deferred (see
+`docs/architecture/workflows/payroll-lifecycle.md §5`), the entire generation cost is CSV/XLSX
+building plus a handful of SHA-256 hashes, sub-second even at Principle 10's 10,000-employee design
+floor; no queue or background-job mechanism was introduced. The archive-transition trigger this
+ordering was originally scoped for (Checkpoint 0's own note, below) remains later, separately
+authorized Phase 5 work (Checkpoint 3) — Checkpoint 2 builds the generator that checkpoint will call,
+unchanged, from inside its own transaction.
 
 **Clarified 2026-07-12 (Phase 4 Checkpoint 6.2's own architecture review) — on-demand PDF
 generation does NOT require `StorageProvider`.** This section previously read as if Puppeteer PDF

@@ -75,8 +75,25 @@ be enough to resume correctly without re-deriving context from scratch — per
   and bulk update) was driven end-to-end against the compiled `dist/` build and the fresh database. A
   future session with access to a browser-automation tool should still click through the Salary
   Release page's Finalize flow visually before this is considered fully verified.
-  **Do not begin Phase 5 Checkpoint 2 (Backup Package generator) without its own explicit
-  go-ahead.**
+- **Later still the same day (2026-07-14): Phase 5 Checkpoint 2 — Backup Packages: reusable domain
+  and generator — IMPLEMENTED, PENDING REVIEW BEFORE COMMIT (not yet committed).** A read-only
+  architecture review ran first (approved with six final decisions — include Payroll Entry XLSX;
+  reuse `payroll-cycle:manage`; synchronous generation; individual files + manifest, not a
+  persisted ZIP; no frontend UI this checkpoint; defer Payslip PDFs and an Audit Log export), then
+  implementation: `BackupPackage`/`BackupPackageFile` (additive migration
+  `20260714180000_backup_packages`, amended from the originally frozen sketch with `status`/
+  `generatedBy`/`failureReason` and `filename`/`contentType`/`checksum`/`sortOrder`), a new
+  `backend/src/modules/backup-packages/` module (`generateBackupPackage` — Draft cycles rejected,
+  version reserved atomically before any storage write, content assembled purely via existing
+  export builders, `manifest.json` built last with a canonical-JSON checksum, cross-system ordering
+  per Checkpoint 0's own frozen decision, best-effort cleanup + `FAILED` on any error), four new
+  routes (generate/list/detail/download, all `payroll-cycle:manage`, Master-Admin-only), and a new
+  combined Bank Sheets CSV builder (`bank-sheets.service.ts`, loops the existing per-bank
+  `getBankSheet()` rather than a second query path). 26 new backend tests
+  (`backup-packages.test.ts`), plus the existing Bank Sheets/Cash Receiving/Payroll Entry export
+  regression suites re-run clean. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5,
+  Checkpoint 2" entry. **Do not begin Phase 5 Checkpoint 3 (new-cycle-creation transaction upgrade)
+  without its own explicit go-ahead, and do not commit Checkpoint 2 without review.**
 - **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
   4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
@@ -1337,9 +1354,10 @@ checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and commi
 `docs/PROJECT_PROGRESS.md` §1's "Phase 4 close-out review" for the single outstanding condition
 (real Render/Linux-container deployment verification). **Phase 5 is IN PROGRESS, authorized
 2026-07-14 — architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
-and Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`) are complete. Checkpoints 2–4 and phase
-close-out each still require their own separate, explicit go-ahead — see §1's "Phase 5, Checkpoint 1"
-entry.**
+Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`), and Checkpoint 2 (Backup Packages reusable
+domain/generator) are complete — Checkpoint 2 is implemented and pending review before commit (not
+yet committed). Checkpoints 3–4 and phase close-out each still require their own separate, explicit
+go-ahead — see §1's "Phase 5, Checkpoint 2" entry.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest

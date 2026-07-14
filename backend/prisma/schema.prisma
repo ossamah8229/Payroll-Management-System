@@ -29,11 +29,19 @@
 // (Employee.bankId); Broom Services' own source account(s) for disbursement are a distinct concept
 // not yet modeled anywhere in this schema — see docs/PROJECT_PROGRESS.md for the open item.
 //
-// Every other table in docs/architecture/database/ (Correction, BalanceAdjustment, BackupPackage,
-// BackupPackageFile, PayrollUnitReadiness, CorrectionRequest,
-// CorrectionPayment, BalanceAdjustmentSettlement) is deferred to the phase that actually builds
-// the module owning it, added via a new additive migration at that time — per Principle 8 (prefer
-// additive schema evolution) and docs/IMPLEMENTATION_PLAN.md's phase breakdown.
+// Phase 5 Checkpoint 2 (Backup Packages) adds `BackupPackage`/`BackupPackageFile` — the reusable
+// backup-generation domain (docs/architecture/database/payroll-cycle.md §17-18, amended from the
+// original frozen sketch per the 2026-07-14 architecture review: adds `status`/`generatedBy`/
+// `failureReason` to `BackupPackage` and `filename`/`contentType`/`checksum`/`sortOrder` to
+// `BackupPackageFile`, none of which the original sketch included). Generation is manually
+// triggered only this checkpoint — no automatic month-end generation, no cycle archiving, both
+// still later Phase 5 checkpoints.
+//
+// Every other table in docs/architecture/database/ (Correction, BalanceAdjustment,
+// PayrollUnitReadiness, CorrectionRequest, CorrectionPayment, BalanceAdjustmentSettlement) is
+// deferred to the phase that actually builds the module owning it, added via a new additive
+// migration at that time — per Principle 8 (prefer additive schema evolution) and
+// docs/IMPLEMENTATION_PLAN.md's phase breakdown.
 //
 // PayrollEntry.advanceId/.eidAdvanceId are now included (Phase 4 Checkpoint 5) — both FKs to the
 // new Advance table, closing the deferral noted in every prior revision of this file.
@@ -138,6 +146,7 @@ model User {
   tasksAssignedByMe      Task[]                    @relation("TaskAssignedBy")
   taskNotifications      TaskNotification[]
   advanceScheduleChanges AdvanceScheduleChange[]
+  backupPackagesGenerated BackupPackage[] @relation("BackupPackageGeneratedBy")
 
   @@index([roleId])
 }
@@ -417,6 +426,7 @@ model PayrollCycle {
   entries                 PayrollEntry[]
   unitReleases            PayrollUnitRelease[]
   scheduledPayrollPeriods ScheduledPayrollPeriod[]
+  backupPackages          BackupPackage[]
 
   @@unique([year, month])
 }
@@ -823,4 +833,120 @@ model AdvanceScheduleChange {
   // table in docs/architecture/database/advances.md §15a.
   @@index([advanceId, changedAt(sort: Desc)])
   @@index([payrollEntryId])
+}
+
+/// Phase 5 Checkpoint 2 (Backup Packages, docs/architecture/database/payroll-cycle.md §17). A
+/// `GENERATING` row is created the instant a version number is reserved (before any storage write
+/// begins — the concurrency backstop, see `backup-packages.service.ts`); it transitions to exactly
+/// one of `READY`/`FAILED` and never changes again after that. There is deliberately no `PARTIAL`
+/// or similar — a package is either fully generated and downloadable or it failed; see this
+/// checkpoint's own architecture review for the confirmed invariant.
+enum BackupPackageStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
+/// Closed, code-coupled set (docs/architecture/database/conventions-and-enums.md §1) — one value
+/// per distinct backup artifact this checkpoint generates. Payslip PDFs and an Audit Log export
+/// were both evaluated in the architecture review and explicitly deferred (absent from the frozen
+/// docs/architecture/workflows/payroll-lifecycle.md §5 spec, and — for Payslips — redundantly
+/// regenerable on demand from released `PayrollEntry` data, per
+/// docs/architecture/system-conventions.md §2's existing reasoning for not caching them). Extending
+/// this enum additively is exactly how either would be added later (Principle 8), not by
+/// repurposing an existing value.
+enum BackupFileType {
+  MANIFEST
+  PAYROLL_ENTRY_CSV
+  PAYROLL_ENTRY_XLSX
+  BANK_SHEETS_CSV
+  CASH_RECEIVING_CSV
+}
+
+/// The disaster-recovery/external-access artifact for one payroll cycle
+/// (docs/architecture/workflows/payroll-lifecycle.md §5). **Amended from the originally frozen
+/// sketch (docs/architecture/database/payroll-cycle.md §17) by the 2026-07-14 architecture
+/// review** — `status`, `generatedBy`, and `failureReason` are additions the original sketch
+/// omitted, needed respectively for: representing an in-flight/failed generation attempt without a
+/// queue (`status`), actor attribution matching every other lifecycle table's own convention
+/// (`generatedBy` — `createdBy`/`releasedBy` on `PayrollCycle` itself), and a non-sensitive
+/// diagnostic string for a failed attempt (`failureReason`). This checkpoint only ever creates rows
+/// via manual, explicit generation — the automatic generation this table is ultimately meant to
+/// serve (triggered by the cycle archive transition) is later, separately-authorized Phase 5 work.
+model BackupPackage {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId               String              @db.Uuid
+  /// Reserved atomically (`MAX(version) + 1` inside the same transaction that inserts this row) —
+  /// never client-supplied. A concurrent second reservation attempt for the same `cycleId` loses
+  /// the race against the `(cycleId, version)` unique constraint below and is translated to a
+  /// clean, typed conflict — see the service's own doc comment.
+  version               Int                 @default(1)
+  status                BackupPackageStatus @default(GENERATING)
+  /// Set only on the `GENERATING -> READY` transition, in the same transaction as every
+  /// `BackupPackageFile` row — never set independently of that transition.
+  generatedAt           DateTime?           @db.Timestamptz(6)
+  generatedBy           String              @db.Uuid
+  /// The deployed app release identifier at generation time (`backend/package.json`'s own
+  /// `version` field today — this project does not yet bump it per deploy, a known, accepted
+  /// limitation rather than something this checkpoint invents a fix for).
+  applicationVersion    String              @db.VarChar(40)
+  /// The latest applied Prisma migration name at generation time, read directly from Prisma's own
+  /// `_prisma_migrations` table — no new schema needed to track this.
+  databaseSchemaVersion String              @db.VarChar(60)
+  /// Released/held/pending entry counts at generation time — computed identically to Finalize
+  /// Cycle's own `payroll_cycle.released` audit metadata shape (`entryCount`/`releasedCount`/
+  /// `heldCount`), not a new calculation.
+  releaseStatusSummary  Json
+  /// Nullable until the package reaches `READY` (unknown while `GENERATING`, meaningless if
+  /// `FAILED`).
+  totalSizeBytes        BigInt?
+  fileCount             Int?
+  /// SHA-256 hex of the manifest's own canonical JSON — changes if any file's size/checksum or any
+  /// other manifest field changes. Nullable until `READY`.
+  manifestChecksum      String?             @db.VarChar(64)
+  /// Set only when `status = FAILED` — a short, non-sensitive diagnostic (exception message class,
+  /// never a stack trace, SQL detail, or filesystem path).
+  failureReason         String?
+  createdAt             DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime            @updatedAt @db.Timestamptz(6)
+
+  cycle          PayrollCycle        @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  generatedByUser User               @relation("BackupPackageGeneratedBy", fields: [generatedBy], references: [id], onDelete: Restrict)
+  files          BackupPackageFile[]
+
+  @@unique([cycleId, version])
+  @@index([cycleId])
+  @@index([status])
+}
+
+/// One physical stored file within a `BackupPackage`
+/// (docs/architecture/database/payroll-cycle.md §18). **Amended from the originally frozen sketch**
+/// — `filename`, `contentType`, `checksum`, and `sortOrder` are additions the original sketch
+/// omitted, needed respectively for: a safe, sanitized download filename distinct from the
+/// (untrusted) `storageKey`, a `Content-Type` response header (`StorageProvider` itself never
+/// retains this after `write()`, see `docs/architecture/system-conventions.md §2`), per-file
+/// integrity verification, and deterministic listing/manifest order. Immutable, append-only, no
+/// update path — a regenerated package is always a new `BackupPackage` version with its own new
+/// `BackupPackageFile` rows, never an edit to an existing one's rows.
+model BackupPackageFile {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  backupPackageId String         @db.Uuid
+  fileType        BackupFileType
+  filename        String
+  /// Key/path resolved via the `StorageProvider` abstraction — never exposed to API clients
+  /// directly; every download is authorized and resolved through this row's own `id`.
+  storageKey      String
+  contentType     String
+  sizeBytes       BigInt
+  /// SHA-256 hex, computed from the exact bytes written to storage.
+  checksum        String         @db.VarChar(64)
+  /// Deterministic listing/manifest order — `manifest.json` first, then the data files in the
+  /// fixed order the service always generates them in.
+  sortOrder       Int
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+
+  backupPackage BackupPackage @relation(fields: [backupPackageId], references: [id], onDelete: Restrict)
+
+  @@unique([backupPackageId, fileType])
+  @@index([backupPackageId])
 }

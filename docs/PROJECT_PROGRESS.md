@@ -3374,6 +3374,117 @@ not routed through `assertEntryEditable` at all.
   add/update/delete, bulk update, CSV/Excel import, and Advance Deduction Deferral — not only the
   single-entry PATCH endpoint the first pass's wording implied.
 
+### Phase 5, Checkpoint 2 — Backup Packages: reusable domain and generator — implemented 2026-07-14, pending review before commit
+
+Preflight confirmed branch `main`, clean working tree, and Checkpoint 1's commits (`cad93bc`,
+`6d0acd9`) present before any file was touched. Architecture review approved with six final
+decisions (include Payroll Entry XLSX; reuse `payroll-cycle:manage`; synchronous generation;
+individual files + manifest; no frontend UI this checkpoint; defer Payslip PDFs/Audit Log export).
+
+- **Schema** (docs/architecture/database/payroll-cycle.md §17-18, migration
+  `20260714180000_backup_packages`, additive, no unrelated table touched): `BackupPackageStatus`
+  (`GENERATING`/`READY`/`FAILED`), `BackupFileType` (`MANIFEST`/`PAYROLL_ENTRY_CSV`/
+  `PAYROLL_ENTRY_XLSX`/`BANK_SHEETS_CSV`/`CASH_RECEIVING_CSV`), `BackupPackage` (unique
+  `(cycleId, version)`, indexed `cycleId`/`status`, `generatedBy` FK → `User`), `BackupPackageFile`
+  (unique `(backupPackageId, fileType)`). Amended from the originally frozen sketch: `status`/
+  `generatedBy`/`failureReason` added to `BackupPackage`; `filename`/`contentType`/`checksum`/
+  `sortOrder` added to `BackupPackageFile` — all four additions the architecture review found the
+  original sketch missing for authenticated download, in-flight/failed tracking, and actor
+  attribution. `prisma migrate diff` used to generate the SQL (shadow-database permission denied for
+  the test role, same as every prior migration in this project) — the tool's spurious
+  `DROP TABLE "session"` line removed by hand, matching established precedent.
+- **Service** (`backend/src/modules/backup-packages/backup-packages.service.ts`):
+  `generateBackupPackage` — rejects a Draft cycle; reserves the next version atomically
+  (`MAX(version) + 1` inside the row-creation call, the `(cycleId, version)` unique constraint as
+  the concurrency backstop, a losing race translated to a clean `409` rather than a raw
+  constraint-violation leak); assembles Payroll Entry CSV/XLSX, a new combined Bank Sheets CSV, and
+  Cash Receiving CSV purely by calling existing, already-shipped export builders (zero new
+  calculation logic); computes SHA-256 checksums; builds `manifest.json` last (needs every other
+  file's checksum) via a canonical (recursively key-sorted) JSON serializer so its own checksum is
+  deterministic; writes all five storage objects; one final transaction creates the five
+  `BackupPackageFile` rows, flips the package to `READY`, and writes the audit entry. Any failure
+  after version-reservation best-effort deletes this attempt's own already-written storage objects
+  and marks the row `FAILED` with a safe, error-class-only diagnostic (`safeFailureReason` —
+  `StorageError` subclasses' own messages are logged directly since they're guaranteed path-free;
+  anything else logs only its constructor name, never its raw message/stack/SQL/path). `getApplicationVersion`
+  reads `backend/package.json`'s own `version` field (resolved against `process.cwd()`, matching
+  `STORAGE_ROOT`/`DATABASE_URL`'s own convention); `getDatabaseSchemaVersion` reads the latest
+  `migration_name` from Prisma's own `_prisma_migrations` table directly.
+- **Combined Bank Sheets CSV** (`bank-sheets.service.ts`'s new `buildCombinedBankSheetCsv`): loops
+  every active `Bank` plus the existing `CASH_BANK_FILTER` sentinel through the module's own,
+  unchanged `getBankSheet()`, concatenates rows, reuses the existing `BANK_SHEET_HEADERS`/
+  `buildExportRow` (both changed from module-private to exported — the only "refactor" this
+  checkpoint needed) and `sumMoney` for one combined grand total. No second query or calculation
+  path, per the architecture review's explicit instruction.
+- **Routes** (`backend/src/modules/backup-packages/backup-packages.routes.ts`, mounted in
+  `app.ts`): `POST`/`GET /api/v1/payroll-cycles/:cycleId/backup-packages` (generate, list) and
+  `GET /api/v1/backup-packages/:id` / `GET /api/v1/backup-packages/files/:fileId` (detail,
+  download) — all four gated by `payroll-cycle:manage` (reused, no new permission), Master-Admin-
+  only. `BigInt` fields (`sizeBytes`/`totalSizeBytes`) are serialized to strings at the HTTP
+  boundary only (`res.json()` cannot serialize `BigInt` natively) — the service itself keeps native
+  Prisma types. Download resolves the storage key exclusively through the `BackupPackageFile` row's
+  own id (a client-supplied raw key is never accepted); a missing storage object behind a `READY`
+  row is treated as corrupted state and translated to the same generic `404` a nonexistent id gets,
+  logged as an operational anomaly, never a `500` leaking storage internals.
+- **Audit**: `backup_package.generated`/`.generation_failed` (metadata: `cycleId`, `version`,
+  `fileCount`, `totalSizeBytes`/`failureReason`) and `backup_package.file_downloaded` (metadata:
+  `backupPackageId`, `fileType`, `filename`) — list/detail are never audited, matching Bank Sheets/
+  Payslips' own "viewing isn't audited, retrieving sensitive content is" precedent.
+- **Tests**: 26 new (`backend/tests/backup-packages.test.ts`) — Draft-cycle rejection, successful
+  generation, version increment, an HTTP-level and a direct-service-level concurrent-generation race
+  (no duplicate version ever committed), deterministic 5-file ordering, manifest/checksum/size
+  correctness cross-verified against the actual stored bytes, byte-for-byte reuse-parity checks
+  against the live Payroll Entry/Cash Receiving/Bank Sheet export endpoints, storage-key-prefix
+  verification, two failure-injection tests (an exporter throwing during assembly — zero storage
+  writes; a storage write failing mid-sequence — the already-written files get cleaned up) both
+  asserting the package ends up `FAILED` with a safe diagnostic and is never exposed as usable, RBAC
+  (Master Admin/Payroll Staff/Finance/unauthenticated/missing-or-invalid CSRF), download
+  (`Content-Type`/filename/`Cache-Control`/binary integrity/audit/generic 404), audit-noise
+  (list/detail never audited), and schema-level constraint tests (both unique constraints, an
+  invalid enum value rejected at the database level). `tests/helpers.ts`'s `cleanTestData` gained
+  FK-ordered cleanup for both new tables (`BackupPackageFile` before `BackupPackage`, both before
+  `PayrollCycle`/`User`). `.gitignore` gained the test-only storage root
+  (`backend/storage-test-unused/` — `backend/tests/env.setup.ts`'s fallback, now a real consumer
+  since this checkpoint wires the `StorageProvider` singleton up as `backup-packages.routes.ts`'s
+  own dependency); the new test suite's own `afterAll` removes that directory wholesale so no
+  generated artifact survives a run.
+
+### Phase 5, Checkpoint 2 — final narrow verification pass, 2026-07-14 (same day, before commit)
+
+A 12-point final verification found and fixed **one real gap**: `backup-packages.routes.ts`'s
+`serializeBackupPackage` spread each `BackupPackageFile` row's fields directly into the JSON
+response, which included `storageKey` verbatim — list and detail responses were leaking the raw
+storage key, contradicting this checkpoint's own explicit requirement that every download resolve
+server-side through the file's own `id`, never a client-visible key. **Fixed**: `storageKey` is now
+explicitly destructured out and discarded before serialization — the one place any Backup Package
+response crosses the HTTP boundary. The service layer itself is unchanged (it still returns the
+full Prisma row internally); only the HTTP-facing serializer was corrected.
+
+Six new regression tests added to `backup-packages.test.ts` (32 total, up from 26), each proving a
+specific point from the verification checklist rather than re-testing what was already covered:
+list/detail responses contain no `storageKey`/absolute-path substring anywhere in their JSON;
+individual file download is blocked by the actual runtime status check (not merely the structural
+absence of file rows) — verified by forcing a real file's parent package to `GENERATING`/`FAILED`
+via direct update and confirming download 404s, then flipping back to `READY` and confirming it
+succeeds; a `GENERATING` package remains visible in list/detail with zero files; version 2
+generation leaves version 1's database row and every stored file byte-for-byte untouched;
+`manifestChecksum` is verified non-circular (the manifest's own parsed content has no
+`manifestChecksum`/`checksum` key, the raw manifest text never contains its own stored checksum
+value, and re-serializing the parsed manifest canonically reproduces the same bytes); and failure
+cleanup for a second (failing) version's own storage writes never touches a *prior, successful*
+version's rows or files. The existing failure-audit test was also tightened to assert exactly one
+`backup_package.generation_failed` row (not just "at least one"), to check the audit metadata's own
+`failureReason` field (not only the DB row's) for the absence of stack-trace frames, absolute paths,
+and SQL text, and to confirm zero stray `backup_package.generated` rows exist for the same failed
+attempt.
+
+Full backend suite re-run clean: **452/452**, all 27 suites green. `prisma validate`/migration
+status/drift check clean (no schema change this pass). typecheck/lint/build clean across all three
+workspaces. Storage directories (`backend/storage-test-unused/`, `backend/storage/`) confirmed
+absent after every test run performed this pass.
+
+- **Not committed** — pending review, per this checkpoint's explicit instruction.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -3386,7 +3497,7 @@ not routed through `assertEntryEditable` at all.
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoints 2–4 (Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) IMPLEMENTED 2026-07-14, pending review before commit — see §1. Checkpoints 3–4 (new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -3740,13 +3851,16 @@ outstanding).
    rendering (Times New Roman or its documented fallback), memory stability under a real batch,
    graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
 3. **Phase 5 (Cycle Finalization, Archiving, and Backups) IN PROGRESS, authorized 2026-07-14** — the
-   architecture review, Checkpoint 0 (`StorageProvider` foundation, committed `d87b9b0`), and
-   Checkpoint 1 (Finalize Cycle, committed `cad93bc`) are complete, per this
-   project's standing per-checkpoint/per-phase practice; Checkpoints 2–4 and phase close-out each
+   architecture review, Checkpoint 0 (`StorageProvider` foundation, committed `d87b9b0`),
+   Checkpoint 1 (Finalize Cycle, committed `cad93bc`), and Checkpoint 2 (Backup Packages reusable
+   domain/generator, implemented 2026-07-14, pending review before commit) are complete, per this
+   project's standing per-checkpoint/per-phase practice; Checkpoints 3–4 and phase close-out each
    still require their own separate, explicit go-ahead, same as every other phase. **Known, documented
-   gap carried forward by Checkpoint 1's own approved scope**: there is no post-finalization release
-   path for a held entry yet — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s "Released"
-   state description. `StorageProvider`
+   gaps carried forward**: there is no post-finalization release path for a held entry yet (Checkpoint
+   1's own approved scope) — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s "Released"
+   state description; automatic Backup Package generation on the cycle archive transition, Payslip
+   PDFs, and an Audit Log export are all explicitly deferred past Checkpoint 2 — see
+   `docs/architecture/workflows/payroll-lifecycle.md §5`. `StorageProvider`
    (§3 item 4; Backup Package generation's hard requirement, deliberately kept out of Phases 2.5–4)
    is now built — `backend/src/lib/storage/`, see §1's Checkpoint 0 entry — designed portable to
    whatever hosting a given customer provides per §3 item 13, not assumed cloud-provider-specific

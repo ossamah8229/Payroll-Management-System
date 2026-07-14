@@ -250,40 +250,70 @@ the same numbers today.
 
 ## 5. Backup Packages
 
-When a cycle transitions to `Archived` (i.e., the moment a new cycle is created — see §4), the
-system automatically generates a backup package for the cycle being archived.
+**Implemented Phase 5 Checkpoint 2 (2026-07-14) as a reusable, manually-triggered domain —
+automatic generation on the cycle archive transition remains later, separately-authorized Phase 5
+work (Checkpoint 3).** This section originally described only the automatic-on-archive trigger;
+Checkpoint 2 builds the generator and a manual entry point
+(`POST /api/v1/payroll-cycles/:cycleId/backup-packages`, `payroll-cycle:manage`, Master-Admin-only)
+that later checkpoint will call from inside its own archive transition, unchanged. A Draft cycle is
+rejected; `Released` and `Archived` cycles are both accepted (the latter has no code path that sets
+it yet, but the check already permits it).
 
-**Contents:**
-- Payroll CSV — full Payroll Entry data for the cycle, matching the existing Payroll Entry
-  import/export column set.
-- Bank Sheets CSV — the released, non-held, bank-account-holding employees for the cycle, one row
-  per employee, using the same combined payment amount (net salary ± any settling Balance
-  Adjustments) as the in-app Bank Sheet — see
-  `docs/architecture/workflows/corrections-and-balance-adjustments.md` ("Representation in Bank
-  Sheets, Cash Sheets, and Payslips"). The backup must never diverge from what the in-app sheet showed.
-- Receivings CSV — the same, for released, non-held, cash-payment employees (Cash Receiving Sheet
-  data).
-- `metadata.json`, containing:
-  - Cycle month/label and release-status summary (released / held / pending counts)
-  - **Application Version** — the deployed app release/build identifier at generation time
-  - **Database Schema Version** — the applied Prisma migration identifier at generation time
-  - **Backup Version** — this package's own version number (see Versioning, below)
-  - **Generated Timestamp** — when the package was produced
+**Contents, approved by the 2026-07-14 architecture review (amended from this section's original
+list):**
+- `manifest.json` — package version, cycle identity, generation timestamp/actor, application/schema
+  version, release-status summary, and every other file's own filename/checksum/size. Built last
+  (it needs every other file's checksum to be meaningful) but stored/listed first.
+- Payroll Entry CSV **and** XLSX — full Payroll Entry data for the cycle, produced by the same
+  `exportPayrollEntriesToCsv`/`Xlsx` builders the live Payroll Entry export route already uses.
+- Bank Sheets CSV — **one combined file spanning every active Bank plus Cash**, not one file per
+  bank (a change from this section's original per-bank framing): built by looping the existing
+  single-bank `getBankSheet()` query once per active Bank and once for Cash and concatenating rows,
+  never a second query/calculation path.
+- Cash Receiving CSV — produced by the existing `exportCashReceivingSheetToCsv` builder, unchanged.
+- **Payslip PDFs and an Audit Log export were both evaluated and explicitly deferred** — absent from
+  this checkpoint entirely. Payslips are deterministically regenerable on demand from released
+  `PayrollEntry` data (the same reasoning `docs/architecture/system-conventions.md §2` already gives
+  for not caching them elsewhere), and an Audit Log export has no existing builder to reuse. Revisit
+  only if a real, measured need emerges — not built ahead of one.
 
-  Capturing application and schema version alongside the data itself means a backup package is
-  self-describing: restoring or auditing it later doesn't require guessing which code/schema version
-  produced it.
+Every figure in every file above is read from `PayrollEntry`'s own already-frozen columns via
+existing, already-shipped builders — a backup can never diverge from what the in-app equivalent
+showed, by construction (Principle 6), not by a separate parity check.
 
 **Storage:** written through the `StorageProvider` abstraction (`docs/architecture/system-conventions.md
 §2`) — local filesystem in development, swappable to cloud object storage in production without
-touching the generation logic.
+touching the generation logic. Keys: `backups/{cycleId}/v{version}/{filename}` — five individual
+stored objects per version (manifest + four data files), never a persisted ZIP of the whole package.
 
-**Versioning:** a backup package's `Backup Version` increments if it is regenerated for a cycle that
-has already been archived — which happens when a correction is later approved against that
-historical cycle's data (see `docs/architecture/workflows/corrections-and-balance-adjustments.md`).
-Each version is retained, not overwritten; the package itself follows the same "never overwrite
-history" rule as the database.
+**Generation ordering (the approved cross-system atomicity ordering, now implemented):** assemble
+every file's content in memory → write all five storage objects → one final PostgreSQL transaction
+(create every `BackupPackageFile` row, flip the package to `READY`, write the audit entry) → commit.
+If anything fails after the package's version was reserved, this attempt's own already-written
+storage objects are best-effort deleted and the reserved row is marked `FAILED` with a short,
+non-sensitive diagnostic — a `BackupPackage` is either `READY` and fully downloadable, or it is not a
+usable domain record; there is no partial/half-written state ever exposed.
+
+**Versioning:** version 1 is created the first time a Backup Package is generated for a cycle; each
+subsequent generation (manual retry now, or — later — a correction approved against an already-
+archived cycle, per `docs/architecture/workflows/corrections-and-balance-adjustments.md`) reserves
+the next integer version atomically (`MAX(version) + 1`, inside the same transaction that creates the
+row, before any storage write begins) and is retained, never overwritten — the package follows the
+same "never overwrite history" rule as the database itself. A concurrent second generation attempt
+for the same cycle either lands on the next version cleanly or loses the reservation race with a
+typed `409 Conflict` (never two successful generations landing on the same version, never a raw
+constraint-violation leak).
+
+**Authorization:** generation, listing, package detail, and individual file download all reuse
+`payroll-cycle:manage` (the same permission Finalize Cycle and cycle creation already use — all
+three the same class of system-lifecycle action) — Master Admin only; no new permission was
+introduced. Every download is authorized and resolved through the `BackupPackageFile` row's own id;
+no raw storage key is ever accepted from or exposed to a client.
 
 **Purpose boundary:** backup packages are for disaster recovery and external handoff (e.g. giving the
 client an offline copy, or restoring from a catastrophic failure) — they are not, and must never
 become, a data source for any in-application feature.
+
+**Explicitly deferred past this checkpoint:** automatic generation on cycle archive (Checkpoint 3),
+cycle archiving itself, new-cycle creation, historical cycle selection, Payslip PDFs, an Audit Log
+export, and any browser UI (backend API only this checkpoint).

@@ -43,6 +43,13 @@ export async function cleanTestData(): Promise<void> {
   // scoped by the same fake year=2900 convention as PayrollEntry/PayrollCycle below (it has no
   // text column of its own to prefix).
   await prisma.payrollUnitRelease.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
+  // BackupPackage/BackupPackageFile (Phase 5 Checkpoint 2, docs/architecture/database/
+  // payroll-cycle.md §17-18) are both RESTRICT (cycleId → PayrollCycle, generatedBy → User) —
+  // BackupPackageFile must go before BackupPackage (its own RESTRICT parent), and both strictly
+  // before PayrollCycle/User below. Scoped by the same fake year>=2900 convention (neither table
+  // has a text column of its own to prefix).
+  await prisma.backupPackageFile.deleteMany({ where: { backupPackage: { cycle: { year: { gte: 2900 } } } } });
+  await prisma.backupPackage.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.payrollEntry.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.advance.deleteMany({ where: { employee: { site: { name: { startsWith: 'Test Site ' } } } } });
   await prisma.scheduledPayrollPeriod.deleteMany({ where: { year: { gte: 2900 } } });

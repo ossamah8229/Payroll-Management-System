@@ -26,3 +26,8 @@ npm-debug.log*
 
 # Local storage (StorageProvider local filesystem implementation)
 backend/storage/
+# Test-only storage root (backend/tests/env.setup.ts's STORAGE_ROOT fallback) — created the moment
+# any test file imports src/app.ts, since Phase 5 Checkpoint 2 wires the StorageProvider singleton
+# up as a real dependency of backup-packages.routes.ts. backup-packages.test.ts removes its own
+# generated content in its own afterAll; this covers the directory itself as defense in depth.
+backend/storage-test-unused/

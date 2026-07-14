@@ -1708,6 +1708,58 @@ cycle test and `payroll-entry-import-export.test.ts`'s reject-import-on-non-Draf
 assert the corrected behavior instead of the old, incorrect one. Full record:
 `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 1 — final review corrections" entry.
 
+**Checkpoint 2 — Backup Packages: reusable domain and generator — implemented 2026-07-14, pending
+review before commit.** `BackupPackage`/`BackupPackageFile` (docs/architecture/database/
+payroll-cycle.md §17-18, amended from the originally frozen sketch per the 2026-07-14 architecture
+review: `status`/`generatedBy`/`failureReason` added to `BackupPackage`;
+`filename`/`contentType`/`checksum`/`sortOrder` added to `BackupPackageFile`). New module
+`backend/src/modules/backup-packages/` — `generateBackupPackage`/`listBackupPackages`/
+`getBackupPackage`/`getBackupPackageFile`. **Manual generation only** (`POST /api/v1/payroll-cycles/
+:cycleId/backup-packages`, `payroll-cycle:manage`, Master-Admin-only) — no automatic generation on
+archive, no archiving, no new-cycle creation, all later, separately authorized work.
+
+**Approved content (deviating from this section's own original candidate list, per the architecture
+review's explicit check against the actual frozen spec and shipped modules):** Payroll Entry CSV +
+XLSX, one combined Bank Sheets CSV (every active Bank plus Cash, looping the existing single-bank
+`getBankSheet()` and concatenating rows — no second query/calculation path), Cash Receiving CSV, and
+`manifest.json`. **Payslip PDFs and an Audit Log export were evaluated and explicitly deferred** —
+absent from the frozen `docs/architecture/workflows/payroll-lifecycle.md §5` spec, and, for
+Payslips, redundantly regenerable on demand from released `PayrollEntry` data per
+`docs/architecture/system-conventions.md §2`'s existing reasoning.
+
+**Generation ordering** (the Checkpoint 0 cross-system-atomicity decision, now implemented): reserve
+the next version (`GENERATING` row, `MAX(version) + 1`, before any storage write — the concurrency
+backstop, a losing concurrent reservation gets a clean `409`) → assemble all four data files via
+existing export builders only → build `manifest.json` last (needs every other file's checksum) but
+store it first → write all five storage objects (SHA-256 checksum per file) → one final transaction
+(file rows + package → `READY` + audit) → commit. Any failure after reservation best-effort deletes
+this attempt's own storage objects and marks the row `FAILED` with a safe, class-name-only
+diagnostic (never the raw error message/stack/SQL/path) — a package is either `READY` and fully
+downloadable or not a usable record, never partial. **Synchronous, no background/job mechanism** —
+with Payslips deferred, generation cost is sub-second even at the 10,000-employee design floor,
+verified directly rather than assumed.
+
+**API**: `POST`/`GET .../backup-packages` (cycle-scoped: generate, list), `GET /api/v1/backup-
+packages/:id` (detail), `GET /api/v1/backup-packages/files/:fileId` (download) — all four reuse
+`payroll-cycle:manage`, no new permission. Every download resolves through the file's own row id;
+no raw storage key is ever accepted from or exposed to a client. Audit:
+`backup_package.generated`/`.generation_failed`/`.file_downloaded` — list/detail are never audited.
+
+**Small, justified reuse-enabling changes** (not new calculation logic): `bank-sheets.service.ts`'s
+existing `BANK_SHEET_HEADERS`/`buildExportRow` were exported (previously module-private) and a new
+`buildCombinedBankSheetCsv` added there, reusing `getBankSheet()` unchanged. `backend/tests/
+helpers.ts`'s `cleanTestData` gained FK-ordered cleanup for the two new tables. No frontend UI this
+checkpoint (explicitly out of scope, per approved decision).
+
+**Checkpoint 2 — final narrow verification pass, 2026-07-14 (same day, before commit).** A 12-point
+verification found one real gap: list/detail responses were leaking each file's raw `storageKey`
+(the HTTP serializer spread the full Prisma row) — fixed by stripping it at the one place a
+response crosses the HTTP boundary. 6 new regression tests added (32 total) proving this and five
+other checklist points directly (runtime-enforced READY-only download, `GENERATING` package
+visibility with zero files, version-2 leaving version-1 untouched byte-for-byte, non-circular
+manifest checksum, and failure cleanup never reaching a prior successful version). Full record:
+`docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 2 — final narrow verification pass" entry.
+
 **Depends on:** Phase 4 (Release must exist for the finalization precondition to be meaningful).
 
 **Effort estimate:** 4–6 days.

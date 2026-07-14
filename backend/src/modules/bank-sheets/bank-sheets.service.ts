@@ -183,7 +183,7 @@ export async function getBankSheet(
   };
 }
 
-const BANK_SHEET_HEADERS = [
+export const BANK_SHEET_HEADERS = [
   'Employee Code',
   'CNIC',
   'Employee Name',
@@ -197,7 +197,7 @@ const BANK_SHEET_HEADERS = [
   'Net Salary',
 ] as const;
 
-function buildExportRow(row: BankSheetRow): string[] {
+export function buildExportRow(row: BankSheetRow): string[] {
   return [
     row.employeeCode ?? '',
     row.cnic ?? '',
@@ -283,4 +283,43 @@ export async function exportBankSheetToXlsx(
 
   const buffer = await workbook.xlsx.writeBuffer();
   return { buffer: Buffer.from(buffer), rowCount: sheet.rows.length, bankLabel: sheet.bankLabel };
+}
+
+export interface CombinedBankSheetResult {
+  buffer: Buffer;
+  rowCount: number;
+}
+
+/**
+ * Backup Packages (Phase 5 Checkpoint 2) — one combined Bank Sheets CSV spanning every active Bank
+ * plus Cash, for the whole cycle. **Deliberately not a new query/calculation path**: this loops
+ * `getBankSheet()` (this module's own single query+calc implementation, above) once per active
+ * Bank and once for Cash, reusing its rows, `buildExportRow`'s exact formatting, and
+ * `BANK_SHEET_HEADERS`'s exact columns unchanged — the only new logic here is concatenation and one
+ * combined grand total, matching the architecture review's explicit "do not introduce a second
+ * calculation path" instruction.
+ */
+export async function buildCombinedBankSheetCsv(
+  currentUser: SessionUser,
+  cycleId: string,
+): Promise<CombinedBankSheetResult> {
+  const activeBanks = await prisma.bank.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } });
+  const bankFilters = [...activeBanks.map((bank) => bank.id), CASH_BANK_FILTER];
+
+  const allRows: BankSheetRow[] = [];
+  for (const bankFilter of bankFilters) {
+    const sheet = await getBankSheet(currentUser, cycleId, bankFilter);
+    allRows.push(...sheet.rows);
+  }
+
+  const exportRows = allRows.map(buildExportRow);
+  const totalNetSalary = sumMoney(allRows.map((row) => row.netSalary));
+  const totalRow = ['', '', '', '', '', '', '', '', '', 'Total', totalNetSalary];
+  const csv = stringifyCsvSync([
+    BANK_SHEET_HEADERS as unknown as string[],
+    ...exportRows,
+    ...(exportRows.length > 0 ? [totalRow] : []),
+  ]);
+
+  return { buffer: Buffer.from(csv, 'utf-8'), rowCount: allRows.length };
 }

@@ -30,6 +30,7 @@ import { cashReceivingRouter } from './modules/cash-receiving/cash-receiving.rou
 import { payslipsRouter } from './modules/payslips/payslips.routes';
 import { advancesRouter } from './modules/advances/advances.routes';
 import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
+import { backupPackageDetailRouter, backupPackagesRouter } from './modules/backup-packages/backup-packages.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -123,6 +124,9 @@ export function createApp(): Express {
   // Same reasoning again — a dedicated module, not a bolt-on of Bank Sheets/Cash Receiving above
   // (Phase 4 Checkpoint 6.1).
   app.use('/api/v1/payroll-cycles/:cycleId/payslips', payslipsRouter);
+  // Same reasoning again — mounted ahead of payrollCyclesRouter's own /:id route (Phase 5
+  // Checkpoint 2).
+  app.use('/api/v1/payroll-cycles/:cycleId/backup-packages', backupPackagesRouter);
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
   app.use('/api/v1/payroll-entries', payrollEntriesRouter);
   app.use('/api/v1/work-lines', workLinesRouter);
@@ -131,6 +135,10 @@ export function createApp(): Express {
   app.use('/api/v1/advances', advancesRouter);
   app.use('/api/v1/tasks', tasksRouter);
   app.use('/api/v1/task-notifications', taskNotificationsRouter);
+  // Phase 5 Checkpoint 2 — id-scoped detail/download routes, a flat top-level resource (a package/
+  // file is looked up by its own id, matching Advances' own "not nested under a specific parent
+  // route" pattern above).
+  app.use('/api/v1/backup-packages', backupPackageDetailRouter);
 
   app.use(errorHandler);
 

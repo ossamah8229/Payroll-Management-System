@@ -177,52 +177,85 @@ table exists to avoid — every such reference goes through this one table inste
 
 ## 17. `BackupPackage`
 
-**Purpose:** The disaster-recovery/external-access artifact generated automatically when a cycle is
-archived.
+**Purpose:** The disaster-recovery/external-access artifact for one payroll cycle.
 **Why it exists:** `docs/architecture/workflows/payroll-lifecycle.md §5`. **Never a data source for
 in-app historical viewing** — that always comes from Postgres directly.
+
+**Implemented Phase 5 Checkpoint 2 (2026-07-14), amended from the sketch this section previously
+carried** — the architecture review found the original sketch (below the amendment note)
+under-specified for authenticated download, in-flight/failed generation, and actor attribution, and
+added `status`, `generatedBy`, and `failureReason`. Generation is **manually triggered only** this
+checkpoint (`POST /api/v1/payroll-cycles/:cycleId/backup-packages`, Master-Admin-only via
+`payroll-cycle:manage`) — automatic generation on the cycle archive transition remains later,
+separately-authorized Phase 5 work; this checkpoint builds the generator that later work will call.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `cycleId` | uuid | no | — | FK → `PayrollCycle.id`, `ON DELETE RESTRICT` |
-| `version` | integer | no | `1` | increments if regenerated after a later correction against this archived cycle |
-| `generatedAt` | timestamptz | no | `now()` | |
-| `applicationVersion` | varchar(40) | no | — | deployed app build/release identifier |
-| `databaseSchemaVersion` | varchar(60) | no | — | applied Prisma migration identifier |
-| `releaseStatusSummary` | jsonb | no | — | released/held/pending counts at generation time |
+| `version` | integer | no | `1` | reserved atomically as `MAX(version) + 1` inside the same transaction that creates this row — never client-supplied; increments on every regeneration (a later correction against an archived cycle, or a manual retry), never overwritten |
+| `status` | `BackupPackageStatus` | no | `GENERATING` | `GENERATING` → exactly one of `READY`/`FAILED`, never changes again after that |
+| `generatedAt` | timestamptz | yes | — | set only on the `GENERATING → READY` transition |
+| `generatedBy` | uuid | no | — | FK → `User.id`, `ON DELETE RESTRICT` — the actor who triggered generation, matching `PayrollCycle.createdBy`/`.releasedBy`'s own convention |
+| `applicationVersion` | varchar(40) | no | — | deployed app release identifier at generation time (`backend/package.json`'s own `version` field — this project does not yet bump it per deploy, a known, accepted limitation) |
+| `databaseSchemaVersion` | varchar(60) | no | — | the latest applied Prisma migration name at generation time, read from Prisma's own `_prisma_migrations` table |
+| `releaseStatusSummary` | jsonb | no | — | released/held counts at generation time, computed identically to Finalize Cycle's own `payroll_cycle.released` audit metadata shape |
+| `totalSizeBytes` | bigint | yes | — | nullable until `READY` |
+| `fileCount` | integer | yes | — | nullable until `READY` |
+| `manifestChecksum` | varchar(64) | yes | — | SHA-256 hex of the manifest's own canonical-JSON bytes; nullable until `READY` |
+| `failureReason` | text | yes | — | set only when `status = FAILED` — a short, non-sensitive diagnostic (the failing error's class name, never its raw message/stack/SQL detail/filesystem path) |
+| `createdAt` | timestamptz | no | `now()` | |
+| `updatedAt` | timestamptz | no | (auto) | |
 
 - **Unique constraints:** (`cycleId`, `version`)
-- **Indexes:** unique(`cycleId`, `version`); (`cycleId`)
-- **Cascade:** `cycleId` is `RESTRICT`
-- **Module owner:** Payroll Processing (triggered by the archive transition) via the storage
-  abstraction (`docs/architecture/system-conventions.md §2`)
-- **Immutable, append-only:** a new version row is created for regeneration; existing rows are never
-  edited
+- **Indexes:** unique(`cycleId`, `version`); (`cycleId`); (`status`)
+- **Cascade:** `cycleId` and `generatedBy` are both `RESTRICT`
+- **Module owner:** Payroll Processing (this checkpoint's own module, `backup-packages.service.ts`) via
+  the storage abstraction (`docs/architecture/system-conventions.md §2`)
+- **Immutable, append-only** with exactly one permitted transition per row (`GENERATING` →
+  `READY`/`FAILED`); a `FAILED` row is never retried in place — a fresh attempt reserves a brand new
+  version
+- **Invariant:** a `BackupPackage` is either `READY` (fully generated, downloadable, exactly `fileCount`
+  `BackupPackageFile` rows exist) or it is not a usable domain record (`GENERATING`/`FAILED` are never
+  exposed as downloadable by list/detail/download)
 - **Row count:** ~1/month, occasionally more when a correction against an archived cycle triggers a
-  new version
+  new version, or an operator manually regenerates
 
 ## 18. `BackupPackageFile`
 
-**Purpose:** One physical file within a `BackupPackage` (Payroll CSV, Bank Sheets CSV, Receivings
-CSV, and any future artifact type).
-**Why it exists:** Modeled as its own table rather than three hardcoded columns on `BackupPackage`,
-so a future artifact type (e.g. a Payslips bundle) is a new row type, not a new column
-(Principle 8).
+**Purpose:** One physical stored file within a `BackupPackage`.
+**Why it exists:** Modeled as its own table rather than hardcoded columns on `BackupPackage`, so a
+future artifact type is a new row type, not a new column (Principle 8).
+
+**Implemented Phase 5 Checkpoint 2, amended from the sketch this section previously carried** —
+`filename`, `contentType`, `checksum`, and `sortOrder` were added: a safe, sanitized download
+filename distinct from the (untrusted) `storageKey`; a `Content-Type` response header
+(`StorageProvider` itself never retains this after `write()`); per-file SHA-256 integrity
+verification; and deterministic listing/manifest order.
+
+**Approved content, this checkpoint (docs/architecture/workflows/payroll-lifecycle.md §5):**
+`manifest.json`, Payroll Entry CSV, Payroll Entry XLSX, one combined Bank Sheets CSV (every active
+Bank plus Cash), Cash Receiving CSV — five rows per package version, always. Payslip PDFs and an
+Audit Log export were both evaluated in the 2026-07-14 architecture review and explicitly deferred.
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `backupPackageId` | uuid | no | — | FK → `BackupPackage.id`, `ON DELETE RESTRICT` |
-| `fileType` | `BackupFileType` | no | — | |
-| `storageKey` | text | no | — | key/path resolved via the `StorageProvider` abstraction |
-| `sizeBytes` | bigint | yes | — | |
+| `fileType` | `BackupFileType` | no | — | `MANIFEST` \| `PAYROLL_ENTRY_CSV` \| `PAYROLL_ENTRY_XLSX` \| `BANK_SHEETS_CSV` \| `CASH_RECEIVING_CSV` |
+| `filename` | text | no | — | e.g. `payroll-entry.csv` — always one of five fixed, server-generated values, never derived from user input |
+| `storageKey` | text | no | — | key/path resolved via the `StorageProvider` abstraction, under `backups/{cycleId}/v{version}/{filename}` — never exposed to API clients directly; every download is authorized and resolved through this row's own `id` |
+| `contentType` | text | no | — | echoed back on download (`StorageProvider.write()` does not persist this itself) |
+| `sizeBytes` | bigint | no | — | |
+| `checksum` | varchar(64) | no | — | SHA-256 hex, computed from the exact bytes written to storage |
+| `sortOrder` | integer | no | — | deterministic order — `manifest.json` is always `0`, then the four data files in the fixed order the service always generates them in |
 | `createdAt` | timestamptz | no | `now()` | |
 
 - **Unique constraints:** (`backupPackageId`, `fileType`)
 - **Indexes:** (`backupPackageId`)
 - **Cascade:** `RESTRICT`
 - **Module owner:** Payroll Processing
-- **Immutable, append-only**
+- **Immutable, append-only** — a regenerated package is always a new `BackupPackage` version with its
+  own new `BackupPackageFile` rows, never an edit to an existing one's rows
 
 ---
