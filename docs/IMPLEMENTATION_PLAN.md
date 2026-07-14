@@ -1600,7 +1600,7 @@ Package generator → Checkpoint 3 — new-cycle-creation transaction upgrade (a
 departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll Cycle Selector → Phase
 close-out. Later checkpoints are not yet authorized; each requires its own explicit go-ahead.
 
-**Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14.** The storage abstraction
+**Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14, COMMITTED as `d87b9b0`.** The storage abstraction
 originally planned for Phase 0 (never built — see `docs/PROJECT_PROGRESS.md` §3 item 4) and
 identified as Phase 5's own hard prerequisite. `StorageProvider` interface + the first and only
 implementation, `LocalFilesystemStorageProvider` (`backend/src/lib/storage/`) — see
