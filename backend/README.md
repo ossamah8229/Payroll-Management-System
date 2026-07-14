@@ -72,5 +72,12 @@ Management, plus their `Bank`/`AdjustmentType`/`CompanySettings` master data). `
 they're added additively (Principle 8) in the migrations that accompany the phases that build those
 modules. `BackupPackage` is deferred with them (Phase 5).
 
-File uploads (company logo, user avatar) are not available yet — the `StorageProvider` abstraction
-called for in Phase 0 was never actually built; see `docs/PROJECT_PROGRESS.md` §3 item 4.
+File uploads (company logo, user avatar) are still not wired up to any route — the `StorageProvider`
+abstraction called for in Phase 0 was never actually built until Phase 5 Checkpoint 0
+(`backend/src/lib/storage/`, see `docs/architecture/system-conventions.md §2` and
+`docs/PROJECT_PROGRESS.md` §3 item 4); it exists now, but no service imports it yet — the next
+consumer is the `BackupPackage` checkpoint (Phase 5).
+
+Generated/persisted files are written under `STORAGE_ROOT` (`.env.example`, default `storage` —
+resolves to `backend/storage/`, gitignored, created automatically if missing). Required in every
+environment; there is no unsafe fallback if it's left unset.

@@ -36,20 +36,58 @@ dictated by that library, not by this rule.
 
 Generated files (PDFs, Excel exports, backup packages, uploaded logos/avatars) are never written
 directly to `fs` or a cloud SDK from business logic. All file I/O goes through a single
-`StorageProvider` interface:
+`StorageProvider` interface.
+
+**Implemented 2026-07-14 (Phase 5 Checkpoint 0) — supersedes the design sketch this section
+previously carried.** The interface below is what actually shipped
+(`backend/src/lib/storage/storage-provider.ts`), scoped to Phase 5's concrete needs rather than the
+earlier speculative sketch (which included `getUrl` and `list`, neither of which any real consumer
+needs yet):
 
 ```
 StorageProvider
-  save(key, data, contentType)   -> StorageRef
-  read(key)                      -> Buffer
-  getUrl(key)                    -> string        // signed URL in cloud impl, local path/route in dev
-  delete(key)                    -> void           // restricted; see audit note below
-  list(prefix)                   -> StorageRef[]
+  write(key, data: Buffer | ReadableStream, options?: { contentType })  -> StorageObjectMetadata
+  read(key)                                                             -> Buffer
+  createReadStream(key)                                                 -> ReadableStream
+  exists(key)                                                           -> boolean
+  delete(key)                                                           -> void
 ```
 
+No signed URLs, multipart upload, bucket/container exposure to domain code, CDN behavior, ACLs,
+provider-specific ETags, or lifecycle policies — deliberately excluded as speculative ahead of a
+real need (Principle 8's spirit applied to this interface, not just the database schema); any
+future implementation adds these behind the interface if a real consumer ever needs them, without
+changing what domain modules call. Overwrite policy: last-writer-wins, published atomically (a
+concurrent reader never observes a partially-written file) — a caller that needs "never overwrite"
+semantics (e.g. a versioned `BackupPackage`) chooses a unique key per version itself; the interface
+does not enforce key uniqueness. `delete` is idempotent — deleting a missing key succeeds silently,
+matching common cloud-object-storage (e.g. S3) semantics, so a future cloud implementation never has
+to fake a not-found error just to match local behavior. Storage keys are treated as untrusted at the
+provider boundary even when application-generated — validated against traversal, absolute paths,
+backslashes, null bytes, empty segments, and containment (including a defense-in-depth symlink
+check) before any filesystem operation is attempted (`backend/src/lib/storage/safe-path.ts`).
+
 **Implementations:**
-- `LocalFilesystemStorageProvider` — development default. Writes under a project-local storage
-  directory (e.g. `backend/storage/`), served back via a simple authenticated route for local use.
+- `LocalFilesystemStorageProvider` (`backend/src/lib/storage/local-filesystem-storage-provider.ts`)
+  — the only implementation today; suitable for both local development and a self-hosted production
+  deployment with no cloud object storage (§3 item 13's portability requirement — this codebase is
+  not assumed to run on any specific host or cloud provider). Writes under a configured root
+  directory (`STORAGE_ROOT`, default `backend/storage/` in development, gitignored), created
+  automatically if missing, via an atomic temp-file-then-rename publish. **Not yet served back by
+  any HTTP route** — `read`/`createReadStream` exist at the provider layer only; the authenticated,
+  user-facing download endpoint is deferred to the `BackupPackage` checkpoint (Phase 5), the first
+  checkpoint with a real domain record to authorize a download against. The storage root itself is
+  never served via Express static middleware. **Permissions, verified 2026-07-14**: every directory
+  (the root itself and every nested directory a key's path implies) is created with explicit
+  owner-only `0o700`; every object file is written with explicit owner-only `0o600` — an explicit
+  mode, not the deploying environment's umask, is what guarantees this, confirmed to apply
+  recursively on this platform. The containment baseline is the storage root's *real* (symlinked-
+  resolved) location, established once at construction, so a configured root that is itself a
+  symlink is handled correctly, not merely a root whose subdirectories might later become one.
+  Every thrown error names the caller-supplied key, never an absolute filesystem path, in its own
+  `message` — see `backend/src/lib/storage/errors.ts`'s log-hygiene note on `StorageIOError.cause`
+  for the one field that still carries a raw underlying filesystem error (kept for local debugging,
+  not meant to be logged wholesale).
 - Cloud implementation (e.g. S3 or R2-backed) — introduced when production hosting is finalized.
   Selected via configuration/environment variable; business logic that calls `StorageProvider` never
   changes when the implementation swaps.
@@ -58,6 +96,18 @@ Every feature that produces a **persisted** file — backup packages, company lo
 depends on this interface only. This is what lets development run entirely on the local filesystem
 while production later moves to cloud object storage with no business-logic changes, per the
 approved architecture.
+
+**Cross-system atomicity (Phase 5 Checkpoint 0 architecture decision, mechanism not yet
+implemented — the consuming checkpoint is `BackupPackage` generation).** A backup package's
+generation spans two systems — PostgreSQL and `StorageProvider` — that cannot share one
+transaction. The approved ordering: prepare and write all storage objects for the operation
+*first*; only once every storage write has succeeded does the single, final PostgreSQL transaction
+run (archiving the cycle, inserting `BackupPackage`/`BackupPackageFile` rows referencing the
+already-written keys, creating the new cycle). If the later database transaction fails, the
+already-written storage object(s) are best-effort cleaned up, but this is accepted as non-blocking —
+a late failure may leave a temporarily unreferenced storage object, but must never leave payroll
+database state partially advanced (Principle 2). This ordering is documented here as a frozen
+decision for the checkpoint that implements it; Checkpoint 0 itself performs no cross-system writes.
 
 **Clarified 2026-07-12 (Phase 4 Checkpoint 6.2's own architecture review) — on-demand PDF
 generation does NOT require `StorageProvider`.** This section previously read as if Puppeteer PDF

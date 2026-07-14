@@ -3023,6 +3023,213 @@ Reviewed against every Phase 4 checkpoint and `docs/PROJECT_PRINCIPLES.md`:
   is marked code-complete, not fully closed** — the summary table in §2 below reflects this
   precisely rather than rounding up to "closed."
 
+### Phase 5 architecture review (2026-07-14, read-only, no code)
+
+Reviewed the frozen Phase 5 architecture (`docs/architecture/workflows/payroll-lifecycle.md §4–5`,
+`database/payroll-cycle.md §10/§10a/§17–18`) against the actual Phase 4 implementation. **Conclusion:
+no architectural redesign required** — Phase 4 shipped without surprises that invalidate Phase 5's
+design. Findings, all approved before any code was written:
+
+1. `createPayrollCycle` (`payroll-processing.service.ts`) already implements *part* of Phase 5's job
+   (cycle creation, carry-forward, `ScheduledPayrollPeriod` resolution, Advances materialization) —
+   Phase 5 extends this function in place rather than building a parallel implementation. It
+   currently does not require the outgoing cycle to be `RELEASED`, does not archive it, generates no
+   `BackupPackage`, and — a genuine functional gap, not by design — never carries forward a departed
+   employee, so a departed employee with a scheduled Advance deduction due next cycle currently gets
+   no entry and the deduction is stranded.
+2. **The Outstanding Payroll Obligation registry question, resolved**: Phase 5 retains the existing
+   direct-call convention (Advances only, the sole real provider today); no generic provider/hook
+   registry is built in Phase 5; `BalanceAdjustment`'s own carry-forward predicate is out of Phase
+   5's implementable scope (the table doesn't exist until Phase 6, which is sequenced after this
+   phase) and lands as Phase 6's own direct call, mirroring Advances'; a registry is revisited only
+   if a second concurrently-existing provider actually justifies it. Recorded in
+   `docs/IMPLEMENTATION_PLAN.md`'s Phase 5 section.
+3. `PayrollUnitReadiness` remains intentionally deferred (dated note added to `database/release.md`)
+   — not part of Phase 5's `Builds` list; the finalization precondition keys off
+   `PayrollEntry.released`/`.hold` only.
+4. Schema additions needed: `BackupPackage`/`BackupPackageFile` only (`database/payroll-cycle.md
+   §17–18`) — `PayrollCycle.releasedAt`/`.releasedBy`/`.archivedAt`/`.archivedBy` already exist
+   (added Phase 3 Checkpoint 0, unused until now), no change needed there.
+5. `StorageProvider` confirmed as Phase 5's hard prerequisite, per the standing decision
+   (`docs/PROJECT_PROGRESS.md` §3 item 4) — built first, as Checkpoint 0 (below).
+6. Cross-system atomicity (Postgres + `StorageProvider` can't share one transaction) identified as a
+   real open design question with no prior written answer — resolved and recorded in
+   `docs/architecture/system-conventions.md §2`: storage writes complete first, then one final
+   database transaction; a late database failure triggers best-effort storage cleanup and may
+   temporarily leave an unreferenced storage object, but must never leave payroll database state
+   partially advanced.
+7. Proposed checkpoint breakdown (Checkpoint 0 `StorageProvider` → 1 Finalize Cycle → 2 Backup
+   Package generator → 3 new-cycle-creation transaction upgrade → 4 Payroll Cycle Selector → phase
+   close-out) approved; recorded in `docs/IMPLEMENTATION_PLAN.md`'s Phase 5 section.
+
+### Phase 5, Checkpoint 0 — `StorageProvider` Foundation — COMPLETE, 2026-07-14
+
+Implements the storage abstraction originally planned for Phase 0 (silently never built — see §3
+item 4) and confirmed by the architecture review above as Phase 5's own hard prerequisite. Preflight
+confirmed branch `main`, a clean working tree, and every documented Phase 4 close-out commit present
+in `git log` before any file was touched.
+
+- **`backend/src/lib/storage/`** (new): `storage-provider.ts` (the `StorageProvider` interface —
+  `write`/`read`/`createReadStream`/`exists`/`delete` — deliberately narrower than the original
+  design sketch, which included `getUrl`/`list` that no real consumer needs yet; see
+  `docs/architecture/system-conventions.md §2` for the full shipped shape and reasoning);
+  `errors.ts` (`StorageError` hierarchy — `StorageKeyError`/`StorageNotFoundError`/
+  `StorageConfigError`/`StorageIOError` — deliberately not `HttpError`, since `StorageProvider` has
+  no knowledge of HTTP; a future route translates these itself); `safe-path.ts`
+  (`resolveObjectPath()` — the one place key validation happens: rejects `..`/`.` segments, absolute
+  paths, backslashes (rejected outright rather than merely normalized, so a key's meaning never
+  depends on which OS the process runs on), null bytes, empty segments, and anything that resolves
+  outside the configured root); `local-filesystem-storage-provider.ts`
+  (`LocalFilesystemStorageProvider` — the first and, for now, only implementation; atomic
+  temp-file-then-rename publish with guaranteed temp-file cleanup on failure; a defense-in-depth
+  symlink-escape check beyond the lexical path validation, since a subdirectory under the root could
+  in principle be replaced by a symlink after creation); `resolve-root.ts` (`resolveStorageRoot()` —
+  split into its own file, deliberately, so it stays a pure, testable function of its arguments
+  rather than living in `index.ts` where importing it for a test would trigger the singleton's real
+  `mkdirSync` side effect); `index.ts` (the app-wide `storageProvider` singleton, matching
+  `lib/prisma.ts`'s existing convention — constructed eagerly at import time so a misconfigured root
+  fails at startup; **not imported by any route or service yet**, so it has zero side effects on the
+  existing test suite or dev environment until the `BackupPackage` checkpoint wires it up).
+- **`backend/src/config/env.ts`**: new required `STORAGE_ROOT` (no schema default — matches
+  `SESSION_SECRET`/`CSRF_SECRET`'s fail-loudly convention, not `PORT`'s defaulted one).
+  **`backend/.env.example`**: `STORAGE_ROOT="storage"` (a working local-dev value, per this
+  codebase's existing convention for every other required secret/config). **`backend/tests/
+  env.setup.ts`**: a fallback value satisfying schema validation only — never used to create a real
+  directory, since every storage test constructs its own provider against an isolated
+  `fs.mkdtemp()` root rather than importing the `index.ts` singleton.
+- **Path security** (the checkpoint's own explicit requirement — storage keys are untrusted at the
+  provider boundary even when application-generated): traversal (`..`, including mid-path and
+  multi-level), absolute POSIX paths, Windows drive-letter prefixes, backslashes (both as a
+  traversal attempt and as an ordinary separator — rejected unconditionally, not merely normalized),
+  null bytes, empty path segments, and single-dot segments are all rejected before any filesystem
+  call. Containment is verified twice: lexically (segment-by-segment, plus a `startsWith(root +
+  sep)` check guarding against a naive prefix match like a `<root>-evil` sibling directory) and, for
+  defense in depth, via `realpath` on the nearest existing ancestor — catching a subdirectory under
+  the root having been replaced by a symlink pointing outside it after this provider created it.
+  Verified live: a real symlink was created inside a test's storage root pointing at a separate
+  `fs.mkdtemp()` directory, and a write through it was confirmed rejected with zero bytes written to
+  the target.
+- **No HTTP route added, deliberately** — per the checkpoint's own scope boundary, with no
+  `BackupPackage` (or any other domain record) yet in existence to authorize a download against,
+  inventing an authorization rule now would have had nothing real to check against. `read`/
+  `createReadStream` exist at the provider layer only; the authenticated, user-facing download
+  endpoint is explicitly deferred to the `BackupPackage` checkpoint. The storage root is not served
+  by Express static middleware anywhere in `app.ts`.
+- **Tests**: `backend/tests/storage.test.ts` — 37 new pure unit tests (no database, mirroring
+  `date-utils.test.ts`/`calc-net.test.ts`'s pattern for a `lib`-level utility), each against its own
+  isolated `fs.mkdtemp()` directory, removed in `afterEach`: binary read/write round-trip, nested
+  directory auto-creation, write metadata correctness, writing from a stream (not only a `Buffer`),
+  zero-byte and 5&nbsp;MB binary content, overwrite (last-writer-wins) and 12-way concurrent-write
+  resolution (exactly one of the concurrent values survives, never a byte-level mix), temp-file
+  cleanup after a simulated stream failure, `createReadStream` full-content streaming, `exists`
+  true/false without throwing, `delete` including idempotent delete-of-missing, 12 malformed-key
+  cases each individually rejected across all five operations, the symlink-escape case above,
+  recursive root creation, rejection of a filesystem-root storage root, and `resolveStorageRoot`'s
+  own cwd-collision guard. **Full backend suite: 383/383** (346 prior + 37 new), confirmed via a live
+  local PostgreSQL instance (this session reused an already-running embedded-postgres instance left
+  over from an earlier session in the same sandbox rather than starting a conflicting second one on
+  the same port — same `payroll_dev` database/migrations, all 13 migrations already applied, `prisma
+  migrate deploy` confirmed zero pending). The new storage tests were additionally re-run 5 times in
+  isolation to confirm no flakiness (all 37/37 every time).
+- **One real defect found and fixed via this checkpoint's own test run, not shipped**: a Jest/Node
+  VM-realm gotcha — Jest's `node` test environment runs test files in a separate VM context from the
+  one Node's own built-in modules (like `fs`) construct their errors in, so `err instanceof Error`
+  silently evaluates to `false` for a perfectly ordinary `fs` ENOENT/EACCES rejection under Jest,
+  even though the identical code behaves correctly outside Jest (confirmed by reproducing the exact
+  same code via `tsx` directly, where it worked correctly, before finding the Jest-specific cause).
+  This made the symlink-containment check's error-type guard mis-classify a routine "the object does
+  not exist yet, walk up to the parent" case as an unexpected I/O failure, so `exists()`/`delete()`
+  of a genuinely missing key would throw instead of returning `false`/succeeding silently as
+  specified. Fixed by checking for a `code` string property (duck-typing) instead of `err instanceof
+  Error`, which is also the more standard, realm-agnostic way to identify a `NodeJS.ErrnoException`
+  regardless of the Jest-specific trigger. Verified fixed and stable across 5 repeated isolated test
+  runs.
+- Two pre-existing, unrelated integration-test failures (`payslips.test.ts` — a PDF-rendering
+  timing/connection issue; `employees-import-export.test.ts` — a stale-session login failure) were
+  observed on the very first full-suite run against the reused live database, before any code in
+  this checkpoint's diff was touched by them, and did not reproduce on a clean re-run (383/383
+  green) — attributed to the reused Postgres instance's residual state from its prior session, not a
+  regression this checkpoint introduced. Neither test file was modified.
+- typecheck/lint/build clean across all three workspaces (`prisma validate` also clean — no schema
+  change, as expected). No frontend/UI surface was touched — an explicit, approved exception to the
+  otherwise-mandatory per-checkpoint Playwright rule, matching the same exception this project's
+  earlier schema-only checkpoints (e.g. Phase 3 Checkpoint 0) used, since this checkpoint adds no
+  route, service, or component a browser could exercise.
+- Git status confirmed clean of leftover artifacts: no stray `.tmp-*`/test-storage directories
+  anywhere in the repository tree; `backend/storage/` does not exist on disk (nothing has
+  constructed the singleton yet, confirming zero side effects from any verification step run this
+  checkpoint) and is confirmed gitignored, along with any file inside it, via `git check-ignore -v`.
+- **Not committed** — held for review per this checkpoint's own explicit instruction. Also not yet
+  begun: Finalize Cycle, `BackupPackage`, cycle archiving, new-cycle-creation changes, or historical
+  cycle selection — all explicitly out of this checkpoint's scope and unstarted.
+
+### Phase 5, Checkpoint 0 — final narrow pre-commit verification pass (2026-07-14)
+
+Approved in principle; before committing, ten specific properties were checked explicitly against
+the actual implementation (not assumed from the design) — the same discipline this project used for
+Phase 4 Checkpoint 6.1/6.2's own pre-commit passes. **Two real gaps were found and fixed; the other
+eight were confirmed already correct**, each backed by a new test, not just a code read:
+
+1. **Root-as-symlink containment — confirmed already correct, now tested.** The constructor's
+   existing `fs.realpathSync(resolved)` already resolves a symlinked root to its real location before
+   storing it as the containment baseline — untested until now. Added a test constructing a provider
+   whose *root itself* is a symlink, confirming writes land in the real target directory and
+   traversal is still rejected.
+2. **Collision-resistant concurrent temp filenames — confirmed already correct.** 8 random bytes (16
+   hex characters) per temp file was already sufficient; added an explicit assertion that a 12-way
+   concurrent write to the same key leaves zero `.tmp-*` files behind afterward (previously only the
+   "exactly one value survives" outcome was asserted, not the absence of leaked temp files).
+3. **Same-directory atomic rename — confirmed already correct**, unchanged from Checkpoint 0's
+   original implementation.
+4. **Temp-file cleanup on failure — confirmed correct for write failures, gap found for rename
+   failures.** The existing `catch` wraps both the write-to-temp-file step and the rename step, so
+   rename failures were already structurally covered — but no test exercised that path specifically.
+   Added a deterministic rename-failure test (pre-occupying the destination with a non-empty
+   directory, which POSIX `rename()` always rejects for a file source) confirming temp-file cleanup
+   and zero impact on the pre-existing occupant.
+5. **`createReadStream` contract — confirmed correct, clarified and tested.** Missing-object handling
+   was already synchronous (`StorageNotFoundError`, not a stream event). Added a doc comment stating
+   the contract explicitly (a *later* failure, after the stream has been returned, is an ordinary
+   stream `'error'` event this method cannot intercept) and a deterministic test proving the returned
+   stream is the real, unwrapped Node stream — a later externally-triggered error still surfaces
+   normally, confirming nothing in this method could silently swallow it.
+6. **`delete` scope — confirmed already correct, now tested.** `unlink` only, never recursive; added
+   a test writing two objects in the same directory, deleting one, and confirming the sibling and the
+   parent directory are both untouched.
+7. **No absolute paths or sensitive data in logs — two real gaps found and fixed.** The module itself
+   never calls `console`/a logger (confirmed by a new test spying on `console`/`stdout`/`stderr`
+   across a representative mix of successful and failing operations — zero calls). But
+   `assertNoSymlinkEscape`'s two error messages *did* embed the absolute resolved path (`current`) —
+   a real gap, since `backend/src/common/middleware/error-handler.ts:65` (`logger.error({ err, ... })`)
+   confirms any future route that lets a `StorageIOError` fall through *would* log it in full. Fixed
+   by threading the caller-supplied `key` through to those two messages instead of the absolute path;
+   every `StorageError` message is now guaranteed key-only. `StorageIOError.cause` still carries the
+   raw underlying Node error (which has its own absolute `.path`) for local debugging — documented
+   with an explicit log-hygiene caution in `errors.ts` rather than stripped, since sanitizing a field
+   whose entire purpose is developer diagnostics would cost more than it's worth for a field no
+   current code path logs.
+8. **Directory/file permissions — a real gap found and fixed.** Neither directories nor files were
+   given an explicit mode, leaving them subject to the deploying environment's umask (typically
+   `0o755`/`0o644` — group/other-readable). Fixed: every `mkdir`/`mkdirSync` call now passes
+   `mode: 0o700` (confirmed, via a throwaway script, to apply recursively to every directory created
+   in one call on this platform, not only the leaf), and both `writeFile` and `createWriteStream` now
+   pass `mode: 0o600`. Explicit modes, not the umask, are what make this a guarantee rather than an
+   environment-dependent accident — `0o700`/`0o600` have no group/other bits to begin with, so no
+   ordinary umask can widen them. Four new tests assert the actual mode bits on a freshly-created
+   root, a nested object directory, a Buffer-sourced file, and a stream-sourced file.
+9. **Full suite clean.** `prisma validate` clean (no schema change); typecheck/lint/build clean across
+   all three workspaces; full backend suite **392/392** (383 prior + 9 new tests from this pass) —
+   one transient, unrelated failure (`payroll-entry-import-export.test.ts`'s login helper) appeared on
+   the first full-suite run against the same long-lived reused Postgres instance and did not reproduce
+   in isolation or on a clean full re-run (392/392 green both times); the new/expanded storage suite
+   (46 tests total) was additionally re-run 5 times in isolation with zero flakiness.
+10. **No leftover artifacts** — re-confirmed after this pass: no stray `.tmp-*`/test-storage
+    directories anywhere in the repository tree, `backend/storage/` still does not exist on disk, and
+    `git status` shows only the intended files touched.
+
+No unrelated code was refactored; no `BackupPackage`/cycle-lifecycle work was started, per this
+pass's own explicit scope.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -3035,7 +3242,7 @@ Reviewed against every Phase 4 checkpoint and `docs/PROJECT_PRINCIPLES.md`:
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | Not started — precondition wording reaffirmed unchanged by the Phase 3 review |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) COMPLETE, not yet committed — see §1. Checkpoints 1–4 (Finalize Cycle, Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -3077,6 +3284,12 @@ Reviewed against every Phase 4 checkpoint and `docs/PROJECT_PRINCIPLES.md`:
    `StorageProvider` is not built in Phase 3 or Phase 4 — file uploads (logo/avatar) stay
    unavailable through both. Backup Package generation (Phase 5) is the first phase that hard-requires
    `StorageProvider`, so it must be built no later than the start of that phase.
+   **CLOSED 2026-07-14 (Phase 5 Checkpoint 0).** `StorageProvider` interface +
+   `LocalFilesystemStorageProvider` implemented — `backend/src/lib/storage/`, see §1's Checkpoint 0
+   entry and `docs/architecture/system-conventions.md §2`. Company logo/My Profile avatar upload
+   remains unwired through this checkpoint (out of its explicit scope — no route or service imports
+   the new `storageProvider` singleton yet); the abstraction those features are blocked on now
+   exists and is ready for a future checkpoint to wire up, whenever that work is scheduled.
 5. **Employee Registry import template's redundant columns — RESOLVED 2026-07-04 (Phase 2.5
    Checkpoint 3), pending only a client sanity-check.** The finalized mapping: `Area` and
    `Area/Location` are unit-level aliases (both export the employee's `ProjectUnit.name`; on import
@@ -3382,12 +3595,14 @@ outstanding).
    `--disable-setuid-sandbox`, PDF generation (individual and a representative batch), font
    rendering (Times New Roman or its documented fallback), memory stability under a real batch,
    graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
-3. **Phase 5 (Cycle Finalization, Archiving, and Backups) requires its own separate, explicit
-   authorization to begin**, per this project's standing per-checkpoint/per-phase practice — do not
-   start it opportunistically just because Phase 4 is code-complete. It also needs `StorageProvider`
-   built first (§3 item 4; Backup Package generation hard-requires it, and it was deliberately kept
-   out of Phases 2.5–4). **New consideration (§3 item 13)**: design it for portability to whatever
-   hosting a given customer provides, not assumed cloud-provider-specific.
+3. **Phase 5 (Cycle Finalization, Archiving, and Backups) IN PROGRESS, authorized 2026-07-14** — the
+   architecture review and Checkpoint 0 (`StorageProvider` foundation) are complete, per this
+   project's standing per-checkpoint/per-phase practice; Checkpoints 1–4 and phase close-out each
+   still require their own separate, explicit go-ahead, same as every other phase. `StorageProvider`
+   (§3 item 4; Backup Package generation's hard requirement, deliberately kept out of Phases 2.5–4)
+   is now built — `backend/src/lib/storage/`, see §1's Checkpoint 0 entry — designed portable to
+   whatever hosting a given customer provides per §3 item 13, not assumed cloud-provider-specific
+   (local filesystem only today; no Render-specific API anywhere in it).
 4. Confirm the two still-open design assumptions from `database/schema-invariants.md` §26: item 5
    (calendar-month-only cycles, already effectively settled by Phase 3's shipped design) and item 3
    (at-most-one-`ACTIVE`-`Advance`-per-type, already confirmed and enforced by Phase 4 Checkpoint 5)

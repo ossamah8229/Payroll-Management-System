@@ -13,6 +13,13 @@ const envSchema = z.object({
   SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 characters'),
   CSRF_SECRET: z.string().min(16, 'CSRF_SECRET must be at least 16 characters'),
   CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN is required'),
+  // No schema default, deliberately — matching SESSION_SECRET/CSRF_SECRET's pattern rather than
+  // PORT's. A missing value must fail loudly at startup rather than silently falling back to some
+  // guessed path (docs/architecture/system-conventions.md §2, Phase 5 Checkpoint 0). `.env.example`
+  // ships a working local-dev value; `lib/storage/index.ts`'s `resolveStorageRoot()` performs a
+  // second, storage-specific safety check on top of this one (rejects a value that resolves to the
+  // process's own working directory).
+  STORAGE_ROOT: z.string().min(1, 'STORAGE_ROOT is required'),
 });
 
 function loadEnv() {

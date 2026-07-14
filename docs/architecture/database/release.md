@@ -57,6 +57,14 @@ it can release.
 
 ### `PayrollUnitReadiness`
 
+**Still intentionally deferred, reconfirmed 2026-07-14 (Phase 5 Checkpoint 0 preflight).** Deferred
+past Phase 4 Checkpoint 2 when it was first scoped out, and not part of Phase 5's own `Builds` list
+(`docs/IMPLEMENTATION_PLAN.md` — Finalize Cycle's precondition keys off `PayrollEntry.released`/
+`.hold`, never off Readiness). Recorded here explicitly, rather than left to be silently
+rediscovered by a future session, since it has now been dangling across two phases: this table
+remains unimplemented (no migration, no route, no UI) until a session is explicitly authorized to
+build it.
+
 **Purpose:** The informational "payroll preparation for this Unit is complete" signal — the new
 "Ready for Release" status. **Deliberately non-gating**: Finance can release a Unit whether or not it
 has been marked Ready; this table has no bearing on whether `PayrollUnitRelease` can be inserted.

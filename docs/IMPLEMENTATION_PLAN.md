@@ -1575,6 +1575,74 @@ generator (Payroll/Bank Sheets/Receivings CSV +
 `metadata.json`, versioned, written through `StorageProvider`); the Payroll Cycle Selector (browse any
 historical cycle, always reading PostgreSQL, never a backup file).
 
+**Architecture review, 2026-07-14 (read-only, no code) — approved, reconciling the "registered
+provider" wording above with the actual implemented convention.** The paragraph above's generalized
+"every registered Outstanding Payroll Obligation provider" language pre-dates Advances actually
+being built (Phase 4 Checkpoint 5) and, as built, Advances is called *directly* from
+`createPayrollCycle` — no generic provider/hook registry exists, by explicit approved decision
+recorded in that module's own header comment (`backend/src/modules/payroll-processing/
+payroll-processing.service.ts`). Phase 5 retains this: it extends the existing direct-call
+convention to also carry forward a departed employee via Advances' own predicate (the one concrete,
+buildable-today case — `createPayrollCycle` currently selects only active employees, a real gap
+this phase closes), it does **not** build a generic registry, and the `BalanceAdjustment`-specific
+carry-forward predicate this section's own testing strategy (below) describes remains genuinely
+out of Phase 5's implementable scope — `BalanceAdjustment` doesn't exist until Phase 6, which is
+sequenced *after* this phase. Phase 6 adds its own direct call here, mirroring Advances', when it
+lands; a real registry is revisited only if a second concurrently-existing provider actually
+demonstrates the abstraction is justified, never built ahead of that need. **`PayrollUnitReadiness`
+is reconfirmed still out of scope** — see `database/release.md`'s dated note — Phase 5's
+finalization precondition keys off `PayrollEntry.released`/`.hold` only.
+
+**Executed as explicit, individually-gated checkpoints, the same discipline every phase since Phase
+2.5 has used** — proposed breakdown from the 2026-07-14 architecture review: **Checkpoint 0 —
+`StorageProvider` foundation** (below) → Checkpoint 1 — Finalize Cycle → Checkpoint 2 — Backup
+Package generator → Checkpoint 3 — new-cycle-creation transaction upgrade (archive + backup +
+departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll Cycle Selector → Phase
+close-out. Later checkpoints are not yet authorized; each requires its own explicit go-ahead.
+
+**Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14.** The storage abstraction
+originally planned for Phase 0 (never built — see `docs/PROJECT_PROGRESS.md` §3 item 4) and
+identified as Phase 5's own hard prerequisite. `StorageProvider` interface + the first and only
+implementation, `LocalFilesystemStorageProvider` (`backend/src/lib/storage/`) — see
+`docs/architecture/system-conventions.md §2` for the shipped interface shape and the cross-system
+atomicity decision recorded for the future `BackupPackage` checkpoint. No schema change (`prisma
+validate` confirmed clean). Application-controlled storage keys validated against traversal,
+absolute paths, backslashes, null bytes, empty segments, and containment (including a
+defense-in-depth symlink check) before any filesystem access
+(`backend/src/lib/storage/safe-path.ts`); atomic temp-file-then-rename publish; a new required
+`STORAGE_ROOT` env var (`backend/src/config/env.ts`, no schema default — fails loudly if missing,
+matching `SESSION_SECRET`/`CSRF_SECRET`'s convention rather than `PORT`'s); a second,
+storage-specific safety check (`resolveStorageRoot()`) rejecting a value that resolves to the
+process's own working directory. **No HTTP route added this checkpoint** — `read`/`createReadStream`
+exist at the provider layer only; retrieval stays there until the `BackupPackage` checkpoint gives it
+a real domain record to authorize a download against, per this checkpoint's own explicit scope
+boundary (no Finalize Cycle, no `BackupPackage`, no archiving, no new-cycle-creation changes, no
+historical cycle selection). 37 new backend tests (`backend/tests/storage.test.ts`, pure unit tests
+against isolated `fs.mkdtemp()` directories, no database) — full backend suite **383/383** (346
+prior + 37 new). typecheck/lint/build clean across all three workspaces. **One real defect found
+and fixed via this checkpoint's own test run, not shipped**: a Jest/Node VM-realm gotcha (Jest's
+`node` test environment runs test files in a different VM context than Node's own built-in modules
+construct their errors in, so `err instanceof Error` silently returns `false` for an ordinary
+`fs` ENOENT/EACCES rejection under Jest even though the identical code behaves correctly outside
+it) caused the containment check's error-type guard to mis-classify a routine "object does not
+exist" case as an unexpected I/O failure; fixed by checking for a `code` string property
+(duck-typing) instead of `instanceof Error`, confirmed stable across 5 repeated isolated runs.
+
+**Final narrow pre-commit verification pass, 2026-07-14** — ten specific properties checked
+explicitly (real filesystem-location containment when the root itself is a symlink, collision-
+resistant concurrent temp filenames, same-directory atomic rename, temp-file cleanup on both write
+*and* rename failure, `createReadStream`'s missing-object-vs-later-stream-error contract, `delete`
+never touching parent/sibling objects, no absolute paths or sensitive data in logs, private
+directory/file permissions, full clean verification, no leftover artifacts). **Two real gaps found
+and fixed**: error messages in the symlink-containment check embedded an absolute filesystem path
+(now names the key instead — a real log-hygiene issue given `error-handler.ts`'s
+`logger.error({ err, ... })` catch-all); directories/files had no explicit permission mode, leaving
+them subject to the deploying environment's umask (now explicit `0o700`/`0o600` on every
+directory/file, confirmed to apply recursively). The other eight properties were confirmed already
+correct and are now each backed by a dedicated test. 9 new tests (46 total in
+`storage.test.ts`) — full backend suite **392/392** (383 prior + 9 new). Full record:
+`docs/PROJECT_PROGRESS.md` §1's "final narrow pre-commit verification pass" entry.
+
 **Depends on:** Phase 4 (Release must exist for the finalization precondition to be meaningful).
 
 **Effort estimate:** 4–6 days.

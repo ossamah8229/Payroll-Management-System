@@ -9,3 +9,9 @@ process.env.DATABASE_URL ??=
 process.env.SESSION_SECRET ??= 'test-only-session-secret-not-for-production-use';
 process.env.CSRF_SECRET ??= 'test-only-csrf-secret-not-for-production-use';
 process.env.CORS_ORIGIN ??= 'http://localhost:5173';
+// Only satisfies env.ts's schema validation (a string presence/shape check) — never actually
+// written to. Every test that exercises `LocalFilesystemStorageProvider` constructs it directly
+// against its own isolated `fs.mkdtemp()` directory (backend/tests/storage.test.ts) rather than
+// importing the `lib/storage/index.ts` singleton, so this value is never used to create a real
+// directory during a test run.
+process.env.STORAGE_ROOT ??= 'storage-test-unused';

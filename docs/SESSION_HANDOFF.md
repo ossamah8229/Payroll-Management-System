@@ -11,8 +11,25 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 1. Current repository status
 
 - Branch: `main`
-- **This session's Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase 4
-  Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
+- **This session (2026-07-14) ran the Phase 5 architecture review (approved, no redesign required —
+  see `docs/PROJECT_PROGRESS.md` §1's "Phase 5 architecture review" entry) and implemented Phase 5
+  Checkpoint 0 — `StorageProvider` Foundation. NOT YET COMMITTED — held for review per this
+  checkpoint's own explicit instruction.** `backend/src/lib/storage/` (`StorageProvider` interface +
+  `LocalFilesystemStorageProvider`, the storage abstraction originally planned for Phase 0 and never
+  built — `docs/PROJECT_PROGRESS.md` §3 item 4, now closed), a new required `STORAGE_ROOT` env var,
+  and `backend/tests/storage.test.ts` (37 new tests). Full backend suite **383/383** (346 prior + 37
+  new); typecheck/lint/build clean across all three workspaces; `prisma validate` clean (no schema
+  change). One real defect found and fixed during this checkpoint's own verification — a Jest/Node
+  VM-realm `instanceof Error` gotcha in the containment check's error-type guard, fixed via
+  duck-typing — confirmed stable across 5 repeated isolated test runs. No HTTP route added
+  (deliberately deferred to the `BackupPackage` checkpoint, which has a real domain record to
+  authorize a download against); no Finalize Cycle, `BackupPackage`, archiving, new-cycle-creation
+  changes, or historical cycle selection — all explicitly out of this checkpoint's scope and
+  unstarted. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 0" entry.
+  **Do not commit, and do not begin Phase 5 Checkpoint 1, without a fresh review of this checkpoint's
+  diff first** — per the explicit instruction this checkpoint was scoped under.
+- **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
+  4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
   implementation commit's own docs couldn't self-reference a hash that didn't exist yet at commit
   time). Full prior lineage (the block below was itself stale — several sessions out of date, still
