@@ -3231,7 +3231,7 @@ eight were confirmed already correct**, each backed by a new test, not just a co
 No unrelated code was refactored; no `BackupPackage`/cycle-lifecycle work was started, per this
 pass's own explicit scope.
 
-### Phase 5, Checkpoint 1 — Finalize Cycle — implemented 2026-07-14, pending review before commit
+### Phase 5, Checkpoint 1 — Finalize Cycle — COMPLETE, 2026-07-14, COMMITTED as `cad93bc`
 
 Preflight confirmed branch `main`, clean working tree, and Checkpoint 0's commits (`d87b9b0`,
 `a2dd31f`) present before any file was touched.
@@ -3386,7 +3386,7 @@ not routed through `assertEntryEditable` at all.
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) IMPLEMENTED 2026-07-14, pending review before commit — see §1. Checkpoints 2–4 (Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoints 2–4 (Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -3740,8 +3740,8 @@ outstanding).
    rendering (Times New Roman or its documented fallback), memory stability under a real batch,
    graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
 3. **Phase 5 (Cycle Finalization, Archiving, and Backups) IN PROGRESS, authorized 2026-07-14** — the
-   architecture review, Checkpoint 0 (`StorageProvider` foundation), and Checkpoint 1 (Finalize Cycle)
-   are complete (Checkpoint 1 implemented 2026-07-14, pending review before commit), per this
+   architecture review, Checkpoint 0 (`StorageProvider` foundation, committed `d87b9b0`), and
+   Checkpoint 1 (Finalize Cycle, committed `cad93bc`) are complete, per this
    project's standing per-checkpoint/per-phase practice; Checkpoints 2–4 and phase close-out each
    still require their own separate, explicit go-ahead, same as every other phase. **Known, documented
    gap carried forward by Checkpoint 1's own approved scope**: there is no post-finalization release

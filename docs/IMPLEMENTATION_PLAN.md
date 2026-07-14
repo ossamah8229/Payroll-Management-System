@@ -1643,7 +1643,7 @@ correct and are now each backed by a dedicated test. 9 new tests (46 total in
 `storage.test.ts`) — full backend suite **392/392** (383 prior + 9 new). Full record:
 `docs/PROJECT_PROGRESS.md` §1's "final narrow pre-commit verification pass" entry.
 
-**Checkpoint 1 — Finalize Cycle — implemented 2026-07-14, pending review before commit.** The
+**Checkpoint 1 — Finalize Cycle — COMPLETE, 2026-07-14, COMMITTED as `cad93bc`.** The
 explicit `DRAFT` → `RELEASED` cycle-level transition: `POST /api/v1/payroll-cycles/:cycleId/finalize`
 (`payroll-processing.routes.ts`/`payroll-processing.service.ts`'s `finalizePayrollCycle`), reusing
 `payroll-cycle:manage` (no new permission). Precondition (no override, no bypass): rejects unless

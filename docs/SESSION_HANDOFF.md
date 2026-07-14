@@ -1337,9 +1337,9 @@ checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and commi
 `docs/PROJECT_PROGRESS.md` §1's "Phase 4 close-out review" for the single outstanding condition
 (real Render/Linux-container deployment verification). **Phase 5 is IN PROGRESS, authorized
 2026-07-14 — architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
-and Checkpoint 1 (Finalize Cycle) are complete; Checkpoint 1 is implemented and pending review before
-commit (not yet committed). Checkpoints 2–4 and phase close-out each still require their own
-separate, explicit go-ahead — see §1's "Phase 5, Checkpoint 1" entry.**
+and Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`) are complete. Checkpoints 2–4 and phase
+close-out each still require their own separate, explicit go-ahead — see §1's "Phase 5, Checkpoint 1"
+entry.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest
