@@ -73,3 +73,30 @@ export function useCreatePayrollCycle() {
     },
   });
 }
+
+/**
+ * The most recently created cycle, regardless of status — unlike `useCurrentPayrollCycle` (which
+ * only ever returns the one `DRAFT` cycle, for pages that operate on the editable cycle), Salary
+ * Release needs to keep showing the cycle it was just displaying through a Finalize transition
+ * (`DRAFT` → `RELEASED`), not fall back to an empty state the instant it stops being Draft. The
+ * list is already ordered `[{ year: 'desc' }, { month: 'desc' }]` by the backend, so the first row
+ * is always the latest. This is deliberately not a historical cycle selector (a later phase's
+ * concern, docs/architecture/workflows/payroll-lifecycle.md §4) — it only ever shows the single
+ * newest cycle, never lets the user browse older ones.
+ */
+export function useLatestPayrollCycle() {
+  const query = usePayrollCycles();
+  const cycle = query.data?.[0];
+  return { ...query, cycle };
+}
+
+export function useFinalizePayrollCycle() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (cycleId: string) =>
+      apiRequest<{ cycle: PayrollCycle }>(`/api/v1/payroll-cycles/${cycleId}/finalize`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PAYROLL_CYCLES_QUERY_KEY });
+    },
+  });
+}

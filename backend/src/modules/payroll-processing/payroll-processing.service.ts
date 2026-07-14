@@ -2,16 +2,18 @@ import { randomUUID } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import type { CreatePayrollCycleInput, SessionUser } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
-import { conflict, notFound } from '../../common/http-error';
+import { badRequest, conflict, notFound } from '../../common/http-error';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { materializeScheduledAdvanceDeductions } from '../advances/advances.service';
 
 /**
  * Payroll Processing — owns the `PayrollCycle` lifecycle (docs/architecture/database/payroll-cycle.md
- * §10). Phase 3 Checkpoint 1 scope: cycle *creation* only (bootstrap and carry-forward). Finalize
- * Cycle, Release, Archiving, and Backup Package generation are explicitly NOT implemented here —
- * see this module's `createPayrollCycle` doc comment for the precise, approved scope boundary.
+ * §10). Phase 3 Checkpoint 1 scope: cycle *creation* only (bootstrap and carry-forward). Phase 5
+ * Checkpoint 1 adds Finalize Cycle (`finalizePayrollCycle`, below) — the explicit `DRAFT` →
+ * `RELEASED` transition. Archiving, Backup Package generation, and the new-cycle-creation
+ * transaction upgrade (archive-on-create) are still explicitly NOT implemented here — later Phase 5
+ * checkpoints, each requiring its own separate go-ahead.
  *
  * **Phase 4 Checkpoint 5 (Advances) addition:** this module now also owns
  * `ScheduledPayrollPeriod` (docs/architecture/database/payroll-cycle.md §10a) — the only module that
@@ -296,4 +298,84 @@ export async function createPayrollCycle(
   );
 
   return cycle;
+}
+
+/**
+ * Finalize Cycle (Phase 5 Checkpoint 1, docs/architecture/workflows/payroll-lifecycle.md §4) — the
+ * explicit `DRAFT` → `RELEASED` transition. Master-User-only, reuses `PAYROLL_CYCLE_MANAGE` (the
+ * same permission cycle *creation* already uses — both are system-lifecycle actions, not routine
+ * data entry).
+ *
+ * **The finalization precondition, strictly enforced, with no override:** the cycle cannot
+ * finalize while any `PayrollEntry` in it has `released = false AND hold = false` — every entry
+ * must be either released (via per-Unit release, `payroll-release.service.ts`) or explicitly held.
+ * There is deliberately no override parameter anywhere in this function's signature or the route
+ * that calls it — a cycle with unreleased, non-held stragglers simply cannot be finalized until
+ * they are released or held.
+ *
+ * **What this function deliberately does NOT do (explicit Checkpoint 1 scope boundary):** it never
+ * touches `PayrollEntry.released` — held, unreleased entries stay held and unreleased after
+ * finalization, exactly as before (there is no post-finalization release path yet — a documented,
+ * deferred product gap, see the workflow doc). It never archives the cycle, generates a Backup
+ * Package, or creates a new cycle — those are later Phase 5 checkpoints, each requiring its own
+ * separate authorization.
+ *
+ * **Concurrency:** the precondition count and the `DRAFT` → `RELEASED` write both happen inside one
+ * transaction, so a concurrent `createPayrollEntry`/hold/release landing between the initial
+ * `cycle.status` check and this transaction's own start cannot slip past the count unnoticed by the
+ * write. The status flip itself is an atomic conditional `updateMany` scoped to `status: 'DRAFT'`
+ * (not a read-then-write `update`) — under Postgres's row-level locking, two concurrent finalize
+ * transactions serialize on this row: whichever commits first flips the status, and the loser's own
+ * `updateMany` then matches zero rows once it re-evaluates the `WHERE` clause, so it cleanly reports
+ * a conflict rather than either double-finalizing or writing a second audit row.
+ */
+export async function finalizePayrollCycle(currentUser: SessionUser, cycleId: string, requestMeta: RequestMeta) {
+  const cycle = await prisma.payrollCycle.findUnique({ where: { id: cycleId } });
+  if (!cycle) {
+    throw notFound('Payroll cycle not found');
+  }
+  if (cycle.status !== 'DRAFT') {
+    throw badRequest('Only a Draft payroll cycle can be finalized');
+  }
+
+  return prisma.$transaction(
+    async (tx) => {
+      const [entryCount, releasedCount, heldCount, blockingCount] = await Promise.all([
+        tx.payrollEntry.count({ where: { cycleId } }),
+        tx.payrollEntry.count({ where: { cycleId, released: true } }),
+        tx.payrollEntry.count({ where: { cycleId, hold: true } }),
+        tx.payrollEntry.count({ where: { cycleId, released: false, hold: false } }),
+      ]);
+
+      if (blockingCount > 0) {
+        throw badRequest(
+          `Cannot finalize this cycle — ${blockingCount} payroll ${blockingCount === 1 ? 'entry is' : 'entries are'} neither released nor held`,
+        );
+      }
+
+      const guarded = await tx.payrollCycle.updateMany({
+        where: { id: cycleId, status: 'DRAFT' },
+        data: { status: 'RELEASED', releasedAt: new Date(), releasedBy: currentUser.id },
+      });
+      if (guarded.count === 0) {
+        throw conflict('This payroll cycle has already been finalized');
+      }
+
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'payroll_cycle.released',
+          entityType: 'PayrollCycle',
+          entityId: cycleId,
+          metadata: { cycleId, year: cycle.year, month: cycle.month, entryCount, releasedCount, heldCount },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+
+      return tx.payrollCycle.findUniqueOrThrow({ where: { id: cycleId } });
+    },
+    { timeout: 30_000 },
+  );
 }

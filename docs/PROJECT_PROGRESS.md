@@ -3231,6 +3231,149 @@ eight were confirmed already correct**, each backed by a new test, not just a co
 No unrelated code was refactored; no `BackupPackage`/cycle-lifecycle work was started, per this
 pass's own explicit scope.
 
+### Phase 5, Checkpoint 1 — Finalize Cycle — implemented 2026-07-14, pending review before commit
+
+Preflight confirmed branch `main`, clean working tree, and Checkpoint 0's commits (`d87b9b0`,
+`a2dd31f`) present before any file was touched.
+
+- **Backend**: `finalizePayrollCycle` (`payroll-processing.service.ts`) — the explicit `DRAFT` →
+  `RELEASED` cycle-level transition, gated by `payroll-cycle:manage` (no new permission). No-override
+  precondition: rejects unless zero `PayrollEntry` rows have `released = false AND hold = false`
+  (empty cycles trivially satisfy this). One transaction: re-checks the precondition, atomically
+  flips `status` via `updateMany({ where: { id, status: 'DRAFT' } })` (the concurrency backstop — a
+  losing concurrent finalize attempt matches zero rows, reporting a clean `409` rather than a
+  double-success or duplicate audit row), sets `releasedAt`/`releasedBy`, writes exactly one
+  `payroll_cycle.released` `AuditLog` entry (`cycleId`, `year`, `month`, `entryCount`,
+  `releasedCount`, `heldCount`). New route: `POST /api/v1/payroll-cycles/:id/finalize`
+  (`payroll-processing.routes.ts`). Never touches `PayrollEntry.released`, never archives, never
+  generates a Backup Package, never creates a new cycle, never invokes Advances materialization.
+- **Dormant editability conflict fixed**: `payroll-entry.service.ts`'s `assertEntryEditable`
+  previously locked an entry once its parent cycle left `DRAFT`, regardless of the entry's own
+  `released` state — harmless before this checkpoint (no route could ever set a cycle to non-`DRAFT`)
+  but would have wrongly frozen every held/straggler entry the instant Finalize shipped, contradicting
+  the finalization precondition's own hold exemption. Corrected to key off `PayrollEntry.released`
+  alone. One call site (`payroll-entry-import-export.service.ts`) updated to match the narrowed
+  signature. **This first pass turned out incomplete — see "final review corrections" below,
+  same day**: that module's own separate whole-cycle-not-Draft upfront check was left untouched at
+  the time this bullet was first written, and was itself an equally-dormant instance of the same bug.
+- **Frontend**: "Finalize Cycle" action on the Salary Release page (`salary-release-page.tsx`),
+  visible only with `payroll-cycle:manage`, enabled only for a Draft cycle, behind a confirmation
+  modal stating the invariant, the one-way nature of the action, that held employees are not paid by
+  finalization, and that archiving/the next cycle happen later. The page now anchors on the *latest*
+  cycle regardless of status (new `useLatestPayrollCycle` hook, `use-payroll-cycles.ts`) instead of
+  only the one `DRAFT` cycle (`useCurrentPayrollCycle`, unchanged and still used by Payroll Entry/
+  Advances, which genuinely need only the editable cycle) — otherwise the page would fall back to its
+  "no Draft cycle" empty state the instant finalization succeeded, unable to show the `RELEASED`
+  badge or the disabled per-Unit release row it's supposed to.
+- **Tests**: 25 new (`backend/tests/payroll-cycle-finalize.test.ts`) — precondition (blocked/
+  succeeds/empty-cycle/no-override), lifecycle state (`releasedAt`/`releasedBy`, entry flags
+  untouched, double-finalize, an HTTP-level and a direct-service-level concurrent race), RBAC (Master
+  Admin/Payroll Staff/Finance/unauthenticated/missing-or-invalid CSRF), audit (exactly one row,
+  correct metadata, atomic with the status update), and six regression cases (held-entry
+  editability, released-entry immutability, per-Unit release rejecting a finalized cycle, Advance
+  deferral's target-cycle guard, Bank Sheets/Cash Receiving Sheets staying entry-release-driven,
+  finalization never silently setting `released = true`). One existing test in
+  `payroll-entry.test.ts` ("rejects editing a released entry") was corrected from simulating
+  immutability via a direct `cycle.status` database write to the real `released`-driven mechanism,
+  since the old simulation no longer reflects the corrected rule.
+- **Verification (superseded by the clean-environment re-run below — kept for the record of what was
+  actually observed at the time):** `prisma validate` clean; typecheck/lint/build clean across all
+  three workspaces; full backend suite run against a **reused, long-lived local Postgres instance
+  left over from an earlier, unrelated session** — 405–406/417 across several runs, with the
+  `payslips.test.ts` PDF-rendering suite and, once, `payroll-release.test.ts`'s site-scoping test
+  failing inconsistently. At the time, this was attributed to the same "reused instance" flakiness
+  Checkpoint 0's own session had already documented. **That attribution was incomplete — see the
+  clean-environment re-run below**, which found the real cause.
+
+### Phase 5, Checkpoint 1 — clean-environment re-verification, 2026-07-14 (same day, after final review corrections, before commit)
+
+Per the final review's explicit instruction not to describe a 405–406/417 run as passing: terminated
+every stale process first (`ps aux` turned up a **Puppeteer/Chrome-for-Testing process tree and an
+`embedded-postgres` instance both still running from a completely different, older session** — a
+different sandbox scratchpad ID than this session's own, evidently never cleaned up after that
+earlier session ended), killed all of them, then provisioned a genuinely fresh, isolated PostgreSQL
+18 instance in this session's own scratchpad (`@embedded-postgres/darwin-x64`, `initdb`, `pg_ctl`,
+role `payroll`/db `payroll_dev` created directly via the `pg` client library), applied all 13
+migrations (`prisma migrate deploy`, clean), and seeded once (`prisma/seed.ts`).
+
+- **Full backend suite, run once against this clean database and clean process state: `npm run test`
+  (the project's own established script, not a bare `npx jest`, per `docs/SESSION_HANDOFF.md`'s own
+  warning about `NODE_ENV`/rate-limiter drift) — 420/420, all 26 suites green, zero failures,
+  including every `payslips.test.ts` PDF-rendering test.** The `payslips.test.ts` failures reported in
+  every earlier verification pass this checkpoint (and, in hindsight, very likely Checkpoint 0's own
+  "pre-existing, environment-dependent" characterization of the same failures) were **not** a genuine
+  environment/dependency limitation — they were caused by that stale, days-old Puppeteer process from
+  an unrelated prior session interfering with the PDF-generation path's own Puppeteer usage. Once that
+  process was killed and a truly isolated environment was used, the failures did not recur. This
+  corrects the record: those failures should not have been described as an inherent baseline
+  limitation of this sandbox without first checking for exactly this kind of leftover process — a
+  useful lesson for any future verification pass in this environment.
+- **Focused regression suite (`payroll-cycle-finalize.test.ts`: 27, `payroll-entry.test.ts`: 14,
+  `payroll-entry-import-export.test.ts`: 10, `advances.test.ts`: 13 — 64 total) run three times in
+  immediate succession: 64/64, three times, identical results every run.**
+- `prisma validate`/migration status clean (still no schema change); typecheck/lint/build clean
+  across all three workspaces, re-run against the clean environment.
+- **Real production-build HTTP flow, re-verified against the fresh database**: compiled
+  `dist/src/server.js`, real login/CSRF/cookies — blocked precondition (400) → hold → finalize (200,
+  `RELEASED`, `releasedAt`/`releasedBy` set) → second finalize (400, clean) → held entry still
+  editable via single-entity PATCH (200) → held entry still editable via bulk update (200,
+  `{matchedCount:1,appliedCount:1}`) — all against the corrected code, confirming the final-review
+  fixes work end-to-end, not only under Jest. Test data cleaned up afterward; server stopped.
+- **Browser/Playwright verification: re-checked, still not possible in this environment.** No
+  `playwright` dependency exists in any of this repository's three `package.json` files (root,
+  backend, frontend), no Playwright config or test directory exists anywhere in the repo, and no
+  browser-automation tool (Playwright MCP or otherwise) is available in this session's toolset. The
+  repository defines no supported browser-verification setup to fall back to, so none was installed,
+  per this review's own instruction not to add unrelated tooling. Documented as an outstanding gap,
+  carried into `docs/SESSION_HANDOFF.md`'s own next-steps — what *was* verified instead: the frontend
+  production build (`vite build`) succeeds cleanly, and Vite's dev-server transform of the modified
+  `salary-release-page.tsx`/`use-payroll-cycles.ts` succeeds with no compile/transform errors. Neither
+  is a substitute for actually clicking through the page in a real browser.
+- **Not committed** — pending review, per this checkpoint's explicit instruction.
+
+### Phase 5, Checkpoint 1 — final review corrections, 2026-07-14 (same day, before commit)
+
+A final review found the first-pass editability fix above corrected `assertEntryEditable` and
+therefore every one of its direct callers, but missed two further mutation surfaces that carried
+their own **independent, equally-dormant** `cycle.status !== 'DRAFT'` gate — a bug in the same shape,
+not routed through `assertEntryEditable` at all.
+
+- **`bulkUpdatePayrollEntries` ("Copy to All", `payroll-entry.service.ts`)** — removed its upfront
+  `if (cycle.status !== 'DRAFT') throw badRequest(...)`. No other change: the function already
+  filtered its matched set to `!entry.released` before writing, so removing the whole-cycle gate is
+  the complete fix — a held, unreleased entry is now reachable by this action after its cycle
+  finalizes; a released entry stays permanently skipped, unconditionally.
+- **`importPayrollEntries` (CSV/Excel importer, `payroll-entry-import-export.service.ts`)** — removed
+  the identical upfront check. Already called `assertEntryEditable` per row, so, again, removing the
+  whole-cycle gate is the complete fix.
+- **Reviewed and confirmed correctly preserved, not touched**: `createPayrollCycle`'s "only one Draft
+  cycle at a time" check (cycle-creation eligibility, not entry editability); `createPayrollEntry`'s
+  `cycle.status !== 'DRAFT'` check (the Late Entry boundary — no new `PayrollEntry` may ever be
+  created against a finalized cycle, a documented, separate invariant,
+  `docs/architecture/workflows/payroll-lifecycle.md §4`); `releaseProjectUnit`'s check (the release
+  action's own gate, unrelated to editability — already covered by this checkpoint's own regression
+  test, "per-Unit release rejects a finalized cycle"); `finalizePayrollCycle`'s own precondition check
+  (finalization's own gate); `deferAdvanceSchedule`'s `conflictingCycle.status !== 'DRAFT'` check
+  (the deferral *target* period's cycle — a different cycle from the entry's own, an Advance-specific
+  invariant explicitly confirmed to keep, not an editability check on the source entry).
+- **Tests**: 2 new regression tests in `backend/tests/payroll-cycle-finalize.test.ts` (a held,
+  unreleased entry stays editable via bulk update and via CSV import after a real finalize call;
+  a released entry stays permanently skipped through both, in the same two tests) and 1 new
+  regression test in `backend/tests/advances.test.ts` (a held, unreleased entry's Advance deduction
+  may still be deferred after its own cycle finalizes — no new Advance workflow, `deferAdvanceSchedule`
+  itself needed no code change since it already called `assertEntryEditable`). 2 existing tests
+  corrected to assert the new, correct behavior instead of the old, incorrect one:
+  `payroll-entry.test.ts`'s bulk-update test (previously asserted `400` once the cycle left Draft;
+  now asserts `200` for the still-unreleased entry, `released` entry still skipped) and
+  `payroll-entry-import-export.test.ts`'s import test (previously asserted the whole import rejected
+  outright once the cycle left Draft; now asserts the unreleased entry's row still imports
+  successfully).
+- **Documentation**: `database/payroll-entry.md §12`'s Immutability note and
+  `docs/architecture/workflows/payroll-lifecycle.md §4`'s "Released" state description both extended
+  to state explicitly that the rule applies identically across single-entity update/delete, work-line
+  add/update/delete, bulk update, CSV/Excel import, and Advance Deduction Deferral — not only the
+  single-entry PATCH endpoint the first pass's wording implied.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -3243,7 +3386,7 @@ pass's own explicit scope.
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoints 1–4 (Finalize Cycle, Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) IMPLEMENTED 2026-07-14, pending review before commit — see §1. Checkpoints 2–4 (Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -3597,9 +3740,13 @@ outstanding).
    rendering (Times New Roman or its documented fallback), memory stability under a real batch,
    graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
 3. **Phase 5 (Cycle Finalization, Archiving, and Backups) IN PROGRESS, authorized 2026-07-14** — the
-   architecture review and Checkpoint 0 (`StorageProvider` foundation) are complete, per this
-   project's standing per-checkpoint/per-phase practice; Checkpoints 1–4 and phase close-out each
-   still require their own separate, explicit go-ahead, same as every other phase. `StorageProvider`
+   architecture review, Checkpoint 0 (`StorageProvider` foundation), and Checkpoint 1 (Finalize Cycle)
+   are complete (Checkpoint 1 implemented 2026-07-14, pending review before commit), per this
+   project's standing per-checkpoint/per-phase practice; Checkpoints 2–4 and phase close-out each
+   still require their own separate, explicit go-ahead, same as every other phase. **Known, documented
+   gap carried forward by Checkpoint 1's own approved scope**: there is no post-finalization release
+   path for a held entry yet — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s "Released"
+   state description. `StorageProvider`
    (§3 item 4; Backup Package generation's hard requirement, deliberately kept out of Phases 2.5–4)
    is now built — `backend/src/lib/storage/`, see §1's Checkpoint 0 entry — designed portable to
    whatever hosting a given customer provides per §3 item 13, not assumed cloud-provider-specific

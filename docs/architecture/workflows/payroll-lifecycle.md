@@ -98,7 +98,17 @@ Archived (Locked)
   **Reaffirmed 2026-07-05: this explicit action stays, even though `PayrollEntry.released` is now
   itself derived from per-Unit release events** — a cycle whose every Unit has released-or-been-held
   is merely *eligible* to finalize; it still shows as `Draft` until the Master User explicitly clicks
-  Finalize, exactly as before this session.
+  Finalize, exactly as before this session. **Implemented Phase 5 Checkpoint 1 (2026-07-14):**
+  `POST /api/v1/payroll-cycles/:cycleId/finalize` (`payroll-processing.service.ts`'s
+  `finalizePayrollCycle`), reusing `payroll-cycle:manage` (the same permission cycle creation
+  already uses). Finalization is a pure cycle-level `Draft` → `Released` transition, writing exactly
+  one `payroll_cycle.released` `AuditLog` entry (`cycleId`, `year`, `month`, `entryCount`,
+  `releasedCount`, `heldCount`) in the same transaction as the status change. **Empty cycles may be
+  finalized** — a cycle with zero `PayrollEntry` rows trivially satisfies the precondition below.
+  Finalization does **not** archive the cycle, generate a Backup Package, create a new cycle, release
+  held entries, or invoke Advances materialization — those remain later Phase 5 checkpoints (or, for
+  archiving/backups specifically, still not built as of this writing), each requiring its own separate
+  authorization.
   - **Finalization precondition, strictly enforced, with no override:** the cycle cannot transition
     from `Draft` to `Released` while any `PayrollEntry` in it has `released = false AND hold = false`
     — i.e., every employee who could be released has been. **This wording is unchanged by the move to
@@ -107,10 +117,11 @@ Archived (Locked)
     Employees left `hold = true` are explicitly exempted from this precondition and may remain
     outstanding indefinitely; they do not block finalization. A pending **Late Entry** (below) is *not*
     exempted — it behaves like any other unreleased-and-non-held entry and blocks finalization the same
-    way, unless also held. **There is no Master User override of this precondition.** A cycle with
-    unreleased, non-held stragglers simply cannot be finalized until they are released or held — this
-    is deliberate: Corrections exist for genuine post-release discoveries, not as a shortcut around
-    finishing the month's release work.
+    way, unless also held. **There is no Master User override of this precondition** — Checkpoint 1's
+    implementation exposes no override parameter anywhere in the route, request body, or service
+    function signature. A cycle with unreleased, non-held stragglers simply cannot be finalized until
+    they are released or held — this is deliberate: Corrections exist for genuine post-release
+    discoveries, not as a shortcut around finishing the month's release work.
   - **Late Entry exception (added 2026-07-05):** if a new `PayrollEntry` is created for a Project Unit
     that has *already* released this cycle (e.g. a new hire added to an already-released Unit), the
     ordinary per-Unit sweep will never reach it — there's no future `PayrollUnitRelease` event left to
@@ -124,12 +135,55 @@ Archived (Locked)
     `PayrollEntry` can be created against it at all; a new hire after full cycle finalization simply
     waits for the next cycle. The two behaviors reconcile this way, not as alternatives to choose
     between.
-  - Once `Released`, payroll is finalized — ordinary field edits no longer apply to any entry in this
-    cycle (every entry in it now has `released = true`, per the finalization precondition above, so the
-    trigger condition applies to all of them).
+  - **The authoritative immutability rule (corrected 2026-07-14, Phase 5 Checkpoint 1 architecture
+    review — this supersedes any earlier wording in this document that tied entry immutability to
+    cycle status):**
+    > A `PayrollEntry` becomes financially immutable when `PayrollEntry.released = true`. Cycle
+    > finalization does not convert held, unreleased entries into released entries, and does not by
+    > itself make them enter the Correction workflow.
+
+    Concretely: a held, unreleased entry (`released = false`, `hold = true`) remains **ordinarily
+    editable** after its parent cycle finalizes — exactly as editable as it was the moment before —
+    because the shared editability guard (`payroll-entry.service.ts`'s `assertEntryEditable`) keys off
+    `PayrollEntry.released` alone, never `PayrollCycle.status`. This was a **dormant conflict** before
+    Checkpoint 1: no route could ever set a cycle's status to anything but `Draft`, so a
+    (now-removed) `cycle.status !== 'Draft'` clause in that guard never actually fired; fixed as part
+    of building Finalize rather than left latent. A held entry that survives finalization sits in
+    neither the "ordinarily editable while cycle is Draft" bucket nor the Correction-eligible bucket
+    in the sense those were originally described — it is simply an ordinarily-editable row whose
+    parent cycle happens to be `Released`, per the rule above.
+
+    **Extended to every mutation surface, not only the single-entry route (final review,
+    2026-07-14):** the same first-pass fix had only touched `assertEntryEditable`'s own direct
+    callers; two further surfaces carried an independent, equally-dormant `cycle.status !== 'Draft'`
+    gate of their own and needed the identical correction — "Copy to All" bulk update
+    (`bulkUpdatePayrollEntries`) and the CSV/Excel importer (`importPayrollEntries`). Both now rely
+    purely on each row's own `released` flag, exactly like the single-entry path, so a held,
+    unreleased entry stays reachable through every one of them after its cycle finalizes, while a
+    released entry stays permanently skipped through all of them. Advance Deduction Deferral
+    (`database/advances.md §15`) needed no code change — it already calls `assertEntryEditable` on
+    the entry being deferred, so it inherited the fix automatically — but is worth stating
+    explicitly: a held, unreleased entry may still have its Advance deduction deferred after its own
+    cycle finalizes, precisely because the entry itself remains editable; the deferral *target*
+    period's own cycle, if one already exists, must still independently be `Draft` (an unrelated
+    check on a *different* cycle, unaffected by and not weakened by this fix); and a released entry
+    can never use deferral to bypass immutability, since `assertEntryEditable` blocks it exactly as
+    it blocks any other edit attempt. Full detail: `database/payroll-entry.md §12`'s Immutability
+    note.
+  - **Known, deliberately deferred product gap: there is no post-finalization release path for held
+    entries yet.** Once a cycle finalizes, a held-but-unreleased entry has no in-app mechanism to ever
+    become `released = true` for that cycle — Checkpoint 1 deliberately does not build a "Late Entry /
+    post-finalization release" workflow (an override-free, explicitly separate future action, not to
+    be confused with the no-override finalization precondition above). Until that workflow is built,
+    the only way to affect payment for an employee left held past finalization is a hold/release
+    decision in a *future* Draft cycle's own entry, per `database/payroll-entry.md §12`.
+    `PayrollUnitReadiness` ("Ready for Release") likewise remains deferred, unrelated to this gap (see
+    "Release now happens per Project Unit," above).
   - Corrections are allowed, per Principle 9 — see
     `docs/architecture/workflows/corrections-and-balance-adjustments.md` for the full request/approval,
-    immediate/deferred, and installment-recovery mechanics (all revised 2026-07-05).
+    immediate/deferred, and installment-recovery mechanics (all revised 2026-07-05). This applies to
+    entries that actually reached `released = true`; it does not apply to a held entry left unreleased
+    past finalization (previous bullet).
   - Balance Adjustments are generated from approved corrections (see
     `docs/architecture/workflows/corrections-and-balance-adjustments.md`) rather than the original
     figures being changed.

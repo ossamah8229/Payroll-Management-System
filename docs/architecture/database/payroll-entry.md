@@ -142,17 +142,44 @@ yet typed the account number must not have that in-progress edit rejected.
 - **Cascade:** all FKs `RESTRICT` — a `PayrollEntry` is never orphaned by deleting its cycle,
   employee, site, bank, or linked advance
 - **Module owner:** Payroll Entry (writes while Draft); read by nearly every other module
-- **Immutability:** mutable only while `released = false` **and** the parent
-  `PayrollCycle.status = 'DRAFT'`. `hold` has **no bearing on mutability** — it only affects
-  downstream inclusion in Release/Bank Sheet/Cash Sheet, and remains an ordinarily-editable field
-  like any other while the entry is unlocked. Once `released = true` **or** the parent cycle leaves
-  Draft, every column on the row — including `hold` — is frozen; there is deliberately no correctable
-  path for `hold`/`released` themselves (`CorrectionField`, `database/conventions-and-enums.md §1`,
-  excludes them, since they are workflow state, not correctable payroll data — the only legitimate way
-  to affect payment for a problem discovered later is via a hold/release decision in a *future* Draft
-  cycle). Enforced at the application layer (no update route reaches a locked row) and recommended as
-  a database-level `BEFORE UPDATE` trigger blocking any column change once locked, for the same
-  defense-in-depth reasoning as the Audit Log (`database/audit-log.md §16`).
+- **Immutability (corrected 2026-07-14, Phase 5 Checkpoint 1 architecture review):** mutable only
+  while `released = false`. Immutability is driven **exclusively** by this row's own `released`
+  flag — never by the parent `PayrollCycle.status`. `hold` has **no bearing on mutability** — it only
+  affects downstream inclusion in Release/Bank Sheet/Cash Sheet, and remains an ordinarily-editable
+  field like any other while the entry is unlocked. Once `released = true`, every column on the row —
+  including `hold` — is frozen; there is deliberately no correctable path for `hold`/`released`
+  themselves (`CorrectionField`, `database/conventions-and-enums.md §1`, excludes them, since they are
+  workflow state, not correctable payroll data). A held, unreleased entry (`released = false`,
+  `hold = true`) stays **ordinarily editable even after its parent cycle finalizes**
+  (`docs/architecture/workflows/payroll-lifecycle.md §4`, "Released") — Finalize Cycle is a pure
+  cycle-level `DRAFT` → `RELEASED` transition and never touches `PayrollEntry.released` itself. The
+  only legitimate way to affect payment for a problem discovered later, for an entry that never
+  released, is via a hold/release decision in a *future* Draft cycle's own entry — there is no
+  post-finalization release path for a held entry yet (a documented, deliberately deferred product
+  gap, same doc). **Prior wording here (`released = false` **and** the parent cycle `status = 'DRAFT'`)
+  described a dormant conflict**: no route could ever set a cycle's status to anything but `DRAFT`
+  before Checkpoint 1, so the cycle-status clause never actually fired in practice; once Finalize
+  Cycle shipped it would have wrongly frozen every held/straggler entry the moment its cycle
+  finalized, contradicting the finalization precondition's own hold exemption. Enforced at the
+  application layer (`payroll-entry.service.ts`'s `assertEntryEditable`, no update route reaches a
+  locked row) and recommended as a database-level `BEFORE UPDATE` trigger blocking any column change
+  once `released = true`, for the same defense-in-depth reasoning as the Audit Log
+  (`database/audit-log.md §16`).
+  **This is the one rule every Payroll Entry mutation surface enforces (final review, 2026-07-14) —
+  not only the single-entity PATCH/DELETE routes**: single-entity update/delete and work-line
+  add/update/delete (`assertEntryEditable`, directly); "Copy to All" bulk update
+  (`bulkUpdatePayrollEntries` — filters its matched set to `released = false` rather than calling
+  `assertEntryEditable` per row, but enforces the identical boundary); the CSV/Excel importer
+  (`importPayrollEntries` — calls `assertEntryEditable` per row, skipping only already-released ones
+  with a "locked" reason); and Advance Deduction Deferral (`deferAdvanceSchedule`,
+  `database/advances.md §15` — calls `assertEntryEditable` on the *source* entry, so a held,
+  unreleased entry may still have its deduction deferred even after its own cycle finalizes; the
+  deferral *target* period's own cycle, if one already exists, must independently still be `DRAFT` —
+  an unrelated, preserved check, see that section). **None of these five surfaces ever gates on
+  `PayrollCycle.status` for editability purposes** — a whole-cycle `status !== 'DRAFT'` check survives
+  only where its real purpose is something else entirely (cycle creation eligibility, per-Unit
+  release, cycle finalization itself, or the Advance target-period check just mentioned), never as a
+  substitute for this row-level rule.
 - **Optimistic locking required:** yes — this is the primary candidate. Multiple Payroll Staff (or
   multiple tabs, or an autosave retry after a network hiccup) may edit different rows concurrently;
   `version` prevents a lost update on the same row
@@ -273,10 +300,10 @@ cycle by whoever enters that month's data, consistent with attendance itself res
   `RESTRICT` via the referenced `ProjectUnit`
 - **Module owner:** Payroll Entry (same module that owns `PayrollEntry` itself — this is not a
   separate module, it's the attendance-detail half of the same editable surface)
-- **Immutability:** mutable under exactly the same condition as its parent `PayrollEntry` — while
-  `released = false` **and** the parent `PayrollCycle.status = 'DRAFT'`. Once the parent entry locks,
-  every line under it freezes too, preserved as a historical attendance record; there is no
-  line-level Correction path (§12's revision note)
+- **Immutability:** mutable under exactly the same condition as its parent `PayrollEntry` (corrected
+  2026-07-14, §12's revision note) — while `released = false`, full stop; never gated by the parent
+  `PayrollCycle.status`. Once the parent entry locks (`released = true`), every line under it freezes
+  too, preserved as a historical attendance record; there is no line-level Correction path
 - **Transactions required:** yes — entry creation + first line creation (always together); any line
   add/edit/remove while the entry's aggregate figures are recalculated for display (recalculation
   itself is computed on read, per §12, not written back to a cached column, so this is a read

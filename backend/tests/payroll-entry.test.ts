@@ -263,7 +263,7 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     expect(cleared.body.entry.iban).toBeNull();
   });
 
-  it('rejects editing an entry whose cycle is no longer Draft — released payroll is immutable', async () => {
+  it('rejects editing a released entry — released payroll is immutable (driven by PayrollEntry.released, not cycle status)', async () => {
     const admin = await masterAdminAgent('entry-immutable@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Entry Immutable');
     const cycle = await makeDraftCycle(admin, 6);
@@ -274,9 +274,16 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
       .set('x-csrf-token', admin.csrfToken)
       .send({ employeeId: employee.id });
 
-    // No Finalize/Release exists yet in this checkpoint — simulate the cycle having moved past
-    // Draft directly, exactly as the carry-forward cycle tests do.
-    await prisma.payrollCycle.update({ where: { id: cycle.id }, data: { status: 'RELEASED' } });
+    // No dedicated single-entry release action is exercised by this suite — directly mark the
+    // entry released, the same pattern the bulk-update immutability test below uses. Immutability
+    // is driven by PayrollEntry.released alone (corrected Phase 5 Checkpoint 1 architecture
+    // review) — deliberately NOT simulated via cycle.status here, since a held/unreleased entry in
+    // a RELEASED cycle must remain editable (see payroll-cycle-finalize.test.ts's own regression
+    // coverage for that case).
+    await prisma.payrollEntry.update({
+      where: { id: created.body.entry.id },
+      data: { released: true, releasedAt: new Date(), releasedBy: admin.userId },
+    });
 
     const update = await admin.agent
       .patch(`/api/v1/payroll-entries/${created.body.entry.id}`)
@@ -487,7 +494,7 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
       expect(untouched.version).toBe(entry.body.entry.version);
     });
 
-    it('rejects a bulk update when the cycle is no longer Draft, and skips a released entry within an otherwise-Draft cycle', async () => {
+    it('skips a released entry regardless of cycle status, but keeps applying to an unreleased entry even after the cycle leaves Draft', async () => {
       const admin = await masterAdminAgent('bulk-locked@test.local');
       const { site, unit } = await makeSiteWithUnit('Test Site Bulk Locked');
       const cycle = await makeDraftCycle(admin, 12);
@@ -523,18 +530,29 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
       });
       expect(stillReleased.version).toBe(releasedEntry.body.entry.version);
 
-      // Now lock the whole cycle — the bulk request must be rejected outright, not partially applied.
+      // Simulate the cycle having finalized (Phase 5 Checkpoint 1) — the corrected rule (final
+      // review, 2026-07-14) is that this must NOT block the bulk action outright: an unreleased
+      // entry (the still-open one here) stays editable via every mutation surface, including this
+      // one, once its cycle leaves Draft. Only `released = true` locks a row, never cycle status.
       await prisma.payrollCycle.update({ where: { id: cycle.id }, data: { status: 'RELEASED' } });
-      const bulkAfterCycleLocked = await admin.agent
+      const bulkAfterFinalize = await admin.agent
         .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
         .set('x-csrf-token', admin.csrfToken)
         .send({ siteIds: [site.id], field: 'otRate', value: '175.00' });
-      expect(bulkAfterCycleLocked.status).toBe(400);
+      expect(bulkAfterFinalize.status).toBe(200);
+      // Still only the open entry is editable — the released one remains permanently skipped,
+      // cycle status notwithstanding.
+      expect(bulkAfterFinalize.body).toEqual({ matchedCount: 2, appliedCount: 1 });
 
-      const untouchedOpenLine = await prisma.payrollEntryWorkLine.findFirstOrThrow({
+      const updatedOpenLine = await prisma.payrollEntryWorkLine.findFirstOrThrow({
         where: { payrollEntryId: openEntry.body.entry.id },
       });
-      expect(untouchedOpenLine.otRate?.toString()).toBe('150');
+      expect(updatedOpenLine.otRate?.toString()).toBe('175');
+
+      const stillReleasedAfterFinalize = await prisma.payrollEntry.findUniqueOrThrow({
+        where: { id: releasedEntry.body.entry.id },
+      });
+      expect(stillReleasedAfterFinalize.version).toBe(releasedEntry.body.entry.version);
     });
 
     it('rejects a bulk request with no payroll:entry permission', async () => {

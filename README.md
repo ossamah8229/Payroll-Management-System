@@ -3,13 +3,16 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status (2026-07-13):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
+> **Status (2026-07-14):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
 > evidence**. **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances, Payslips) is
-> code-complete and committed — all six checkpoints implemented and tested (backend 346/346) — but
+> code-complete and committed — all six checkpoints implemented and tested — but
 > is not yet marked fully closed**: one condition, a real Render/Linux-container deployment smoke
 > test, was genuinely attempted and could not be completed in the sandboxed development environment
-> used so far (no Docker/Podman/Colima, no Render API access). Phase 5 has **not** started and
-> requires separate, explicit authorization to begin. See "Current Status" below,
+> used so far (no Docker/Podman/Colima, no Render API access). **Phase 5 (Cycle Finalization,
+> Archiving, and Backups) is IN PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider`
+> foundation, committed), and Checkpoint 1 (Finalize Cycle) are complete — Checkpoint 1 is
+> implemented and pending review before commit. Checkpoints 2–4 and phase close-out each require
+> their own separate, explicit authorization. See "Current Status" below,
 > `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
 > `docs/SESSION_HANDOFF.md` for details.
 
@@ -173,9 +176,11 @@ npm run dev:frontend          # http://localhost:5173
 
 Phase 4 is code-complete and committed but not yet fully closed — the one outstanding condition is a
 real Render (or genuine Linux container) deployment smoke test, which this development environment
-has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups)
-requires its own separate, explicit authorization before any code is written**, per this project's
-standing per-phase practice, and additionally needs the `StorageProvider` abstraction built first
-(never built despite being called for in Phase 0 — see `docs/PROJECT_PROGRESS.md` §3 item 4). See
+has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is IN
+PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider` foundation), and Checkpoint 1
+(Finalize Cycle) are complete — Checkpoint 1 is implemented and pending review before commit.
+Checkpoints 2–4 (Backup Package generator, new-cycle-creation transaction upgrade, Payroll Cycle
+Selector) and phase close-out each still require their own separate, explicit authorization before
+any code is written, per this project's standing per-checkpoint/per-phase practice. See
 `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
 handoff to the next development session.

@@ -30,6 +30,21 @@ User action** on top of per-Unit release completing (confirmed 2026-07-05, not a
 whose every Unit has released-or-been-held is merely *eligible* to finalize, still shown as `DRAFT`
 until a Master User explicitly finalizes it, exactly as today.
 
+**Implemented Phase 5 Checkpoint 1 (2026-07-14):** `POST /api/v1/payroll-cycles/:cycleId/finalize`
+(`payroll-processing.service.ts`'s `finalizePayrollCycle`), gated by `payroll-cycle:manage` (the
+same permission cycle creation already uses — both are system-lifecycle actions). In one
+transaction: re-checks the precondition, atomically flips `status` `DRAFT` → `RELEASED` via an
+`updateMany` scoped to `status: 'DRAFT'` (the concurrency backstop — a losing concurrent request's
+`updateMany` matches zero rows and reports a clean conflict rather than double-finalizing or writing
+a duplicate audit row), sets `releasedAt`/`releasedBy`, and writes exactly one
+`payroll_cycle.released` `AuditLog` entry (`cycleId`, `year`, `month`, `entryCount`, `releasedCount`,
+`heldCount`). No override parameter exists anywhere in the route or service signature. Finalization
+never touches `PayrollEntry.released` — see `database/payroll-entry.md §12`'s corrected Immutability
+note for the held-entry-editability rule this checkpoint's own architecture review fixed. Empty
+cycles (zero `PayrollEntry` rows) trivially satisfy the precondition and may be finalized. Archiving,
+Backup Package generation, and the new-cycle-creation transaction upgrade remain later, separately
+authorized Phase 5 checkpoints.
+
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |

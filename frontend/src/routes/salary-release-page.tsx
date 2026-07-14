@@ -11,7 +11,7 @@ import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
-import { formatCycleLabel, useCurrentPayrollCycle } from '@/hooks/use-payroll-cycles';
+import { formatCycleLabel, useFinalizePayrollCycle, useLatestPayrollCycle } from '@/hooks/use-payroll-cycles';
 import { useReleaseProjectUnit, useUnitReleaseStatus, type UnitReleaseStatus } from '@/hooks/use-payroll-release';
 
 const selectClassName =
@@ -92,11 +92,54 @@ function ReleaseConfirmModal({
   );
 }
 
+function FinalizeConfirmModal({
+  open,
+  onOpenChange,
+  cycleLabel,
+  onConfirm,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  cycleLabel: string;
+  onConfirm: () => void;
+  isPending: boolean;
+}) {
+  return (
+    <Modal open={open} onOpenChange={(next) => !isPending && onOpenChange(next)}>
+      <ModalContent title={`Finalize ${cycleLabel}`} widthClassName="max-w-[520px]">
+        <div className="flex flex-col gap-3.5 text-xs">
+          <p className="text-text-muted">
+            Every payroll entry must be either released or held before finalization.
+          </p>
+          <p className="text-text-muted">
+            Finalization is a <span className="font-medium text-text">one-way</span> lifecycle
+            action — once finalized, this cycle moves from Draft to Released and per-Unit release
+            actions are disabled. Held employees are <span className="font-medium text-text">not
+            paid</span> by finalization; it does not release them, generate a backup, or start the
+            next payroll cycle. Archiving and starting the next cycle happen later, as their own
+            separate steps.
+          </p>
+        </div>
+        <ModalFooter>
+          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={isPending}>
+            {isPending ? 'Finalizing…' : 'Finalize Cycle'}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 export function SalaryReleasePage({ user }: { user: SessionUser }) {
-  const { cycle, isLoading: cycleLoading, error: cycleError } = useCurrentPayrollCycle();
+  const { cycle, isLoading: cycleLoading, error: cycleError } = useLatestPayrollCycle();
   const sites = useProjectSites();
   const [siteId, setSiteId] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState<UnitReleaseStatus | undefined>(undefined);
+  const [confirmingFinalize, setConfirmingFinalize] = useState(false);
 
   useEffect(() => {
     if (!siteId && sites.data && sites.data.length > 0) {
@@ -106,8 +149,10 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
 
   const unitStatus = useUnitReleaseStatus(cycle?.id, siteId);
   const releaseUnit = useReleaseProjectUnit(cycle?.id ?? '', siteId ?? '');
+  const finalizeCycle = useFinalizePayrollCycle();
 
   const canRelease = user.permissions.includes(PERMISSIONS.PAYROLL_RELEASE);
+  const canFinalize = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const cycleLabel = cycle ? formatCycleLabel(cycle) : '';
 
   async function handleConfirmRelease() {
@@ -127,13 +172,31 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     }
   }
 
+  async function handleConfirmFinalize() {
+    if (!cycle) return;
+    try {
+      await finalizeCycle.mutateAsync(cycle.id);
+      toast.success(`${cycleLabel} finalized — the cycle is now Released`);
+      setConfirmingFinalize(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Finalization failed');
+    }
+  }
+
   return (
     <AppShell user={user} title="Salary Release" subtitle="Release payroll by Project Unit">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2.5">
-            <CardTitle>Salary Release</CardTitle>
-            {cycle && <Badge tone={cycle.status === 'DRAFT' ? 'green' : 'gray'}>{cycleLabel}</Badge>}
+          <div className="flex items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5">
+              <CardTitle>Salary Release</CardTitle>
+              {cycle && <Badge tone={cycle.status === 'DRAFT' ? 'green' : 'gray'}>{cycleLabel} · {cycle.status}</Badge>}
+            </div>
+            {cycle && canFinalize && cycle.status === 'DRAFT' && (
+              <Button size="sm" variant="secondary" onClick={() => setConfirmingFinalize(true)}>
+                Finalize Cycle
+              </Button>
+            )}
           </div>
           {(sites.data ?? []).length > 0 && (
             <select
@@ -265,6 +328,16 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
           cycleLabel={cycleLabel}
           onConfirm={handleConfirmRelease}
           isPending={releaseUnit.isPending}
+        />
+      )}
+
+      {cycle && (
+        <FinalizeConfirmModal
+          open={confirmingFinalize}
+          onOpenChange={(open) => !finalizeCycle.isPending && setConfirmingFinalize(open)}
+          cycleLabel={cycleLabel}
+          onConfirm={handleConfirmFinalize}
+          isPending={finalizeCycle.isPending}
         />
       )}
     </AppShell>

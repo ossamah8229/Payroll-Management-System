@@ -418,6 +418,64 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(Number(entryAfter.advanceDeduction)).toBeCloseTo(9000, 2);
   });
 
+  it('permits deferring a held, unreleased entry\'s Advance deduction even after its own cycle has finalized — the entry itself stays editable (Phase 5 Checkpoint 1 final review)', async () => {
+    const admin = await masterAdminAgent('adv-defer-held-finalized-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Defer Held Finalized');
+    const employee = await makeEmployee(site.id, unit.id, 'Defer Held Finalized Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2902, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2902, 1);
+    const entry = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(entry.advanceId).toBe(advanceId);
+
+    // Hold the entry (so it satisfies the finalization precondition unreleased), then finalize the
+    // whole cycle — the entry stays released = false, hold = true throughout.
+    const holdRes = await admin.agent
+      .patch(`/api/v1/payroll-entries/${entry.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: entry.version, hold: true });
+    expect(holdRes.status).toBe(200);
+
+    const finalizeRes = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/finalize`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(finalizeRes.status).toBe(200);
+    expect(finalizeRes.body.cycle.status).toBe('RELEASED');
+
+    // The entry's own cycle is now RELEASED, but the entry itself never released — per the
+    // corrected editability rule, it remains ordinarily editable, so its permitted Advance schedule
+    // change (deferral) must still be reachable, exactly as before finalization. This is not a new
+    // Advance workflow — deferAdvanceSchedule's own logic is unchanged; only assertEntryEditable's
+    // cycle-status clause (removed, Checkpoint 1) previously would have wrongly blocked this.
+    const deferRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/defer`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({
+        payrollEntryId: entry.id,
+        toPeriod: { year: 2902, month: 3 },
+        reason: 'Deferred after cycle finalization — entry stayed held, not released',
+      });
+    expect(deferRes.status).toBe(200);
+    expect(deferRes.body.advance.status).toBe('ACTIVE');
+
+    const entryAfter = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+    expect(entryAfter.advanceId).toBeNull();
+    expect(Number(entryAfter.advanceDeduction)).toBe(0);
+    expect(entryAfter.hold).toBe(true);
+    expect(entryAfter.released).toBe(false);
+  });
+
   // --- Historical integrity: editing an Advance never touches released payroll -------------------
 
   it('never modifies a released PayrollEntry when the Advance is edited afterward', async () => {

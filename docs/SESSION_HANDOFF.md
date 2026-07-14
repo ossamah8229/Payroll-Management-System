@@ -30,8 +30,53 @@ be enough to resume correctly without re-deriving context from scratch — per
   no Finalize Cycle, `BackupPackage`, archiving, new-cycle-creation changes, or historical cycle
   selection — all explicitly out of this checkpoint's scope and unstarted. Full record:
   `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 0" and "final narrow pre-commit verification
-  pass" entries. **Do not begin Phase 5 Checkpoint 1 without its own explicit go-ahead** — per this
-  project's standing per-checkpoint practice.
+  pass" entries.
+- **Later the same day (2026-07-14): Phase 5 Checkpoint 1 — Finalize Payroll Cycle.** The explicit
+  `DRAFT` → `RELEASED` cycle-level transition: `POST /api/v1/payroll-cycles/:cycleId/finalize`
+  (`finalizePayrollCycle`, `payroll-processing.service.ts`), reusing `payroll-cycle:manage`.
+  No-override precondition (zero `PayrollEntry` rows with `released = false AND hold = false`),
+  atomic conditional `updateMany` concurrency guard, exactly one `payroll_cycle.released` audit row
+  per successful finalize. Frontend: a "Finalize Cycle" action on the Salary Release page, gated by
+  permission and Draft-only, behind a confirmation modal.
+  **Editability invariant, corrected across every mutation surface (two passes, same day):**
+  `PayrollEntry` immutability is driven exclusively by `released = true`, never by
+  `PayrollCycle.status`. The first pass fixed `assertEntryEditable` (single-entity update/delete,
+  work-line add/update/delete); a same-day final review found two further surfaces —
+  `bulkUpdatePayrollEntries` ("Copy to All") and `importPayrollEntries` (CSV/Excel import) — carried
+  their own independent, equally-dormant `cycle.status !== 'DRAFT'` gate and needed the identical
+  fix. Advance Deduction Deferral needed no code change (it already calls `assertEntryEditable` on
+  the source entry) but is now explicitly documented and tested. Every other `cycle.status` check in
+  the codebase was reviewed and confirmed to guard something else (cycle creation, Late Entry
+  creation boundary, per-Unit release, finalization itself, Advance target-period validity) and was
+  left untouched. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 1" and "final
+  review corrections" entries.
+  **Tests:** 27 in `payroll-cycle-finalize.test.ts`, plus corrections/additions in
+  `payroll-entry.test.ts`, `payroll-entry-import-export.test.ts`, and `advances.test.ts` (64 total
+  across these four files, run 3× in immediate succession with identical results each time).
+  **Full backend suite, run once against a freshly provisioned, isolated PostgreSQL instance and a
+  clean process state (all stale Jest/Node/Puppeteer/Postgres processes from prior sessions killed
+  first): 420/420, all 26 suites green, zero failures.** Earlier verification passes this same day,
+  against a long-lived Postgres instance reused from an unrelated prior session, had shown 11
+  `payslips.test.ts` PDF-rendering failures (assumed at the time to be the same "pre-existing,
+  environment-dependent" issue Checkpoint 0's own session had already logged) plus one occasional,
+  non-reproducing failure elsewhere. **The clean re-run traced the real cause: a days-old, orphaned
+  Puppeteer/Chrome-for-Testing process, left running from a completely different session's
+  scratchpad, was interfering with the PDF-generation path's own Puppeteer usage.** Once killed and a
+  genuinely isolated environment was used, all failures disappeared. This corrects the record — those
+  failures were not an inherent limitation of this sandbox, and should not have been characterized as
+  "baseline instability" without first checking for exactly this kind of leftover process.
+  **Browser/Playwright verification remains outstanding** — no `playwright` dependency, config, or
+  test directory exists anywhere in this repository, and no browser-automation tool is available in
+  this session's toolset; this is not a gap this checkpoint's own scope requires installing new
+  tooling to close (the repository defines no supported setup to fall back to). What *was* verified:
+  the frontend production build succeeds cleanly, Vite's dev transform of the modified files succeeds
+  with no errors, and the real production-build HTTP flow (login → CSRF → block → hold → finalize →
+  persisted status/audit → second-attempt-fails → held entry editable via both single-entity PATCH
+  and bulk update) was driven end-to-end against the compiled `dist/` build and the fresh database. A
+  future session with access to a browser-automation tool should still click through the Salary
+  Release page's Finalize flow visually before this is considered fully verified.
+  **Do not begin Phase 5 Checkpoint 2 (Backup Package generator) without its own explicit
+  go-ahead.**
 - **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
   4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
@@ -1285,13 +1330,16 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Updated 2026-07-13 — Phase 1, Phase 2, Phase 2.5, Phase 3 (all seven checkpoints), and Phase 3.5
+**Updated 2026-07-14 — Phase 1, Phase 2, Phase 2.5, Phase 3 (all seven checkpoints), and Phase 3.5
 (all four checkpoints) remain closed with full DB-backed evidence — see §1/§2. Phase 4 (all six
 checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and committed, but is
 **code-complete, not fully closed** — see §1's Checkpoint 6.3 entry and
 `docs/PROJECT_PROGRESS.md` §1's "Phase 4 close-out review" for the single outstanding condition
-(real Render/Linux-container deployment verification). Phase 5 has not started and has not been
-authorized.**
+(real Render/Linux-container deployment verification). **Phase 5 is IN PROGRESS, authorized
+2026-07-14 — architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
+and Checkpoint 1 (Finalize Cycle) are complete; Checkpoint 1 is implemented and pending review before
+commit (not yet committed). Checkpoints 2–4 and phase close-out each still require their own
+separate, explicit go-ahead — see §1's "Phase 5, Checkpoint 1" entry.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest

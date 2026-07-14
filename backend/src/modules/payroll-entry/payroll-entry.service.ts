@@ -54,14 +54,20 @@ function withCalc(entry: EntryWithWorkLines) {
 }
 
 /**
- * A `PayrollEntry` is mutable only while `released = false` AND its parent cycle is still `DRAFT`
- * (docs/architecture/database/payroll-entry.md §12) — `hold` has no bearing on this. There is
- * deliberately no route in this checkpoint that can ever set `released = true` (Release is Phase
- * 4), so in practice this guard only ever trips on a non-`DRAFT` cycle today; it is still written
- * against the full, general rule so it needs no revisiting once Release exists.
+ * A `PayrollEntry` is mutable only while `released = false` (docs/architecture/database/
+ * payroll-entry.md §12, corrected 2026-07-14 — Phase 5 Checkpoint 1 architecture review). Entry
+ * immutability is driven exclusively by the entry's own `released` flag, never by the parent
+ * cycle's `status`: Finalize Cycle (`DRAFT` → `RELEASED`) does not release held entries, so a held,
+ * unreleased entry stays exactly as editable after finalization as it was the moment before —
+ * `hold` has no bearing on mutability either way, same as before this correction. Prior to this
+ * checkpoint, no route could ever set `PayrollCycle.status` to anything but `DRAFT`, so a
+ * `cycle.status !== 'DRAFT'` clause here was dormant — once Finalize Cycle shipped, it would have
+ * wrongly frozen every held/straggler entry in a cycle the moment it finalized, contradicting the
+ * documented "held and unreleased entries remain ordinarily editable after finalization" rule. Fixed
+ * here rather than left dormant.
  */
-export function assertEntryEditable(entry: { released: boolean; cycle: { status: string } }): void {
-  if (entry.released || entry.cycle.status !== 'DRAFT') {
+export function assertEntryEditable(entry: { released: boolean }): void {
+  if (entry.released) {
     throw badRequest(
       'This payroll entry is locked and can no longer be edited directly — released payroll is immutable (Principle 9)',
     );
@@ -638,6 +644,13 @@ export interface BulkUpdatePayrollEntriesResult {
  *
  * Writes exactly one summary `AuditLog` entry (no `entityId` — matches `employee.import`'s existing
  * bulk-audit precedent, `employees.routes.ts`), never one row per affected entry.
+ *
+ * **Editability (corrected 2026-07-14, Phase 5 Checkpoint 1 final review):** no longer gates the
+ * whole operation on `cycle.status` — a cycle leaving `DRAFT` (Finalize Cycle) never converts a
+ * held, unreleased entry into a released one, so it must stay reachable by this bulk action exactly
+ * as any single-entity edit would (`assertEntryEditable`, `database/payroll-entry.md §12`).
+ * Editability is enforced per row, below, by filtering to `released = false` — the same boundary
+ * `assertEntryEditable` enforces, just applied across a matched set instead of one row.
  */
 export async function bulkUpdatePayrollEntries(
   currentUser: SessionUser,
@@ -645,10 +658,9 @@ export async function bulkUpdatePayrollEntries(
   input: BulkUpdatePayrollEntriesInput,
   requestMeta: RequestMeta,
 ): Promise<BulkUpdatePayrollEntriesResult> {
-  const cycle = await getPayrollCycle(cycleId);
-  if (cycle.status !== 'DRAFT') {
-    throw badRequest('Cannot bulk-edit payroll entries in a cycle that is not in Draft');
-  }
+  // Confirms the cycle exists (404 otherwise) — its status is deliberately not otherwise
+  // consulted here; see this function's own doc comment.
+  await getPayrollCycle(cycleId);
 
   for (const siteId of input.siteIds) {
     assertSiteAccess(currentUser, siteId);

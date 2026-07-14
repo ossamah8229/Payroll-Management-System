@@ -246,14 +246,20 @@ function cellYesNo(row: ParsedRow, column: string): boolean | undefined {
 }
 
 /**
- * Imports parsed rows into an already-existing Draft cycle's `PayrollEntry` rows — **update-only,
- * per the approved architecture (Phase 3 Checkpoint 5)**: this never creates a `PayrollEntry` or
+ * Imports parsed rows into an already-existing cycle's `PayrollEntry` rows — **update-only, per
+ * the approved architecture (Phase 3 Checkpoint 5)**: this never creates a `PayrollEntry` or
  * `PayrollEntryWorkLine`, never bootstraps an employee into the cycle, never modifies `siteId`
  * (permanently non-editable, `database/payroll-entry.md` §12's 2026-07-07 decision, unchanged),
  * and never modifies `released`/`releasedAt`/`releasedBy` — the exported `Released` column is
  * read-only/informational, never parsed back into a write. A row for an already-released entry is
  * rejected by the same `assertEntryEditable()` every single-row edit path already enforces, not a
  * reimplementation of that rule.
+ *
+ * **Editability (corrected 2026-07-14, Phase 5 Checkpoint 1 final review):** no longer gates the
+ * whole import on `cycle.status` — a held, unreleased entry stays reachable by this importer after
+ * its cycle finalizes, exactly as any single-entity edit would (`assertEntryEditable`,
+ * `database/payroll-entry.md §12`). Editability is enforced per row, below, the same as always; the
+ * only rows this importer ever skips for lock reasons are already-`released` ones.
  *
  * Each row is validated and applied independently — one bad row is skipped and reported, never a
  * whole-file failure (`reference/PROJECT_SPEC.md`'s own explicit requirement for this importer,
@@ -279,10 +285,9 @@ export async function importPayrollEntries(
   cycleId: string,
   rows: ParsedRow[],
 ): Promise<PayrollEntryImportResult> {
-  const cycle = await getPayrollCycle(cycleId);
-  if (cycle.status !== 'DRAFT') {
-    throw badRequest('Cannot import payroll data into a cycle that is not in Draft');
-  }
+  // Confirms the cycle exists (404 otherwise) — its status is deliberately not otherwise
+  // consulted here; see this function's own doc comment.
+  await getPayrollCycle(cycleId);
 
   const entries = await prisma.payrollEntry.findMany({
     where: { cycleId },
@@ -297,7 +302,7 @@ export async function importPayrollEntries(
       const entry = resolveRowEntry(row, entries);
 
       assertSiteAccess(currentUser, entry.siteId);
-      assertEntryEditable({ released: entry.released, cycle });
+      assertEntryEditable({ released: entry.released });
 
       const primaryLine = entry.workLines[0]!;
 

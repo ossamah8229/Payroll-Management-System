@@ -285,11 +285,15 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel import/export', () =>
     expect(entryAfter.released).toBe(true);
   });
 
-  it('rejects the whole import upfront when the target cycle is not Draft', async () => {
+  it('still imports into an unreleased entry after its cycle leaves Draft — editability is driven by PayrollEntry.released, not cycle status', async () => {
     const admin = await masterAdminAgent('import-nondraft-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Import NonDraft');
-    await makeEmployee(site.id, unit.id, 'NonDraft Employee', { cnic: '6667778889990' });
+    const employee = await makeEmployee(site.id, unit.id, 'NonDraft Employee', { cnic: '6667778889990' });
     const cycle = await makeDraftCycle(admin, 7);
+    // Simulate the cycle having finalized (Phase 5 Checkpoint 1) — corrected 2026-07-14 final
+    // review: this must NOT block the whole import. An unreleased entry stays reachable by every
+    // mutation surface, including the importer, once its cycle leaves Draft; only
+    // `released = true` ever locks a row.
     await prisma.payrollCycle.update({ where: { id: cycle.id }, data: { status: 'RELEASED' } });
 
     const csv = toCsv([templateRow({ CNIC: '6667778889990', 'Gross Pay': '31000' })]);
@@ -299,7 +303,12 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel import/export', () =>
       .set('x-csrf-token', admin.csrfToken)
       .attach('file', csv, 'payroll.csv');
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toBe(1);
+    expect(res.body.skipped).toHaveLength(0);
+
+    const entry = await entryForEmployee(cycle.id, employee.id);
+    expect(Number(entry.grossPay)).toBe(31000);
   });
 
   it('site-scopes Payroll Staff — a row for an out-of-assignment site is skipped, never updated, via a direct API call', async () => {

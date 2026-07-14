@@ -1643,6 +1643,71 @@ correct and are now each backed by a dedicated test. 9 new tests (46 total in
 `storage.test.ts`) — full backend suite **392/392** (383 prior + 9 new). Full record:
 `docs/PROJECT_PROGRESS.md` §1's "final narrow pre-commit verification pass" entry.
 
+**Checkpoint 1 — Finalize Cycle — implemented 2026-07-14, pending review before commit.** The
+explicit `DRAFT` → `RELEASED` cycle-level transition: `POST /api/v1/payroll-cycles/:cycleId/finalize`
+(`payroll-processing.routes.ts`/`payroll-processing.service.ts`'s `finalizePayrollCycle`), reusing
+`payroll-cycle:manage` (no new permission). Precondition (no override, no bypass): rejects unless
+zero `PayrollEntry` rows in the cycle have `released = false AND hold = false`; empty cycles trivially
+satisfy this and may finalize. In one transaction: re-checks the precondition, atomically flips
+`status` via an `updateMany` scoped to `status: 'DRAFT'` (the race backstop — a losing concurrent
+finalize attempt matches zero rows and reports a clean `409 CONFLICT`, never a double-success or a
+duplicate audit row), sets `releasedAt`/`releasedBy`, and writes exactly one `payroll_cycle.released`
+`AuditLog` entry (`cycleId`, `year`, `month`, `entryCount`, `releasedCount`, `heldCount`). Never
+touches `PayrollEntry.released`/`.hold`, never archives, never generates a Backup Package, never
+creates a new cycle, never invokes Advances materialization — all explicitly out of this checkpoint's
+scope. **Fixed a dormant editability conflict found by the 2026-07-14 architecture review**: the
+shared Payroll Entry editability guard (`payroll-entry.service.ts`'s `assertEntryEditable`) previously
+locked an entry once its parent cycle left `DRAFT`, regardless of the entry's own `released`/`hold`
+state — harmless before this checkpoint (no route could ever set a cycle to anything but `DRAFT`), but
+would have wrongly frozen every held/straggler entry the instant Finalize shipped, contradicting the
+finalization precondition's own hold exemption. Corrected to key off `PayrollEntry.released` alone;
+see `database/payroll-entry.md §12`'s corrected Immutability note and
+`docs/architecture/workflows/payroll-lifecycle.md §4`'s corrected "Released" state description.
+Frontend: a "Finalize Cycle" action on the Salary Release page (`salary-release-page.tsx`), visible
+only with `payroll-cycle:manage`, enabled only for a Draft cycle, behind a confirmation modal stating
+the invariant, the one-way nature of the action, that held employees are not paid by finalization, and
+that archiving/the next cycle happen later; the page now tracks the latest cycle regardless of status
+(`useLatestPayrollCycle`, `use-payroll-cycles.ts`) rather than only the Draft one, so it keeps showing
+the just-finalized cycle's `RELEASED` badge and disabled per-Unit release actions instead of falling
+back to an empty state. 25 new backend tests
+(`backend/tests/payroll-cycle-finalize.test.ts`) covering the precondition, lifecycle state, RBAC,
+CSRF, audit atomicity, both an HTTP-level and a direct-service-level concurrent-race scenario, and
+regression coverage (held-entry editability, released-entry immutability, per-Unit release rejecting
+a finalized cycle, Advance deferral's target-cycle guard, Bank Sheets/Cash Receiving Sheets staying
+entry-release-driven, finalization never silently setting `released = true`); one existing test in
+`payroll-entry.test.ts` was corrected from simulating immutability via a direct `cycle.status`
+database write to the real, `released`-driven mechanism, since the old simulation no longer reflects
+the corrected rule.
+
+**Checkpoint 1 — final review corrections, 2026-07-14 (same day, before commit).** A final review
+found the first-pass editability fix above was incomplete: it corrected `assertEntryEditable` and
+therefore every one of its direct callers (single-entity update/delete, work-line add/update/delete),
+but two further mutation surfaces carried their own **independent, equally-dormant**
+`cycle.status !== 'DRAFT'` gate that didn't route through `assertEntryEditable` at all —
+`bulkUpdatePayrollEntries` ("Copy to All") and `importPayrollEntries` (CSV/Excel import). Both
+would have wrongly blocked a held, unreleased entry's bulk-edit/import the instant its cycle
+finalized, the same bug in a different shape. Fixed identically: the whole-cycle upfront check
+removed from both, each now relying purely on its own existing row-level `released` filter (bulk
+update already filtered `!entry.released` into its matched set; the importer already called
+`assertEntryEditable` per row) — no other behavior in either function changed. Advance Deduction
+Deferral (`deferAdvanceSchedule`) needed no code change at all — it already calls
+`assertEntryEditable` on the entry being deferred, so it inherited the very first fix automatically;
+its own, separate, correctly-preserved check is that the deferral *target* period's cycle, if one
+already exists, must independently be `DRAFT` (an Advance-specific invariant on a different cycle,
+not an editability check on the source entry, and not touched by this correction). Every other
+`cycle.status !== 'DRAFT'` check in the codebase was reviewed and confirmed to guard something other
+than entry editability — cycle creation (`createPayrollCycle`'s "only one Draft at a time"), new-entry
+creation within a cycle (`createPayrollEntry`'s Late Entry boundary), per-Unit release
+(`releaseProjectUnit`), and cycle finalization itself (`finalizePayrollCycle`'s own precondition) —
+and left unchanged, per this review's explicit instruction not to blindly remove every such check.
+2 new regression tests added to `payroll-cycle-finalize.test.ts` (held entry stays editable via bulk
+update and via import after real finalization; released entry stays skipped through both), 1 new
+regression test added to `advances.test.ts` (held entry's Advance deduction still defers after its
+own cycle finalizes), and 2 existing tests corrected (`payroll-entry.test.ts`'s bulk-update-locks-the-
+cycle test and `payroll-entry-import-export.test.ts`'s reject-import-on-non-Draft-cycle test) to
+assert the corrected behavior instead of the old, incorrect one. Full record:
+`docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 1 — final review corrections" entry.
+
 **Depends on:** Phase 4 (Release must exist for the finalization precondition to be meaningful).
 
 **Effort estimate:** 4–6 days.
