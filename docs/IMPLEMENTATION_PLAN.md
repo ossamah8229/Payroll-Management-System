@@ -1708,8 +1708,8 @@ cycle test and `payroll-entry-import-export.test.ts`'s reject-import-on-non-Draf
 assert the corrected behavior instead of the old, incorrect one. Full record:
 `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 1 — final review corrections" entry.
 
-**Checkpoint 2 — Backup Packages: reusable domain and generator — implemented 2026-07-14, pending
-review before commit.** `BackupPackage`/`BackupPackageFile` (docs/architecture/database/
+**Checkpoint 2 — Backup Packages: reusable domain and generator — COMPLETE, 2026-07-14, COMMITTED as
+`3ea879e`.** `BackupPackage`/`BackupPackageFile` (docs/architecture/database/
 payroll-cycle.md §17-18, amended from the originally frozen sketch per the 2026-07-14 architecture
 review: `status`/`generatedBy`/`failureReason` added to `BackupPackage`;
 `filename`/`contentType`/`checksum`/`sortOrder` added to `BackupPackageFile`). New module

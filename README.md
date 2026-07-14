@@ -11,7 +11,7 @@ calculations, payslips, and related HR/finance workflows.
 > used so far (no Docker/Podman/Colima, no Render API access). **Phase 5 (Cycle Finalization,
 > Archiving, and Backups) is IN PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider`
 > foundation, committed), Checkpoint 1 (Finalize Cycle, committed), and Checkpoint 2 (Backup
-> Packages reusable domain/generator, implemented, pending review) are complete. Checkpoints 3–4 and
+> Packages reusable domain/generator, committed) are complete. Checkpoints 3–4 and
 > phase close-out each require their own separate, explicit authorization. See "Current Status"
 > below,
 > `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
@@ -180,8 +180,8 @@ real Render (or genuine Linux container) deployment smoke test, which this devel
 has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is IN
 PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider` foundation), Checkpoint 1
 (Finalize Cycle), and Checkpoint 2 (Backup Packages reusable domain/generator — manual generation
-only; automatic generation on archive remains Checkpoint 3) are complete — Checkpoint 2 is
-implemented and pending review before commit. Checkpoints 3–4 (new-cycle-creation transaction
+only; automatic generation on archive remains Checkpoint 3) are complete, all committed.
+Checkpoints 3–4 (new-cycle-creation transaction
 upgrade, Payroll Cycle Selector) and phase close-out each still require their own separate, explicit
 authorization before any code is written, per this project's standing per-checkpoint/per-phase
 practice. See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
