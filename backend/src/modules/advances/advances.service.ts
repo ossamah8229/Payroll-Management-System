@@ -355,33 +355,49 @@ export interface MaterializeScheduledAdvanceDeductionsParams {
 
 /**
  * The Advances half of the new-cycle bootstrap integration (Phase 4 Checkpoint 5) — called
- * directly from `payroll-processing.service.ts`'s `createPayrollCycle`, never a generic registry
- * (approved architecture decision). Runs inside the caller's own transaction.
+ * directly from `payroll-processing.service.ts`'s `createPayrollCycle` and
+ * `archiveAndCreateNextPayrollCycle` (Phase 5 Checkpoint 3), never a generic registry (approved
+ * architecture decision). Runs inside the caller's own transaction. Returns the number of advances
+ * actually materialized (excludes any `continue`d below) — Checkpoint 3's rollover audit
+ * (`payroll_cycle.rollover_completed`) reports this count directly rather than re-deriving it.
  *
  * For every `ACTIVE` Advance whose `currentScheduledPeriodId` resolves to this cycle: `FULL_DEDUCTION`
  * deducts the entire `outstandingBalance` in one shot; `INSTALLMENT` deducts
  * `min(scheduledInstallmentAmount, outstandingBalance)` **only if** a `scheduledInstallmentAmount`
  * has been set — an `INSTALLMENT` advance with no standing schedule yet is deliberately left
- * unmaterialized (no value is ever computed by the system). An employee who left before their
- * scheduled period arrived has no new entry this cycle (`employeeIdToEntryId` won't have them) —
- * this is a known, accepted limitation: the deduction simply stays unmaterialized until the
- * employee returns or someone handles it manually (Cash Advances / departed-employee obligations
- * are out of this checkpoint's scope).
+ * unmaterialized (no value is ever computed by the system).
+ *
+ * **Departed employees (Phase 5 Checkpoint 3, closes this doc comment's own former gap):** a
+ * departed employee whose scheduled period arrives now DOES have a new entry — rollover's own
+ * bootstrap (`payroll-processing.service.ts`) includes every departed employee with an `ACTIVE`
+ * Advance due this exact period, specifically so this function can reach them. `employeeIdToEntryId`
+ * lacking an employee is therefore only expected via `createPayrollCycle`'s first-cycle-only path
+ * (which by definition has no prior cycle for anyone to have departed from) or as a defensive
+ * fallback should a future caller ever build the map incompletely.
  */
 export async function materializeScheduledAdvanceDeductions(
   params: MaterializeScheduledAdvanceDeductionsParams,
   tx: PrismaTransactionClient,
-): Promise<void> {
+): Promise<number> {
   const { cycleId, cycleYear, cycleMonth, resolvedPeriodId, employeeIdToEntryId, actorUserId, requestMeta } = params;
 
   const dueAdvances = await tx.advance.findMany({
     where: { status: 'ACTIVE', currentScheduledPeriodId: resolvedPeriodId },
   });
 
+  let materializedCount = 0;
+
   for (const advance of dueAdvances) {
     const entryId = employeeIdToEntryId.get(advance.employeeId);
     if (!entryId) {
-      continue; // Departed employee with no new entry this cycle — left unmaterialized, by design.
+      // Phase 5 Checkpoint 3 closed the ordinary version of this gap — a departed employee with a
+      // scheduled deduction due this period is now included in the new cycle's own bootstrap
+      // (`payroll-processing.service.ts`'s `archiveAndCreateNextPayrollCycle`), so `entryId` is
+      // normally found. This branch remains reachable only via `createPayrollCycle`'s own
+      // first-cycle-only path (never a departed employee, by definition — there is no prior cycle
+      // to have departed from) and as a defensive fallback if `employeeIdToEntryId` is ever built
+      // incompletely by a future caller.
+      continue;
     }
 
     let amount: Prisma.Decimal;
@@ -445,5 +461,9 @@ export async function materializeScheduledAdvanceDeductions(
       },
       tx,
     );
+
+    materializedCount += 1;
   }
+
+  return materializedCount;
 }

@@ -3,7 +3,13 @@ import { createPayrollCycleSchema, PERMISSIONS } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
-import { createPayrollCycle, finalizePayrollCycle, getPayrollCycle, listPayrollCycles } from './payroll-processing.service';
+import {
+  archiveAndCreateNextPayrollCycle,
+  createPayrollCycle,
+  finalizePayrollCycle,
+  getPayrollCycle,
+  listPayrollCycles,
+} from './payroll-processing.service';
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
@@ -75,6 +81,35 @@ payrollCyclesRouter.post(
       });
 
       res.status(200).json({ cycle });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Master-User-only, same permission as creation/Finalize (docs/architecture/workflows/
+// payroll-lifecycle.md §4 — the month-end rollover workflow, Phase 5 Checkpoint 3). The outgoing
+// cycle is always named explicitly by id; the next calendar period is always derived server-side
+// (outgoing month + 1) — there is deliberately no request body, so there is nothing for a caller to
+// override.
+payrollCyclesRouter.post(
+  '/:cycleId/archive-and-create-next',
+  requirePermission(PERMISSIONS.PAYROLL_CYCLE_MANAGE),
+  async (req, res, next) => {
+    try {
+      // archiveAndCreateNextPayrollCycle owns its own audit logging inside its own transaction —
+      // the route never logs a second, redundant entry after the fact (same convention as
+      // createPayrollCycle/finalizePayrollCycle).
+      const result = await archiveAndCreateNextPayrollCycle(
+        req.currentUser!,
+        requireIdParam(req.params.cycleId),
+        {
+          ipAddress: req.ip ?? null,
+          userAgent: req.get('user-agent') ?? null,
+        },
+      );
+
+      res.status(201).json(result);
     } catch (error) {
       next(error);
     }

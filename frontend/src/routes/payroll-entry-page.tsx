@@ -13,7 +13,7 @@ import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
-import { formatCycleLabel, useCurrentPayrollCycle } from '@/hooks/use-payroll-cycles';
+import { formatCycleLabel, usePayrollCycles, useCurrentPayrollCycle } from '@/hooks/use-payroll-cycles';
 import {
   downloadPayrollEntryExport,
   usePayrollEntries,
@@ -46,21 +46,42 @@ function GridErrorState({ message }: { message: string }) {
   );
 }
 
+/** No `PayrollCycle` row exists yet, anywhere — the true first-run/cold-start case. This is the
+ * one scenario `POST /api/v1/payroll-cycles` (now restricted, Phase 5 Checkpoint 3) still handles,
+ * so this is the only empty state on this page that still offers a create action. */
 function NoCycleEmptyState({ canManageCycles, onCreate }: { canManageCycles: boolean; onCreate: () => void }) {
   return (
     <div className="flex flex-col items-center gap-2 py-14 text-center">
-      <p className="text-xs font-medium text-text">No Draft payroll cycle exists yet</p>
+      <p className="text-xs font-medium text-text">No payroll cycle exists yet</p>
       <p className="max-w-sm text-xs text-text-muted">
         {canManageCycles
-          ? 'Start a new payroll cycle to begin entering this month’s figures.'
-          : 'Ask a Master User to start a new payroll cycle before Payroll Entry can be used.'}
+          ? 'Start the very first payroll cycle to begin entering this month’s figures.'
+          : 'Ask a Master User to start the first payroll cycle before Payroll Entry can be used.'}
       </p>
       {canManageCycles && (
         <Button size="sm" className="mt-2" onClick={onCreate}>
           <Plus className="h-3.5 w-3.5" aria-hidden />
-          Start New Payroll Cycle
+          Start First Payroll Cycle
         </Button>
       )}
+    </div>
+  );
+}
+
+/** A cycle already exists but none is Draft — the latest one is `RELEASED` (finalized, awaiting
+ * rollover) or `ARCHIVED`. Phase 5 Checkpoint 3 restricts `POST /api/v1/payroll-cycles` to the
+ * true first-cycle case above, so this page deliberately offers no create action here — starting
+ * the next cycle is Salary Release's "Start New Payroll Cycle" action (rollover), since that is
+ * also where the outgoing cycle's archive/backup consequences are explained before confirming. */
+function NoDraftCycleEmptyState({ canManageCycles }: { canManageCycles: boolean }) {
+  return (
+    <div className="flex flex-col items-center gap-2 py-14 text-center">
+      <p className="text-xs font-medium text-text">No Draft payroll cycle exists</p>
+      <p className="max-w-sm text-xs text-text-muted">
+        {canManageCycles
+          ? 'The current cycle has been finalized. Start the next payroll cycle from the Salary Release page.'
+          : 'Ask a Master User to start the next payroll cycle from the Salary Release page.'}
+      </p>
     </div>
   );
 }
@@ -116,6 +137,12 @@ function ImportResultModal({
 
 export function PayrollEntryPage({ user }: { user: SessionUser }) {
   const { cycle, isLoading: cycleLoading, error: cycleError } = useCurrentPayrollCycle();
+  // Phase 5 Checkpoint 3 — distinguishes "no cycle has ever existed" (this page's own
+  // Start-First-Cycle action still applies) from "a cycle exists but none is Draft" (rollover on
+  // Salary Release is now the only way to start the next one, since `POST /api/v1/payroll-cycles`
+  // is restricted to the true first-cycle case).
+  const allCycles = usePayrollCycles();
+  const hasAnyCycle = (allCycles.data ?? []).length > 0;
   const {
     data: entries,
     isLoading: entriesLoading,
@@ -202,20 +229,17 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                   />
                 </>
               )}
-              {canManageCycles && (
-                <Button size="sm" variant="secondary" onClick={() => setNewCycleOpen(true)}>
-                  <Plus className="h-3.5 w-3.5" aria-hidden />
-                  New Payroll Cycle
-                </Button>
-              )}
             </div>
           )}
         </CardHeader>
         <CardContent>
           {cycleError && <GridErrorState message={cycleError.message} />}
           {!cycleError && isLoading && <GridLoadingState />}
-          {!cycleError && !isLoading && !cycle && (
+          {!cycleError && !isLoading && !cycle && !hasAnyCycle && (
             <NoCycleEmptyState canManageCycles={canManageCycles} onCreate={() => setNewCycleOpen(true)} />
+          )}
+          {!cycleError && !isLoading && !cycle && hasAnyCycle && (
+            <NoDraftCycleEmptyState canManageCycles={canManageCycles} />
           )}
           {!cycleError && !isLoading && cycle && entriesError && (
             <GridErrorState message={entriesError.message} />

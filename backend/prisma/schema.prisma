@@ -132,21 +132,21 @@ model User {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  role                   Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  siteAssignments        UserSiteAssignment[]
-  auditLogEntries        AuditLog[]
-  companySettingsUpdates CompanySettings[]
-  employeeTransfers      EmployeeTransferHistory[]
-  payrollCyclesCreated   PayrollCycle[]            @relation("PayrollCycleCreatedBy")
-  payrollCyclesReleased  PayrollCycle[]            @relation("PayrollCycleReleasedBy")
-  payrollCyclesArchived  PayrollCycle[]            @relation("PayrollCycleArchivedBy")
-  payrollEntriesReleased PayrollEntry[]            @relation("PayrollEntryReleasedBy")
-  payrollUnitReleases    PayrollUnitRelease[]      @relation("PayrollUnitReleaseReleasedBy")
-  tasksAssignedToMe      Task[]                    @relation("TaskAssignedTo")
-  tasksAssignedByMe      Task[]                    @relation("TaskAssignedBy")
-  taskNotifications      TaskNotification[]
-  advanceScheduleChanges AdvanceScheduleChange[]
-  backupPackagesGenerated BackupPackage[] @relation("BackupPackageGeneratedBy")
+  role                    Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  siteAssignments         UserSiteAssignment[]
+  auditLogEntries         AuditLog[]
+  companySettingsUpdates  CompanySettings[]
+  employeeTransfers       EmployeeTransferHistory[]
+  payrollCyclesCreated    PayrollCycle[]            @relation("PayrollCycleCreatedBy")
+  payrollCyclesReleased   PayrollCycle[]            @relation("PayrollCycleReleasedBy")
+  payrollCyclesArchived   PayrollCycle[]            @relation("PayrollCycleArchivedBy")
+  payrollEntriesReleased  PayrollEntry[]            @relation("PayrollEntryReleasedBy")
+  payrollUnitReleases     PayrollUnitRelease[]      @relation("PayrollUnitReleaseReleasedBy")
+  tasksAssignedToMe       Task[]                    @relation("TaskAssignedTo")
+  tasksAssignedByMe       Task[]                    @relation("TaskAssignedBy")
+  taskNotifications       TaskNotification[]
+  advanceScheduleChanges  AdvanceScheduleChange[]
+  backupPackagesGenerated BackupPackage[]           @relation("BackupPackageGeneratedBy")
 
   @@index([roleId])
 }
@@ -406,29 +406,39 @@ enum PayrollCycleStatus {
 /// Prisma-DSL-inexpressible and added by raw SQL in the migration, same pattern as `Employee`'s
 /// CNIC check constraint (Phase 2).
 model PayrollCycle {
-  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  year          Int                @db.SmallInt
-  month         Int                @db.SmallInt
-  status        PayrollCycleStatus @default(DRAFT)
-  sourceCycleId String?            @db.Uuid
-  createdAt     DateTime           @default(now()) @db.Timestamptz(6)
-  createdBy     String             @db.Uuid
-  releasedAt    DateTime?          @db.Timestamptz(6)
-  releasedBy    String?            @db.Uuid
-  archivedAt    DateTime?          @db.Timestamptz(6)
-  archivedBy    String?            @db.Uuid
+  id                          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  year                        Int                @db.SmallInt
+  month                       Int                @db.SmallInt
+  status                      PayrollCycleStatus @default(DRAFT)
+  sourceCycleId               String?            @db.Uuid
+  createdAt                   DateTime           @default(now()) @db.Timestamptz(6)
+  createdBy                   String             @db.Uuid
+  releasedAt                  DateTime?          @db.Timestamptz(6)
+  releasedBy                  String?            @db.Uuid
+  archivedAt                  DateTime?          @db.Timestamptz(6)
+  archivedBy                  String?            @db.Uuid
+  /// **Added Phase 5 Checkpoint 3.** The specific `BackupPackage` version that was `READY` and
+  /// committed atomically alongside this cycle's own `ARCHIVED` transition (`archive-and-create-
+  /// next`'s single transaction) — never set independently of that transition, and never set for a
+  /// cycle archived any other way (there is no other way). `(cycleId, version)` on `BackupPackage`
+  /// already answers "which packages exist for this cycle," but not "which one was THE package that
+  /// gated this specific archive" once a later correction (Phase 6) can add version 2/3/etc. to an
+  /// already-archived cycle — this FK is that direct, queryable answer, additive only.
+  archivedWithBackupPackageId String?            @db.Uuid
 
-  sourceCycle             PayrollCycle?            @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
-  derivedCycles           PayrollCycle[]           @relation("PayrollCycleSource")
-  createdByUser           User                     @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  releasedByUser          User?                    @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  archivedByUser          User?                    @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
-  entries                 PayrollEntry[]
-  unitReleases            PayrollUnitRelease[]
-  scheduledPayrollPeriods ScheduledPayrollPeriod[]
-  backupPackages          BackupPackage[]
+  sourceCycle               PayrollCycle?            @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  derivedCycles             PayrollCycle[]           @relation("PayrollCycleSource")
+  createdByUser             User                     @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  releasedByUser            User?                    @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  archivedByUser            User?                    @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  archivedWithBackupPackage BackupPackage?           @relation("PayrollCycleArchivedWithBackupPackage", fields: [archivedWithBackupPackageId], references: [id], onDelete: Restrict)
+  entries                   PayrollEntry[]
+  unitReleases              PayrollUnitRelease[]
+  scheduledPayrollPeriods   ScheduledPayrollPeriod[]
+  backupPackages            BackupPackage[]
 
   @@unique([year, month])
+  @@index([archivedWithBackupPackageId])
 }
 
 /// **Added Phase 4 Checkpoint 5 (Advances).** The canonical way any module references a calendar
@@ -910,9 +920,13 @@ model BackupPackage {
   createdAt             DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt             DateTime            @updatedAt @db.Timestamptz(6)
 
-  cycle          PayrollCycle        @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  generatedByUser User               @relation("BackupPackageGeneratedBy", fields: [generatedBy], references: [id], onDelete: Restrict)
-  files          BackupPackageFile[]
+  cycle           PayrollCycle        @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  generatedByUser User                @relation("BackupPackageGeneratedBy", fields: [generatedBy], references: [id], onDelete: Restrict)
+  files           BackupPackageFile[]
+  /// The reverse side of `PayrollCycle.archivedWithBackupPackage` (Phase 5 Checkpoint 3) — normally
+  /// at most one element, since only one cycle is ever archived with a given package as its
+  /// gating version, but Prisma models the FK direction as a list regardless.
+  archivedCycles  PayrollCycle[]      @relation("PayrollCycleArchivedWithBackupPackage")
 
   @@unique([cycleId, version])
   @@index([cycleId])

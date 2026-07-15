@@ -532,17 +532,22 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     await createEntry(admin, oldCycle.id, employee.id);
     await releaseUnit(admin, oldCycle.id, unit.id);
 
-    // Only one PayrollCycle may ever be Draft at a time (`createPayrollCycle`'s own invariant) —
-    // there is no Finalize Cycle endpoint yet (Phase 5), so this directly flips the old cycle's
-    // status the way that future endpoint eventually will, purely to create a second, newer cycle
-    // for this test. Never touches PayrollEntry itself — the release boundary this module reads
-    // is `PayrollEntry.released`, not `PayrollCycle.status` (this checkpoint's own frozen decision).
-    await prisma.payrollCycle.update({ where: { id: oldCycle.id }, data: { status: 'RELEASED' } });
+    // Finalize (Phase 5 Checkpoint 1) then roll over (Phase 5 Checkpoint 3) — the real path to a
+    // second, newer cycle now that the plain create route is restricted to the very first cycle.
+    const finalizeRes = await admin.agent
+      .post(`/api/v1/payroll-cycles/${oldCycle.id}/finalize`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(finalizeRes.status).toBe(200);
 
     // A newer cycle now exists (bootstrap carries the employee forward) — the older cycle's own
     // Payslip must still resolve correctly.
-    const newCycle = await makeDraftCycle(admin, 2);
-    expect(newCycle.id).not.toBe(oldCycle.id);
+    const rolloverRes = await admin.agent
+      .post(`/api/v1/payroll-cycles/${oldCycle.id}/archive-and-create-next`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(rolloverRes.status).toBe(201);
+    expect(rolloverRes.body.newCycle.id).not.toBe(oldCycle.id);
 
     const res = await admin.agent.get(`/api/v1/payroll-cycles/${oldCycle.id}/payslips/${employee.id}`);
     expect(res.status).toBe(200);

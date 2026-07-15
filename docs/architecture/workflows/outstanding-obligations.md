@@ -1,7 +1,7 @@
 # Outstanding Payroll Obligations — the New-Cycle Carry-Forward Seam
 
 **Owner module(s):** Payroll Processing (orchestration only — never contains obligation-specific
-knowledge); Balance Adjustments and Advances (today's two registered providers)
+knowledge); Advances (today's only implemented obligation source)
 
 **Contains:** The carry-forward-predicate / Payroll Materialization Hook extensibility seam that
 Payroll Processing's new-cycle bootstrap uses to decide which departed employees still need a new
@@ -19,9 +19,43 @@ Gratuity).
 
 ---
 
-**Added 2026-07-08, pre-Checkpoint-2 architecture amendment**, generalizing what this section
-previously stated as a single, Balance-Adjustment-specific rule. Payroll Processing's new-cycle
-bootstrap must never contain hardcoded knowledge of any other module's tables (the same discipline
+**Corrected 2026-07-15 (Phase 5 Checkpoint 3 architecture review) — reconciles this file's own
+2026-07-08 generalization with what was actually approved and built.** The 2026-07-08 amendment
+below generalized this section into a registered-provider/hook-registry framework ahead of Advances
+actually being built. As Advances was built (Phase 4 Checkpoint 5) and as Phase 5 Checkpoint 3 closed
+the departed-employee gap, the approved, shipped convention turned out to be simpler and was
+explicitly re-confirmed, not the registry: **there is no generic Outstanding-Payroll-Obligation
+provider/hook registry anywhere in this codebase.** `payroll-processing.service.ts`'s rollover
+bootstrap (`archiveAndCreateNextPayrollCycle`) calls Advances' own
+`materializeScheduledAdvanceDeductions` **directly** — one explicit call, not a dispatch through a
+registered-provider list. **`BalanceAdjustment` does not exist yet** — it is Phase 6, not "today's"
+anything; the paragraph below that lists it as an already-registered provider pre-dates Phase 4 and
+was never accurate for a shipped system. Phase 6, when it lands, adds its own direct call here,
+mirroring Advances' — **a real registry is revisited only if a second, concurrently-existing provider
+actually demonstrates the abstraction is justified, never built ahead of that need** (the same
+anti-premature-abstraction discipline `docs/architecture/overview.md`'s Extensibility section already
+states for Biometric Attendance and Leave Management). The rest of this file, below, is kept for
+historical/design-rationale context — what "outstanding" means, why it's Payroll Processing's
+business only to orchestrate — but its "registered provider" framing should be read as the *shape a
+future registry would take if one is ever justified*, not as the current implementation.
+
+**What Payroll Processing's rollover bootstrap actually does (Phase 5 Checkpoint 3,
+`archiveAndCreateNextPayrollCycle`):** selects the union of (a) every currently active employee
+(`dateOfLeaving IS NULL`), and (b) every departed employee with an `ACTIVE` Advance due the new
+period — a direct query against `Employee`/`Advance`, not a predicate invoked through a registry.
+Departed-obligation entries carry no ordinary pay (zeroed `grossPay`/`eobiAmount`, `hold = true` —
+see `database/payroll-entry.md §12`'s own note on this entry shape). After every entry exists,
+rollover calls `materializeScheduledAdvanceDeductions` once, directly, which populates
+`advanceDeduction`/`advanceId` (or the eid- equivalent), advances `currentScheduledPeriodId` to the
+following month (or clears it on `PAID_OFF`), and writes the `advance.schedule_materialized` audit
+entry (`database/advances.md §15`) — exactly the behavior the "Payroll Materialization Hook" concept
+below describes, just reached by a direct function call instead of a hook registry lookup.
+
+---
+
+**Added 2026-07-08, pre-Checkpoint-2 architecture amendment — superseded by the 2026-07-15 correction
+above; kept for design-rationale context only.** Payroll Processing's new-cycle bootstrap must never
+contain hardcoded knowledge of any other module's tables (the same discipline
 `docs/architecture/overview.md`'s Extensibility section already applies to Biometric Attendance and
 Leave Management — a future module integrates at a defined seam, never by editing Payroll Processing's
 internals). Carry-forward is therefore expressed as an abstraction, not a name-checked list:
@@ -42,34 +76,21 @@ exists — invokes every registered provider's Payroll Materialization Hook, whe
 module owns its own business rules for what "outstanding" means and what materializing an obligation
 looks like; Payroll Processing owns only the orchestration described here.
 
-**Provider independence (added 2026-07-08):** Payroll Processing must never rely on the order in which
-providers are evaluated or invoked. Every registered predicate and every registered Payroll
-Materialization Hook must be independent and safe to run in any order, or concurrently — a provider
-must never assume another provider has already run, or will run before or after it, within the same
-bootstrap. If a genuine ordering dependency between two obligation types is ever discovered, it must be
-resolved by an explicit architecture decision (e.g. a documented, named ordering rule), never by
-depending on whatever order registration happens to produce today. This is what keeps a future
-obligation type a pure addition rather than a source of subtle coupling to whichever providers already
-exist.
+**Provider independence (added 2026-07-08, still the right principle for if/when a registry is ever
+built):** a future obligation type's predicate and materialization logic must be independent and safe
+to run in any order, or concurrently — never assuming another provider has already run, or will run
+before or after it. If a genuine ordering dependency between two obligation types is ever discovered,
+it must be resolved by an explicit architecture decision, never by depending on whatever order happens
+to fall out of implementation today.
 
-**Today's two registered providers:**
+**What this section used to list as "today's two registered providers" (Balance Adjustments and
+Advances) was never accurate as written** — `BalanceAdjustment` is Phase 6, not yet built, and no
+registry exists for either. Advances is the one real, implemented obligation source; see "What
+Payroll Processing's rollover bootstrap actually does," above, for its exact predicate and
+materialization behavior.
 
-1. **Balance Adjustments** — predicate: at least one `PENDING BalanceAdjustment` for this employee.
-   No Payroll Materialization Hook: settlement is a release-time concern
-   (`docs/architecture/workflows/corrections-and-balance-adjustments.md`), unchanged by this
-   amendment — the entry is created with all earning/attendance fields at zero and is visually flagged
-   in the UI as a computed "Final Settlement" indicator (`docs/design-system.md`), so it never reads as
-   an active employee's ordinary monthly pay, exactly as before.
-2. **Advances** — predicate: an `ACTIVE Advance` whose `currentScheduledPeriodId`
-   (`database/payroll-cycle.md §10a`) resolves to the cycle now being created. Payroll Materialization
-   Hook: populate that entry's `advanceDeduction`/`advanceId` (or eid- equivalent) from the advance's
-   schedule, advance `currentScheduledPeriodId` to the following month as the new default target (or
-   clear it to null if this installment brings the advance to `PAID_OFF`), and write the
-   `advance.schedule_materialized` audit entry (`database/advances.md §15`) — distinct from
-   `advance.deferred`, marking the moment a previously-deferred (or ordinary) schedule actually lands
-   in a real `PayrollEntry`, not merely that it moved.
-
-A future obligation type (a Loans, Recoveries, or Bonus Deferral module, say) plugs into this same seam
-by registering its own predicate and, if needed, its own Payroll Materialization Hook — never by
-Payroll Processing being edited to know about it, and never by assuming its own execution order
-relative to any other provider.
+A future obligation type (a Loans, Recoveries, or Bonus Deferral module, say) is added by giving
+Payroll Processing's bootstrap its own additional direct call, mirroring Advances' — **not** by
+building a registry ahead of that second real need. Should Phase 6 (Balance Adjustments) or a later
+module become a genuine second consumer of this same seam, *that* is the point to evaluate whether a
+real registry is justified, not before.

@@ -119,9 +119,9 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
     expect(second.body.error.message).toMatch(/draft/i);
   });
 
-  it('rejects creating a cycle for a (year, month) that already exists', async () => {
-    const { agent, csrfToken } = await masterAdminAgent('cycle-duplicate-year-month@test.local');
-    await makeSiteWithUnit('Test Site Cycle Duplicate');
+  it('rejects a second cycle via the plain create route once any cycle exists, regardless of its status (Phase 5 Checkpoint 3)', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('cycle-plain-route-restricted@test.local');
+    await makeSiteWithUnit('Test Site Cycle Plain Route Restricted');
 
     const first = await agent
       .post('/api/v1/payroll-cycles')
@@ -129,20 +129,20 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
       .send({ year: 2900, month: 5 });
     expect(first.status).toBe(201);
 
-    // Simulate the cycle having moved past Draft (Finalize/Release don't exist yet in this
-    // checkpoint) so the "only one Draft at a time" guard doesn't mask the duplicate-(year,month)
-    // check this test is specifically targeting.
+    // Move the cycle past Draft — the plain route must still reject a second create, now with a
+    // message pointing at the rollover endpoint rather than the "Draft already exists" message
+    // (that message is specific to the still-Draft case, tested separately above).
     await prisma.payrollCycle.update({ where: { id: first.body.cycle.id }, data: { status: 'RELEASED' } });
 
-    const duplicate = await agent
+    const second = await agent
       .post('/api/v1/payroll-cycles')
       .set('x-csrf-token', csrfToken)
-      .send({ year: 2900, month: 5 });
-    expect(duplicate.status).toBe(409);
-    expect(duplicate.body.error.message).toMatch(/already exists/i);
+      .send({ year: 2900, month: 6 });
+    expect(second.status).toBe(409);
+    expect(second.body.error.message).toMatch(/archive-and-create-next/i);
   });
 
-  it('carries forward grossPay/EOBI/leaveRate/cycleDays/otRate from a continuing employee\'s prior entry, not from Employee\'s own defaults', async () => {
+  it('carries forward grossPay/EOBI/leaveRate/cycleDays/otRate from a continuing employee\'s prior entry, not from Employee\'s own defaults, via rollover', async () => {
     const { agent, csrfToken } = await masterAdminAgent('cycle-carry-forward@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Carry Forward');
     const employee = await makeEmployee(site.id, unit.id, 'Continuing Employee', { grossPay: '30000' });
@@ -164,7 +164,9 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
     const patchRes = await agent
       .patch(`/api/v1/payroll-entries/${entry1.id}`)
       .set('x-csrf-token', csrfToken)
-      .send({ version: entry1.version, grossPay: '35000.50', eobiAmount: '450', eobiApplicable: false });
+      // hold: true — Finalize's precondition requires every entry be released or held; this test
+      // doesn't exercise per-Unit release, so it holds the one entry instead.
+      .send({ version: entry1.version, grossPay: '35000.50', eobiAmount: '450', eobiApplicable: false, hold: true });
     expect(patchRes.status).toBe(200);
 
     await prisma.payrollEntryWorkLine.update({
@@ -172,18 +174,23 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
       data: { cycleDays: 26, otRate: '111.11' },
     });
 
-    // Simulate cycle 1 having released (no Finalize/Release exists yet in this checkpoint).
-    await prisma.payrollCycle.update({ where: { id: cycle1.body.cycle.id }, data: { status: 'RELEASED' } });
+    // Finalize (real transition, not a simulated status write — Finalize/Release exist as of
+    // Phase 5 Checkpoint 1) then roll over — the real Checkpoint 3 path to a second cycle.
+    const finalizeRes = await agent
+      .post(`/api/v1/payroll-cycles/${cycle1.body.cycle.id}/finalize`)
+      .set('x-csrf-token', csrfToken)
+      .send({});
+    expect(finalizeRes.status).toBe(200);
 
     const cycle2 = await agent
-      .post('/api/v1/payroll-cycles')
+      .post(`/api/v1/payroll-cycles/${cycle1.body.cycle.id}/archive-and-create-next`)
       .set('x-csrf-token', csrfToken)
-      .send({ year: 2900, month: 7 });
+      .send({});
     expect(cycle2.status).toBe(201);
-    expect(cycle2.body.cycle.sourceCycleId).toBe(cycle1.body.cycle.id);
+    expect(cycle2.body.newCycle.sourceCycleId).toBe(cycle1.body.cycle.id);
 
     const entry2 = await prisma.payrollEntry.findFirstOrThrow({
-      where: { cycleId: cycle2.body.cycle.id, employeeId: employee.id },
+      where: { cycleId: cycle2.body.newCycle.id, employeeId: employee.id },
       include: { workLines: true },
     });
 
@@ -200,7 +207,7 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
     expect(entry2.workLines[0]?.unitId).toBe(unit.id);
   });
 
-  it('seeds a genuinely new employee (no prior entry) fresh from Employee defaults in a subsequent cycle', async () => {
+  it('seeds a genuinely new employee (no prior entry) fresh from Employee defaults in a subsequent cycle created via rollover', async () => {
     const { agent, csrfToken } = await masterAdminAgent('cycle-new-employee@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site New Employee Mid Cycle');
 
@@ -209,19 +216,24 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
       .set('x-csrf-token', csrfToken)
       .send({ year: 2900, month: 8 });
     expect(cycle1.status).toBe(201);
-    await prisma.payrollCycle.update({ where: { id: cycle1.body.cycle.id }, data: { status: 'RELEASED' } });
+
+    const finalizeRes = await agent
+      .post(`/api/v1/payroll-cycles/${cycle1.body.cycle.id}/finalize`)
+      .set('x-csrf-token', csrfToken)
+      .send({});
+    expect(finalizeRes.status).toBe(200);
 
     // Hired after cycle 1 was created — has no entry in cycle 1 at all.
     const newHire = await makeEmployee(site.id, unit.id, 'New Hire', { grossPay: '42000' });
 
     const cycle2 = await agent
-      .post('/api/v1/payroll-cycles')
+      .post(`/api/v1/payroll-cycles/${cycle1.body.cycle.id}/archive-and-create-next`)
       .set('x-csrf-token', csrfToken)
-      .send({ year: 2900, month: 9 });
+      .send({});
     expect(cycle2.status).toBe(201);
 
     const entry2 = await prisma.payrollEntry.findFirstOrThrow({
-      where: { cycleId: cycle2.body.cycle.id, employeeId: newHire.id },
+      where: { cycleId: cycle2.body.newCycle.id, employeeId: newHire.id },
       include: { workLines: true },
     });
     expect(Number(entry2.grossPay)).toBe(42000);

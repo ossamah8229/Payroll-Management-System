@@ -45,6 +45,20 @@ cycles (zero `PayrollEntry` rows) trivially satisfy the precondition and may be 
 Backup Package generation, and the new-cycle-creation transaction upgrade remain later, separately
 authorized Phase 5 checkpoints.
 
+**Implemented Phase 5 Checkpoint 3 (2026-07-15):** `POST /api/v1/payroll-cycles/:cycleId/
+archive-and-create-next` (`payroll-processing.service.ts`'s `archiveAndCreateNextPayrollCycle`),
+gated by `payroll-cycle:manage`. The month-end rollover workflow — see
+`docs/architecture/workflows/payroll-lifecycle.md §4`'s "New Cycle Creation & Employee Selection" for
+the full transaction ordering. In summary: reserves and generates a fresh `BackupPackage` (§17),
+then in one transaction atomically flips the named outgoing cycle `RELEASED` → `ARCHIVED` (the same
+guarded-`updateMany` race pattern Finalize uses), setting `archivedAt`/`archivedBy`/
+`archivedWithBackupPackageId` (below), creates the next `Draft` `PayrollCycle` (year/month always
+derived — outgoing + one calendar month, December rolling the year, never caller-supplied), bootstraps
+its `PayrollEntry` rows, and materializes due Advances. **`POST /api/v1/payroll-cycles` (plain
+creation) is restricted, as of this checkpoint, to bootstrapping the very first cycle ever** — once
+any `PayrollCycle` row exists, that route rejects with a typed conflict directing the caller to this
+rollover route instead, regardless of the existing cycle's own status.
+
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
@@ -57,13 +71,15 @@ authorized Phase 5 checkpoints.
 | `releasedAt` | timestamptz | yes | — | set when status → `RELEASED` |
 | `releasedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` |
 | `archivedAt` | timestamptz | yes | — | set when status → `ARCHIVED` |
-| `archivedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT`; null if the archive was a fully automatic system action |
+| `archivedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` — always set; archiving is always an explicit rollover action by an actor (Phase 5 Checkpoint 3), never a fully automatic system action with no actor |
+| `archivedWithBackupPackageId` | uuid | yes | — | **Added Phase 5 Checkpoint 3.** FK → `BackupPackage.id`, `ON DELETE RESTRICT` — the specific package version that was `READY` and committed atomically alongside this cycle's own `ARCHIVED` transition; set only by rollover, never independently. `(cycleId, version)` on `BackupPackage` (§17) answers "which packages exist for this cycle"; this column answers "which one specifically gated this archive" — meaningful once a later correction (Phase 6) can add version 2/3/etc. to an already-archived cycle |
 
 - **Unique constraints:** (`year`, `month`) — one cycle per calendar month, ever
 - **Check constraints:** `month BETWEEN 1 AND 12`
 - **Indexes:** unique(`year`, `month`); (`status`) — the "which cycle is currently Draft" lookup is
   hot and should be a fast partial index `WHERE status = 'DRAFT'` (also enforces, together with
-  application logic, that only one cycle is ever Draft)
+  application logic, that only one cycle is ever Draft); (`archivedWithBackupPackageId`) — added
+  Phase 5 Checkpoint 3, alongside the column
 - **Cascade:** all FKs `RESTRICT` — a cycle and the users who acted on it are never deleted out from
   under this record
 - **Module owner:** Payroll Processing
@@ -184,10 +200,19 @@ in-app historical viewing** — that always comes from Postgres directly.
 **Implemented Phase 5 Checkpoint 2 (2026-07-14), amended from the sketch this section previously
 carried** — the architecture review found the original sketch (below the amendment note)
 under-specified for authenticated download, in-flight/failed generation, and actor attribution, and
-added `status`, `generatedBy`, and `failureReason`. Generation is **manually triggered only** this
-checkpoint (`POST /api/v1/payroll-cycles/:cycleId/backup-packages`, Master-Admin-only via
-`payroll-cycle:manage`) — automatic generation on the cycle archive transition remains later,
-separately-authorized Phase 5 work; this checkpoint builds the generator that later work will call.
+added `status`, `generatedBy`, and `failureReason`. Manual generation
+(`POST /api/v1/payroll-cycles/:cycleId/backup-packages`, Master-Admin-only via `payroll-cycle:manage`)
+remains available for a standalone snapshot outside of rollover.
+
+**Automatic generation on the cycle archive transition implemented Phase 5 Checkpoint 3
+(2026-07-15)** — rollover (`archiveAndCreateNextPayrollCycle`, `docs/architecture/workflows/
+payroll-lifecycle.md §4`) always generates a fresh version immediately before archiving, reusing the
+same generator (refactored into four composable phases so neither caller duplicates the logic:
+`reserveBackupPackageVersion` → `assembleBackupPackageFiles` → `writeBackupPackageFilesToStorage` →
+`commitBackupPackageReady`). Rollover never reuses an earlier `READY` package — see the "Rollover
+always generates a fresh Backup Package version" note in `payroll-lifecycle.md §5`. The archived
+`PayrollCycle` row records which specific version gated its archive via
+`PayrollCycle.archivedWithBackupPackageId` (§10).
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|

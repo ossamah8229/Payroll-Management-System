@@ -117,6 +117,22 @@ Sheets, Cash Receiving, and reports is always enforced against `PayrollEntry.sit
 special case and no risk of a row disappearing from a Payroll Staff or Finance user's view mid-session
 because of an unrelated `Employee` edit.
 
+**Departed-employee obligation-only entries (Phase 5 Checkpoint 3, `docs/architecture/workflows/
+payroll-lifecycle.md §4`'s "New Cycle Creation & Employee Selection"):** at rollover, a departed
+employee (`dateOfLeaving IS NOT NULL`) with an outstanding obligation due the new period (today:
+an `ACTIVE` Advance whose `currentScheduledPeriodId` resolves to it) still receives a new
+`PayrollEntry` — the one deliberate exception to "new entries seed from currently active employees."
+This entry does not follow the ordinary carry-forward rule for payroll figures: `grossPay` and
+`eobiAmount` are zeroed, `eobiApplicable` is `false`, and `hold` is set `true` at creation — never
+mistakable for, or accidentally payable as, ordinary salary. Identity/banking fields
+(`employeeNameSnapshot`/`fatherNameSnapshot`/`designation`/bank fields) still populate normally,
+following the same rules as any other entry. The work line's `cycleDays` still takes the ordinary
+schema default (30, `database/payroll-entry.md §12a`) — it is the cycle's own day-count basis
+(DB-constrained to 1–31), not an attendance figure; attendance (`days`) stays at its own default zero,
+which is what actually expresses "no work performed." The entry can be released like any other held
+entry once its obligation is settled; a departed employee with no outstanding obligation receives no
+entry at all, same as before this checkpoint.
+
 **Banking rule (2026-07-11):** a cash entry (`bankId` null) always has `accountNumber`/`iban` both
 null too. Unlike `Employee`'s own create/update, which hard-rejects setting a bank with no Account
 Number (full-form submission, `employees.service.ts`'s `applyBankingInvariant`), `updatePayrollEntry`

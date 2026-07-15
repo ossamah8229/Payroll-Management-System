@@ -3487,6 +3487,72 @@ absent after every test run performed this pass.
 
 ---
 
+### Phase 5, Checkpoint 3 — Cycle Archiving, Automatic Backup Generation, and New-Cycle Rollover — COMPLETE, 2026-07-15
+
+Read-only architecture review (2026-07-15, no code) approved with six final decisions: dedicated
+rollover endpoint (`POST /api/v1/payroll-cycles/:cycleId/archive-and-create-next`), not folded into
+cycle creation; the plain `POST /api/v1/payroll-cycles` restricted to bootstrapping the very first
+cycle ever; a minimal frontend slice ships this checkpoint; the next period always derives
+automatically (no request body, no override); an additive `PayrollCycle.archivedWithBackupPackageId`
+FK; no departed-employee visual indicator this checkpoint. Full narrative, transaction ordering, and
+schema detail: `docs/IMPLEMENTATION_PLAN.md`'s Phase 5 Checkpoint 3 entry.
+
+**Backend:** `archiveAndCreateNextPayrollCycle` (`payroll-processing.service.ts`) — one PostgreSQL
+transaction (preceded by the non-transactional Backup Package reserve/assemble/storage-write):
+guarded `RELEASED` → `ARCHIVED` update → commits the fresh Backup Package's `READY` metadata →
+creates the next Draft (derived year/month) → resolves the `ScheduledPayrollPeriod` → bootstraps
+entries (active employees ∪ departed employees with a due `ACTIVE` Advance) → materializes due
+Advances → writes three audit entries. `backup-packages.service.ts`'s `generateBackupPackage`
+refactored into four composable phases (`reserveBackupPackageVersion` /
+`assembleBackupPackageFiles` / `writeBackupPackageFilesToStorage` / `commitBackupPackageReady`) so
+rollover reuses it rather than duplicating the generator — manual generation's own behavior
+unchanged. `createPayrollCycle`'s bootstrap body extracted into a shared `bootstrapPayrollEntries`
+helper used by both the now-restricted plain route and rollover. Closes
+`materializeScheduledAdvanceDeductions`'s own former accepted gap (a departed employee's due Advance
+was previously left permanently unmaterialized) — Advances only, direct call, no registry (the
+approved boundary; `docs/architecture/workflows/outstanding-obligations.md` corrected — it had
+drifted into describing a registry as already-adopted convention ahead of it ever being built, and
+into listing `BalanceAdjustment`, which doesn't exist until Phase 6, as "today's" provider).
+
+**Frontend:** "Start New Payroll Cycle" moved to the Salary Release page next to Finalize Cycle,
+visible only when `Released`, confirmation modal, busy/duplicate-submit-prevention state matching
+Finalize's own pattern. The Payroll Entry page's redundant "New Payroll Cycle" toolbar button was
+removed; its empty state now distinguishes "no cycle has ever existed" (still offers the first-cycle
+create action) from "a cycle exists but none is Draft" (points to Salary Release).
+
+**Schema:** one additive migration, `20260715142622_payroll_cycle_archived_with_backup_package` —
+nullable `PayrollCycle.archivedWithBackupPackageId`, FK → `BackupPackage.id`, `ON DELETE RESTRICT`.
+
+**Tests:** 17 new (`backend/tests/payroll-cycle-rollover.test.ts`) — lifecycle transitions, backup
+freshness (a held-entry edit made after Finalize is reflected in the rollover-generated package, not
+an earlier manual one), storage-write and mid-transaction failure injection (rollback verified via a
+spied `recordAuditLog` throwing after the archive/backup-commit/bootstrap steps already ran),
+bootstrap inclusion/exclusion (departed-with-obligation included with zeroed salary fields and
+`hold = true`; a paid-off advance excludes its employee from the *following* rollover), audit
+metadata, true HTTP-level concurrent-rollover racing (exactly one success), RBAC/CSRF. 3 existing
+tests in `payroll-cycle.test.ts` and 1 in `payslips.test.ts` corrected to reach their second cycle via
+Finalize + rollover instead of a second plain-route call. Full backend suite: **469/469**.
+
+**Two real defects caught by this checkpoint's own new tests before commit, not shipped:**
+(1) the storage-write phase's refactor initially returned a locally-built `writtenKeys` array rather
+than mutating a caller-owned one, so a mid-write failure lost the partial list and cleanup silently
+deleted nothing — fixed by passing the array in by reference (also affects, and was fixed for, manual
+generation's own catch path, though manual generation's own existing test suite didn't happen to
+exercise the exact failing sequence that exposes it); (2) a departed-obligation work line was
+initially seeded with `cycleDays = 0`, violating the `cycleDays BETWEEN 1 AND 31` check constraint —
+`cycleDays` is the cycle's own day-count basis, not attendance, so it takes the ordinary schema
+default (30); "no work performed" is expressed via `days` (already zero by default) instead.
+
+Real-stack verification: real PostgreSQL (embedded-postgres, re-provisioned this session), real
+filesystem `StorageProvider`, compiled backend, real login/CSRF/cookies via `supertest`. Full
+verification record (typecheck/lint/build, migration status, repeated rollover runs, live HTTP
+walkthrough): §1's "Full verification pass" note below this entry once recorded, and the
+implementation session's own deliverable message.
+
+- **Not committed** — pending review, per this checkpoint's explicit instruction.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -3497,7 +3563,7 @@ absent after every test run performed this pass.
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoints 3–4 (new-cycle-creation transaction upgrade, Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) implemented and tested 2026-07-15, **not yet committed** — see §1's Checkpoint 3 entry. Checkpoint 4 (Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -3838,7 +3904,7 @@ outstanding).
    sessions. Recipe unchanged: `@embedded-postgres/darwin-x64` in the scratchpad, `initdb`, start
    TCP-only, create the `payroll`/`payroll_dev` role/database, `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed twice (confirm idempotency), `npm run test --workspace backend`
-   (expect **346/346** as of Checkpoint 6.3's close — run via the `npm run test` script, which sets
+   (expect **469/469** as of Phase 5 Checkpoint 3 — run via the `npm run test` script, which sets
    `NODE_ENV=test` and `--runInBand`; do not run `npx jest` directly with a sourced `.env`, which
    overrides `NODE_ENV` to `development` and drops the login rate limit from 1000/window to
    10/window, producing spurious 429s).
@@ -3853,14 +3919,17 @@ outstanding).
 3. **Phase 5 (Cycle Finalization, Archiving, and Backups) IN PROGRESS, authorized 2026-07-14** — the
    architecture review, Checkpoint 0 (`StorageProvider` foundation, committed `d87b9b0`),
    Checkpoint 1 (Finalize Cycle, committed `cad93bc`), and Checkpoint 2 (Backup Packages reusable
-   domain/generator, committed `3ea879e`) are complete, per this
-   project's standing per-checkpoint/per-phase practice; Checkpoints 3–4 and phase close-out each
-   still require their own separate, explicit go-ahead, same as every other phase. **Known, documented
-   gaps carried forward**: there is no post-finalization release path for a held entry yet (Checkpoint
-   1's own approved scope) — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s "Released"
-   state description; automatic Backup Package generation on the cycle archive transition, Payslip
-   PDFs, and an Audit Log export are all explicitly deferred past Checkpoint 2 — see
-   `docs/architecture/workflows/payroll-lifecycle.md §5`. `StorageProvider`
+   domain/generator, committed `3ea879e`) are complete, per this project's standing
+   per-checkpoint/per-phase practice. **Checkpoint 3 (cycle archiving, automatic backup generation,
+   and new-cycle rollover) is implemented and tested, 2026-07-15, not yet committed** — pending
+   review, see §1's Checkpoint 3 entry. Checkpoint 4 (Payroll Cycle Selector) and phase close-out
+   each still require their own separate, explicit go-ahead, same as every other phase. **Known,
+   documented gaps carried forward**: there is no post-finalization release path for a held entry yet
+   (Checkpoint 1's own approved scope) — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s
+   "Released" state description; Payslip PDFs and an Audit Log export inside a Backup Package remain
+   explicitly deferred — see `docs/architecture/workflows/payroll-lifecycle.md §5`. Automatic Backup
+   Package generation on the cycle archive transition (previously listed here as deferred) is now
+   implemented, Checkpoint 3. `StorageProvider`
    (§3 item 4; Backup Package generation's hard requirement, deliberately kept out of Phases 2.5–4)
    is now built — `backend/src/lib/storage/`, see §1's Checkpoint 0 entry — designed portable to
    whatever hosting a given customer provides per §3 item 13, not assumed cloud-provider-specific

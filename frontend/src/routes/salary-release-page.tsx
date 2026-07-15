@@ -11,7 +11,13 @@ import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
-import { formatCycleLabel, useFinalizePayrollCycle, useLatestPayrollCycle } from '@/hooks/use-payroll-cycles';
+import {
+  formatCycleLabel,
+  useFinalizePayrollCycle,
+  useLatestPayrollCycle,
+  useRolloverPayrollCycle,
+  type PayrollCycle,
+} from '@/hooks/use-payroll-cycles';
 import { useReleaseProjectUnit, useUnitReleaseStatus, type UnitReleaseStatus } from '@/hooks/use-payroll-release';
 
 const selectClassName =
@@ -134,12 +140,72 @@ function FinalizeConfirmModal({
   );
 }
 
+/** Purely a display computation, mirroring the backend's own derived-period arithmetic
+ * (`archiveAndCreateNextPayrollCycle`) — never sent to the server; the backend derives the real
+ * next period itself and this label is only ever used to preview it before confirming. */
+function nextCycleLabel(cycle: Pick<PayrollCycle, 'year' | 'month'>): string {
+  const nextMonth = cycle.month === 12 ? 1 : cycle.month + 1;
+  const nextYear = cycle.month === 12 ? cycle.year + 1 : cycle.year;
+  return formatCycleLabel({ year: nextYear, month: nextMonth });
+}
+
+function RolloverConfirmModal({
+  open,
+  onOpenChange,
+  cycleLabel,
+  nextLabel,
+  onConfirm,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  cycleLabel: string;
+  nextLabel: string;
+  onConfirm: () => void;
+  isPending: boolean;
+}) {
+  return (
+    <Modal open={open} onOpenChange={(next) => !isPending && onOpenChange(next)}>
+      <ModalContent title="Start New Payroll Cycle" widthClassName="max-w-[520px]">
+        <div className="flex flex-col gap-3.5 text-xs">
+          <p className="text-text-muted">
+            This starts <span className="font-medium text-text">{nextLabel}</span> as the next Draft
+            payroll cycle.
+          </p>
+          <div className="flex flex-col gap-1.5 rounded border border-border bg-bg px-3 py-2.5">
+            <p className="text-text-muted">
+              <span className="font-medium text-text">{cycleLabel}</span> will be archived — it becomes
+              permanently read-only. This is a <span className="font-medium text-text">one-way</span>{' '}
+              lifecycle action.
+            </p>
+            <p className="text-text-muted">
+              A fresh Backup Package will be generated for {cycleLabel} immediately before it archives.
+            </p>
+            <p className="text-text-muted">
+              {nextLabel} is created automatically — the next calendar month after {cycleLabel}.
+            </p>
+          </div>
+        </div>
+        <ModalFooter>
+          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={isPending}>
+            {isPending ? 'Starting…' : 'Start New Payroll Cycle'}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 export function SalaryReleasePage({ user }: { user: SessionUser }) {
   const { cycle, isLoading: cycleLoading, error: cycleError } = useLatestPayrollCycle();
   const sites = useProjectSites();
   const [siteId, setSiteId] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState<UnitReleaseStatus | undefined>(undefined);
   const [confirmingFinalize, setConfirmingFinalize] = useState(false);
+  const [confirmingRollover, setConfirmingRollover] = useState(false);
 
   useEffect(() => {
     if (!siteId && sites.data && sites.data.length > 0) {
@@ -150,6 +216,7 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   const unitStatus = useUnitReleaseStatus(cycle?.id, siteId);
   const releaseUnit = useReleaseProjectUnit(cycle?.id ?? '', siteId ?? '');
   const finalizeCycle = useFinalizePayrollCycle();
+  const rolloverCycle = useRolloverPayrollCycle();
 
   const canRelease = user.permissions.includes(PERMISSIONS.PAYROLL_RELEASE);
   const canFinalize = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
@@ -183,6 +250,17 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     }
   }
 
+  async function handleConfirmRollover() {
+    if (!cycle) return;
+    try {
+      const result = await rolloverCycle.mutateAsync(cycle.id);
+      toast.success(`${formatCycleLabel(result.newCycle)} started — ${cycleLabel} archived`);
+      setConfirmingRollover(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Starting the new payroll cycle failed');
+    }
+  }
+
   return (
     <AppShell user={user} title="Salary Release" subtitle="Release payroll by Project Unit">
       <Card>
@@ -195,6 +273,11 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
             {cycle && canFinalize && cycle.status === 'DRAFT' && (
               <Button size="sm" variant="secondary" onClick={() => setConfirmingFinalize(true)}>
                 Finalize Cycle
+              </Button>
+            )}
+            {cycle && canFinalize && cycle.status === 'RELEASED' && (
+              <Button size="sm" variant="secondary" onClick={() => setConfirmingRollover(true)}>
+                Start New Payroll Cycle
               </Button>
             )}
           </div>
@@ -338,6 +421,17 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
           cycleLabel={cycleLabel}
           onConfirm={handleConfirmFinalize}
           isPending={finalizeCycle.isPending}
+        />
+      )}
+
+      {cycle && (
+        <RolloverConfirmModal
+          open={confirmingRollover}
+          onOpenChange={(open) => !rolloverCycle.isPending && setConfirmingRollover(open)}
+          cycleLabel={cycleLabel}
+          nextLabel={nextCycleLabel(cycle)}
+          onConfirm={handleConfirmRollover}
+          isPending={rolloverCycle.isPending}
         />
       )}
     </AppShell>

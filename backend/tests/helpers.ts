@@ -48,6 +48,14 @@ export async function cleanTestData(): Promise<void> {
   // BackupPackageFile must go before BackupPackage (its own RESTRICT parent), and both strictly
   // before PayrollCycle/User below. Scoped by the same fake year>=2900 convention (neither table
   // has a text column of its own to prefix).
+  //
+  // PayrollCycle.archivedWithBackupPackageId (Phase 5 Checkpoint 3) is RESTRICT the other
+  // direction — a cycle archived by rollover points at the specific BackupPackage that gated its
+  // archive, so that pointer must be cleared before BackupPackage itself can be deleted below.
+  await prisma.payrollCycle.updateMany({
+    where: { year: { gte: 2900 } },
+    data: { archivedWithBackupPackageId: null },
+  });
   await prisma.backupPackageFile.deleteMany({ where: { backupPackage: { cycle: { year: { gte: 2900 } } } } });
   await prisma.backupPackage.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.payrollEntry.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });

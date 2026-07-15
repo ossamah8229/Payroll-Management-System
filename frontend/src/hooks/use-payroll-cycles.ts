@@ -100,3 +100,32 @@ export function useFinalizePayrollCycle() {
     },
   });
 }
+
+export interface RolloverPayrollCycleResult {
+  outgoingCycle: PayrollCycle;
+  newCycle: PayrollCycle;
+  backupPackageId: string;
+  backupPackageVersion: number;
+  entriesCreated: number;
+  departedObligationEntries: number;
+  advancesMaterialized: number;
+}
+
+/**
+ * Phase 5 Checkpoint 3 — the month-end rollover workflow. No request body: the next calendar
+ * period is always derived server-side from the outgoing cycle's own `(year, month)`, never
+ * caller-supplied (docs/architecture/workflows/payroll-lifecycle.md §4).
+ */
+export function useRolloverPayrollCycle() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (outgoingCycleId: string) =>
+      apiRequest<RolloverPayrollCycleResult>(
+        `/api/v1/payroll-cycles/${outgoingCycleId}/archive-and-create-next`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PAYROLL_CYCLES_QUERY_KEY });
+    },
+  });
+}

@@ -94,8 +94,39 @@ be enough to resume correctly without re-deriving context from scratch — per
   regression tests (32 total in `backup-packages.test.ts`), plus the existing Bank Sheets/Cash
   Receiving/Payroll Entry export regression suites re-run clean; full backend suite **452/452**.
   Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 2" and "final narrow
-  verification pass" entries. **Do not begin Phase 5 Checkpoint 3 (new-cycle-creation transaction
-  upgrade) without its own explicit go-ahead.**
+  verification pass" entries.
+- **This session (2026-07-15): Phase 5 Checkpoint 3 — Cycle Archiving, Automatic Backup Generation,
+  and New-Cycle Rollover — implemented and tested, NOT YET COMMITTED, pending review.** A read-only
+  architecture review ran first (approved with six final decisions — dedicated rollover endpoint;
+  plain cycle-creation route restricted to the very-first-cycle case; a minimal frontend slice ships
+  this checkpoint; next period always derived automatically, no override; additive
+  `PayrollCycle.archivedWithBackupPackageId` FK; departed-employee visual indicator deferred), then
+  implementation: `POST /api/v1/payroll-cycles/:cycleId/archive-and-create-next`
+  (`archiveAndCreateNextPayrollCycle`, `payroll-processing.service.ts`) — one transaction (archive
+  outgoing cycle, commit fresh Backup Package `READY` metadata, create next Draft with a derived
+  year/month, bootstrap entries, materialize Advances, three audit entries), preceded by the
+  necessarily non-transactional Backup Package reserve/assemble/storage-write. `backup-packages
+  .service.ts`'s generator refactored into four composable phases so rollover reuses it rather than
+  duplicating logic; manual generation's own behavior unchanged. `createPayrollCycle`'s bootstrap
+  extracted into a shared helper. Closes the departed-employee Advance-materialization gap that
+  `advances.service.ts` had documented as an accepted limitation since Phase 4. Corrected
+  `docs/architecture/workflows/outstanding-obligations.md`, which had drifted into describing a
+  generic provider registry as already-adopted convention (never built) and listing `BalanceAdjustment`
+  (Phase 6, not yet built) as "today's" provider. Frontend: "Start New Payroll Cycle" moved to the
+  Salary Release page next to Finalize Cycle; the Payroll Entry page's redundant toolbar button
+  removed and its empty state split into two cases. One additive migration
+  (`20260715142622_payroll_cycle_archived_with_backup_package`). 17 new tests
+  (`payroll-cycle-rollover.test.ts`) plus 4 existing tests corrected across `payroll-cycle.test.ts`
+  (3) and `payslips.test.ts` (1) to reach a second cycle via Finalize + rollover instead of a now-
+  disallowed second plain-route call. Full backend suite **469/469**. Two real defects caught by this
+  checkpoint's own new tests before commit: a storage-cleanup-array-by-reference bug in the phase
+  refactor, and an invalid `cycleDays = 0` on departed-obligation work lines (violates the
+  `cycleDays BETWEEN 1 AND 31` check constraint — fixed to the ordinary schema default, 30; "no work
+  performed" is expressed via `days`, not `cycleDays`). Real-stack verification: real PostgreSQL
+  (embedded-postgres, re-provisioned this session), real filesystem `StorageProvider`, compiled
+  backend, real login/CSRF/cookies. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5,
+  Checkpoint 3" entry. **Do not begin Phase 5 Checkpoint 4 (Payroll Cycle Selector) or Phase 6
+  without their own explicit go-ahead — and do not commit this checkpoint's work without review.**
 - **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
   4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
@@ -1349,7 +1380,7 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Updated 2026-07-14 — Phase 1, Phase 2, Phase 2.5, Phase 3 (all seven checkpoints), and Phase 3.5
+**Updated 2026-07-15 — Phase 1, Phase 2, Phase 2.5, Phase 3 (all seven checkpoints), and Phase 3.5
 (all four checkpoints) remain closed with full DB-backed evidence — see §1/§2. Phase 4 (all six
 checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and committed, but is
 **code-complete, not fully closed** — see §1's Checkpoint 6.3 entry and
@@ -1357,8 +1388,10 @@ checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and commi
 (real Render/Linux-container deployment verification). **Phase 5 is IN PROGRESS, authorized
 2026-07-14 — architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
 Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`), and Checkpoint 2 (Backup Packages reusable
-domain/generator, COMMITTED `3ea879e`) are complete. Checkpoints 3–4 and phase close-out each still require their own separate, explicit
-go-ahead — see §1's "Phase 5, Checkpoint 2" entry.**
+domain/generator, COMMITTED `3ea879e`) are complete. Checkpoint 3 (cycle archiving, automatic backup
+generation, and new-cycle rollover) is implemented and tested (2026-07-15, full backend suite
+469/469) but **NOT YET COMMITTED — pending review**, see §1's "Phase 5, Checkpoint 3" entry.
+Checkpoint 4 and phase close-out each still require their own separate, explicit go-ahead.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest
@@ -1368,8 +1401,8 @@ go-ahead — see §1's "Phase 5, Checkpoint 2" entry.**
    `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its symlinks, `initdb -U postgres -A
    trust`, start with `-c unix_socket_directories=''` (TCP only), create role `payroll` (password
    `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
-   `npx prisma migrate deploy` (13 migrations as of Checkpoint 6.3), seed **twice** (confirm
-   idempotency), `npm run test --workspace backend` (expect **346/346** as of Checkpoint 6.3's close
+   `npx prisma migrate deploy` (15 migrations as of Phase 5 Checkpoint 3), seed **twice** (confirm
+   idempotency), `npm run test --workspace backend` (expect **469/469** as of Phase 5 Checkpoint 3
    — **use the `npm run test` script itself**, which sets `NODE_ENV=test` and `--runInBand`; running
    `npx jest` directly after sourcing `backend/.env` overrides `NODE_ENV` to `development` and drops
    the login rate limiter from 1000/window to 10/window, producing a cascade of spurious 429
@@ -1385,7 +1418,7 @@ go-ahead — see §1's "Phase 5, Checkpoint 2" entry.**
    `SELECT count(*) FROM pg_stat_activity` returning to baseline (~9) before re-running; this has
    been a known "Jest did not exit one second after…" artifact since Checkpoint 6.1/6.2 and was
    re-confirmed, not newly introduced, during Checkpoint 6.3.
-3. **Confirm the 346/346 baseline is green before touching any new code.**
+3. **Confirm the 469/469 baseline is green before touching any new code.**
 4. **Close the one outstanding Phase 4 condition before treating the phase as fully closed: a real
    Render (or genuine Linux container) deployment smoke test.** Neither Docker/Podman/Colima nor
    Render API access nor a configured git remote were available in this session (same constraint as

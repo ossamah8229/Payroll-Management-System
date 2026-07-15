@@ -188,11 +188,22 @@ Archived (Locked)
     `docs/architecture/workflows/corrections-and-balance-adjustments.md`) rather than the original
     figures being changed.
   - The original released payroll record remains unchanged, permanently (Principle 9).
-  - "Start New Payroll Cycle" is only available once the current cycle is `Released` — attempting to
-    start a new cycle while the current one is still `Draft` is blocked with a message to finalize it
-    first.
+  - **"Start New Payroll Cycle" (Phase 5 Checkpoint 3) lives on the Salary Release page**, next to
+    Finalize Cycle, visible only when the current cycle is `Released` — behind a confirmation modal
+    naming the outgoing cycle, the automatically-derived next period, and stating that a fresh Backup
+    Package will be generated and the outgoing cycle archived. Attempting to start a new cycle while
+    the current one is still `Draft` has no affordance here at all (the button doesn't render); the
+    underlying plain-creation route independently rejects with a message to finalize first, for any
+    caller that reaches it directly. The Payroll Entry page's own, separate "start the very first
+    cycle" empty-state action is unaffected — see the plain-creation restriction, below.
 
-- **Archived (Locked)** — triggered automatically the moment a new payroll cycle is created.
+- **Archived (Locked)** — **implemented Phase 5 Checkpoint 3 (2026-07-15)** as an explicit rollover
+  action (`POST /api/v1/payroll-cycles/:cycleId/archive-and-create-next`, `payroll-cycle:manage`,
+  Master-Admin-only), never an automatic side effect of ordinary cycle creation. Naming the outgoing
+  cycle explicitly, rather than folding this into cycle creation, was the approved architecture
+  decision (2026-07-15 review) — it keeps "create a cycle" (still possible only once, to bootstrap
+  the very first cycle ever — see below) and "roll over to the next cycle" as two distinct actions,
+  so starting a new cycle can never silently archive history as an undocumented side effect.
   - The entire cycle becomes historical and fully read-only.
   - Archived cycles continue to accept Corrections indefinitely (a dispute or discovered error
     doesn't have an expiry) — per the trigger condition above, this was already true the moment the
@@ -203,30 +214,72 @@ Archived (Locked)
     Draft* cycle — never by writing back into the original cycle's own figures, and never by
     reopening it. See `docs/architecture/workflows/corrections-and-balance-adjustments.md` for the full
     settlement workflow.
-  - A backup package is automatically generated for the cycle being archived (§5).
+  - A fresh Backup Package is always generated for the cycle being archived, immediately before the
+    archive transition, as part of the same rollover action (§5).
+  - `PayrollCycle.archivedWithBackupPackageId` records exactly which `BackupPackage` version gated
+    this specific archive (`database/payroll-cycle.md §10`) — additive schema, Phase 5 Checkpoint 3.
+  - Defensively re-validates, at rollover time, that the named outgoing cycle is the only currently
+    `Released` cycle in the system — the invariant this checkpoint establishes (at most one cycle is
+    ever `Released` at a time, since every rollover archives its predecessor atomically) should
+    always hold by construction; this is a backstop, not the primary correctness mechanism.
 
 Only one cycle is ever in `Draft` state at a time.
 
 ### New Cycle Creation & Employee Selection
 
-Creating a new cycle requires the current cycle to already be `Released` (above) and, in one
-transaction, in this order:
+**`POST /api/v1/payroll-cycles` (plain creation) is restricted to bootstrapping the very first cycle
+ever** (no `PayrollCycle` row of any status exists yet) — implemented Phase 5 Checkpoint 3. Once any
+cycle exists, this route rejects with a typed conflict pointing the caller at the rollover endpoint
+below, regardless of that existing cycle's own status. This is what makes "starting a new cycle" and
+"archiving the outgoing one" the same atomic action for every cycle after the first, with no route
+that can create a second cycle without also handling its predecessor.
 
-1. Transitions the current cycle to `Archived` and generates its backup package (§5).
-2. Creates the new `PayrollCycle` row (`Draft`).
-3. Resolves any `ScheduledPayrollPeriod` matching this new cycle's `(year, month)`
+**Rollover (`POST /api/v1/payroll-cycles/:cycleId/archive-and-create-next`) requires the named
+outgoing cycle to already be `Released`** and, in one PostgreSQL transaction (preceded by the
+necessarily-non-transactional Backup Package storage write — see §5's cross-system ordering), in
+this order:
+
+1. Commits the freshly-generated Backup Package's `READY` metadata (assembled and written to storage
+   just before this transaction opened — §5).
+2. Transitions the outgoing cycle to `Archived`, setting `archivedAt`/`archivedBy`/
+   `archivedWithBackupPackageId`, guarded by an atomic conditional update scoped to
+   `status: 'Released'` (the same race-safe pattern Finalize's own `Draft` → `Released` transition
+   uses) — a losing concurrent rollover attempt matches zero rows and reports a clean conflict.
+3. Creates the new `PayrollCycle` row (`Draft`), whose `(year, month)` is always the outgoing cycle's
+   own `(year, month)` plus exactly one calendar month (December rolling the year) — **derived
+   automatically, never caller-supplied**. There is no "skip a month" or "pick an arbitrary period"
+   override.
+4. Resolves any `ScheduledPayrollPeriod` matching the new cycle's `(year, month)`
    (`database/payroll-cycle.md §10a`) — a single, generic step, with no knowledge of which
    module(s), if any, reference that period.
-4. Selects which employees get a new `PayrollEntry`: the union of (a) every currently active employee
-   (`dateOfLeaving IS NULL`), and (b) every employee — active or departed — selected by **any
-   registered Outstanding Payroll Obligation provider's** carry-forward predicate (see
-   `docs/architecture/workflows/outstanding-obligations.md`). Payroll Processing never cares which
-   module owns a given obligation; it only evaluates the union of whatever predicates are registered.
-5. Bulk-creates the new cycle's `PayrollEntry` rows (each with its own single, freshly-seeded
-   `PayrollEntryWorkLine`, per `database/payroll-entry.md §12a`'s carry-forward rule).
-6. Invokes every registered provider's Payroll Materialization Hook, where one exists, against the
-   newly-created entries — each invocation independent of the others (no assumed ordering, see
-   `docs/architecture/workflows/outstanding-obligations.md`).
+5. Selects which employees get a new `PayrollEntry`: the union of (a) every currently active employee
+   (`dateOfLeaving IS NULL`), and (b) every departed employee with an outstanding obligation due this
+   exact period. **Approved Phase 5 boundary (superseding this section's own earlier, more general
+   wording — see `docs/architecture/workflows/outstanding-obligations.md`'s current text): there is
+   no generic Outstanding-Payroll-Obligation provider/hook registry.** Advances is the only
+   implemented obligation source today, called directly (an `ACTIVE` Advance whose
+   `currentScheduledPeriodId` resolves to the new period) — a real registry is revisited only if a
+   second, concurrently-existing provider (e.g. Phase 6 Balance Adjustments) actually demonstrates
+   the abstraction is justified, never built ahead of that need. A departed-obligation entry carries
+   no ordinary pay (`grossPay`/`eobiAmount` zeroed, `eobiApplicable` false) and is created
+   `hold = true`, so it can never be mistaken for, or accidentally paid as, ordinary salary; it can
+   still be released like any other held entry once its obligation is settled.
+6. Bulk-creates the new cycle's `PayrollEntry` rows (each with its own single, freshly-seeded
+   `PayrollEntryWorkLine`, per `database/payroll-entry.md §12a`'s carry-forward rule) — reading the
+   outgoing cycle's own entries for carry-forward as late as possible, inside this same transaction,
+   since a held, unreleased entry stays editable even after its cycle is `Released` (above).
+7. Invokes Advances' own materialization directly against the newly-created entries (including any
+   departed-obligation ones) — the one explicit call, not a registry dispatch.
+8. Writes `payroll_cycle.archived`, `payroll_cycle.created`, and `payroll_cycle.rollover_completed`
+   audit entries (§ Audit, below), all inside this same transaction.
+
+If anything fails after the Backup Package version was reserved but before this transaction commits,
+the entire transaction rolls back — the outgoing cycle is never archived without its corresponding
+new Draft and bootstrap state, because that pairing is literally the same transaction. This attempt's
+own already-written storage objects are then best-effort deleted and the reserved `BackupPackage` row
+is marked `FAILED` — the same cleanup manual generation itself uses (§5). A failed rollover may
+therefore leave a `FAILED` `BackupPackage` row and/or an orphaned storage object; it never leaves a
+database-lifecycle change without its pair.
 
 Carried-forward fields for continuing employees (gross pay, cycle days, OT/leave rate overrides, EOBI
 amount/applicability, site/bank/designation as of the source cycle) follow the same copy-at-creation
@@ -250,14 +303,24 @@ the same numbers today.
 
 ## 5. Backup Packages
 
-**Implemented Phase 5 Checkpoint 2 (2026-07-14) as a reusable, manually-triggered domain —
-automatic generation on the cycle archive transition remains later, separately-authorized Phase 5
-work (Checkpoint 3).** This section originally described only the automatic-on-archive trigger;
-Checkpoint 2 builds the generator and a manual entry point
-(`POST /api/v1/payroll-cycles/:cycleId/backup-packages`, `payroll-cycle:manage`, Master-Admin-only)
-that later checkpoint will call from inside its own archive transition, unchanged. A Draft cycle is
-rejected; `Released` and `Archived` cycles are both accepted (the latter has no code path that sets
-it yet, but the check already permits it).
+**Implemented Phase 5 Checkpoint 2 (2026-07-14) as a reusable, manually-triggered domain; automatic
+generation on the cycle archive transition implemented Phase 5 Checkpoint 3 (2026-07-15).** The
+manual entry point (`POST /api/v1/payroll-cycles/:cycleId/backup-packages`, `payroll-cycle:manage`,
+Master-Admin-only) is unchanged and still the only way to generate a backup for a cycle that is not
+being archived right now (e.g. a manual snapshot, or — later — a correction-triggered regeneration
+against an already-archived cycle). Rollover (§4) calls the same generator, refactored into four
+composable phases (`reserveBackupPackageVersion` → `assembleBackupPackageFiles` →
+`writeBackupPackageFilesToStorage` → `commitBackupPackageReady`) so both callers share one
+implementation — see the Generation ordering note below for how rollover's own transaction folds the
+fourth phase into its larger transaction rather than duplicating this logic. A Draft cycle is
+rejected; `Released` and `Archived` cycles are both accepted.
+
+**Rollover always generates a fresh Backup Package version, never reuses an earlier `READY`
+package — approved Phase 5 Checkpoint 3 architecture decision.** This is forced by Checkpoint 1's own
+approved rule that a held, unreleased `PayrollEntry` stays editable even after its cycle is
+`Released` (§4) — an earlier package, manual or from a prior failed rollover attempt, cannot be
+proven to still reflect the cycle's true final pre-archive state, so rollover's own fresh assembly,
+generated immediately before the archive transition, is the only one ever trusted to gate it.
 
 **Contents, approved by the 2026-07-14 architecture review (amended from this section's original
 list):**
@@ -292,7 +355,14 @@ every file's content in memory → write all five storage objects → one final 
 If anything fails after the package's version was reserved, this attempt's own already-written
 storage objects are best-effort deleted and the reserved row is marked `FAILED` with a short,
 non-sensitive diagnostic — a `BackupPackage` is either `READY` and fully downloadable, or it is not a
-usable domain record; there is no partial/half-written state ever exposed.
+usable domain record; there is no partial/half-written state ever exposed. For manual generation,
+this final transaction is the entire transaction. **For rollover (Phase 5 Checkpoint 3), the exact
+same final-commit phase (`commitBackupPackageReady`) instead runs *inside* rollover's own larger
+transaction**, which also archives the outgoing cycle, creates the new Draft, bootstraps its entries,
+and materializes Advances — "Backup metadata, cycle archiving, and new-cycle database state either
+commit together or none of them commit." The version reservation and the storage writes themselves
+still happen before that transaction opens either way, since neither can participate in a Postgres
+transaction — this part of the ordering is unchanged by which caller is generating.
 
 **Versioning:** version 1 is created the first time a Backup Package is generated for a cycle; each
 subsequent generation (manual retry now, or — later — a correction approved against an already-
@@ -314,6 +384,6 @@ no raw storage key is ever accepted from or exposed to a client.
 client an offline copy, or restoring from a catastrophic failure) — they are not, and must never
 become, a data source for any in-application feature.
 
-**Explicitly deferred past this checkpoint:** automatic generation on cycle archive (Checkpoint 3),
-cycle archiving itself, new-cycle creation, historical cycle selection, Payslip PDFs, an Audit Log
-export, and any browser UI (backend API only this checkpoint).
+**Explicitly deferred, still:** historical cycle selection (Checkpoint 4), Payslip PDFs, an Audit Log
+export, and a Backup Package browsing/download UI — generating one is reachable from the frontend (the
+rollover trigger below), but browsing/downloading existing packages remains backend-API-only.

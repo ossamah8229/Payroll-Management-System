@@ -112,10 +112,15 @@ leave a `BackupPackage` row falsely reporting `READY` (Principle 2). Checkpoint 
 **synchronously, within the HTTP request** — with Payslip PDFs deferred (see
 `docs/architecture/workflows/payroll-lifecycle.md §5`), the entire generation cost is CSV/XLSX
 building plus a handful of SHA-256 hashes, sub-second even at Principle 10's 10,000-employee design
-floor; no queue or background-job mechanism was introduced. The archive-transition trigger this
-ordering was originally scoped for (Checkpoint 0's own note, below) remains later, separately
-authorized Phase 5 work (Checkpoint 3) — Checkpoint 2 builds the generator that checkpoint will call,
-unchanged, from inside its own transaction.
+floor; no queue or background-job mechanism was introduced. **The archive-transition trigger this
+ordering was originally scoped for is implemented, Phase 5 Checkpoint 3 (2026-07-15)** —
+`archiveAndCreateNextPayrollCycle` (`payroll-processing.service.ts`) calls the same generator
+Checkpoint 2 built, refactored into four composable phases (reserve → assemble → write storage →
+final commit) so the fourth phase, `commitBackupPackageReady`, can run inside rollover's own larger
+transaction (which also archives the outgoing cycle, creates the next Draft, and bootstraps it)
+instead of opening its own — the one shape change this required, with zero behavior change for
+manual generation's own call site. Rollover always generates a fresh version, never reuses an
+earlier `READY` one — see `docs/architecture/workflows/payroll-lifecycle.md §5`.
 
 **Clarified 2026-07-12 (Phase 4 Checkpoint 6.2's own architecture review) — on-demand PDF
 generation does NOT require `StorageProvider`.** This section previously read as if Puppeteer PDF

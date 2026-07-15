@@ -3,7 +3,7 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status (2026-07-14):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
+> **Status (2026-07-15):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
 > evidence**. **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances, Payslips) is
 > code-complete and committed — all six checkpoints implemented and tested — but
 > is not yet marked fully closed**: one condition, a real Render/Linux-container deployment smoke
@@ -11,9 +11,10 @@ calculations, payslips, and related HR/finance workflows.
 > used so far (no Docker/Podman/Colima, no Render API access). **Phase 5 (Cycle Finalization,
 > Archiving, and Backups) is IN PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider`
 > foundation, committed), Checkpoint 1 (Finalize Cycle, committed), and Checkpoint 2 (Backup
-> Packages reusable domain/generator, committed) are complete. Checkpoints 3–4 and
-> phase close-out each require their own separate, explicit authorization. See "Current Status"
-> below,
+> Packages reusable domain/generator, committed) are complete. **Checkpoint 3 (cycle archiving,
+> automatic backup generation, and new-cycle rollover) is implemented and tested, pending review —
+> not yet committed.** Checkpoint 4 and phase close-out each require their own separate, explicit
+> authorization. See "Current Status" below,
 > `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
 > `docs/SESSION_HANDOFF.md` for details.
 
@@ -179,10 +180,10 @@ Phase 4 is code-complete and committed but not yet fully closed — the one outs
 real Render (or genuine Linux container) deployment smoke test, which this development environment
 has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is IN
 PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider` foundation), Checkpoint 1
-(Finalize Cycle), and Checkpoint 2 (Backup Packages reusable domain/generator — manual generation
-only; automatic generation on archive remains Checkpoint 3) are complete, all committed.
-Checkpoints 3–4 (new-cycle-creation transaction
-upgrade, Payroll Cycle Selector) and phase close-out each still require their own separate, explicit
-authorization before any code is written, per this project's standing per-checkpoint/per-phase
-practice. See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the full
-handoff to the next development session.
+(Finalize Cycle), and Checkpoint 2 (Backup Packages reusable domain/generator) are complete, all
+committed. **Checkpoint 3 (cycle archiving, automatic backup generation on the archive transition,
+and new-cycle rollover) is implemented and tested — pending review, not yet committed.**
+Checkpoint 4 (Payroll Cycle Selector) and phase close-out each still require their own separate,
+explicit authorization before any code is written, per this project's standing
+per-checkpoint/per-phase practice. See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and
+`docs/SESSION_HANDOFF.md` for the full handoff to the next development session.

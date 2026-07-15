@@ -1594,11 +1594,12 @@ is reconfirmed still out of scope** — see `database/release.md`'s dated note �
 finalization precondition keys off `PayrollEntry.released`/`.hold` only.
 
 **Executed as explicit, individually-gated checkpoints, the same discipline every phase since Phase
-2.5 has used** — proposed breakdown from the 2026-07-14 architecture review: **Checkpoint 0 —
+2.5 has used** — breakdown from the 2026-07-14 architecture review: **Checkpoint 0 —
 `StorageProvider` foundation** (below) → Checkpoint 1 — Finalize Cycle → Checkpoint 2 — Backup
-Package generator → Checkpoint 3 — new-cycle-creation transaction upgrade (archive + backup +
-departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll Cycle Selector → Phase
-close-out. Later checkpoints are not yet authorized; each requires its own explicit go-ahead.
+Package generator → Checkpoint 3 — cycle archiving, automatic backup generation, and new-cycle
+rollover (archive + backup + departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll
+Cycle Selector → Phase close-out. Checkpoints 0–3 are COMPLETE (below); Checkpoint 4 and phase
+close-out are not yet authorized — each still requires its own explicit go-ahead.
 
 **Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14, COMMITTED as `d87b9b0`.** The storage abstraction
 originally planned for Phase 0 (never built — see `docs/PROJECT_PROGRESS.md` §3 item 4) and
@@ -1759,6 +1760,79 @@ other checklist points directly (runtime-enforced READY-only download, `GENERATI
 visibility with zero files, version-2 leaving version-1 untouched byte-for-byte, non-circular
 manifest checksum, and failure cleanup never reaching a prior successful version). Full record:
 `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 2 — final narrow verification pass" entry.
+
+**Checkpoint 3 — Cycle Archiving, Automatic Backup Generation, and New-Cycle Rollover — COMPLETE,
+2026-07-15.** Read-only architecture review (2026-07-15, no code) approved with six final decisions:
+dedicated rollover endpoint (not folded into cycle creation); `POST /api/v1/payroll-cycles` restricted
+to bootstrapping the very first cycle ever; a minimal frontend slice ships this checkpoint (not
+deferred); the next period is always derived automatically (outgoing + one calendar month, no request
+body, no override); an additive `PayrollCycle.archivedWithBackupPackageId` FK; and no departed-employee
+visual indicator this checkpoint (deferred UI polish).
+
+`POST /api/v1/payroll-cycles/:cycleId/archive-and-create-next` (`payroll-processing.service.ts`'s
+`archiveAndCreateNextPayrollCycle`), `payroll-cycle:manage`, Master-Admin-only. One PostgreSQL
+transaction (preceded by the necessarily non-transactional Backup Package reservation/assembly/
+storage-write): guarded `RELEASED` → `ARCHIVED` update (`archivedAt`/`archivedBy`/
+`archivedWithBackupPackageId`, the same race-safe `updateMany` pattern Finalize uses) → commits the
+freshly-generated Backup Package's `READY` metadata → creates the next Draft (`year`/`month` always
+derived, December rolling the year) → resolves any pending `ScheduledPayrollPeriod` for it →
+bootstraps its `PayrollEntry` rows (active employees ∪ departed employees with a due `ACTIVE`
+Advance) → materializes due Advances → writes `payroll_cycle.archived`/`payroll_cycle.created`/
+`payroll_cycle.rollover_completed` audit entries. A failure anywhere rolls the whole transaction back
+and runs the same best-effort storage cleanup + `FAILED` marking manual generation already uses — the
+outgoing cycle is never archived without its corresponding new Draft, because that pairing is the
+same transaction.
+
+**Backup Package freshness (approved architecture decision):** rollover always generates a brand new
+version immediately before archiving, never reuses an earlier `READY` package (manual or from a prior
+failed rollover) — forced by Checkpoint 1's own rule that a held, unreleased entry stays editable
+after `Released`, so only a fresh, immediately-pre-archive assembly can be trusted. `backup-packages
+.service.ts`'s `generateBackupPackage` was refactored (not rewritten) into four composable phases —
+`reserveBackupPackageVersion` → `assembleBackupPackageFiles` → `writeBackupPackageFilesToStorage` →
+`commitBackupPackageReady` — so rollover reuses the identical generator, folding only the fourth phase
+into its own larger transaction instead of duplicating any of this logic. Manual generation's own
+behavior is unchanged.
+
+**`createPayrollCycle` restricted, not rewritten:** its bootstrap body was extracted into a shared
+`bootstrapPayrollEntries` helper (used by both the now first-cycle-only plain route and rollover) —
+one implementation of carry-forward/refresh/reset field rules, not two. **Departed-employee
+obligation carry-forward closes `materializeScheduledAdvanceDeductions`'s own former accepted gap**
+(a departed employee's due Advance was previously left permanently unmaterialized) — Advances only,
+direct call, no generic provider/hook registry (the approved boundary, corrected in
+`docs/architecture/workflows/outstanding-obligations.md`, which had drifted into describing a
+registry as already-adopted convention ahead of it ever being built).
+
+**Frontend:** "Start New Payroll Cycle" moved to the Salary Release page (next to Finalize Cycle),
+visible only when the current cycle is `Released`, behind a confirmation modal naming the outgoing
+cycle and the automatically-derived next period, busy/duplicate-submit-prevention state matching
+Finalize's own pattern. The Payroll Entry page's prior "New Payroll Cycle" toolbar button (redundant
+once a cycle exists) was removed, and its empty state now distinguishes "no cycle has ever existed"
+(still offers the first-cycle create action) from "a cycle exists but none is Draft" (points to
+Salary Release, no create action here). Historical cycle selection (Checkpoint 4) remains out of
+scope.
+
+**Schema:** one additive migration (`20260715142622_payroll_cycle_archived_with_backup_package`) —
+nullable `PayrollCycle.archivedWithBackupPackageId`, FK → `BackupPackage.id`, `ON DELETE RESTRICT`.
+No other schema change.
+
+**Tests:** 17 new tests (`backend/tests/payroll-cycle-rollover.test.ts`) covering lifecycle
+transitions, backup freshness (including a held-entry edit made after Finalize reflected in the
+rollover-generated package but not an earlier manual one), storage-write and mid-transaction failure
+injection (a spied `recordAuditLog` throwing after the archive/backup-commit/new-cycle/bootstrap
+steps already ran, proving the whole transaction rolls back), bootstrap inclusion/exclusion (active,
+departed-without-obligation excluded, departed-with-due-Advance included with zeroed salary fields
+and `hold = true`, a paid-off advance excluding its employee from the *following* rollover), audit
+metadata, true HTTP-level concurrent-rollover racing (exactly one success), and RBAC/CSRF. 3 existing
+tests in `payroll-cycle.test.ts` and 1 in `payslips.test.ts` were corrected to use Finalize + rollover
+for their second cycle instead of a second plain-route call, since the plain route no longer permits
+one. Full backend suite: **469/469** (452 prior + 17 new). Two real defects were caught by this
+checkpoint's own new tests before commit, not shipped: (1) `writeBackupPackageFilesToStorage`'s
+refactor initially returned a locally-built `writtenKeys` array rather than mutating a caller-owned
+one, so a mid-write failure lost the partial list and cleanup silently deleted nothing — fixed by
+passing the array in by reference; (2) a departed-obligation work line was initially seeded with
+`cycleDays = 0`, violating the `cycleDays BETWEEN 1 AND 31` check constraint — `cycleDays` is the
+cycle's own day-count basis, not attendance, so it takes the ordinary schema default (30) like any
+other fresh line; "no work performed" is expressed via `days` (already defaulting to zero) instead.
 
 **Depends on:** Phase 4 (Release must exist for the finalization precondition to be meaningful).
 
