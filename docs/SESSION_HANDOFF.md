@@ -96,7 +96,7 @@ be enough to resume correctly without re-deriving context from scratch — per
   Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 2" and "final narrow
   verification pass" entries.
 - **This session (2026-07-15): Phase 5 Checkpoint 3 — Cycle Archiving, Automatic Backup Generation,
-  and New-Cycle Rollover — implemented and tested, NOT YET COMMITTED, pending review.** A read-only
+  and New-Cycle Rollover — COMPLETE, COMMITTED as `957ab9d`.** A read-only
   architecture review ran first (approved with six final decisions — dedicated rollover endpoint;
   plain cycle-creation route restricted to the very-first-cycle case; a minimal frontend slice ships
   this checkpoint; next period always derived automatically, no override; additive
@@ -124,9 +124,14 @@ be enough to resume correctly without re-deriving context from scratch — per
   `cycleDays BETWEEN 1 AND 31` check constraint — fixed to the ordinary schema default, 30; "no work
   performed" is expressed via `days`, not `cycleDays`). Real-stack verification: real PostgreSQL
   (embedded-postgres, re-provisioned this session), real filesystem `StorageProvider`, compiled
-  backend, real login/CSRF/cookies. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5,
-  Checkpoint 3" entry. **Do not begin Phase 5 Checkpoint 4 (Payroll Cycle Selector) or Phase 6
-  without their own explicit go-ahead — and do not commit this checkpoint's work without review.**
+  backend, real login/CSRF/cookies — both via `supertest` and, in a same-session final-verification
+  pass, live `curl` HTTP against the compiled server (create first cycle → finalize → edit a held
+  entry → rollover → confirm the Backup Package reflects the edit → confirm archive/new-Draft/
+  Advance-materialization → confirm a second rollover attempt and a second plain-creation attempt
+  both fail). That same final-verification pass strengthened three existing tests to explicitly
+  assert concurrency/field/immutability properties the checkpoint review required proving directly.
+  Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 3" entry. **Do not begin Phase 5
+  Checkpoint 4 (Payroll Cycle Selector) or Phase 6 without their own explicit go-ahead.**
 - **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
   4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
@@ -1389,8 +1394,8 @@ checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and commi
 2026-07-14 — architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
 Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`), and Checkpoint 2 (Backup Packages reusable
 domain/generator, COMMITTED `3ea879e`) are complete. Checkpoint 3 (cycle archiving, automatic backup
-generation, and new-cycle rollover) is implemented and tested (2026-07-15, full backend suite
-469/469) but **NOT YET COMMITTED — pending review**, see §1's "Phase 5, Checkpoint 3" entry.
+generation, and new-cycle rollover) is complete, 2026-07-15, full backend suite 469/469,
+**COMMITTED as `957ab9d`**, see §1's "Phase 5, Checkpoint 3" entry.
 Checkpoint 4 and phase close-out each still require their own separate, explicit go-ahead.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →

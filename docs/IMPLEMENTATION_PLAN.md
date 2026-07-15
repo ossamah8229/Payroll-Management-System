@@ -1762,7 +1762,8 @@ manifest checksum, and failure cleanup never reaching a prior successful version
 `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 2 — final narrow verification pass" entry.
 
 **Checkpoint 3 — Cycle Archiving, Automatic Backup Generation, and New-Cycle Rollover — COMPLETE,
-2026-07-15.** Read-only architecture review (2026-07-15, no code) approved with six final decisions:
+2026-07-15, COMMITTED as `957ab9d`.** Read-only architecture review (2026-07-15, no code) approved
+with six final decisions:
 dedicated rollover endpoint (not folded into cycle creation); `POST /api/v1/payroll-cycles` restricted
 to bootstrapping the very first cycle ever; a minimal frontend slice ships this checkpoint (not
 deferred); the next period is always derived automatically (outgoing + one calendar month, no request

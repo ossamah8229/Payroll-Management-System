@@ -12,8 +12,8 @@ calculations, payslips, and related HR/finance workflows.
 > Archiving, and Backups) is IN PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider`
 > foundation, committed), Checkpoint 1 (Finalize Cycle, committed), and Checkpoint 2 (Backup
 > Packages reusable domain/generator, committed) are complete. **Checkpoint 3 (cycle archiving,
-> automatic backup generation, and new-cycle rollover) is implemented and tested, pending review —
-> not yet committed.** Checkpoint 4 and phase close-out each require their own separate, explicit
+> automatic backup generation, and new-cycle rollover) is complete and committed.** Checkpoint 4 and
+> phase close-out each require their own separate, explicit
 > authorization. See "Current Status" below,
 > `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
 > `docs/SESSION_HANDOFF.md` for details.
@@ -182,7 +182,7 @@ has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving,
 PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider` foundation), Checkpoint 1
 (Finalize Cycle), and Checkpoint 2 (Backup Packages reusable domain/generator) are complete, all
 committed. **Checkpoint 3 (cycle archiving, automatic backup generation on the archive transition,
-and new-cycle rollover) is implemented and tested — pending review, not yet committed.**
+and new-cycle rollover) is complete and committed (`957ab9d`).**
 Checkpoint 4 (Payroll Cycle Selector) and phase close-out each still require their own separate,
 explicit authorization before any code is written, per this project's standing
 per-checkpoint/per-phase practice. See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and
