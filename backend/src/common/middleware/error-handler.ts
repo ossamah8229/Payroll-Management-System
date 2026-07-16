@@ -60,6 +60,19 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
       });
       return;
     }
+
+    // Every id column in this schema is `@db.Uuid` (docs/architecture/database — every model's own
+    // `id`/foreign-key columns), so a route param that isn't a well-formed UUID never reaches a
+    // business-logic branch — it fails at the Postgres driver itself ("invalid input syntax for
+    // type uuid"), which Prisma surfaces as P2023. That is client error (a malformed request), not
+    // a server fault, and is handled once here rather than duplicating UUID-shape validation across
+    // every module's own `requireIdParam` helper.
+    if (err.code === 'P2023') {
+      res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'One or more identifiers in the request are malformed' },
+      });
+      return;
+    }
   }
 
   logger.error({ err, path: req.path, method: req.method }, 'Unhandled error');

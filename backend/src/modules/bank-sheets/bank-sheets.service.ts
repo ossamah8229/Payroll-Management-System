@@ -1,10 +1,10 @@
 import ExcelJS from 'exceljs';
-import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
 import type { Prisma } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
 import { sumMoney } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
+import { stringifyCsvSafe } from '../../common/import-export';
 import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { computeEntryCalc } from '../payroll-entry/payroll-entry.service';
@@ -241,7 +241,7 @@ export async function exportBankSheetToCsv(
   const sheet = await getBankSheet(currentUser, cycleId, bankFilter, siteIds);
   const rows = sheet.rows.map(buildExportRow);
   const totalRow = ['', '', '', '', '', '', '', '', '', 'Total', sheet.totalNetSalary];
-  const csv = stringifyCsvSync([
+  const csv = stringifyCsvSafe([
     BANK_SHEET_HEADERS as unknown as string[],
     ...rows,
     ...(rows.length > 0 ? [totalRow] : []),
@@ -315,7 +315,7 @@ export async function buildCombinedBankSheetCsv(
   const exportRows = allRows.map(buildExportRow);
   const totalNetSalary = sumMoney(allRows.map((row) => row.netSalary));
   const totalRow = ['', '', '', '', '', '', '', '', '', 'Total', totalNetSalary];
-  const csv = stringifyCsvSync([
+  const csv = stringifyCsvSafe([
     BANK_SHEET_HEADERS as unknown as string[],
     ...exportRows,
     ...(exportRows.length > 0 ? [totalRow] : []),

@@ -1,11 +1,10 @@
 import ExcelJS from 'exceljs';
-import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
 import type { Prisma } from '@prisma/client';
 import { normalizeCnic, updatePayrollEntrySchema, updateWorkLineSchema } from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
-import { parseTableFromFile, type ImportRowError } from '../../common/import-export';
+import { parseTableFromFile, stringifyCsvSafe, type ImportRowError } from '../../common/import-export';
 import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { assertEntryEditable, mapUpdateInputToEntryData, mapUpdateInputToWorkLineData } from './payroll-entry.service';
@@ -120,7 +119,7 @@ export async function exportPayrollEntriesToCsv(
 ): Promise<PayrollEntryExportResult> {
   const entries = await resolveExportEntries(currentUser, cycleId, siteIds);
   const rows = entries.map(buildExportRow);
-  const csv = stringifyCsvSync([PAYROLL_ENTRY_TEMPLATE_HEADERS as unknown as string[], ...rows]);
+  const csv = stringifyCsvSafe([PAYROLL_ENTRY_TEMPLATE_HEADERS as unknown as string[], ...rows]);
   return { buffer: Buffer.from(csv, 'utf-8'), rowCount: entries.length };
 }
 

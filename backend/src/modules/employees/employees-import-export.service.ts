@@ -1,10 +1,9 @@
 import ExcelJS from 'exceljs';
-import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
 import { createEmployeeSchema, formatDate, isoDateToUtcDate, pluralize } from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
-import { parseTableFromFile, type ImportRowError } from '../../common/import-export';
+import { parseTableFromFile, stringifyCsvSafe, type ImportRowError } from '../../common/import-export';
 import {
   assertSiteAccess,
   assertUnitBelongsToSite,
@@ -102,7 +101,7 @@ async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
 
 export async function exportEmployeesToCsv(currentUser: SessionUser, siteIds?: string[]): Promise<Buffer> {
   const rows = await buildExportRows(currentUser, siteIds);
-  const csv = stringifyCsvSync([EMPLOYEE_TEMPLATE_HEADERS as unknown as string[], ...rows]);
+  const csv = stringifyCsvSafe([EMPLOYEE_TEMPLATE_HEADERS as unknown as string[], ...rows]);
   return Buffer.from(csv, 'utf-8');
 }
 

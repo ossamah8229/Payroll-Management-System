@@ -561,4 +561,27 @@ describe('Employee Registry import/export', () => {
     const reactivatedEntries = await prisma.auditLog.findMany({ where: { action: 'employee.reactivated' } });
     expect(reactivatedEntries.some((entry) => entry.entityId === employee.id)).toBe(true);
   });
+
+  it('neutralizes a formula-injection payload in an employee name on CSV export (security correction)', async () => {
+    const site = await makeSite('Test Site CSV Injection');
+    await prisma.employee.create({
+      data: {
+        name: '=cmd|\'/C calc\'!A1',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '25000',
+      },
+    });
+
+    const { agent } = await masterAdminAgent('csv-injection@test.local');
+    const res = await agent.get('/api/v1/employees/export?format=csv');
+
+    expect(res.status).toBe(200);
+    // Raw, unneutralized payload must never appear in the export (a bare "=cmd|" immediately after
+    // a field-separating comma is exactly what a spreadsheet application would evaluate as a
+    // formula) — it must always carry the neutralizing leading apostrophe instead.
+    expect(res.text).not.toContain(',=cmd|');
+    expect(res.text).toContain(",'=cmd|");
+  });
 });

@@ -3761,6 +3761,106 @@ locally-cached Chromium binary and proves nothing about the actual Render/Linux 
 
 ---
 
+### Post-Phase-5 Stabilization Checkpoint 1 — audit-approved fixes (2026-07-16)
+
+Phase 6 has **not** started. A separate, independent, review-only audit session (no code changes)
+produced a prioritized findings report against the closed Phase 0–5 state; the user then explicitly
+authorized implementing five specific findings from that report — **AUD-001, AUD-002, AUD-003,
+AUD-004, AUD-005** — and only those five. AUD-006 through AUD-013 (emoji/prototype-scroll drift,
+contrast, session revocation on password reset, table-density/control-height consistency, orphaned
+`GENERATING` Backup Package rows, bundle code-splitting, stale test-count docs) were explicitly
+withheld from this checkpoint and remain unimplemented, exactly as scoped.
+
+**AUD-001 — backend production start script fixed.** Root cause: `backend/tsconfig.build.json`
+inherited `rootDir: "."` from `tsconfig.json` and did not exclude `prisma/seed.ts`, so `tsc` treated
+the whole `backend/` directory (not `src/`) as the compilation root, nesting build output under
+`dist/src/server.js` while `package.json`'s `start`/`main` fields (and `render.yaml`'s
+`startCommand: npm run start`) both expect `dist/server.js`. Fixed by giving
+`tsconfig.build.json` its own `rootDir: "src"` and excluding `prisma` from the build (the seed
+script already runs via `tsx prisma/seed.ts` directly — it was never meant to be compiled into
+`dist/` at all). No change was needed to `package.json`, `render.yaml`, or the seed script itself —
+this was a build-config-only fix. Verified: a clean `rm -rf dist && npm run build` now produces
+`dist/server.js` (not `dist/src/server.js`); `npm run build && npm run start` (from the backend
+workspace, exactly as `render.yaml` invokes it) boots and answers `GET /health` with `200`.
+
+**AUD-002 — CSV/spreadsheet-formula-injection sanitizer.** A single shared function,
+`sanitizeCsvCell`/`stringifyCsvSafe` in `backend/src/common/import-export.ts`, now sits in front of
+every CSV export in the codebase — Employee Registry (`employees-import-export.service.ts`), Payroll
+Entry (`payroll-entry-import-export.service.ts`), Bank Sheet (`bank-sheets.service.ts`, both its
+per-bank export and its combined Backup Package export), and Cash Receiving
+(`cash-receiving.service.ts`) — replacing every direct `csv-stringify` call across those four
+modules. A cell whose content opens with `=`, `+`, `-`, `@`, tab, or CR gets a neutralizing leading
+apostrophe *unless* it parses as a genuine number (so a legitimate negative monetary figure is never
+corrupted into text) — the standard OWASP mitigation. XLSX exports are unaffected by design (ExcelJS
+writes typed cells, not a line of text a spreadsheet re-parses). Regression coverage:
+`backend/tests/csv-formula-injection.test.ts` (13 unit tests against `sanitizeCsvCell`/
+`stringifyCsvSafe` directly — trigger characters, legitimate negative numbers, non-string passthrough,
+row-level integration) plus one new end-to-end test appended to
+`backend/tests/employees-import-export.test.ts` proving the live `GET /api/v1/employees/export`
+route neutralizes a malicious employee name, not just the isolated function.
+
+**AUD-003 — malformed UUID route params now return 400, not 500.** Every id column in this schema is
+`@db.Uuid` (`backend/prisma/schema.prisma`), so a non-UUID route param never reaches business logic —
+it fails at the Postgres driver itself ("invalid input syntax for type uuid"), which Prisma surfaces
+as `P2023`. Before this fix that fell through `error-handler.ts`'s generic 500 branch, returning
+`INTERNAL_ERROR` and, outside production, the raw Prisma error message (including absolute
+filesystem paths). Fixed once, at the shared framework level: `error-handler.ts` now maps `P2023` to
+`400 VALIDATION_ERROR`, alongside its existing `P2002`/`P2003` handling — no per-route UUID-shape
+validation was added or duplicated anywhere. Regression coverage:
+`backend/tests/malformed-uuid-handling.test.ts` — five representative routes across five unrelated
+modules (Employees, Project Sites, Users, Payroll Cycles, Backup Packages) each asserted to return
+`400`/`VALIDATION_ERROR`, plus one assertion that no raw Prisma error text or filesystem path ever
+reaches the response body.
+
+**AUD-004 — Payslips filter row alignment fixed, at the shared-component level.** Root cause: the
+Unit filter (only) was wrapped in an extra page-local `flex-col` div carrying an always-rendered
+helper line ("Select one Site to filter by Unit") beneath the control — since the whole filter row is
+`flex items-end`, that taller wrapper pushed every other control in the row down to match its bottom
+edge, leaving Unit's own control sitting ~19px higher than Cycle/Site/Search. Fixed by extending the
+existing shared `MultiSelectFilter` component (`frontend/src/components/ui/multi-select-filter.tsx`)
+with optional `disabled`/`disabledReason` props — disabling the trigger occupies zero extra layout
+height, communicates the same information via a native `title` tooltip plus an
+`aria-describedby`-linked `sr-only` paragraph (screen-reader accessible, never a visible line that
+changes the field's height), and `payslips-page.tsx`'s Unit filter was flattened to the exact same
+call shape every other filter on that row already used (matching Site's own pattern) — no
+page-specific markup remains. Browser-verified: all four controls (Cycle/Site/Unit/Search) now
+render at an identical `top` offset, both before and after selecting a Site; the disabled Unit
+trigger's `title` and `aria-describedby` were confirmed present and correctly linked to the hint text.
+
+**AUD-005 — the missing Phase 5 living HTML prototype was created.**
+`docs/prototypes/phase5-payroll-lifecycle-preview.html`, following the exact shell/CSS convention
+every prior phase's prototype already established (reused verbatim from
+`phase4-salary-release-preview.html`, not reinvented). Eight tabs, each traced to the real
+implementation: Draft cycle Salary Release (Finalize button), the Finalize confirmation modal
+(exact copy from `FinalizeConfirmModal`), Released cycle Salary Release (Rollover button replacing
+Finalize), the Rollover confirmation modal (exact copy from `RolloverConfirmModal`, including the
+Backup Package line), Archived-cycle Salary Release and Archived-cycle Payroll Entry (both showing
+the real `ArchivedReadOnlyBanner`/read-only-summary copy verbatim), the Historical Cycle Selector
+(the shared `PayrollCycleStatusBadge`/`PayrollCycleSelectField` pieces, the dual flat/canonical URL
+scheme, and the Draft → newest Released → newest Archived → empty default-resolution order, all as
+actually implemented in `App.tsx`/`use-selected-payroll-cycle.ts`), and a Backup Package lifecycle
+tab that deliberately states — rather than invents — that no dedicated Backup Package browsing/
+download UI exists yet, only the automatic generation-on-rollover path and the tested backend API.
+Per the explicit instruction not to invent interfaces that don't exist, AUD-006 (removing prototype
+emoji) was left untouched here even though this new file follows the same emoji-nav convention every
+other existing prototype uses. Verified with a headless-browser pass over all 8 tabs: each renders
+its own screen with zero console/page errors.
+
+**Full verification performed after all five fixes, together:** `prisma validate` clean; `prisma
+migrate status` — still 15 migrations, zero drift (`prisma migrate diff` against the schema:
+"No difference detected" — this checkpoint touched no Prisma model); backend suite **507/507**
+(487 pre-existing + 20 new: 13 in `csv-formula-injection.test.ts`, 6 in
+`malformed-uuid-handling.test.ts`, 1 appended to `employees-import-export.test.ts`); frontend suite
+**21/21** (unchanged); `typecheck` clean across all three workspaces; `lint` clean (the same 4
+pre-existing `react-refresh` warnings only, in files this checkpoint did not touch); production
+builds clean across all three workspaces; `npm run build && npm run start` verified booting and
+answering `/health` with `200` (AUD-001's own direct verification). The local database was
+re-provisioned to a genuinely clean, freshly migrated-and-seeded state both before this checkpoint's
+baseline test run and is left in that same clean state afterward, matching this project's standing
+per-session convention — it does not persist between sessions.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

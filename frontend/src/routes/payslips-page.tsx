@@ -195,18 +195,15 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                 setSelectedUnitIds([]); // the unit list itself changes with the site selection
               }}
             />
-            <div className="flex flex-col gap-1">
-              <MultiSelectFilter
-                id="payslips-unit-filter"
-                label="Unit"
-                options={unitOptions}
-                selectedIds={selectedUnitIds}
-                onChange={setSelectedUnitIds}
-              />
-              {!singleSelectedSiteId && (
-                <span className="text-[10px] text-text-faint">Select one Site to filter by Unit</span>
-              )}
-            </div>
+            <MultiSelectFilter
+              id="payslips-unit-filter"
+              label="Unit"
+              options={unitOptions}
+              selectedIds={selectedUnitIds}
+              onChange={setSelectedUnitIds}
+              disabled={!singleSelectedSiteId}
+              disabledReason="Select one Site to filter by Unit"
+            />
             <div className="flex flex-col gap-1">
               <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="payslips-search">
                 Search

@@ -34,14 +34,26 @@ export function MultiSelectFilter({
   options,
   selectedIds,
   onChange,
+  disabled = false,
+  disabledReason,
 }: {
   id: string;
   label: string;
   options: MultiSelectOption[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
+  /** Disables the trigger without changing the field's own label+control height — the shared
+   * alternative to a page rendering its own conditional helper text beneath the control, which
+   * breaks every filter row's shared `items-end` baseline alignment (every filter bar in this app
+   * is a `flex items-end` row; a taller field pushes every other field's control down to match).
+   * `disabledReason`, when given, stays fully accessible while occupying zero layout space: a
+   * native `title` tooltip for sighted pointer users, plus an `aria-describedby`-linked `sr-only`
+   * paragraph for screen readers — never a visible line that changes this field's height. */
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const selectedSet = new Set(selectedIds);
+  const hintId = disabledReason ? `${id}-disabled-hint` : undefined;
 
   function toggle(optionId: string) {
     onChange(
@@ -65,9 +77,13 @@ export function MultiSelectFilter({
           <button
             id={id}
             type="button"
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            aria-describedby={disabled ? hintId : undefined}
             className={cn(
               'flex h-9 w-56 items-center justify-between rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none transition-colors',
               'hover:border-border-strong focus:border-accent-mid focus:ring-2 focus:ring-accent-light',
+              'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border',
             )}
           >
             <span className="truncate">{triggerLabel}</span>
@@ -102,6 +118,11 @@ export function MultiSelectFilter({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      {disabled && disabledReason && (
+        <span id={hintId} className="sr-only">
+          {disabledReason}
+        </span>
+      )}
     </div>
   );
 }
