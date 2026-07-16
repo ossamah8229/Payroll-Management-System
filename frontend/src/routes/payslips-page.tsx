@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { FilterField } from '@/components/ui/filter-field';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import { useProjectUnits } from '@/hooks/use-project-units';
@@ -204,18 +206,15 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
               disabled={!singleSelectedSiteId}
               disabledReason="Select one Site to filter by Unit"
             />
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="payslips-search">
-                Search
-              </label>
+            <FilterField id="payslips-search" label="Search">
               <Input
                 id="payslips-search"
-                className="h-9 w-48 text-xs"
+                className="w-48"
                 placeholder="Name, code, or CNIC"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-            </div>
+            </FilterField>
             <div className="ml-auto flex items-center gap-3">
               {selectedCount > 0 && (
                 <span className="text-xs text-text-muted">
@@ -227,7 +226,6 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
               )}
               {!batchGenerating ? (
                 <Button
-                  size="sm"
                   onClick={handleBatchDownload}
                   disabled={selectedCount === 0 || overBatchLimit}
                 >
@@ -240,7 +238,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                     <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
                     Generating {selectedCount} Payslip{selectedCount === 1 ? '' : 's'}…
                   </span>
-                  <Button size="sm" variant="secondary" onClick={handleCancelBatch}>
+                  <Button variant="secondary" onClick={handleCancelBatch}>
                     <X className="h-3.5 w-3.5" aria-hidden />
                     Cancel
                   </Button>
@@ -252,9 +250,9 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 
@@ -283,8 +281,8 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
 
           {!isLoading && !payslips.error && payslips.isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 
@@ -311,14 +309,10 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10">
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           aria-label="Select all currently loaded employees"
-                          checked={allLoadedSelected}
-                          ref={(el) => {
-                            if (el) el.indeterminate = someLoadedSelected && !allLoadedSelected;
-                          }}
-                          onChange={toggleAllLoaded}
+                          checked={someLoadedSelected && !allLoadedSelected ? 'indeterminate' : allLoadedSelected}
+                          onCheckedChange={toggleAllLoaded}
                         />
                       </TableHead>
                       <TableHead className="whitespace-nowrap">Employee Code</TableHead>
@@ -332,11 +326,10 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                     {loadedEmployees.map((employee) => (
                       <TableRow key={employee.entryId}>
                         <TableCell>
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             aria-label={`Select ${employee.employeeName}`}
                             checked={selectedEmployeeIds.has(employee.employeeId)}
-                            onChange={() => toggleOne(employee.employeeId)}
+                            onCheckedChange={() => toggleOne(employee.employeeId)}
                           />
                         </TableCell>
                         <TableCell className="whitespace-nowrap">{employee.employeeCode ?? '—'}</TableCell>

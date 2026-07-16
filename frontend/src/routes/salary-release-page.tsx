@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { FilterField } from '@/components/ui/filter-field';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import {
@@ -320,18 +321,20 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
                 onSelect={selectCycle}
               />
               {(sites.data ?? []).length > 0 && (
-                <select
-                  className={selectClassName}
-                  value={siteId ?? ''}
-                  onChange={(e) => setSiteId(e.target.value)}
-                  aria-label="Project Site"
-                >
-                  {(sites.data ?? []).map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.name}
-                    </option>
-                  ))}
-                </select>
+                <FilterField id="salary-release-site" label="Site">
+                  <select
+                    id="salary-release-site"
+                    className={selectClassName}
+                    value={siteId ?? ''}
+                    onChange={(e) => setSiteId(e.target.value)}
+                  >
+                    {(sites.data ?? []).map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name}
+                      </option>
+                    ))}
+                  </select>
+                </FilterField>
               )}
             </div>
           )}
@@ -346,8 +349,8 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
 
           {!cycleError && cycleLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 
@@ -386,9 +389,9 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
 
               {!unitStatus.error && unitStatus.isLoading && (
                 <div className="flex flex-col gap-2 p-[18px]">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
                 </div>
               )}
 

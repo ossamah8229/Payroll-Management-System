@@ -15,7 +15,12 @@
   --color-border-strong: #b8b2a8;
   --color-text: #1a1816;
   --color-text-muted: #6b6560;
-  --color-text-faint: #9c978f;
+  /* Post-Phase-5 Stabilization Checkpoint 2 (AUD-008) — was #9c978f (2.90:1 against
+     --color-surface-2, 2.49:1 against --color-bg — both fail WCAG AA's 4.5:1 minimum for
+     normal-size text). #6f6b66 keeps the same warm-neutral hue, stays visually lighter than
+     --color-text-muted (5.29:1/4.53:1 vs muted's 5.74:1/4.92:1), and passes 4.5:1 against both
+     surfaces this token is actually rendered on (docs/design-system.md §1.1). */
+  --color-text-faint: #6f6b66;
 
   --accent: #1b4f72;
   --accent-light: #ebf2f8;
@@ -29,6 +34,40 @@
   --color-red-light: #fbe8e8;
   --color-purple: #4a2080;
   --color-purple-light: #f0ebf8;
+
+  /* Sidebar section-label color (AUD-008) — was inline text-white/35 (≈2.48:1 against --accent,
+     fails AA at 10px bold). 65% white opacity measures 4.71:1 against --accent — the one sidebar
+     color promoted to a named token here, since it's the one AUD-008 flagged; every other
+     white/N-opacity utility in Sidebar (borders, hover states, nav-link text) already passes and
+     is left untouched, matching "do not indiscriminately darken all muted text" (Part 5). */
+  --sidebar-section-label: rgba(255, 255, 255, 0.65);
+
+  /* Control heights (Post-Phase-5 Stabilization Checkpoint 2, Part 1) — formalizes the height
+     every input/select/MultiSelectFilter trigger/default-size Button already renders at (h-9) and
+     the height table/action-cell buttons use (h-8, Button size="sm"), so a filter row's shared
+     items-end baseline has one deliberate, documented pair of heights rather than incidental
+     Tailwind-scale coincidence. Real components still use the Tailwind h-9/h-8 utility classes
+     (content-driven, not a forced CSS height) — these variables exist for documentation and for
+     the static HTML prototypes under docs/prototypes/, which have no Tailwind build step. */
+  --control-height: 36px;
+  --control-height-sm: 32px;
+
+  /* Table row-height tokens (Part 3) — the *target/measured* result of Table's density-aware cell
+     padding (frontend/src/components/ui/table.tsx), never a literal `height` forced onto a <tr>/
+     <td> (which can clip taller content) — real rows stay content-driven, exactly like every other
+     height in this system. "standard" = management/selection lists (Employees, Users, Sites,
+     Units, Tasks, Advances, Payslips, Salary Release); "compact" = document-like/high-density
+     financial views (Payroll Entry's grid, Bank Sheets, Cash Receiving). See docs/design-system.md
+     §1.5. */
+  --table-row-height-standard: 48px;
+  --table-row-height-compact: 40px;
+  --table-header-height: 36px;
+
+  /* Filter-row rhythm (Part 1/2) — the gap between a filter row's own label+control columns, and
+     the row's own gap-3 (12px) between columns; formalized here since every filter field
+     (FilterField, MultiSelectFilter, PayrollCycleSelectField) now shares exactly this rhythm. */
+  --filter-field-gap: 6px;
+  --filter-row-gap: 12px;
 }
 
 @layer base {

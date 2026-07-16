@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -43,7 +44,7 @@ function SiteCheckboxList({
       {(sites.data ?? []).length === 0 && <p className="text-xs text-text-muted">No project sites yet.</p>}
       {(sites.data ?? []).map((site) => (
         <label key={site.id} className="flex items-center gap-2 text-xs text-text">
-          <input type="checkbox" checked={selected.includes(site.id)} onChange={() => toggle(site.id)} />
+          <Checkbox checked={selected.includes(site.id)} onCheckedChange={() => toggle(site.id)} />
           {site.name}
         </label>
       ))}
@@ -172,11 +173,10 @@ function EditUserModal({
             <Input id="edit-user-name" required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <label className="flex items-center gap-2 text-xs text-text">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={isActive}
               disabled={isSelf}
-              onChange={(e) => setIsActive(e.target.checked)}
+              onCheckedChange={(checked) => setIsActive(checked === true)}
             />
             Active {isSelf && <span className="text-text-faint">(cannot deactivate your own account)</span>}
           </label>
@@ -275,8 +275,8 @@ export function UsersPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 

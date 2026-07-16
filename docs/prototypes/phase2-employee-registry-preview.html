@@ -8,7 +8,7 @@
   :root {
     --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
     --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
-    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #9c978f;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #6f6b66;
     --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
     --color-green: #1a6b3a; --color-green-light: #e8f5ee;
     --color-amber: #8b5e00; --color-amber-light: #fff8e6;
@@ -19,14 +19,19 @@
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; }
-  .meta-banner { background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  html { height: 100%; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; height: 100%; overflow: hidden; }
+  .meta-banner { position: relative; z-index: 100; background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .meta-banner strong { color: #fff; }
   .meta-tabs { display: flex; gap: 6px; }
   .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
   .meta-tabs button.is-active { background: #fff; color: var(--accent); }
   .screen { display: none; }
-  .screen.is-active { display: block; }
+  .icon { display: inline-block; vertical-align: -2px; flex-shrink: 0; }
+
+  .screen.is-active { display: block; height: calc(100vh - 37px); overflow: hidden; }
+  .notes-screen { height: 100%; overflow-y: auto; padding: 28px; box-sizing: border-box; }
+  .notes-screen .inner { max-width: 900px; margin: 0 auto; font-size: 11px; color: var(--color-text-faint); line-height: 1.6; }
   .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
   .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
   .card-title { font-size: 13px; font-weight: 600; margin: 0; }
@@ -42,7 +47,7 @@
   .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
   .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
   .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
-  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.35); }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.65); }
   .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
   .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
@@ -66,15 +71,15 @@
   .filter-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; padding: 18px 18px 0; }
   .filter-field { display: flex; flex-direction: column; gap: 6px; }
   .filter-field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-muted); }
-  input[type="text"], select { height: 34px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+  input[type="text"], select { height: 36px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
   table.data-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 16px; }
-  table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
-  table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); }
+  table.data-table th { text-align: left; padding: 12px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
+  table.data-table td { padding: 16px 14px; border-bottom: 1px solid var(--color-border); }
   table.data-table tr:last-child td { border-bottom: none; }
   table.data-table td.num, table.data-table th.num { text-align: right; }
   table.data-table td.num { font-variant-numeric: tabular-nums; }
   table.data-table td.actions { width: 40px; text-align: center; color: var(--color-text-muted); }
-  .modal-standalone-wrap { padding: 40px 28px; display: flex; justify-content: center; }
+  .modal-standalone-wrap { width: 100%; padding: 40px 28px; display: flex; justify-content: center; align-items: flex-start; }
   .modal { width: 92vw; max-width: 620px; max-height: 85vh; overflow-y: auto; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
   .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border); padding: 14px 20px; position: sticky; top: 0; background: var(--color-surface-2); }
   .modal-header h3 { margin: 0; font-size: 13px; font-weight: 600; }
@@ -110,6 +115,7 @@
       <button type="button" data-target="screen-form">New/Edit Employee modal</button>
       <button type="button" data-target="screen-reactivate">Reactivate Employee modal</button>
       <button type="button" data-target="screen-import-result">Import Results modal</button>
+      <button type="button" data-target="screen-notes">Implementation notes</button>
     </div>
   </div>
 
@@ -124,9 +130,9 @@
           <div class="nav-section-label">Overview</div>
           <a href="#" class="nav-item"><span>▦</span> Dashboard</a>
           <div class="nav-section-label">Employees</div>
-          <a href="#" class="nav-item is-active"><span>👤</span> Employee Registry</a>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> Employee Registry</a>
           <div class="nav-section-label">Admin</div>
-          <a href="#" class="nav-item"><span>🏢</span> Project Sites</a>
+          <a href="#" class="nav-item"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg></span> Project Sites</a>
         </nav>
         <div class="sidebar-footer">
           <div class="avatar avatar-on-accent">MA</div>
@@ -141,7 +147,7 @@
             <div class="subtitle">Identity, employment, and bank details</div>
           </div>
           <div class="topbar-right">
-            <button class="task-bell">📋<span class="badge-count">2</span></button>
+            <button class="task-bell"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="badge-count">2</span></button>
             <div class="avatar avatar-on-surface">MA</div>
           </div>
         </header>
@@ -151,9 +157,9 @@
             <div class="card-header">
               <h3 class="card-title">All Employees</h3>
               <div style="display:flex; gap:8px;">
-                <button class="btn btn-secondary btn-sm">⬇ Export CSV</button>
-                <button class="btn btn-secondary btn-sm">⬇ Export Excel</button>
-                <button class="btn btn-secondary btn-sm">⬆ Import</button>
+                <button class="btn btn-secondary btn-sm"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg> Export CSV</button>
+                <button class="btn btn-secondary btn-sm"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg> Export Excel</button>
+                <button class="btn btn-secondary btn-sm"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg> Import</button>
                 <button class="btn btn-primary btn-sm">+ New Employee</button>
               </div>
             </div>
@@ -207,7 +213,7 @@
     <div class="app-shell" style="background: var(--color-bg);">
       <div class="modal-standalone-wrap">
         <div class="modal">
-          <div class="modal-header"><h3>New Employee</h3><button class="modal-close">✕</button></div>
+          <div class="modal-header"><h3>New Employee</h3><button class="modal-close"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
           <div class="modal-body">
             <div class="form-section">
               <p class="section-label">Identity</p>
@@ -265,7 +271,7 @@
     <div class="app-shell" style="background: var(--color-bg);">
       <div class="modal-standalone-wrap">
         <div class="modal" style="max-width:620px; max-height:85vh; overflow-y:auto;">
-          <div class="modal-header"><h3>Reactivate Employee</h3><button class="modal-close">✕</button></div>
+          <div class="modal-header"><h3>Reactivate Employee</h3><button class="modal-close"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
           <div class="modal-body">
             <p class="muted" style="margin:0 0 14px;">
               <strong style="color:var(--color-text);">Rashid Mehmood</strong> left on 2026-03-15.
@@ -297,7 +303,7 @@
     <div class="app-shell" style="background: var(--color-bg);">
       <div class="modal-standalone-wrap">
         <div class="modal" style="max-width:520px; max-height:75vh; overflow-y:auto;">
-          <div class="modal-header"><h3>Import Results</h3><button class="modal-close">✕</button></div>
+          <div class="modal-header"><h3>Import Results</h3><button class="modal-close"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
           <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
             <div style="display:flex; gap:14px;">
               <span class="badge badge-green">6 created</span>
@@ -322,8 +328,8 @@
     </div>
   </section>
 
-  <footer class="note">
-    Generated 2026-07-02 for Phase 2 (Employee Registry CRUD) from <code>frontend/src/routes/employees-page.tsx</code>.
+  <section id="screen-notes" class="screen">
+    <div class="notes-screen"><div class="inner">    Generated 2026-07-02 for Phase 2 (Employee Registry CRUD) from <code>frontend/src/routes/employees-page.tsx</code>.
     Sample data is illustrative, not seed data. Site-scoped RBAC (C11 decision) and CNIC/employee-code
     uniqueness are enforced server-side — see <code>backend/src/modules/employees/employees.service.ts</code>
     and <code>backend/tests/employees.test.ts</code>.
@@ -390,7 +396,8 @@
     specific to the Payroll Entry grid's narrow, fixed-pixel CSS Grid columns and its Bank
     <code>&lt;select&gt;</code> showing only <code>bank.code</code>; see
     <code>phase3-payroll-entry-preview.html</code>'s footer for the full root-cause account.
-  </footer>
+  </div></div>
+  </section>
 
   <script>
     document.querySelectorAll('.meta-tabs button').forEach(function (btn) {

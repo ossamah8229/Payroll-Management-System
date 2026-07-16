@@ -6,6 +6,22 @@ be enough to resume correctly without re-deriving context from scratch — per
 `docs/PROJECT_PRINCIPLES.md` → `docs/architecture/overview.md` → rest of `docs/architecture/*.md` →
 `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`.
 
+> **Currency notice (added 2026-07-16):** §1 below was last updated during Phase 2/2.5 and does not
+> reflect Phase 3, Phase 3.5, Phase 4, Phase 5, or the two Post-Phase-5 Stabilization checkpoints
+> that followed — all of which are complete. **`docs/PROJECT_PROGRESS.md` §1 is the current,
+> authoritative chronological record; treat it as correct wherever it disagrees with anything below.**
+> Current state in brief: Phases 0–5 are closed. Post-Phase-5 Stabilization Checkpoint 1 (AUD-001
+> backend start-script fix, AUD-002 CSV-formula-injection sanitizer, AUD-003 malformed-UUID 400
+> handling, AUD-004 Payslips filter alignment, AUD-005 the Phase 5 prototype) is COMMITTED as
+> `638f45c`/`a139931`. Post-Phase-5 Stabilization Checkpoint 2 (AUD-006 prototype icon/emoji cleanup,
+> AUD-007 prototype shell-scroll fix, AUD-008 contrast, AUD-010 control-height/table-density
+> consistency, and full living-prototype reconciliation) is this session's own work — see
+> `docs/PROJECT_PROGRESS.md` §1's own dated entry for the full record, including final commit
+> hash(es). Phase 6 has not started. Remaining approved stabilization work: AUD-009 (session
+> revocation on password reset), AUD-011 (stale `GENERATING` Backup Package recovery), AUD-012
+> (route-level code splitting), AUD-013 (committed E2E harness / doc cleanup) — none implemented yet,
+> each its own future checkpoint.
+
 ---
 
 ## 1. Current repository status

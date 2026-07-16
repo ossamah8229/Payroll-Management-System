@@ -215,18 +215,17 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
               />
               {cycleId && (
                 <div className="ml-auto flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
+                  <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export CSV
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'xlsx', selectedSiteIds)}>
+                  <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'xlsx', selectedSiteIds)}>
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export Excel
                   </Button>
                   {!isArchived && (
                     <>
                       <Button
-                        size="sm"
                         variant="secondary"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={importPayrollEntries.isPending}

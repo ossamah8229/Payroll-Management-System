@@ -3861,6 +3861,163 @@ per-session convention — it does not persist between sessions.
 
 ---
 
+### Post-Phase-5 Stabilization Checkpoint 2 — UI consistency, accessibility, prototype reconciliation (2026-07-16)
+
+Phase 6 has **not** started. Continuing the same audit-approved, checkpointed remediation as
+Checkpoint 1 (`638f45c`/`a139931`), this checkpoint implements exactly **AUD-006, AUD-007, AUD-008,
+AUD-010**, plus a complete reconciliation of every living HTML prototype against the shared rules
+those four findings establish. AUD-009 (session revocation on password reset), AUD-011 (stale
+`GENERATING` Backup Package recovery), AUD-012 (route-level code splitting), and AUD-013 (committed
+E2E harness / doc cleanup) remain explicitly out of scope, each its own future checkpoint.
+
+**Design tokens formalized (`frontend/src/index.css`, `docs/design-system.md` new §1.5):**
+`--control-height` (36px)/`--control-height-sm` (32px), `--table-row-height-standard` (48px)/
+`--table-row-height-compact` (40px)/`--table-header-height`, `--filter-field-gap`/`--filter-row-gap`,
+plus the two AUD-008 contrast tokens below. Row height stays content-driven (cell padding, never a
+forced `height` on a `<tr>`/`<td>`) — the pixel values are the documented *result*, not an enforced
+box constraint.
+
+**AUD-008 — accessibility contrast.** `--color-text-faint` was `#9c978f` (2.90:1 against
+`surface-2`/white, 2.49:1 against `bg` — both fail WCAG AA's 4.5:1 for normal-size text); now
+`#6f6b66` (5.29:1 / 4.53:1, both pass), chosen to stay visually lighter than `--color-text-muted`
+(already-passing, untouched) rather than converge on it. The sidebar's nav-section-label color was
+inline `text-white/35` (≈2.48:1 against `--accent`); now a named token, `--sidebar-section-label:
+rgba(255,255,255,0.65)` (4.71:1). `--color-text-muted` and every other already-passing color token
+were deliberately left untouched, per this checkpoint's own "do not indiscriminately darken all
+muted text" instruction. Verified both by direct contrast-ratio calculation and by measuring the
+live-rendered `text-faint` token in a real browser (5.29/4.53, matching the calculation exactly).
+
+**AUD-010 — control-size and table-density consistency.**
+- *Filter-row button sizing*: nine `size="sm"` (32px) action buttons that shared an `items-end`
+  filter row with 36px inputs/selects were changed to the default 36px size —
+  `payroll-entry-page.tsx` (Export CSV/Excel, Import), `bank-sheet-page.tsx` and
+  `cash-receiving-page.tsx` (Export CSV/Excel each), `advances-page.tsx` (Record Advance),
+  `payslips-page.tsx` (Download selected Payslips, and its Cancel-batch replacement state). Buttons
+  standing alone in a `CardHeader` title row with no adjacent 36px control (Employees'/Users'/
+  Project Sites' own "New X" buttons, Salary Release's Finalize/Rollover, every table-row action)
+  were deliberately left at `size="sm"` — the fix is a deliberate per-context choice, not a blanket
+  resize.
+- *`FilterField`* (`frontend/src/components/ui/filter-field.tsx`, new) — the shared label+control
+  shell `MultiSelectFilter` already used (`Label` component, `gap-1.5`), now also used by
+  `PayrollCycleSelectField` and every page-level filter that previously hand-rolled a slightly
+  different shell (a raw `<label>` at `text-[10px]`/`gap-1`, one pixel-scale smaller than `Label`'s
+  `text-[11px]`/`gap-1.5` — a real, if small, per-field drift that compounds across a row).
+  Salary Release's Site `<select>` also gained a proper visible "Site" label (previously
+  `aria-label`-only, the one filter-row control in the app with no visible label at all).
+- *Shared table-density system* (`frontend/src/components/ui/table.tsx`) — `<Table
+  density="standard"|"compact">` (default `standard`), propagated via context to `TableHead`/
+  `TableCell` so density isn't repeated per cell. `tableHeadPaddingClass`/`tableCellPaddingClass`
+  (exported, pure functions) are the deterministic density → padding mapping, unit-tested directly
+  (`table-density.test.ts`) rather than via component rendering — this project's own established
+  convention (`vitest.config.ts`: "deterministic logic... unit tested", no jsdom/DOM-rendering
+  tests; an initial attempt at `@testing-library/react`-based component tests was reverted for
+  exactly this reason). `density="compact"` applied explicitly to Bank Sheet and Cash Receiving;
+  every other table (Employees, Users, Project Sites, Advances, Payslips, Salary Release, Settings →
+  Banks) uses the `standard` default. Every `TableCell` now carries `align-middle`, vertically
+  centering whatever control it holds (Badge, Checkbox, Button) regardless of density. Generic
+  table-loading `<Skeleton>` placeholders (previously a uniform `h-8` everywhere) were resized to
+  `h-12`/`h-10` to match their page's own density, so the loading state doesn't visually jump once
+  real rows arrive.
+- Live-browser-measured results: Employees/standard rows ≈49px, Advances/standard ≈56px (a wider
+  row — two inline actions plus a badge — still clearly the "standard" tier), Bank Sheet/compact
+  ≈33px — a clear two-tier distinction confirmed in a real browser, not just unit-tested class names.
+
+**AUD-006/Part 4 — shared Checkbox and icon cleanup.** New `frontend/src/components/ui/checkbox.tsx`,
+built on `@radix-ui/react-checkbox` (matching this codebase's existing Radix-primitive convention —
+Dialog, DropdownMenu, Label, Avatar), supporting `checked={true|false|'indeterminate'}` and
+`disabled`. Replaces every native `<input type="checkbox">` in the live app: Employee Registry's
+"Active employees only" filter (also given a `flex h-9 items-center` wrapper so the 16px checkbox
+sits vertically centered against its 36px filter-row siblings, not merely bottom-flush with their
+taller label+control columns) and its EOBI-applicable form field, Users' site-assignment checklist
+and Active toggle, and Payslips' select-all (now genuinely `aria-checked="mixed"` via Radix's own
+indeterminate support, not a manual DOM `.indeterminate` ref hack) and per-row selection checkboxes.
+The one remaining decorative Unicode glyph found in the live app — a text `✕` line-remove button in
+`split-work-lines-modal.tsx` — was replaced with the same Lucide `X` icon and `aria-hidden`
+convention the shared `Modal`'s own close button already uses. A full-codebase scan found no other
+emoji or decorative pictographs in the live React app (confirmed both before and after this
+checkpoint's changes).
+
+**AUD-007 + full prototype reconciliation — every file under `docs/prototypes/` (13 files).** Root
+cause of the reported sidebar-gap defect, found by direct DOM/CSS inspection rather than
+speculation: every prototype's trailing `<footer class="note">` sat *outside* the `.screen`/
+`.app-shell` structure, in normal document flow — making the whole HTML document taller than the
+viewport and genuinely scrollable, at which point the sidebar's `position: fixed` visually detaches
+once a reader scrolls into the footer (the fixed sidebar doesn't move, but everything shell-shaped
+around it does, leaving a bare, sidebar-less footer view — exactly the reported symptom). Fixed,
+identically, in all 13 files:
+- `html, body { height: 100%; overflow: hidden }` — the document itself can now never scroll, a hard
+  guarantee rather than a per-screen sizing hope.
+- `.screen.is-active { height: calc(100vh - 37px); overflow: hidden }` — every screen is now
+  self-contained to exactly the space below the meta-banner.
+- Every file's trailing footer content was moved into a new, dedicated `#screen-notes` section (a
+  simple centered, internally-scrolling pane, no sidebar needed) with its own "Implementation notes"
+  tab — reachable, never simultaneously on-screen with a live-shell mockup, so it can never push the
+  document taller.
+- A real, reproduced (not merely theoretical) second defect found during this same investigation:
+  `phase3.5-tasks-workspace-preview.html`'s own `.tasks-panel` (`position: fixed`, `z-index: 60`)
+  intercepted clicks meant for the preview's own tab navigation whenever that screen was active —
+  `.meta-banner` (every file) now carries `position: relative; z-index: 100`, so the preview's own
+  chrome always wins regardless of what a mocked-up screen's own fixed-position panel/modal is
+  doing. Verified fixed by testing the exact previously-failing click against both the original file
+  (reproduced: `TimeoutError`) and the patched one (succeeds, no `force: true` needed).
+- Modal centering: four files (`phase2-employee-registry`, `phase2-project-sites`,
+  `phase3-payroll-entry`, `phase4-bank-registry`) used a `.modal-standalone-wrap { display: flex;
+  justify-content: center }` pattern that — lacking `width: 100%` — sized itself to its own content
+  (the modal) as a flex child of `.app-shell`, so `justify-content: center` centered it within a box
+  exactly as wide as itself, leaving every such modal pinned to the left edge
+  (`hCenterOffset` as far as -432px, measured). Fixed by adding `width: 100%` (`hCenterOffset: 0` on
+  every modal in every file, re-verified).
+- Icons: every emoji glyph across all 13 files (✕ ⬇ 💵 📋 🏦 🏢 📄 👛 🤝 👁 👤 🧑‍💼 🔒 ✓ — 100 total
+  occurrences) replaced with an inline monochrome SVG using the *actual* Lucide path data for the
+  matching real-app icon (X, Download, Upload, Banknote, Landmark, Wallet, HandCoins, FileText,
+  Users, Building2, UserCog, Bell, Eye, Lock, ClipboardList, Check) — no external request, no build
+  step, `stroke="currentColor"` so it inherits the surrounding text color.
+- Control heights: every `.btn`/`.btn-sm`/`select` declaration corrected from the prototypes' own
+  historical 34px/30px guesses to the real app's actual 36px/32px tokens (several compound
+  selectors — `select, input[type="text"] { height: 34px }`, `.filter-select-btn { height: 34px }`
+  — needed a second, targeted pass beyond the first mechanical regex sweep, since prototype markup
+  wasn't consistent about selector shape file-to-file).
+- Table density: `table.data-table td/th` padding split the same standard/compact way as the live
+  `<Table>` component — `16px 14px`/`12px 14px` (standard) vs `12px 14px`/`10px 14px` (compact,
+  Bank Sheets/Cash Receiving) — replacing one uniform `10px 14px` used everywhere before.
+- Contrast: the same `--color-text-faint`/sidebar-section-label token corrections applied to every
+  prototype's own copied `:root`/`.nav-section-label` values (prototypes have no build step to read
+  `index.css`'s variables through, so the literal values needed the identical edit made 13 times).
+- Obsolete behavior corrected, not merely left stale: `phase3-payroll-entry-preview.html`'s
+  standalone "+ New Payroll Cycle" button/modal (a manual create-any-cycle-any-time action) was
+  **removed** — Phase 5 retired that action entirely; cycle creation is now only the one-time
+  "Start First Payroll Cycle" bootstrap or the Rollover action, never a free-standing button on this
+  page. The Implementation Notes tab was updated to record the retirement and point to
+  `phase5-payroll-lifecycle-preview.html` for the current lifecycle. `phase4-salary-release-
+  preview.html` (Phase 4 Checkpoint 2's own frozen scope, still entirely accurate) gained a
+  cross-reference note that Finalize/Rollover/Archived/the Historical Cycle Selector were built on
+  top of it by Phase 5 and are shown in that later prototype instead. The already-existing Payslips
+  Unit-filter helper-text-beneath-control drift (the prototype had copied the exact bug Checkpoint 1
+  fixed in the live app) was corrected identically: helper text removed, the Unit `<select>` marked
+  `disabled` with a `title` tooltip.
+
+**Full verification performed:** headless-Chromium pass over all 13 prototype files × every one of
+their own tabs (zero console/page errors, zero click failures, `window.scrollY === 0` and no visible
+overflow on every screen) — repeated after each fix; a second, dedicated modal-centering pass (all
+`hCenterOffset: 0`); a responsive sweep at 1280×720/1366×768/1440×900/1920×1080 across all 13 files
+(zero horizontal-overflow/scroll-lock violations — 52 file×viewport combinations). Live-app
+verification (fresh production build, real backend + Postgres, real browser, demo data seeded
+through the live API): sidebar-label contrast, filter-row control heights/alignment across
+Payroll Entry/Bank Sheet/Cash Receiving/Advances/Payslips/Employees (every control 36px, same `top`
+offset within its row), table row heights confirming the standard/compact split, the Employees
+Checkbox toggling correctly on a real click, Payslips' select-all/per-row Checkboxes rendering with
+correct `aria-checked`/`aria-label`, no `✕` glyph anywhere on a live Payroll Entry page, and a
+responsive sweep at all four required viewports across Dashboard/Employees/Advances/Users (zero
+overflow, zero unexpected scroll). Automated: backend suite **507/507** (unchanged — this checkpoint
+touched no backend code); frontend suite **23/23** (21 pre-existing + 2 new,
+`table-density.test.ts`); `typecheck`/`lint` clean across all three workspaces (same 4 pre-existing
+`react-refresh` warnings, plus 2 new instances of the identical category in `table.tsx` — it now
+exports plain functions alongside components, the same pattern already accepted in `badge.tsx`/
+`button.tsx`); `prisma validate`/`migrate status`/`migrate diff` all clean, zero drift (no schema
+touched); production builds clean across all three workspaces.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

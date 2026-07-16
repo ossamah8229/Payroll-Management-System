@@ -112,7 +112,6 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
             />
             <div className="ml-auto flex gap-2">
               <Button
-                size="sm"
                 variant="secondary"
                 onClick={() => handleExport('csv')}
                 disabled={isExporting || !cashSheet.data || cashSheet.data.rows.length === 0}
@@ -121,7 +120,6 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
                 Export CSV
               </Button>
               <Button
-                size="sm"
                 variant="secondary"
                 onClick={() => handleExport('xlsx')}
                 disabled={isExporting || !cashSheet.data || cashSheet.data.rows.length === 0}
@@ -135,9 +133,9 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
           )}
 
@@ -168,8 +166,8 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
 
           {!isLoading && !cashSheet.error && cashSheet.isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
           )}
 
@@ -210,7 +208,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
                   reserved minimum width to stay physically usable once printed, not just wide
                   enough for its own header text. */}
               <div className="overflow-x-auto">
-                <Table className="min-w-full">
+                <Table className="min-w-full" density="compact">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="whitespace-nowrap">Serial No.</TableHead>

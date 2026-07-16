@@ -317,8 +317,8 @@ function ManageUnitsModal({
 
             {isLoading && (
               <div className="flex flex-col gap-2">
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
               </div>
             )}
 
@@ -478,9 +478,9 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 

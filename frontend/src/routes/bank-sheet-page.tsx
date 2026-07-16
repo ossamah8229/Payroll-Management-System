@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { FilterField } from '@/components/ui/filter-field';
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
@@ -80,10 +81,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                 onSelect={selectCycle}
               />
             )}
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="bank-sheet-bank">
-                Bank
-              </label>
+            <FilterField id="bank-sheet-bank" label="Bank">
               <select
                 id="bank-sheet-bank"
                 className={selectClassName}
@@ -97,7 +95,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                 ))}
                 <option value={CASH_BANK_FILTER}>Cash</option>
               </select>
-            </div>
+            </FilterField>
             <MultiSelectFilter
               id="bank-sheet-site-filter"
               label="Site"
@@ -107,7 +105,6 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
             />
             <div className="ml-auto flex gap-2">
               <Button
-                size="sm"
                 variant="secondary"
                 onClick={() => handleExport('csv')}
                 disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
@@ -116,7 +113,6 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
                 Export CSV
               </Button>
               <Button
-                size="sm"
                 variant="secondary"
                 onClick={() => handleExport('xlsx')}
                 disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
@@ -130,9 +126,9 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
           )}
 
@@ -161,8 +157,8 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
 
           {!isLoading && !bankSheet.error && bankSheet.isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
           )}
 
@@ -182,7 +178,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
             // Employee Code, CNIC, Bank, Account Number, IBAN, and amounts always render at full
             // width regardless of viewport.
             <div className="overflow-x-auto">
-              <Table className="min-w-full">
+              <Table className="min-w-full" density="compact">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Employee Code</TableHead>

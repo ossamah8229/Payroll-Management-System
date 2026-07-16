@@ -12,6 +12,8 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Checkbox } from '@/components/ui/checkbox';
+import { FilterField } from '@/components/ui/filter-field';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -389,10 +391,9 @@ function EmployeeFormModal({
                 />
               </div>
               <label className="flex items-center gap-2 pt-5 text-xs text-text-muted">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={form.defaultEobiApplicable}
-                  onChange={(e) => setField('defaultEobiApplicable', e.target.checked)}
+                  onCheckedChange={(checked) => setField('defaultEobiApplicable', checked === true)}
                 />
                 EOBI applicable
               </label>
@@ -764,8 +765,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
         </CardHeader>
         <CardContent>
           <div className="mb-4 flex flex-wrap items-end gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="filter-site">Site</Label>
+            <FilterField id="filter-site" label="Site">
               <select
                 id="filter-site"
                 className={`${selectClassName} w-48`}
@@ -779,9 +779,8 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                   </option>
                 ))}
               </select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="filter-search">Search</Label>
+            </FilterField>
+            <FilterField id="filter-search" label="Search">
               <Input
                 id="filter-search"
                 className="w-56"
@@ -789,18 +788,22 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-            </div>
-            <label className="flex items-center gap-2 pb-2 text-xs text-text-muted">
-              <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />
+            </FilterField>
+            {/* Matches the row's own control height (h-9) rather than the label+control columns'
+             * full height either side — with items-end, that keeps this checkbox visually centered
+             * against the select/input controls' own 36px band instead of merely bottom-flush with
+             * their taller (label+gap+control) columns. */}
+            <label className="flex h-9 items-center gap-2 text-xs text-text-muted">
+              <Checkbox checked={activeOnly} onCheckedChange={(checked) => setActiveOnly(checked === true)} />
               Active employees only
             </label>
           </div>
 
           {isLoading && (
             <div className="flex flex-col gap-2">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 

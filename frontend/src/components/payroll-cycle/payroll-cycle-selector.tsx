@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { FilterField } from '@/components/ui/filter-field';
 import {
   formatCycleLabel,
   formatCycleOptionLabel,
@@ -43,10 +44,7 @@ export function PayrollCycleSelectField({
   onSelect: (cycleId: string) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor={id}>
-        Cycle
-      </label>
+    <FilterField id={id} label="Cycle">
       <select
         id={id}
         className={selectClassName}
@@ -59,6 +57,6 @@ export function PayrollCycleSelectField({
           </option>
         ))}
       </select>
-    </div>
+    </FilterField>
   );
 }

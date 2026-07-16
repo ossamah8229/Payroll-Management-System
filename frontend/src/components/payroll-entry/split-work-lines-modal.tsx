@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { X } from 'lucide-react';
 import { pluralize } from '@payroll/shared';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
@@ -207,7 +208,7 @@ export function SplitWorkLinesModal({
                         aria-label={`Remove line ${index + 1}`}
                         className="rounded px-1 py-1 text-text-muted hover:text-danger disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-text-muted"
                       >
-                        ✕
+                        <X className="h-3.5 w-3.5" aria-hidden />
                       </button>
                     </div>
                   </div>

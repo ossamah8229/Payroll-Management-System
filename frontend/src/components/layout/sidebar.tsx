@@ -39,7 +39,9 @@ export function Sidebar({ user }: { user: SessionUser }) {
 
           return (
             <div key={section.label}>
-              <div className="px-4 pb-1 pt-3.5 text-[10px] font-semibold uppercase tracking-wide text-white/35">
+              <div
+                className="px-4 pb-1 pt-3.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--sidebar-section-label)]"
+              >
                 {section.label}
               </div>
               {visibleItems.map((item) => (

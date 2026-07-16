@@ -13,6 +13,7 @@ import { DateInput } from '@/components/ui/date-input';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { FilterField } from '@/components/ui/filter-field';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import { useEmployees } from '@/hooks/use-employees';
@@ -480,10 +481,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
               selectedIds={selectedSiteIds}
               onChange={setSelectedSiteIds}
             />
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="advances-type-filter">
-                Type
-              </label>
+            <FilterField id="advances-type-filter" label="Type">
               <select
                 id="advances-type-filter"
                 className={selectClassName}
@@ -494,11 +492,8 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                 <option value="LOAN">Advance</option>
                 <option value="EID_ADVANCE">Eid Advance</option>
               </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="advances-status-filter">
-                Status
-              </label>
+            </FilterField>
+            <FilterField id="advances-status-filter" label="Status">
               <select
                 id="advances-status-filter"
                 className={selectClassName}
@@ -509,9 +504,9 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                 <option value="ACTIVE">Active</option>
                 <option value="PAID_OFF">Paid Off</option>
               </select>
-            </div>
+            </FilterField>
             <div className="ml-auto">
-              <Button size="sm" onClick={() => setIsRecordOpen(true)}>
+              <Button onClick={() => setIsRecordOpen(true)}>
                 Record Advance
               </Button>
             </div>
@@ -520,9 +515,9 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {advances.isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
             </div>
           )}
 

@@ -8,7 +8,7 @@
   :root {
     --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
     --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
-    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #9c978f;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #6f6b66;
     --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
     --color-green: #1a6b3a; --color-green-light: #e8f5ee;
     --color-amber: #8b5e00; --color-amber-light: #fff8e6;
@@ -19,17 +19,22 @@
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; }
-  .meta-banner { background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  html { height: 100%; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; height: 100%; overflow: hidden; }
+  .meta-banner { position: relative; z-index: 100; background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .meta-banner strong { color: #fff; }
   .meta-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
   .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
   .meta-tabs button.is-active { background: #fff; color: var(--accent); }
   .screen { display: none; }
-  .screen.is-active { display: block; }
+  .icon { display: inline-block; vertical-align: -2px; flex-shrink: 0; }
+
+  .screen.is-active { display: block; height: calc(100vh - 37px); overflow: hidden; }
+  .notes-screen { height: 100%; overflow-y: auto; padding: 28px; box-sizing: border-box; }
+  .notes-screen .inner { max-width: 900px; margin: 0 auto; font-size: 11px; color: var(--color-text-faint); line-height: 1.6; }
   .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 34px; font-size: 12px; }
-  .btn-sm { padding: 0 10px; height: 30px; font-size: 11px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 36px; font-size: 12px; }
+  .btn-sm { padding: 0 10px; height: 32px; font-size: 11px; }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
   .app-shell { display: flex; height: calc(100vh - 37px); overflow: hidden; background: var(--color-bg); }
@@ -38,7 +43,7 @@
   .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
   .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
   .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
-  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.35); }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.65); }
   .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
   .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
@@ -64,13 +69,13 @@
   .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
   .badge-blue { background: var(--accent-light); color: var(--accent-mid); }
   .muted { color: var(--color-text-muted); }
-  select { height: 34px; max-width: 260px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+  select { height: 36px; max-width: 260px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
   .field-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
   table.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  table.data-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
-  table.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--color-border); }
+  table.data-table th { text-align: left; padding: 12px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
+  table.data-table td { padding: 16px 14px; border-bottom: 1px solid var(--color-border); }
   table.data-table tr:last-child td { border-bottom: none; }
   table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.data-table td.actions { width: 110px; text-align: right; }
@@ -109,6 +114,7 @@
       <button type="button" data-target="screen-archived-entry">Archived — Payroll Entry</button>
       <button type="button" data-target="screen-selector">Historical Cycle Selector</button>
       <button type="button" data-target="screen-backup">Backup Package lifecycle</button>
+      <button type="button" data-target="screen-notes">Implementation notes</button>
     </div>
   </div>
 
@@ -125,7 +131,7 @@
           <a href="#" class="nav-item"><span>▦</span> Dashboard</a>
           <div class="nav-section-label">Payroll</div>
           <a href="#" class="nav-item"><span>▤</span> Payroll Entry</a>
-          <a href="#" class="nav-item is-active"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg></span> Salary Release</a>
         </nav>
         <div class="sidebar-footer">
           <div class="avatar avatar-on-accent">FN</div>
@@ -139,7 +145,7 @@
             <div class="subtitle">Release payroll by Project Unit</div>
           </div>
           <div class="topbar-right">
-            <button class="task-bell">📋</button>
+            <button class="task-bell"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></button>
             <div class="avatar avatar-on-surface">FN</div>
           </div>
         </header>
@@ -204,7 +210,7 @@
     <div class="app-shell" style="background: var(--color-bg); align-items: center; justify-content: center;">
       <div class="modal-overlay" style="position: static; background: none;">
         <div class="modal">
-          <div class="modal-header"><h3>Finalize July 2026</h3><button class="modal-close">✕</button></div>
+          <div class="modal-header"><h3>Finalize July 2026</h3><button class="modal-close"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
           <div class="modal-body">
             <p class="muted" style="margin:0;">
               Every payroll entry must be either released or held before finalization.
@@ -237,7 +243,7 @@
         </div>
         <nav class="sidebar-nav">
           <div class="nav-section-label">Payroll</div>
-          <a href="#" class="nav-item is-active"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg></span> Salary Release</a>
         </nav>
         <div class="sidebar-footer">
           <div class="avatar avatar-on-accent">FN</div>
@@ -303,7 +309,7 @@
     <div class="app-shell" style="background: var(--color-bg); align-items: center; justify-content: center;">
       <div class="modal-overlay" style="position: static; background: none;">
         <div class="modal">
-          <div class="modal-header"><h3>Start New Payroll Cycle</h3><button class="modal-close">✕</button></div>
+          <div class="modal-header"><h3>Start New Payroll Cycle</h3><button class="modal-close"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
           <div class="modal-body">
             <p class="muted" style="margin:0;">
               This starts <strong style="color:var(--color-text);">August 2026</strong> as the next
@@ -342,7 +348,7 @@
         </div>
         <nav class="sidebar-nav">
           <div class="nav-section-label">Payroll</div>
-          <a href="#" class="nav-item is-active"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg></span> Salary Release</a>
         </nav>
         <div class="sidebar-footer">
           <div class="avatar avatar-on-accent">FN</div>
@@ -367,7 +373,7 @@
             </div>
             <div style="padding: 14px 18px 0;">
               <div class="readonly-banner">
-                <span>🔒</span>
+                <span><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
                 This cycle is Archived — the release summary below is historical and read-only. No
                 further release, Finalize, or rollover action can be taken against it.
               </div>
@@ -432,7 +438,7 @@
             </div>
             <div style="padding: 14px 18px 0;">
               <div class="readonly-banner">
-                <span>🔒</span>
+                <span><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
                 This cycle is Archived and permanently read-only — editing, holds, work-line changes,
                 bulk apply, and import are all disabled. Filtering and export remain available.
               </div>
@@ -528,7 +534,7 @@
         </div>
         <nav class="sidebar-nav">
           <div class="nav-section-label">Payroll</div>
-          <a href="#" class="nav-item is-active"><span>💵</span> Salary Release</a>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg></span> Salary Release</a>
         </nav>
       </aside>
       <div class="main-area">
@@ -575,8 +581,8 @@
     </div>
   </section>
 
-  <footer class="note">
-    Generated 2026-07-16 for Phase 5 (Cycle Finalization, Archiving, and Backups) from
+  <section id="screen-notes" class="screen">
+    <div class="notes-screen"><div class="inner">    Generated 2026-07-16 for Phase 5 (Cycle Finalization, Archiving, and Backups) from
     <code>frontend/src/routes/salary-release-page.tsx</code>,
     <code>frontend/src/routes/payroll-entry-page.tsx</code>,
     <code>frontend/src/components/payroll-cycle/payroll-cycle-selector.tsx</code>,
@@ -603,7 +609,8 @@
     are not included inside a Backup Package; Backup Packages have no dedicated browsing/download UI
     (see the "Backup Package lifecycle" tab above) — the automatic generation-on-rollover path is the
     entirety of this phase's frozen UI-facing scope for that feature.
-  </footer>
+  </div></div>
+  </section>
 
   <script>
     document.querySelectorAll('.meta-tabs button').forEach(function (btn) {

@@ -32,7 +32,7 @@ background, the solid variant is used for text/icons on that background — neve
 | `border-strong` | `#B8B2A8` | Hover / focus-adjacent border |
 | `text` | `#1A1816` | Primary text |
 | `text-muted` | `#6B6560` | Secondary text, labels, meta info |
-| `text-faint` | `#9C978F` | Placeholder text, disabled, tertiary hints |
+| `text-faint` | `#6F6B66` (was `#9C978F` before Post-Phase-5 Stabilization Checkpoint 2's AUD-008 fix) | Placeholder text, disabled, tertiary hints. **Passes WCAG AA (4.5:1) against both `surface-2`/white (5.29:1) and `bg` (4.53:1)** — the prior value failed at 2.90:1/2.49:1 respectively. Verified by contrast calculation and by a live-browser measurement of the rendered token; see `docs/PROJECT_PROGRESS.md`'s dated Checkpoint 2 entry. |
 | `accent` / `accent-light` / `accent-mid` | `#1B4F72` / `#EBF2F8` / `#2E6EA6` | Brand color — primary buttons, active nav, links, focus rings. **User-customizable per the Theme settings tab** — must be a CSS variable / Tailwind CSS-var-backed color, not a hardcoded Tailwind class, so it can be swapped at runtime per user. |
 | `green` / `green-light` | `#1A6B3A` / `#E8F5EE` | Positive / success / net salary / released status |
 | `amber` / `amber-light` | `#8B5E00` / `#FFF8E6` | Warning / pending / partial status |
@@ -82,6 +82,38 @@ Spacing is drawn from a small, consistent set — do not introduce arbitrary val
 | `50%` | — | Avatars, toggle knobs, theme swatches, FAB |
 | `shadow-md` | `0 4px 16px rgba(0,0,0,.10), 0 0 0 1px rgba(0,0,0,.04)` | Modals, floating panels, FAB — the only elevation shadow in the system. Flat cards use a 1px border, not a shadow, to stay visually calm at high information density. |
 
+### 1.5 Control Heights & Table Density (Post-Phase-5 Stabilization Checkpoint 2)
+
+Formalized as CSS custom properties in `frontend/src/index.css` (also literal values in every
+`docs/prototypes/*.html`, which have no Tailwind build step to read the variables through) — see
+AUD-010 in `docs/PROJECT_PROGRESS.md`'s dated Checkpoint 2 entry for the audit finding this closes:
+buttons at `size="sm"` (32px) were sitting in the same `items-end` filter row as 36px inputs/
+selects, a few-pixel misalignment compounding across a row.
+
+| Token | Value | Usage |
+|---|---|---|
+| `--control-height` | `36px` | Default `<Input>`, `<select>`, `MultiSelectFilter` trigger, `<Button size="default">` (the default variant — no `size` prop needed). **Every control sitting inline in a filter row uses this height**, never `size="sm"`, regardless of whether it's an input or a button. |
+| `--control-height-sm` | `32px` | `<Button size="sm">` — reserved for controls *inside* a table row/action cell (e.g. a per-row "Release"/"Edit" button) or a standalone action with no adjacent 36px control to align against (e.g. a `CardHeader` title-row action). Never used for a control that shares an `items-end` filter row with a 36px input/select. |
+| `--table-row-height-standard` | `48px` | Target/typical rendered body-row height for `<Table>`'s default `density="standard"` — management/selection lists: Employees, Users, Project Sites, Project Units, Tasks, Advances, Payslips, Salary Release's Unit-status table. |
+| `--table-row-height-compact` | `40px` | Target/typical rendered body-row height for `<Table density="compact">` — document-like/high-density financial views: Bank Sheets, Cash Receiving. (Payroll Entry's own grid is a separate, deliberately custom-virtualized component — content-driven horizontal sizing and sticky headers, not built on the shared `<Table>` — and is exempt from this two-tier system.) |
+| `--table-header-height` | `36px` | Reference value for a table's own `<thead>` row — always shorter than either body-row tier, since a header holds only a short uppercase micro-label, never a full-height control. |
+| `--filter-field-gap` | `6px` | Gap between a filter field's own label and control (`FilterField`, `MultiSelectFilter`). |
+| `--filter-row-gap` | `12px` | Gap between sibling fields in one filter row (the row's own `gap-3`). |
+
+**Row height stays content-driven** (cell padding, never a forced `height` on a `<tr>`/`<td>`, which
+can clip taller content) — the pixel values above are the *documented, measured result* of that
+padding at normal font sizes, not a hard box constraint. `frontend/src/components/ui/table.tsx`
+exposes this as `<Table density="standard" | "compact">`, propagated via context so `TableHead`/
+`TableCell` don't need `density` repeated on every cell; `tableHeadPaddingClass`/
+`tableCellPaddingClass` (exported from the same file) are the deterministic density → padding-class
+mapping, unit-tested directly in `table-density.test.ts`.
+
+**`FilterField`** (`frontend/src/components/ui/filter-field.tsx`) is the shared label+control shell
+every filter field now uses — `PayrollCycleSelectField`, and every page-level Cycle/Site/Bank/Type/
+Status/Search filter that used to hand-roll its own `<div><label>...</label><select/></div>` with a
+slightly different label size/gap than `MultiSelectFilter`'s own. One shell, one gap, one label
+style, app-wide.
+
 ---
 
 ## 2. Layout Patterns
@@ -91,7 +123,8 @@ Spacing is drawn from a small, consistent set — do not introduce arbitrary val
 - **Fixed left sidebar**, 220px, solid `accent` background (dark), full viewport height. Contains, top to bottom: company name/logo block, a scrollable nav grouped into labeled sections (Overview / Payroll / Employees / Admin), and a pinned footer with the current user's avatar, name, and role.
 - **Main area** offset by `margin-left: 220px`, containing a **sticky topbar** (56px) and a scrollable content region.
 - **Topbar**: page title + subtitle on the left, contextual global actions on the right (current month badge, Import/Export, New Payroll Cycle). The right-hand action set is the one region of the topbar that changes meaning slightly per page context — the title/subtitle should always describe the active page.
-- **Nav item states**: default (70% white text), hover (8% white bg), active (12% white bg + left accent border + full-white text + medium weight). Badge counts (e.g. pending Payroll Entry count) sit right-aligned on the nav row.
+- **Nav item states**: default (70% white text), hover (8% white bg), active (12% white bg + left accent border + full-white text + medium weight). Badge counts (e.g. pending Payroll Entry count) sit right-aligned on the nav row. **Nav-section labels are 65% white opacity** (`--sidebar-section-label`, corrected from 35% by AUD-008 — 35% measured 2.48:1 against the `accent` background, well under WCAG AA's 4.5:1; 65% measures 4.71:1).
+- **The document itself never scrolls — only the main content region does.** `app-shell.tsx`'s root is `h-screen overflow-hidden`; the sidebar is fixed-height for the life of that container, `<main>` alone carries `overflow-y-auto`. This is what the AUD-007 finding was about: every `docs/prototypes/*.html` file previously let its own trailing `<footer>` sit *outside* the fixed-height shell, making the whole HTML document scrollable and the fixed-position sidebar visually detach once a reader scrolled into it — fixed in every prototype by giving `html`/`body` a hard `height: 100%; overflow: hidden` and moving that trailing documentation into its own in-shell, internally-scrolling "Implementation notes" tab.
 
 In production this shell maps to a persistent layout route (e.g. a React Router layout route) — the
 prototype's `.page` / `.page.active` show/hide toggling should **not** be replicated; use real
@@ -112,14 +145,23 @@ Two-tier grid: a `1.4fr / 1fr` two-column split (primary table + stacked seconda
 
 ### 2.4 Filter Row
 
-A consistent horizontal pattern across Payroll Entry, Release Salary, Fines & EOBI Report, and Bank
-Sheet: left-aligned label+control groups (`filter-group` = uppercase micro-label above a select/
-input), primary action buttons pushed to the far right via `margin-left: auto`. Never mix filters
-and actions without this left/right split — it's what keeps dense toolbars scannable.
+A consistent horizontal pattern across every page with filters (Payroll Entry, Salary Release, Bank
+Sheet, Cash Receiving, Advances, Payslips, Employee Registry): left-aligned label+control groups
+(`FilterField`, §1.5 — uppercase micro-label above a select/input, one shared shell rather than
+each page hand-rolling its own), primary action buttons pushed to the far right via
+`margin-left: auto`. Never mix filters and actions without this left/right split — it's what keeps
+dense toolbars scannable. **Every control in the row shares one height (`--control-height`, §1.5)**
+— an action button inline with filter inputs is never `size="sm"`, only a control that has no
+filter-row sibling to align against (a table-row action, a lone `CardHeader` title-row button) uses
+the smaller size. A disabled field that depends on another field's selection (e.g. Payslips' Unit
+filter, disabled until a single Site is chosen) communicates why via a native `title` tooltip and an
+`aria-describedby`-linked `sr-only` description — never a permanently visible helper line beneath
+the control, which changes the field's own height and breaks the row's shared baseline (the
+Checkpoint 1 root cause of the reported Payslips misalignment).
 
 ### 2.5 Read-Only Page Banner
 
-Bank Sheets and Cash Receiving Sheet each open with a colored info banner (🔒 read-only) explaining
+Bank Sheets and Cash Receiving Sheet each open with a colored info banner (a `Lock` icon, read-only) explaining
 *why* there's no data entry here and *where* to go to change something. Any future read-only/derived
 view (e.g. a new report) should carry the same banner convention rather than silently disabling
 inputs. **Payroll Entry reuses this same banner** (added Phase 5 Checkpoint 4, 2026-07-16) when its
@@ -145,12 +187,14 @@ not inside the Filter Row (§2.4).
 
 | Component | Prototype reference | Notes for implementation |
 |---|---|---|
-| **Button** | `.btn`, variants `primary/secondary/green/amber`, size `sm` | 5 variants × 2 sizes covers the whole app. Build as one `<Button variant size>` component, not ad hoc classes per page. |
+| **Button** | `.btn`, variants `primary/secondary/green/amber`, size `sm` | 5 variants × 2 sizes covers the whole app. Build as one `<Button variant size>` component, not ad hoc classes per page. **Size is a deliberate choice, not a default (§1.5, §2.4)**: `size="default"` (36px) for anything inline in a filter row; `size="sm"` (32px) only for a table-row action or a standalone action with no adjacent 36px control. |
+| **Checkbox** | native `<input type="checkbox">` in the prototype; `frontend/src/components/ui/checkbox.tsx` in production (Post-Phase-5 Stabilization Checkpoint 2, Part 4) | Built on `@radix-ui/react-checkbox`, matching this codebase's existing Radix-primitive pattern (Dialog, DropdownMenu, Label, Avatar). Supports `checked={true|false|'indeterminate'}` and `disabled`. The one shared Checkbox for the whole app — replaces every native, unstyled `<input type="checkbox">` (Employee Registry's "Active employees only" filter and EOBI-applicable form field, Users' site-assignment list and Active toggle, Payslips' select-all/per-row selection). |
 | **Badge / status pill** | `.badge-{green,amber,red,blue,purple,gray,hold}` | Semantic, not decorative — color always maps to the same meaning app-wide (green=released/positive, amber=pending, red=hold/danger, blue=info, purple=role/locked). Reuse one `<Badge tone>` component. |
 | **Toggle switch** | `.hold-toggle` (pill, sliding knob) | Used for both **Hold** and **EOBI on/off** — a real component, not a native checkbox, because it needs to read as a physical on/off affordance for a non-technical user. The Hold toggle is disabled (not just visually, but request-rejected server-side) once the row is released — hold has no correctable path, it simply freezes along with every other field at that point. |
 | **Stat card** | `.stat-card` | Flat card, color only in the value. |
 | **Multi-select filter** | `.multiselect` + checkbox panel | A genuinely reusable component — used identically in Payroll Entry, Release Salary, and Fines & EOBI Report. Build once as `<SiteMultiSelect>` with Clear/Done actions, not copy-pasted per page. |
 | **Inline-editable table cell** | `.inline-edit` | Bordered-on-hover/focus number input that otherwise reads as plain table text; `.deduct` modifier tints red for deduction-type fields (advance, eid, fine). This is the core interaction of Payroll Entry — pair with TanStack Table's cell-editing pattern and TanStack Virtual for row virtualization at ~1,500 rows. |
+| **Table** | `table.data-table` | `frontend/src/components/ui/table.tsx`'s `<Table density="standard"\|"compact">` (§1.5) — the shared density system every table in the app (except Payroll Entry's own custom grid) is built on. Buttons/badges/checkboxes inside a cell are always vertically centered (`align-middle`), regardless of density. |
 | **Drag handle / row reorder** | `.drag-row`, `.drag-handle` | Native HTML5 drag events in the prototype; use a library (e.g. dnd-kit) in production for accessibility and touch support. |
 | **Modal** | `.modal-overlay` / `.modal` | Fixed 3-part structure: header (title + close), body (20px padding), footer (right-aligned actions, Cancel always secondary/left, primary action right). Widths vary by content (420px small confirs, 520–580px default, 620px employee form) — treat width as a prop, structure as fixed. |
 | **Toast** | `.toast` | Bottom-right, ~3.2s auto-dismiss, used for *every* non-destructive confirmation instead of `alert()`. High-stakes actions (release, correction, delete) use a modal with explicit confirmation instead of a toast. |
@@ -166,6 +210,16 @@ not inside the Filter Row (§2.4).
 
 ## 4. UI Conventions
 
+- **Icons (formalized Post-Phase-5 Stabilization Checkpoint 2, AUD-006): Lucide monochrome icons
+  only, everywhere — no emoji, no platform-dependent pictographs, no second icon library.** This was
+  already true of the live React app (`lucide-react`, e.g. `nav-config.ts`'s
+  `LayoutDashboard`/`ClipboardList`/`Banknote`/`Landmark`/`Wallet`/`HandCoins`/`FileText`/`Users`/
+  `Building2`/`UserCog`); Checkpoint 2 brought every `docs/prototypes/*.html` file into line with it,
+  replacing every emoji glyph with an inline monochrome SVG using the identical Lucide path data
+  (`stroke="currentColor"`, no external request, no build step required to render a static
+  preview file). A prototype's close/remove affordance uses the same `X` icon the shared `Modal`
+  uses — never a text `✕` glyph (also fixed in the live app itself,
+  `split-work-lines-modal.tsx`'s per-line remove button).
 - **Numbers**: always formatted with `Intl.NumberFormat('en-US')` — international grouping
   (`100,000`), never lakh-style (`1,00,000`). Currency values are prefixed `PKR`. This was corrected
   multiple times during the original design conversation with the client — treat it as a strict,
