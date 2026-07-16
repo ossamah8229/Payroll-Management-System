@@ -3560,7 +3560,7 @@ migration status/typecheck/lint/build clean across all three workspaces, confirm
 
 - **COMMITTED as `957ab9d`.**
 
-### Phase 5, Checkpoint 4 — Historical Payroll Cycle Selector — IMPLEMENTED, 2026-07-16, NOT YET COMMITTED (pending user review)
+### Phase 5, Checkpoint 4 — Historical Payroll Cycle Selector — COMPLETE, 2026-07-16, COMMITTED as `10e3194`
 
 Read-only architecture review (2026-07-16, no code) approved with four final decisions: Archived
 cycles are fully locked for ordinary Payroll Entry editing; historical navigation uses route segments
@@ -3662,8 +3662,9 @@ Checkpoint 4), a minor input-validation gap (a clean 400/404 would be better tha
 live production leak. Left untouched per the explicit "do not turn this into a repository-wide
 security refactor" instruction; recorded here so it isn't lost.
 
-**Not yet committed** — this section documents the fix that was applied before commit, per the same
-session's own explicit approval-in-principle-then-fix-then-commit sequencing.
+**COMMITTED together with the rest of Checkpoint 4, as `10e3194`** — this fix was applied and
+verified before that commit, per the same session's own explicit
+approval-in-principle-then-fix-then-commit sequencing.
 
 ---
 
@@ -3677,7 +3678,7 @@ session's own explicit approval-in-principle-then-fix-then-commit sequencing.
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) approved in principle 2026-07-16; a `passwordHash` response-serialization defect found during final review (in the Users module, not Checkpoint 4's own code) was fixed and regression-tested before commit — see §1's Checkpoint 4 entries. Phase close-out review pending |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. Phase close-out review pending |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -4036,10 +4037,10 @@ outstanding).
    domain/generator, committed `3ea879e`) are complete, per this project's standing
    per-checkpoint/per-phase practice. **Checkpoint 3 (cycle archiving, automatic backup generation,
    and new-cycle rollover) is complete, 2026-07-15, committed as `957ab9d`** — see §1's Checkpoint 3
-   entry. **Checkpoint 4 (Historical Payroll Cycle Selector) was approved in principle 2026-07-16;
-   final review found and fixed a `passwordHash` response-serialization defect (Users module, not
-   Checkpoint 4's own code — see §1's security-correction entry) before commit** — see §1's Checkpoint
-   4 entries. Phase close-out
+   entry. **Checkpoint 4 (Historical Payroll Cycle Selector) is complete, 2026-07-16, committed as
+   `10e3194`** — its final review found and fixed a `passwordHash` response-serialization defect
+   (Users module, not Checkpoint 4's own code — see §1's security-correction entry) before that
+   commit — see §1's Checkpoint 4 entries. Phase close-out
    still requires its own separate, explicit go-ahead, same as every other phase. **Known,
    documented gaps carried forward**: there is no post-finalization release path for a held entry yet
    (Checkpoint 1's own approved scope) — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s

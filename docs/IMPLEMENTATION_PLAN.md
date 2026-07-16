@@ -1598,9 +1598,8 @@ finalization precondition keys off `PayrollEntry.released`/`.hold` only.
 `StorageProvider` foundation** (below) → Checkpoint 1 — Finalize Cycle → Checkpoint 2 — Backup
 Package generator → Checkpoint 3 — cycle archiving, automatic backup generation, and new-cycle
 rollover (archive + backup + departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll
-Cycle Selector → Phase close-out. Checkpoints 0–4 are COMPLETE (below); Checkpoint 4 is implemented,
-tested, and documented but **not yet committed — pending user review**, per its own explicit
-instruction. Phase close-out is not yet authorized — it still requires its own explicit go-ahead.
+Cycle Selector → Phase close-out. Checkpoints 0–4 are COMPLETE and COMMITTED (below). Phase close-out
+is not yet authorized — it still requires its own explicit go-ahead.
 
 **Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14, COMMITTED as `d87b9b0`.** The storage abstraction
 originally planned for Phase 0 (never built — see `docs/PROJECT_PROGRESS.md` §3 item 4) and
@@ -1873,8 +1872,8 @@ other fresh line; "no work performed" is expressed via `days` (already defaultin
 Draft created — can be run against a realistic dataset, and the resulting Archived cycle's data is
 byte-identical to what the app showed immediately before archiving.
 
-**Checkpoint 4 — Historical Payroll Cycle Selector — IMPLEMENTED, 2026-07-16, not yet committed
-(pending user review).** Read-only architecture review (2026-07-16, no code) approved with four final
+**Checkpoint 4 — Historical Payroll Cycle Selector — COMPLETE, 2026-07-16, COMMITTED as `10e3194`.**
+Read-only architecture review (2026-07-16, no code) approved with four final
 decisions: Archived cycles are fully locked for ordinary Payroll Entry editing (no new held-entry
 workflow); historical navigation uses route segments (`/payroll-cycles/:cycleId/...`), not a query
 param or local-only state; the Payroll Cycle list stays globally visible (not site-scoped) — actual
