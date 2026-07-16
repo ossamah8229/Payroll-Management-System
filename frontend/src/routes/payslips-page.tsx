@@ -5,7 +5,6 @@ import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -14,7 +13,8 @@ import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import { useProjectUnits } from '@/hooks/use-project-units';
-import { formatCycleLabel, usePayrollCycles } from '@/hooks/use-payroll-cycles';
+import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import {
   downloadPayslipPdf,
   downloadPayslipsBatch,
@@ -23,9 +23,6 @@ import {
   usePayslips,
   type PayslipListItem,
 } from '@/hooks/use-payslips';
-
-const selectClassName =
-  'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
 
 /**
  * Payslips (Phase 4 Checkpoint 6.3.3). Follows the exact page shape Bank Sheet/Cash Receiving
@@ -47,10 +44,17 @@ const selectClassName =
  * bookkeeping is a UX convenience, never trusted as the real control.
  */
 export function PayslipsPage({ user }: { user: SessionUser }) {
-  const cycles = usePayrollCycles();
+  const {
+    cycleId,
+    cycle,
+    cycles,
+    isLoading: cycleLoading,
+    error: cycleError,
+    selectCycle,
+  } = useSelectedPayrollCycle('payslips');
+  const hasAnyCycle = cycles.length > 0;
   const sites = useProjectSites();
 
-  const [cycleId, setCycleId] = useState<string | undefined>(undefined);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -58,15 +62,9 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
   const [batchGenerating, setBatchGenerating] = useState(false);
   const batchAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    if (!cycleId && cycles.data && cycles.data.length > 0) {
-      const draft = cycles.data.find((c) => c.status === 'DRAFT');
-      setCycleId((draft ?? cycles.data[0])!.id);
-    }
-  }, [cycleId, cycles.data]);
-
-  // Filter changes always clear the current selection outright — never carry a possibly-
-  // no-longer-visible employeeId across a filter change (this page's own frozen rule, above).
+  // Filter changes — including a cycle switch — always clear the current selection outright (this
+  // page's own frozen rule, above; extended to cycle switches by Phase 5 Checkpoint 4's own
+  // frontend-safety requirement that a batch selection never silently carries across cycles).
   useEffect(() => {
     setSelectedEmployeeIds(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,11 +86,6 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
 
   const siteOptions = useMemo(() => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })), [sites.data]);
   const unitOptions = useMemo(() => (units.data ?? []).map((unit) => ({ id: unit.id, label: unit.name })), [units.data]);
-
-  const cycleLabel = useMemo(() => {
-    const cycle = cycles.data?.find((c) => c.id === cycleId);
-    return cycle ? formatCycleLabel(cycle) : '';
-  }, [cycles.data, cycleId]);
 
   const loadedEmployees = useMemo(() => payslips.data?.employees ?? [], [payslips.data]);
   const loadedIds = useMemo(() => loadedEmployees.map((e) => e.employeeId), [loadedEmployees]);
@@ -125,21 +118,21 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
   }
 
   async function handleDownloadOne(employee: PayslipListItem) {
-    if (!cycleId) return;
+    if (!cycle) return;
     try {
-      await downloadPayslipPdf(cycleId, employee.employeeId, employee.employeeName);
+      await downloadPayslipPdf(cycle, employee.employeeId, employee.employeeName);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Payslip download failed');
     }
   }
 
   async function handleBatchDownload() {
-    if (!cycleId || selectedEmployeeIds.size === 0) return;
+    if (!cycle || selectedEmployeeIds.size === 0) return;
     const controller = new AbortController();
     batchAbortRef.current = controller;
     setBatchGenerating(true);
     try {
-      await downloadPayslipsBatch(cycleId, [...selectedEmployeeIds], controller.signal);
+      await downloadPayslipsBatch(cycle, [...selectedEmployeeIds], controller.signal);
       toast.success(`Generated ${selectedEmployeeIds.size} Payslip${selectedEmployeeIds.size === 1 ? '' : 's'}`);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -158,7 +151,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
   }
 
   const canViewPayslips = user.permissions.includes(PERMISSIONS.PAYSLIPS_VIEW);
-  const isLoading = cycles.isLoading || sites.isLoading;
+  const isLoading = cycleLoading || sites.isLoading;
   const selectedCount = selectedEmployeeIds.size;
   const overBatchLimit = selectedCount > MAX_BATCH_PAYSLIPS_PER_REQUEST;
 
@@ -181,26 +174,17 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
         <CardHeader>
           <div className="flex items-center gap-2.5">
             <CardTitle>Payslips</CardTitle>
-            {cycleLabel && <Badge tone="gray">{cycleLabel}</Badge>}
+            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="payslips-cycle">
-                Cycle
-              </label>
-              <select
+            {hasAnyCycle && (
+              <PayrollCycleSelectField
                 id="payslips-cycle"
-                className={selectClassName}
-                value={cycleId ?? ''}
-                onChange={(e) => setCycleId(e.target.value)}
-              >
-                {(cycles.data ?? []).map((cycle) => (
-                  <option key={cycle.id} value={cycle.id}>
-                    {formatCycleLabel(cycle)} {cycle.status === 'DRAFT' ? '(Draft)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+                cycles={cycles}
+                selectedCycleId={cycleId}
+                onSelect={selectCycle}
+              />
+            )}
             <MultiSelectFilter
               id="payslips-site-filter"
               label="Site"
@@ -277,14 +261,21 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!isLoading && (cycles.data ?? []).length === 0 && (
+          {!isLoading && cycleError && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-danger">Could not load the payroll cycle</p>
+              <p className="text-xs text-text-muted">{cycleError.message}</p>
+            </div>
+          )}
+
+          {!isLoading && !cycleError && !hasAnyCycle && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-text">No payroll cycles exist yet</p>
               <p className="text-xs text-text-muted">Payslips can only be generated once a cycle exists and has released payroll.</p>
             </div>
           )}
 
-          {!isLoading && (cycles.data ?? []).length > 0 && payslips.error && (
+          {!isLoading && !cycleError && hasAnyCycle && payslips.error && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-danger">Could not load Payslips</p>
               <p className="text-xs text-text-muted">

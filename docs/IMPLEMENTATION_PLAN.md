@@ -1598,8 +1598,9 @@ finalization precondition keys off `PayrollEntry.released`/`.hold` only.
 `StorageProvider` foundation** (below) → Checkpoint 1 — Finalize Cycle → Checkpoint 2 — Backup
 Package generator → Checkpoint 3 — cycle archiving, automatic backup generation, and new-cycle
 rollover (archive + backup + departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll
-Cycle Selector → Phase close-out. Checkpoints 0–3 are COMPLETE (below); Checkpoint 4 and phase
-close-out are not yet authorized — each still requires its own explicit go-ahead.
+Cycle Selector → Phase close-out. Checkpoints 0–4 are COMPLETE (below); Checkpoint 4 is implemented,
+tested, and documented but **not yet committed — pending user review**, per its own explicit
+instruction. Phase close-out is not yet authorized — it still requires its own explicit go-ahead.
 
 **Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14, COMMITTED as `d87b9b0`.** The storage abstraction
 originally planned for Phase 0 (never built — see `docs/PROJECT_PROGRESS.md` §3 item 4) and
@@ -1871,6 +1872,97 @@ other fresh line; "no work performed" is expressed via `days` (already defaultin
 **Definition of Done:** a full month-end cycle turnover — finalize, auto-archive, auto-backup, new
 Draft created — can be run against a realistic dataset, and the resulting Archived cycle's data is
 byte-identical to what the app showed immediately before archiving.
+
+**Checkpoint 4 — Historical Payroll Cycle Selector — IMPLEMENTED, 2026-07-16, not yet committed
+(pending user review).** Read-only architecture review (2026-07-16, no code) approved with four final
+decisions: Archived cycles are fully locked for ordinary Payroll Entry editing (no new held-entry
+workflow); historical navigation uses route segments (`/payroll-cycles/:cycleId/...`), not a query
+param or local-only state; the Payroll Cycle list stays globally visible (not site-scoped) — actual
+payroll data remains server-side permission- and site-filtered exactly as before; historical
+export/download filenames include the payroll period.
+
+**Backend** (small — the backend already had no "current cycle" concept; every route already took an
+explicit `cycleId`): `assertEntryEditable` (`payroll-entry.service.ts`) extended to also reject once
+`cycle.status === 'ARCHIVED'`, alongside its existing `released` check — see
+`docs/architecture/database/payroll-entry.md`'s Immutability note for the full per-surface breakdown
+(single-entity update/delete, work-line add/update/delete, `bulkUpdatePayrollEntries`,
+`importPayrollEntries`, and `deferAdvanceSchedule`, which inherited the extension with zero code
+change since it already includes the source entry's `cycle` relation). `listPayrollCycles` gained a
+derived `isCurrentDraft` boolean (`cycle.status === 'DRAFT'`, no schema change, no extra query). Export
+filenames on Bank Sheet, Cash Receiving (already period-aware, no change needed), single Payslip PDF,
+and Payslip batch ZIP all now include the cycle's `{year}-{month, zero-padded}` period slug (e.g.
+`bank-sheet-hbl-2026-07.csv`, `payslip-emp001-2026-07.pdf`, `payslips-2026-07.zip`) — file *contents*
+unchanged.
+
+**Frontend:** flat routes (`/payroll-entry`, `/release-salary`, `/bank-sheet`, `/cash-receiving`,
+`/payslips`) kept as-is and joined by five nested siblings at `/payroll-cycles/:cycleId/...` rendering
+the identical page component; a new shared `useSelectedPayrollCycle(routeSuffix)` hook (
+`frontend/src/hooks/use-selected-payroll-cycle.ts`) resolves the route's `cycleId`, and — only on the
+flat route, only once cycles have loaded — replaces the URL with the resolved default
+(`resolveDefaultCycleId`: newest Draft → newest Released → newest Archived → no redirect if the list
+is empty); an explicit but nonexistent/malformed `cycleId` in the URL is deliberately **not**
+silently redirected, so it falls through to the page's own not-found/empty handling. A shared
+`<PayrollCycleSelectField>` + `<PayrollCycleStatusBadge>` pair (`components/payroll-cycle/
+payroll-cycle-selector.tsx`, `docs/design-system.md §2.6`) replaces what had been three independent,
+duplicated ad hoc local selectors on Bank Sheet, Cash Receiving, and Payslips. Payroll Entry gained an
+`ArchivedReadOnlyBanner` (`docs/design-system.md §2.5`) and now disables/hides edit, delete, bulk
+update, import, hold-toggle, and work-line editing whenever the selected cycle is `Archived`, while
+keeping filtering/export/navigation live; a genuinely dormant bug in its own `isEntryEditable` helper
+(stricter than the backend, requiring `cycleStatus === 'DRAFT'` even though a held/unreleased entry in
+a `Released` cycle was always meant to stay editable) was found and fixed as part of making non-Draft
+cycles reachable for the first time. Salary Release now supports Draft (Finalize + rollover,
+unchanged), Released (rollover only, gated to the current outgoing cycle), and Archived (read-only
+summary, no Finalize/Rollover control ever rendered for a historical selection); all open confirmation
+modals close automatically on cycle change; a successful rollover navigates directly to
+`/payroll-cycles/{newDraftId}/release` rather than relying on the default-selection redirect. Bank
+Sheet, Cash Receiving, and Payslips all now use the shared selector in place of their own; Payslips
+additionally resets its batch selection on cycle change. React Query cache keys were **not**
+redesigned — the existing `cycleId`-aware keys already isolated per-cycle data correctly.
+
+**Tests:** 8 new backend tests (`backend/tests/payroll-cycle-archived-lock.test.ts`) covering Archived
+rejection across every mutation surface, an unchanged Released regression (held entry still editable),
+and `isCurrentDraft` correctness across a mixed Draft/Released/Archived list; filename assertions added
+to `bank-sheets.test.ts`, `cash-receiving.test.ts`, and `payslips.test.ts` (single PDF + batch ZIP).
+7 new frontend unit tests (`use-payroll-cycles.test.ts`) covering `resolveDefaultCycleId`,
+`formatCyclePeriodSlug`, and `formatCycleOptionLabel` — full frontend suite **21/21** (14 prior + 7
+new). Frontend component rendering tests remain out of scope (no existing convention for them in this
+codebase — pure-function tests only); real-stack/browser verification performed via the compiled
+server + `curl` in the absence of a browser-automation tool, documented explicitly as a coverage gap
+rather than silently skipped.
+
+**Security correction (2026-07-16, before commit) — `passwordHash` response leak, found during final
+review, not a Checkpoint 4 regression.** Requested as a "Payroll Cycle response serialization" fix;
+investigation instead traced the confirmed defect to `backend/src/modules/users/users.service.ts` —
+`listUsers`/`getUser`/`createUser`/`updateUser` returned the raw Prisma `User` row (including
+`passwordHash`) straight into `GET/POST/PATCH /api/v1/users` and `GET /api/v1/users/:id`. Fixed with
+an explicit `select` (`USER_SUMMARY_SELECT`, never fetches `passwordHash` for these read paths at
+all) and DTO assembly (`toUserSummary`) matching the frontend's own already-narrow `ManagedUser`
+shape. The requested narrow review of every directly-related Payroll Cycle/Backup Package/Salary
+Release response (`GET/POST /payroll-cycles`, finalize, rollover, Backup Package list/detail, the
+Salary Release unit-status payload) confirmed those were **already clean** — `PayrollCycle`'s
+`createdBy`/`releasedBy`/`archivedBy` are plain scalar FK strings, never an included `User` relation,
+and the one place a `User` relation is queried (`payroll-release.service.ts`'s
+`getUnitReleaseStatus`) already narrowed it to `{ id, name }` before returning it. New permanent
+convention recorded: `docs/architecture/system-conventions.md §4`, "No HTTP route may return a raw
+Prisma model or relation object." **10 new regression tests**: 4 in `users.test.ts` (pinning the
+direct fix — create/list/detail/update responses, plus a database-level confirmation the stored hash
+is a real argon2 hash never echoed back) and 6 in the new
+`backend/tests/payroll-lifecycle-response-security.test.ts` (the negative-finding confirmation, using
+a new shared `assertNoSensitiveKeys()` recursive-key helper in `tests/helpers.ts`, across cycle
+list/detail, Finalize, rollover, Backup Package list/detail, and the Salary Release unit-status
+payload, spanning Draft/Released/Archived cycles). Full backend suite: **487/487** (477 prior + 10
+new). Live-verified a second time against a freshly compiled server: `passwordHash` confirmed absent
+from every Users route response; the full Checkpoint 4 Archived-lock matrix (single-entry, bulk,
+work-line, and import mutation surfaces, across a held-then-archived entry and a
+released-then-archived entry, distinguishing the two different rejection messages by precedence) was
+independently reconfirmed end-to-end across a 4-cycle Draft→Released→Archived chain. One further,
+non-blocking observation surfaced during this pass (not fixed, out of the requested narrow scope): a
+malformed (non-UUID) `cycleId` in the URL produces a raw `PrismaClientKnownRequestError` message
+(including an absolute filesystem path) in the 500 response body — but only when `NODE_ENV !==
+'production'` (`backend/src/common/middleware/error-handler.ts`'s existing, deliberate
+`isProduction` gate already masks it to a generic "Something went wrong" in real production) — a
+pre-existing input-validation gap (a 500 instead of a clean 400/404), not a live leak, not introduced
+by Checkpoint 4, and not touched here to keep this correction narrowly scoped as instructed.
 
 **🛑 Review checkpoint.** Stop here before Corrections. Once Phase 6 is built, Archived cycles will
 start receiving live corrections against real historical data — the archiving/backup mechanics need

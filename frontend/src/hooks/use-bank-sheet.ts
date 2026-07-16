@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest, ApiError } from '@/lib/api-client';
+import { formatCyclePeriodSlug, type PayrollCycle } from '@/hooks/use-payroll-cycles';
 
 /** The sentinel bank-filter value for employees with no bank account on file (`bankId IS NULL`)
  * — matches `CASH_BANK_FILTER` on the backend (`bank-sheets.service.ts`). Distinct from any real
@@ -59,9 +60,13 @@ export function useBankSheet(
 }
 
 /** Triggers a browser download of the Bank Sheet export — bypasses `apiRequest` since the response
- * is a file, mirroring `downloadPayrollEntryExport` (`use-payroll-entries.ts`) exactly. */
+ * is a file, mirroring `downloadPayrollEntryExport` (`use-payroll-entries.ts`) exactly. The
+ * client-side `link.download` filename wins over the server's own `Content-Disposition` for this
+ * blob-fetch download path, so it independently includes the same period slug the backend's own
+ * filename does (Phase 5 Checkpoint 4) — otherwise the backend's period-aware name would never
+ * actually reach the user for this, the primary download path. */
 export async function downloadBankSheetExport(
-  cycleId: string,
+  cycle: Pick<PayrollCycle, 'id' | 'year' | 'month'>,
   bankFilter: string,
   bankLabel: string,
   format: 'csv' | 'xlsx',
@@ -70,7 +75,7 @@ export async function downloadBankSheetExport(
   const params = new URLSearchParams({ bankId: bankFilter, format });
   if (siteIds?.length) params.set('siteIds', siteIds.join(','));
 
-  const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/bank-sheet/export?${params.toString()}`, {
+  const response = await fetch(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet/export?${params.toString()}`, {
     credentials: 'include',
   });
   if (!response.ok) {
@@ -81,7 +86,7 @@ export async function downloadBankSheetExport(
   const link = document.createElement('a');
   link.href = url;
   const safeLabel = bankLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  link.download = `bank-sheet-${safeLabel}.${format}`;
+  link.download = `bank-sheet-${safeLabel}-${formatCyclePeriodSlug(cycle)}.${format}`;
   link.click();
   URL.revokeObjectURL(url);
 }

@@ -648,6 +648,8 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['content-disposition']).toContain('inline');
     expect(res.headers['content-disposition']).toContain('.pdf');
+    // Period-aware filename (Phase 5 Checkpoint 4).
+    expect(res.headers['content-disposition']).toBe('inline; filename="payslip-pdf-employee-2900-01.pdf"');
   });
 
   it('sets Content-Disposition: attachment when ?disposition=attachment is requested', async () => {
@@ -1044,6 +1046,9 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toBe('application/zip');
       expect(res.headers['cache-control']).toBe('no-store');
+      // Period-aware filename (Phase 5 Checkpoint 4) — derived from the batch's own already-resolved
+      // Payslips, no extra query.
+      expect(res.headers['content-disposition']).toBe('attachment; filename="payslips-2900-02.zip"');
 
       const zip = new AdmZip(res.body as Buffer);
       const entries = zip.getEntries();

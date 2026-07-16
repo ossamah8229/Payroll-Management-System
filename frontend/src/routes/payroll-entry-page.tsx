@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Download, Plus, Upload } from 'lucide-react';
+import { Download, Lock, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
@@ -13,7 +13,8 @@ import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
-import { formatCycleLabel, usePayrollCycles, useCurrentPayrollCycle } from '@/hooks/use-payroll-cycles';
+import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import {
   downloadPayrollEntryExport,
   usePayrollEntries,
@@ -47,8 +48,11 @@ function GridErrorState({ message }: { message: string }) {
 }
 
 /** No `PayrollCycle` row exists yet, anywhere — the true first-run/cold-start case. This is the
- * one scenario `POST /api/v1/payroll-cycles` (now restricted, Phase 5 Checkpoint 3) still handles,
- * so this is the only empty state on this page that still offers a create action. */
+ * one scenario `POST /api/v1/payroll-cycles` (restricted, Phase 5 Checkpoint 3) still handles, so
+ * this is the only empty state on this page that still offers a create action. Every other case
+ * (a cycle exists but none is Draft) no longer has a distinct empty state as of Phase 5 Checkpoint
+ * 4 — the Historical Payroll Cycle Selector's own default-selection rule always resolves to *some*
+ * cycle (Draft, else newest Released, else newest Archived) once at least one exists. */
 function NoCycleEmptyState({ canManageCycles, onCreate }: { canManageCycles: boolean; onCreate: () => void }) {
   return (
     <div className="flex flex-col items-center gap-2 py-14 text-center">
@@ -68,20 +72,14 @@ function NoCycleEmptyState({ canManageCycles, onCreate }: { canManageCycles: boo
   );
 }
 
-/** A cycle already exists but none is Draft — the latest one is `RELEASED` (finalized, awaiting
- * rollover) or `ARCHIVED`. Phase 5 Checkpoint 3 restricts `POST /api/v1/payroll-cycles` to the
- * true first-cycle case above, so this page deliberately offers no create action here — starting
- * the next cycle is Salary Release's "Start New Payroll Cycle" action (rollover), since that is
- * also where the outgoing cycle's archive/backup consequences are explained before confirming. */
-function NoDraftCycleEmptyState({ canManageCycles }: { canManageCycles: boolean }) {
+/** The clear read-only indicator an Archived cycle's grid must show (Phase 5 Checkpoint 4
+ * architecture review — "Archive locks all ordinary editing" is the approved decision). */
+function ArchivedReadOnlyBanner() {
   return (
-    <div className="flex flex-col items-center gap-2 py-14 text-center">
-      <p className="text-xs font-medium text-text">No Draft payroll cycle exists</p>
-      <p className="max-w-sm text-xs text-text-muted">
-        {canManageCycles
-          ? 'The current cycle has been finalized. Start the next payroll cycle from the Salary Release page.'
-          : 'Ask a Master User to start the next payroll cycle from the Salary Release page.'}
-      </p>
+    <div className="flex items-center gap-2 rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted">
+      <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      This cycle is Archived and permanently read-only — editing, holds, work-line changes, bulk
+      apply, and import are all disabled. Filtering and export remain available.
     </div>
   );
 }
@@ -136,28 +134,36 @@ function ImportResultModal({
 }
 
 export function PayrollEntryPage({ user }: { user: SessionUser }) {
-  const { cycle, isLoading: cycleLoading, error: cycleError } = useCurrentPayrollCycle();
-  // Phase 5 Checkpoint 3 — distinguishes "no cycle has ever existed" (this page's own
-  // Start-First-Cycle action still applies) from "a cycle exists but none is Draft" (rollover on
-  // Salary Release is now the only way to start the next one, since `POST /api/v1/payroll-cycles`
-  // is restricted to the true first-cycle case).
-  const allCycles = usePayrollCycles();
-  const hasAnyCycle = (allCycles.data ?? []).length > 0;
+  // Phase 5 Checkpoint 4 — the shared Historical Payroll Cycle Selector. `cycleId` is the raw,
+  // URL-sourced identifier (used for every data fetch below, so an invalid/nonexistent explicit
+  // id still reaches the backend and surfaces its own error, per the approved architecture — never
+  // silently redirected away from); `cycle` is the resolved row from the list, used for display
+  // and status-gated UI only.
+  const {
+    cycleId,
+    cycle,
+    cycles,
+    isLoading: cycleLoading,
+    error: cycleError,
+    selectCycle,
+  } = useSelectedPayrollCycle('payroll-entry');
+  const hasAnyCycle = cycles.length > 0;
+  const isArchived = cycle?.status === 'ARCHIVED';
   const {
     data: entries,
     isLoading: entriesLoading,
     error: entriesError,
-  } = usePayrollEntries(cycle?.id);
+  } = usePayrollEntries(cycleId);
   const banks = useBanks();
   const sites = useProjectSites();
   const [newCycleOpen, setNewCycleOpen] = useState(false);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [importResult, setImportResult] = useState<PayrollEntryImportResult | undefined>(undefined);
-  const importPayrollEntries = useImportPayrollEntries(cycle?.id ?? '');
+  const importPayrollEntries = useImportPayrollEntries(cycleId ?? '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canManageCycles = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
-  const isLoading = cycleLoading || (Boolean(cycle) && (entriesLoading || banks.isLoading));
+  const isLoading = cycleLoading || (Boolean(cycleId) && (entriesLoading || banks.isLoading));
 
   const filteredEntries = useMemo(
     () => filterEntriesBySite(entries ?? [], selectedSiteIds),
@@ -197,37 +203,47 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
         <CardHeader>
           <div className="flex items-center gap-2.5">
             <CardTitle>Payroll Entry</CardTitle>
-            {cycle && <Badge tone={cycle.status === 'DRAFT' ? 'green' : 'gray'}>{formatCycleLabel(cycle)}</Badge>}
+            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
           </div>
-          {cycle && (
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" onClick={() => downloadPayrollEntryExport(cycle.id, 'csv', selectedSiteIds)}>
-                <Download className="h-3.5 w-3.5" aria-hidden />
-                Export CSV
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => downloadPayrollEntryExport(cycle.id, 'xlsx', selectedSiteIds)}>
-                <Download className="h-3.5 w-3.5" aria-hidden />
-                Export Excel
-              </Button>
-              {cycle.status === 'DRAFT' && (
-                <>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={importPayrollEntries.isPending}
-                  >
-                    <Upload className="h-3.5 w-3.5" aria-hidden />
-                    {importPayrollEntries.isPending ? 'Importing…' : 'Import'}
+          {hasAnyCycle && (
+            <div className="flex flex-wrap items-end gap-3">
+              <PayrollCycleSelectField
+                id="payroll-entry-cycle"
+                cycles={cycles}
+                selectedCycleId={cycleId}
+                onSelect={selectCycle}
+              />
+              {cycleId && (
+                <div className="ml-auto flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
+                    <Download className="h-3.5 w-3.5" aria-hidden />
+                    Export CSV
                   </Button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".csv,.xlsx"
-                    className="hidden"
-                    onChange={handleImportFileSelected}
-                  />
-                </>
+                  <Button size="sm" variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'xlsx', selectedSiteIds)}>
+                    <Download className="h-3.5 w-3.5" aria-hidden />
+                    Export Excel
+                  </Button>
+                  {!isArchived && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={importPayrollEntries.isPending}
+                      >
+                        <Upload className="h-3.5 w-3.5" aria-hidden />
+                        {importPayrollEntries.isPending ? 'Importing…' : 'Import'}
+                      </Button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".csv,.xlsx"
+                        className="hidden"
+                        onChange={handleImportFileSelected}
+                      />
+                    </>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -235,16 +251,13 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
         <CardContent>
           {cycleError && <GridErrorState message={cycleError.message} />}
           {!cycleError && isLoading && <GridLoadingState />}
-          {!cycleError && !isLoading && !cycle && !hasAnyCycle && (
+          {!cycleError && !isLoading && !cycleId && !hasAnyCycle && (
             <NoCycleEmptyState canManageCycles={canManageCycles} onCreate={() => setNewCycleOpen(true)} />
           )}
-          {!cycleError && !isLoading && !cycle && hasAnyCycle && (
-            <NoDraftCycleEmptyState canManageCycles={canManageCycles} />
-          )}
-          {!cycleError && !isLoading && cycle && entriesError && (
+          {!cycleError && !isLoading && cycleId && entriesError && (
             <GridErrorState message={entriesError.message} />
           )}
-          {!cycleError && !isLoading && cycle && !entriesError && entries && entries.length === 0 && (
+          {!cycleError && !isLoading && cycleId && !entriesError && entries && entries.length === 0 && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-text">No payroll entries in this cycle</p>
               <p className="text-xs text-text-muted">
@@ -252,8 +265,9 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
               </p>
             </div>
           )}
-          {!cycleError && !isLoading && cycle && !entriesError && entries && entries.length > 0 && (
+          {!cycleError && !isLoading && cycleId && !entriesError && entries && entries.length > 0 && (
             <div className="flex flex-col gap-3">
+              {isArchived && <ArchivedReadOnlyBanner />}
               <div className="flex flex-wrap items-end gap-3">
                 <MultiSelectFilter
                   id="payroll-entry-site-filter"
@@ -271,7 +285,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                   action.
                 </p>
               )}
-              {cycle.status === 'DRAFT' && (
+              {!isArchived && cycle && (
                 <CopyToAllToolbar cycleId={cycle.id} siteIds={selectedSiteIds} />
               )}
               {filteredEntries.length === 0 ? (
@@ -279,9 +293,9 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                   <p className="text-xs font-medium text-text">No employees match the current site filter</p>
                   <p className="text-xs text-text-muted">Clear the filter to see every employee in this cycle.</p>
                 </div>
-              ) : (
+              ) : cycle ? (
                 <PayrollEntryGrid cycle={cycle} entries={filteredEntries} banks={banks.data ?? []} />
-              )}
+              ) : null}
             </div>
           )}
         </CardContent>

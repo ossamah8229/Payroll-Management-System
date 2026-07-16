@@ -178,7 +178,11 @@ Archived (Locked)
     the only way to affect payment for an employee left held past finalization is a hold/release
     decision in a *future* Draft cycle's own entry, per `database/payroll-entry.md §12`.
     `PayrollUnitReadiness` ("Ready for Release") likewise remains deferred, unrelated to this gap (see
-    "Release now happens per Project Unit," above).
+    "Release now happens per Project Unit," above). **Sharpened by Phase 5 Checkpoint 4**: this
+    "future Draft cycle" path is a *window*, not indefinite — a held entry stays ordinarily editable
+    only through `Draft` and `Released`; once its cycle rolls over and archives, the row itself locks
+    (below), so any correction to a still-unresolved held employee must happen before that rollover,
+    or be carried forward into the new cycle's own entry, never by reopening the archived one.
   - Corrections are allowed, per Principle 9 — see
     `docs/architecture/workflows/corrections-and-balance-adjustments.md` for the full request/approval,
     immediate/deferred, and installment-recovery mechanics (all revised 2026-07-05). This applies to
@@ -204,7 +208,24 @@ Archived (Locked)
   decision (2026-07-15 review) — it keeps "create a cycle" (still possible only once, to bootstrap
   the very first cycle ever — see below) and "roll over to the next cycle" as two distinct actions,
   so starting a new cycle can never silently archive history as an undocumented side effect.
-  - The entire cycle becomes historical and fully read-only.
+  - **The entire cycle becomes historical and fully read-only for ordinary editing — enforced,
+    Phase 5 Checkpoint 4 (2026-07-16), not merely aspirational.** `assertEntryEditable`
+    (`payroll-entry.service.ts`) rejects every ordinary mutation — single-entry update/delete,
+    work-line add/update/delete, "Copy to All" bulk update, CSV/Excel import, and (inherited
+    automatically) Advance Deduction Deferral — the instant the entry's parent cycle is `Archived`,
+    **including a held, unreleased entry that was still editable through `Released`** (the one
+    approved architecture decision this checkpoint made explicitly, superseding the "released-only"
+    framing the Checkpoint 1 note above still uses for the `Draft`/`Released` window). This was the
+    genuine open question Checkpoint 4 resolved: whether a held row's Checkpoint-1-approved
+    editability window survives archiving. It does not — the decision favors Backup Package
+    integrity (a still-editable row would let the archived record drift after its own archive-time
+    snapshot) over indefinite held-row editability; the resolution path for a still-unresolved held
+    employee is their own carried-forward entry in a later Draft cycle, never reopening the archived
+    row (see the held-entry gap note above). Bulk update degrades gracefully for an Archived cycle —
+    `appliedCount: 0` for the whole matched set, not a thrown error, matching how it already handled
+    an all-released set before this checkpoint. Reads are unaffected: Payroll Entry, Bank Sheets,
+    Cash Receiving, and Payslips all continue to read an Archived cycle exactly like any other,
+    unrelated to this write-side lock.
   - Archived cycles continue to accept Corrections indefinitely (a dispute or discovered error
     doesn't have an expiry) — per the trigger condition above, this was already true the moment the
     cycle became `Released`; `Archived` doesn't change the correction-eligibility rule, only the
@@ -287,11 +308,66 @@ rule as any new `PayrollEntry` — see `database/payroll-entry.md §12`.
 
 ### Payroll Cycle Selector
 
-Users can open and view **any** previous cycle at any time, in whichever state it's in — Payroll
-Entry, Release status, Bank Sheets, Cash Sheets, Payslips, and Statements as they existed for that
-cycle. Every such view is scoped by `cycleId` and reads live from PostgreSQL. Editability of what's
-shown follows the trigger condition above: an entry is editable only if `released = false` (simplified
-2026-07-05, above); otherwise, changes only via Correction.
+**Implemented Phase 5 Checkpoint 4 (2026-07-16).** Users can open and view **any** previous cycle at
+any time, in whichever state it's in — Payroll Entry, Salary Release, Bank Sheets, Cash Receiving,
+and Payslips all read live from PostgreSQL, scoped by an explicit `cycleId`. Statements remain out of
+scope (deferred, unrelated to this checkpoint). **Editability of what's shown follows the trigger
+condition below — corrected from this section's original wording**: an entry is editable while
+`released = false`, **as long as its parent cycle is not `Archived`** (the approved Checkpoint 4
+decision, see "Archived (Locked)" above) — not "otherwise, changes only via Correction," since
+Corrections/Balance Adjustments remain Phase 6, not yet built.
+
+**Route architecture — a URL segment, not a query parameter or local component state:**
+
+```text
+/payroll-cycles/:cycleId/payroll-entry
+/payroll-cycles/:cycleId/release
+/payroll-cycles/:cycleId/bank-sheet
+/payroll-cycles/:cycleId/cash-receiving
+/payroll-cycles/:cycleId/payslips
+```
+
+The five original flat paths (`/payroll-entry`, `/release`, `/bank-sheet`, `/cash-receiving`,
+`/payslips`) remain mounted as compatibility redirects — both routes render the exact same page
+component; `useSelectedPayrollCycle` reads `cycleId` from the URL via `useParams`, redirecting the
+flat route to the canonical one once a default cycle resolves. This makes every historical view
+refresh-persistent, back/forward-correct, and shareable by URL — a real gap the pre-Checkpoint-4
+per-page ad hoc `<select>` + local-state implementations (Bank Sheet, Cash Receiving, Payslips, each
+independently) never had.
+
+**Default-selection rule, shared across every cycle-aware page** (`resolveDefaultCycleId`,
+`frontend/src/hooks/use-payroll-cycles.ts`): the Draft cycle if one exists, otherwise the newest
+Released cycle, otherwise the newest Archived cycle, otherwise no redirect (the true empty-install
+case, where each page shows its own existing empty state). An explicit, malformed, or nonexistent
+`:cycleId` already present in the URL is **never** redirected away from — the page's own existing
+data-fetch error state (a 404/generic error) surfaces exactly as it always has, since none of the
+underlying data hooks ever assumed a "current cycle" internally to begin with.
+
+**Shared selector** — one hook (`useSelectedPayrollCycle`, `frontend/src/hooks/
+use-selected-payroll-cycle.ts`) plus one small display component pair (`PayrollCycleStatusBadge`/
+`PayrollCycleSelectField`, `frontend/src/components/payroll-cycle/payroll-cycle-selector.tsx`) used
+identically by all five pages — replacing three independent, near-duplicate implementations (Bank
+Sheet, Cash Receiving, Payslips) and adding the capability fresh to the two pages that never had it
+(Payroll Entry, Salary Release). No search or virtualization — cycle counts stay in the dozens even
+after years of operation. No page-specific filter (Site/Bank/Unit/search) lives in the shared piece;
+those remain owned by each page exactly as before.
+
+**Salary Release, specifically**: action-taking (per-Unit Release, Finalize, Rollover) is only ever
+bound to the one currently Draft/Released cycle, gated by its live server-returned `status` — a
+historical Archived selection renders a read-only summary with no action affordance at all. A
+historical `Released`-but-not-current cycle cannot exist under the approved lifecycle (Checkpoint 3's
+own invariant: at most one cycle is ever `Released` at a time, since every rollover archives its
+predecessor atomically), so "is this the current outgoing cycle" reduces to checking `status ===
+'RELEASED'` directly — no separate "is this THE current one" flag is needed. A confirmation modal
+open for one selected cycle closes if the selection changes underneath it; a successful rollover
+navigates directly to the new Draft's own Release page rather than relying on the default-selection
+effect to catch up.
+
+**Cycle-list disclosure**: `GET /api/v1/payroll-cycles` remains globally visible to any user holding
+a payroll permission — not site-scoped — an explicit, confirmed decision (Phase 5 Checkpoint 4
+architecture review), since a cycle's own `(year, month, status)` carries no employee, money, or site
+information; every actual payroll figure remains fully site- and permission-scoped at the query level
+exactly as before this checkpoint.
 
 **Historical viewing inside the application always comes from PostgreSQL — never from a backup
 package.** Backup packages (below) exist for disaster recovery and external/offline access only. This

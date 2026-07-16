@@ -1,4 +1,4 @@
-import type { Prisma, PayrollEntry, PayrollEntryWorkLine } from '@prisma/client';
+import type { Prisma, PayrollEntry, PayrollEntryWorkLine, PayrollCycleStatus } from '@prisma/client';
 import type {
   AddWorkLineInput,
   BulkUpdatePayrollEntriesInput,
@@ -54,22 +54,31 @@ function withCalc(entry: EntryWithWorkLines) {
 }
 
 /**
- * A `PayrollEntry` is mutable only while `released = false` (docs/architecture/database/
- * payroll-entry.md §12, corrected 2026-07-14 — Phase 5 Checkpoint 1 architecture review). Entry
- * immutability is driven exclusively by the entry's own `released` flag, never by the parent
- * cycle's `status`: Finalize Cycle (`DRAFT` → `RELEASED`) does not release held entries, so a held,
- * unreleased entry stays exactly as editable after finalization as it was the moment before —
- * `hold` has no bearing on mutability either way, same as before this correction. Prior to this
- * checkpoint, no route could ever set `PayrollCycle.status` to anything but `DRAFT`, so a
- * `cycle.status !== 'DRAFT'` clause here was dormant — once Finalize Cycle shipped, it would have
- * wrongly frozen every held/straggler entry in a cycle the moment it finalized, contradicting the
- * documented "held and unreleased entries remain ordinarily editable after finalization" rule. Fixed
- * here rather than left dormant.
+ * A `PayrollEntry` is mutable only while `released = false` **and its cycle is not `ARCHIVED`**
+ * (docs/architecture/database/payroll-entry.md §12, corrected 2026-07-14 — Phase 5 Checkpoint 1
+ * architecture review; extended 2026-07-15 — Phase 5 Checkpoint 4 architecture review). Between
+ * `DRAFT` and `RELEASED`, immutability is driven exclusively by the entry's own `released` flag,
+ * never by the parent cycle's status: Finalize Cycle (`DRAFT` → `RELEASED`) does not release held
+ * entries, so a held, unreleased entry stays exactly as editable after finalization as it was the
+ * moment before — `hold` has no bearing on mutability either way. **`ARCHIVED` is the one exception,
+ * added Checkpoint 4**: once rollover archives a cycle, ordinary editing stops entirely, including
+ * for a held/unreleased entry that never resolved before archiving — the approved
+ * "Archive locks all ordinary editing" decision (2026-07-15 architecture review), chosen specifically
+ * to keep the Backup Package generated at archive time meaningfully authoritative (a still-editable
+ * held row would let archived history silently drift after the snapshot was taken). A held
+ * employee's unresolved pay is addressed forward, in their own carried-forward entry in a future
+ * Draft cycle — never by reaching back into a locked Archived row; there is still no dedicated Late
+ * Entry / exceptional-settlement workflow (remains deferred).
  */
-export function assertEntryEditable(entry: { released: boolean }): void {
+export function assertEntryEditable(entry: { released: boolean; cycle: { status: PayrollCycleStatus } }): void {
   if (entry.released) {
     throw badRequest(
       'This payroll entry is locked and can no longer be edited directly — released payroll is immutable (Principle 9)',
+    );
+  }
+  if (entry.cycle.status === 'ARCHIVED') {
+    throw badRequest(
+      'This payroll entry belongs to an Archived payroll cycle and can no longer be edited — Archived cycles are permanently locked for ordinary editing',
     );
   }
 }
@@ -645,12 +654,17 @@ export interface BulkUpdatePayrollEntriesResult {
  * Writes exactly one summary `AuditLog` entry (no `entityId` — matches `employee.import`'s existing
  * bulk-audit precedent, `employees.routes.ts`), never one row per affected entry.
  *
- * **Editability (corrected 2026-07-14, Phase 5 Checkpoint 1 final review):** no longer gates the
- * whole operation on `cycle.status` — a cycle leaving `DRAFT` (Finalize Cycle) never converts a
- * held, unreleased entry into a released one, so it must stay reachable by this bulk action exactly
- * as any single-entity edit would (`assertEntryEditable`, `database/payroll-entry.md §12`).
- * Editability is enforced per row, below, by filtering to `released = false` — the same boundary
- * `assertEntryEditable` enforces, just applied across a matched set instead of one row.
+ * **Editability (corrected 2026-07-14, Phase 5 Checkpoint 1 final review; extended 2026-07-15,
+ * Phase 5 Checkpoint 4):** does not gate the whole operation on `cycle.status` up front — a cycle
+ * leaving `DRAFT` for `RELEASED` (Finalize Cycle) never converts a held, unreleased entry into a
+ * released one, so it must stay reachable by this bulk action exactly as any single-entity edit
+ * would (`assertEntryEditable`, `database/payroll-entry.md §12`). Editability is enforced per row,
+ * below, by filtering to `released = false` **and the cycle not being `ARCHIVED`** — the same two
+ * conditions `assertEntryEditable` enforces for a single row, just applied across a matched set at
+ * once. An `ARCHIVED` cycle therefore always applies to zero rows (every row is filtered out
+ * together), reported via the ordinary `appliedCount: 0` outcome rather than a thrown error — the
+ * same graceful-skip shape this bulk action already used for released rows, extended rather than
+ * replaced with a new error path.
  */
 export async function bulkUpdatePayrollEntries(
   currentUser: SessionUser,
@@ -658,9 +672,7 @@ export async function bulkUpdatePayrollEntries(
   input: BulkUpdatePayrollEntriesInput,
   requestMeta: RequestMeta,
 ): Promise<BulkUpdatePayrollEntriesResult> {
-  // Confirms the cycle exists (404 otherwise) — its status is deliberately not otherwise
-  // consulted here; see this function's own doc comment.
-  await getPayrollCycle(cycleId);
+  const cycle = await getPayrollCycle(cycleId);
 
   for (const siteId of input.siteIds) {
     assertSiteAccess(currentUser, siteId);
@@ -674,9 +686,10 @@ export async function bulkUpdatePayrollEntries(
       workLines: { orderBy: { sortOrder: 'asc' }, take: 1, select: { id: true } },
     },
   });
-  // A released entry is locked exactly like a single-entity edit would reject it
-  // (`assertEntryEditable`) — skipped here rather than failing the whole batch over it.
-  const editable = matched.filter((entry) => !entry.released);
+  // A released entry, or any entry at all once the cycle is Archived, is locked exactly like a
+  // single-entity edit would reject it (`assertEntryEditable`) — skipped here rather than failing
+  // the whole batch over it.
+  const editable = cycle.status === 'ARCHIVED' ? [] : matched.filter((entry) => !entry.released);
 
   let appliedCount = 0;
 

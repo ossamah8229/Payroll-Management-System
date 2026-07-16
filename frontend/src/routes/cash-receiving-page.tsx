@@ -5,7 +5,6 @@ import type { SessionUser } from '@payroll/shared';
 import { formatMoney } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -13,11 +12,10 @@ import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useCompanySettings } from '@/hooks/use-company-settings';
 import { useProjectSites } from '@/hooks/use-project-sites';
-import { formatCycleLabel, usePayrollCycles } from '@/hooks/use-payroll-cycles';
+import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
+import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { downloadCashReceivingExport, useCashReceivingSheet } from '@/hooks/use-cash-receiving';
-
-const selectClassName =
-  'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
 
 function formatGeneratedAt(date: Date): string {
   return date.toLocaleString('en-US', {
@@ -42,24 +40,21 @@ function formatGeneratedAt(date: Date): string {
  * explicitly rejected in favor of this shorter, physical-signature-oriented sheet.
  */
 export function CashReceivingPage({ user }: { user: SessionUser }) {
-  const cycles = usePayrollCycles();
+  const {
+    cycleId,
+    cycle,
+    cycles,
+    isLoading: cycleLoading,
+    error: cycleError,
+    selectCycle,
+  } = useSelectedPayrollCycle('cash-receiving');
+  const hasAnyCycle = cycles.length > 0;
   const sites = useProjectSites();
   const companySettings = useCompanySettings();
 
-  const [cycleId, setCycleId] = useState<string | undefined>(undefined);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [generatedAt, setGeneratedAt] = useState(() => new Date());
-
-  // Defaults to the current Draft cycle if one exists, otherwise the most recent cycle — same
-  // reasoning as Bank Sheet: Finance needs to regenerate a past cycle's sheet just as often as the
-  // current one, so every cycle stays selectable.
-  useEffect(() => {
-    if (!cycleId && cycles.data && cycles.data.length > 0) {
-      const draft = cycles.data.find((c) => c.status === 'DRAFT');
-      setCycleId((draft ?? cycles.data[0])!.id);
-    }
-  }, [cycleId, cycles.data]);
 
   const cashSheet = useCashReceivingSheet(cycleId, selectedSiteIds);
 
@@ -75,16 +70,13 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
     [sites.data],
   );
 
-  const cycleLabel = useMemo(() => {
-    const cycle = cycles.data?.find((c) => c.id === cycleId);
-    return cycle ? formatCycleLabel(cycle) : '';
-  }, [cycles.data, cycleId]);
+  const cycleLabel = cycle ? formatCycleLabel(cycle) : '';
 
   async function handleExport(format: 'csv' | 'xlsx') {
-    if (!cycleId || !cashSheet.data) return;
+    if (!cycle || !cashSheet.data) return;
     setIsExporting(true);
     try {
-      await downloadCashReceivingExport(cycleId, format, selectedSiteIds);
+      await downloadCashReceivingExport(cycle, format, selectedSiteIds);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Export failed');
     } finally {
@@ -92,7 +84,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
     }
   }
 
-  const isLoading = cycles.isLoading || sites.isLoading;
+  const isLoading = cycleLoading || sites.isLoading;
 
   return (
     <AppShell user={user} title="Cash Receiving Sheet" subtitle="Generate and export released Cash payroll">
@@ -100,29 +92,17 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
         <CardHeader>
           <div className="flex items-center gap-2.5">
             <CardTitle>Cash Receiving Sheet</CardTitle>
-            {cycleLabel && <Badge tone="gray">{cycleLabel}</Badge>}
+            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="flex flex-col gap-1">
-              <label
-                className="text-[10px] font-semibold uppercase tracking-wide text-text-muted"
-                htmlFor="cash-receiving-cycle"
-              >
-                Cycle
-              </label>
-              <select
+            {hasAnyCycle && (
+              <PayrollCycleSelectField
                 id="cash-receiving-cycle"
-                className={selectClassName}
-                value={cycleId ?? ''}
-                onChange={(e) => setCycleId(e.target.value)}
-              >
-                {(cycles.data ?? []).map((cycle) => (
-                  <option key={cycle.id} value={cycle.id}>
-                    {formatCycleLabel(cycle)} {cycle.status === 'DRAFT' ? '(Draft)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+                cycles={cycles}
+                selectedCycleId={cycleId}
+                onSelect={selectCycle}
+              />
+            )}
             <MultiSelectFilter
               id="cash-receiving-site-filter"
               label="Site"
@@ -161,7 +141,14 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!isLoading && (cycles.data ?? []).length === 0 && (
+          {!isLoading && cycleError && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-danger">Could not load the payroll cycle</p>
+              <p className="text-xs text-text-muted">{cycleError.message}</p>
+            </div>
+          )}
+
+          {!isLoading && !cycleError && !hasAnyCycle && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-text">No payroll cycles exist yet</p>
               <p className="text-xs text-text-muted">
@@ -170,7 +157,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!isLoading && (cycles.data ?? []).length > 0 && cashSheet.error && (
+          {!isLoading && !cycleError && hasAnyCycle && cashSheet.error && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-danger">Could not load the Cash Receiving Sheet</p>
               <p className="text-xs text-text-muted">

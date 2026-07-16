@@ -1,23 +1,25 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import {
   formatCycleLabel,
   useFinalizePayrollCycle,
-  useLatestPayrollCycle,
   useRolloverPayrollCycle,
   type PayrollCycle,
 } from '@/hooks/use-payroll-cycles';
+import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { useReleaseProjectUnit, useUnitReleaseStatus, type UnitReleaseStatus } from '@/hooks/use-payroll-release';
 
 const selectClassName =
@@ -200,7 +202,20 @@ function RolloverConfirmModal({
 }
 
 export function SalaryReleasePage({ user }: { user: SessionUser }) {
-  const { cycle, isLoading: cycleLoading, error: cycleError } = useLatestPayrollCycle();
+  // Phase 5 Checkpoint 4 — the shared Historical Payroll Cycle Selector. Action-taking (Release,
+  // Finalize, Rollover) only ever targets `cycle` (the resolved row), gated by its live `status`
+  // from the server — never an implicit "latest" cycle, and never reachable against a historical
+  // selection this page's own status gates below don't explicitly allow.
+  const {
+    cycleId,
+    cycle,
+    cycles,
+    isLoading: cycleLoading,
+    error: cycleError,
+    selectCycle,
+  } = useSelectedPayrollCycle('release');
+  const hasAnyCycle = cycles.length > 0;
+  const navigate = useNavigate();
   const sites = useProjectSites();
   const [siteId, setSiteId] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState<UnitReleaseStatus | undefined>(undefined);
@@ -213,6 +228,15 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     }
   }, [siteId, sites.data]);
 
+  // Frontend action safety (Phase 5 Checkpoint 4 architecture review, §11) — a confirmation modal
+  // open for one selected cycle must never silently carry over to a different one navigated to
+  // underneath it (e.g. via browser back/forward while a modal is open).
+  useEffect(() => {
+    setConfirming(undefined);
+    setConfirmingFinalize(false);
+    setConfirmingRollover(false);
+  }, [cycleId]);
+
   const unitStatus = useUnitReleaseStatus(cycle?.id, siteId);
   const releaseUnit = useReleaseProjectUnit(cycle?.id ?? '', siteId ?? '');
   const finalizeCycle = useFinalizePayrollCycle();
@@ -221,9 +245,10 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   const canRelease = user.permissions.includes(PERMISSIONS.PAYROLL_RELEASE);
   const canFinalize = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const cycleLabel = cycle ? formatCycleLabel(cycle) : '';
+  const isArchived = cycle?.status === 'ARCHIVED';
 
   async function handleConfirmRelease() {
-    if (!confirming) return;
+    if (!confirming || !cycle) return;
     try {
       const result = await releaseUnit.mutateAsync(confirming.unit.id);
       toast.success(
@@ -256,6 +281,11 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
       const result = await rolloverCycle.mutateAsync(cycle.id);
       toast.success(`${formatCycleLabel(result.newCycle)} started — ${cycleLabel} archived`);
       setConfirmingRollover(false);
+      // Navigate straight to the new Draft's own Release page — never rely on the default-
+      // selection rule alone, since the cycle list refetch that would drive it is asynchronous and
+      // the user should land on the cycle they just created, not wherever the default happens to
+      // resolve to in the meantime (Phase 5 Checkpoint 4 architecture review, §11).
+      navigate(`/payroll-cycles/${result.newCycle.id}/release`, { replace: true });
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Starting the new payroll cycle failed');
     }
@@ -268,7 +298,7 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
           <div className="flex items-center justify-between gap-2.5">
             <div className="flex items-center gap-2.5">
               <CardTitle>Salary Release</CardTitle>
-              {cycle && <Badge tone={cycle.status === 'DRAFT' ? 'green' : 'gray'}>{cycleLabel} · {cycle.status}</Badge>}
+              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
             </div>
             {cycle && canFinalize && cycle.status === 'DRAFT' && (
               <Button size="sm" variant="secondary" onClick={() => setConfirmingFinalize(true)}>
@@ -281,19 +311,29 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
               </Button>
             )}
           </div>
-          {(sites.data ?? []).length > 0 && (
-            <select
-              className={selectClassName}
-              value={siteId ?? ''}
-              onChange={(e) => setSiteId(e.target.value)}
-              aria-label="Project Site"
-            >
-              {(sites.data ?? []).map((site) => (
-                <option key={site.id} value={site.id}>
-                  {site.name}
-                </option>
-              ))}
-            </select>
+          {hasAnyCycle && (
+            <div className="flex flex-wrap items-end gap-3">
+              <PayrollCycleSelectField
+                id="salary-release-cycle"
+                cycles={cycles}
+                selectedCycleId={cycleId}
+                onSelect={selectCycle}
+              />
+              {(sites.data ?? []).length > 0 && (
+                <select
+                  className={selectClassName}
+                  value={siteId ?? ''}
+                  onChange={(e) => setSiteId(e.target.value)}
+                  aria-label="Project Site"
+                >
+                  {(sites.data ?? []).map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           )}
         </CardHeader>
         <CardContent className="p-0">
@@ -311,9 +351,9 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!cycleError && !cycleLoading && !cycle && (
+          {!cycleError && !cycleLoading && !cycleId && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
-              <p className="text-xs font-medium text-text">No Draft payroll cycle exists yet</p>
+              <p className="text-xs font-medium text-text">No payroll cycle exists yet</p>
               <p className="max-w-sm text-xs text-text-muted">
                 Payroll must be prepared in a Draft cycle before any Project Unit can be released.
               </p>
@@ -331,6 +371,12 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
 
           {!cycleError && !cycleLoading && cycle && siteId && (
             <>
+              {isArchived && (
+                <div className="mx-[18px] mt-[18px] flex items-center gap-2 rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted">
+                  This cycle is Archived — the release summary below is historical and read-only. No
+                  further release, Finalize, or rollover action can be taken against it.
+                </div>
+              )}
               {unitStatus.error && (
                 <div className="flex flex-col items-center gap-1 py-14 text-center">
                   <p className="text-xs font-medium text-danger">Could not load release status</p>

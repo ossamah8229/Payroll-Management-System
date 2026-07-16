@@ -6,6 +6,7 @@ import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { logger } from '../../lib/logger';
 import { recordAuditLog } from '../audit-log/audit-log.service';
+import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import {
   generatePayslipPdf,
   getPayslip,
@@ -14,6 +15,13 @@ import {
   renderPayslipPdfBuffer,
   type Payslip,
 } from './payslips.service';
+
+/** `{year}-{month, zero-padded}` — the shared period-slug convention every historical export
+ * filename in this codebase now uses (Phase 5 Checkpoint 4), matching Cash Receiving/Bank Sheet's
+ * own identical construction. */
+function periodSlug(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
@@ -159,10 +167,13 @@ payslipsRouter.get('/:employeeId/pdf', requirePermission(PERMISSIONS.PAYSLIPS_VI
     const employeeId = requireIdParam(req.params.employeeId);
     const disposition = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
 
-    const { buffer, entryId, employeeName } = await generatePayslipPdf(req.currentUser!, cycleId, employeeId, {
-      generatedByName: req.currentUser!.name,
-      generatedAt: new Date(),
-    });
+    const [cycle, { buffer, entryId, employeeName }] = await Promise.all([
+      getPayrollCycle(cycleId),
+      generatePayslipPdf(req.currentUser!, cycleId, employeeId, {
+        generatedByName: req.currentUser!.name,
+        generatedAt: new Date(),
+      }),
+    ]);
 
     await recordAuditLog({
       actorUserId: req.currentUser!.id,
@@ -174,7 +185,8 @@ payslipsRouter.get('/:employeeId/pdf', requirePermission(PERMISSIONS.PAYSLIPS_VI
       userAgent: req.get('user-agent') ?? null,
     });
 
-    const filename = `payslip-${employeeName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`;
+    // Period-aware filename (Phase 5 Checkpoint 4).
+    const filename = `payslip-${employeeName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${periodSlug(cycle.year, cycle.month)}.pdf`;
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
@@ -258,7 +270,11 @@ payslipsRouter.post('/batch', requirePermission(PERMISSIONS.PAYSLIPS_VIEW), asyn
     // headers are sent.
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename="payslips-batch.zip"');
+    // Period-aware filename (Phase 5 Checkpoint 4) — every eligible Payslip in this batch belongs
+    // to the same cycle (`cycleId` is the one path param the whole request is scoped to), so the
+    // canary payslip's own already-resolved `cycleYear`/`cycleMonth` is the period, no extra query.
+    const batchFilename = `payslips-${periodSlug(payslips[0]!.cycleYear, payslips[0]!.cycleMonth)}.zip`;
+    res.setHeader('Content-Disposition', `attachment; filename="${batchFilename}"`);
 
     const archive = archiver('zip', { zlib: { level: 6 } });
     let cancelled = false;

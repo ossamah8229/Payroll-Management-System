@@ -16,6 +16,8 @@ export interface PayrollCycle {
   releasedBy: string | null;
   archivedAt: string | null;
   archivedBy: string | null;
+  /** Phase 5 Checkpoint 4 — derived server-side, `status === 'DRAFT'`. */
+  isCurrentDraft: boolean;
 }
 
 const PAYROLL_CYCLES_QUERY_KEY = ['payroll-cycles'] as const;
@@ -39,6 +41,38 @@ const MONTH_NAMES = [
  * display label... computed from year/month, never stored"). */
 export function formatCycleLabel(cycle: Pick<PayrollCycle, 'year' | 'month'>): string {
   return `${MONTH_NAMES[cycle.month - 1]} ${cycle.year}`;
+}
+
+/** `"July 2026 · Draft"` — the shared selector's own option/label format (Phase 5 Checkpoint 4),
+ * built on `formatCycleLabel` rather than duplicating the month-name lookup. */
+export function formatCycleOptionLabel(cycle: Pick<PayrollCycle, 'year' | 'month' | 'status'>): string {
+  return `${formatCycleLabel(cycle)} · ${formatCycleStatusLabel(cycle.status)}`;
+}
+
+export function formatCycleStatusLabel(status: PayrollCycleStatus): string {
+  return status === 'DRAFT' ? 'Draft' : status === 'RELEASED' ? 'Released' : 'Archived';
+}
+
+/** `"2026-07"` — the shared period-slug convention every historical export filename now uses
+ * (Phase 5 Checkpoint 4), matching the backend's own identical construction
+ * (`bank-sheets.routes.ts`/`cash-receiving.routes.ts`/`payslips.routes.ts`). */
+export function formatCyclePeriodSlug(cycle: Pick<PayrollCycle, 'year' | 'month'>): string {
+  return `${cycle.year}-${String(cycle.month).padStart(2, '0')}`;
+}
+
+/**
+ * The default-cycle-selection rule, shared across every page with a selector (Phase 5 Checkpoint 4
+ * architecture review, §8): the Draft cycle if one exists, otherwise the newest Released cycle,
+ * otherwise the newest Archived cycle, otherwise `undefined` (the true empty-install case). `cycles`
+ * is already newest-first (the backend's own `[{ year: 'desc' }, { month: 'desc' }]` ordering), so
+ * a plain `.find()` for each status already returns the newest match for that status.
+ */
+export function resolveDefaultCycleId(cycles: PayrollCycle[]): string | undefined {
+  return (
+    cycles.find((c) => c.status === 'DRAFT') ??
+    cycles.find((c) => c.status === 'RELEASED') ??
+    cycles.find((c) => c.status === 'ARCHIVED')
+  )?.id;
 }
 
 export function usePayrollCycles() {

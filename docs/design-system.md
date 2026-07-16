@@ -122,7 +122,22 @@ and actions without this left/right split — it's what keeps dense toolbars sca
 Bank Sheets and Cash Receiving Sheet each open with a colored info banner (🔒 read-only) explaining
 *why* there's no data entry here and *where* to go to change something. Any future read-only/derived
 view (e.g. a new report) should carry the same banner convention rather than silently disabling
-inputs.
+inputs. **Payroll Entry reuses this same banner** (added Phase 5 Checkpoint 4, 2026-07-16) when its
+selected Payroll Cycle is `Archived` — the whole page (edit/delete/bulk/import/hold/work-lines) goes
+read-only and the banner explains that the cycle is archived and permanently locked, distinct from
+the Bank Sheet/Cash Sheet banners which are read-only *by page purpose* rather than by cycle state.
+
+### 2.6 Payroll Cycle Selector
+
+A single dropdown (`<PayrollCycleSelectField>`, `docs/architecture/workflows/payroll-lifecycle.md`
+"Payroll Cycle Selector") shared identically across Payroll Entry, Release Salary, Bank Sheet, Cash
+Receiving, and Payslips (Phase 5 Checkpoint 4, 2026-07-16) — one `<select>` listing every cycle
+newest-first as "{Month Year} · {Status}", paired with a `<PayrollCycleStatusBadge>` reusing the
+existing `<Badge tone>` component (green=Released, amber=Draft, gray=Archived, matching the
+established status-color mapping in §3). Selecting a cycle navigates the URL
+(`/payroll-cycles/:cycleId/...`) rather than only updating local state — the selector is a navigation
+control, not a filter control, so it belongs visually in the page header area alongside the title,
+not inside the Filter Row (§2.4).
 
 ---
 
@@ -145,6 +160,7 @@ inputs.
 | **Printable document** | `.payslip-preview`, `.cash-sheet` | Bordered "paper" card, serif type, tight print-style grid layout, totals row bolded with a top border. These should be built as dedicated print/PDF templates (rendered server-side via Puppeteer), sharing structure but **not** the app's Tailwind component library — they follow print-document conventions, not app UI conventions. The Payslip template needs a slot for an optional **Balance Settlement** line (Balance Salary Payable / Salary Recovery, with its remark) — see `docs/architecture/workflows/corrections-and-balance-adjustments.md` — since a settling Balance Adjustment is paid as part of one combined bank/cash amount but must still be shown as its own line item here. |
 | **Slide-out panel** | `.team-panel` → repurposed as the **Tasks Workspace** (revised 2026-07-10 — permanently replaces the Chat/To-Do concept, `docs/architecture/database/tasks.md`) | Fixed-width (340px) right-edge panel, independent scroll region — no tabs needed now that Chat is gone, single-purpose task list. Moved earlier in the roadmap (Phase 3.5, ahead of the original spec's Phase 8/"build last" placement) — no chat, messaging, comments, attachments, subtasks, Kanban view, or recurring tasks; intentionally lightweight. |
 | **Empty state** | e.g. Payslip/Employee profile placeholder | Centered icon + one-line message, used any time a list/detail view has nothing selected or nothing to show. Keep this one consistent pattern everywhere rather than ad hoc "No data" text. |
+| **Payroll Cycle selector** | `<PayrollCycleSelectField>` + `<PayrollCycleStatusBadge>` | One shared component pair (§2.6) driving `/payroll-cycles/:cycleId/...` navigation on 5 pages — build once, do not let any page grow its own local cycle `<select>` again. |
 
 ---
 

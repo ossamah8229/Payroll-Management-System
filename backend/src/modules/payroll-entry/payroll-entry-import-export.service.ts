@@ -255,11 +255,13 @@ function cellYesNo(row: ParsedRow, column: string): boolean | undefined {
  * rejected by the same `assertEntryEditable()` every single-row edit path already enforces, not a
  * reimplementation of that rule.
  *
- * **Editability (corrected 2026-07-14, Phase 5 Checkpoint 1 final review):** no longer gates the
- * whole import on `cycle.status` — a held, unreleased entry stays reachable by this importer after
- * its cycle finalizes, exactly as any single-entity edit would (`assertEntryEditable`,
- * `database/payroll-entry.md §12`). Editability is enforced per row, below, the same as always; the
- * only rows this importer ever skips for lock reasons are already-`released` ones.
+ * **Editability (corrected 2026-07-14, Phase 5 Checkpoint 1 final review; extended 2026-07-15,
+ * Phase 5 Checkpoint 4):** does not gate the whole import on `cycle.status` up front — a held,
+ * unreleased entry stays reachable by this importer after its cycle finalizes (`RELEASED`), exactly
+ * as any single-entity edit would (`assertEntryEditable`, `database/payroll-entry.md §12`).
+ * Editability is enforced per row, below, the same as always; once the cycle is `ARCHIVED`,
+ * `assertEntryEditable` now rejects every row regardless of `released`, so an import against an
+ * Archived cycle skips every row with the same per-row "locked" reason an ordinary edit would give.
  *
  * Each row is validated and applied independently — one bad row is skipped and reported, never a
  * whole-file failure (`reference/PROJECT_SPEC.md`'s own explicit requirement for this importer,
@@ -285,9 +287,9 @@ export async function importPayrollEntries(
   cycleId: string,
   rows: ParsedRow[],
 ): Promise<PayrollEntryImportResult> {
-  // Confirms the cycle exists (404 otherwise) — its status is deliberately not otherwise
-  // consulted here; see this function's own doc comment.
-  await getPayrollCycle(cycleId);
+  // Confirms the cycle exists (404 otherwise) and captures its status for the per-row editability
+  // check below; see this function's own doc comment.
+  const cycle = await getPayrollCycle(cycleId);
 
   const entries = await prisma.payrollEntry.findMany({
     where: { cycleId },
@@ -302,7 +304,7 @@ export async function importPayrollEntries(
       const entry = resolveRowEntry(row, entries);
 
       assertSiteAccess(currentUser, entry.siteId);
-      assertEntryEditable({ released: entry.released });
+      assertEntryEditable({ released: entry.released, cycle: { status: cycle.status } });
 
       const primaryLine = entry.workLines[0]!;
 

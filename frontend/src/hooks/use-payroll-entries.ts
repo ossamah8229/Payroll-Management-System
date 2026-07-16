@@ -71,12 +71,17 @@ export interface PayrollEntry {
   calc: CalcNetResult;
 }
 
-/** A `PayrollEntry` is editable only while unreleased and its cycle is still Draft
- * (docs/architecture/database/payroll-entry.md §12) — `hold` has no bearing on this. Mirrors the
- * backend's own `assertEntryEditable` (payroll-entry.service.ts) so the UI never offers an edit
- * affordance the server would reject. */
+/** A `PayrollEntry` is editable while unreleased, as long as its cycle is not `ARCHIVED`
+ * (docs/architecture/database/payroll-entry.md §12, extended Phase 5 Checkpoint 4) — `hold` has no
+ * bearing on this, and a held/unreleased entry stays editable through `RELEASED` (Checkpoint 1's
+ * own approved rule), only losing editability once the cycle archives. Mirrors the backend's own
+ * `assertEntryEditable` (payroll-entry.service.ts) so the UI never offers an edit affordance the
+ * server would reject. **Corrected 2026-07-15 (Phase 5 Checkpoint 4):** before this checkpoint,
+ * Payroll Entry only ever showed the Draft cycle, so this function's own stricter-than-the-backend
+ * `cycleStatus === 'DRAFT'` check was dormant and harmless; extending the page to show Released
+ * cycles would otherwise have wrongly disabled editing a held entry the backend would still accept. */
 export function isEntryEditable(entry: Pick<PayrollEntry, 'released'>, cycleStatus: string): boolean {
-  return !entry.released && cycleStatus === 'DRAFT';
+  return !entry.released && cycleStatus !== 'ARCHIVED';
 }
 
 interface ListPayrollEntriesResponse {

@@ -5,7 +5,6 @@ import type { SessionUser } from '@payroll/shared';
 import { formatMoney } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -13,32 +12,29 @@ import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
-import { formatCycleLabel, usePayrollCycles } from '@/hooks/use-payroll-cycles';
+import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { CASH_BANK_FILTER, downloadBankSheetExport, useBankSheet } from '@/hooks/use-bank-sheet';
 
 const selectClassName =
   'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
 
 export function BankSheetPage({ user }: { user: SessionUser }) {
-  const cycles = usePayrollCycles();
+  const {
+    cycleId,
+    cycle,
+    cycles,
+    isLoading: cycleLoading,
+    error: cycleError,
+    selectCycle,
+  } = useSelectedPayrollCycle('bank-sheet');
+  const hasAnyCycle = cycles.length > 0;
   const sites = useProjectSites();
   const banks = useBanks();
 
-  const [cycleId, setCycleId] = useState<string | undefined>(undefined);
   const [bankFilter, setBankFilter] = useState<string | undefined>(undefined);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [isExporting, setIsExporting] = useState(false);
-
-  // Defaults to the current Draft cycle if one exists, otherwise the most recent cycle
-  // (`usePayrollCycles` is already ordered year/month descending) — Finance needs to regenerate a
-  // past cycle's Bank Sheet just as often as the current one (historical exports must always
-  // reproduce identical data), so every cycle is selectable, not only the current Draft one.
-  useEffect(() => {
-    if (!cycleId && cycles.data && cycles.data.length > 0) {
-      const draft = cycles.data.find((c) => c.status === 'DRAFT');
-      setCycleId((draft ?? cycles.data[0])!.id);
-    }
-  }, [cycleId, cycles.data]);
 
   useEffect(() => {
     if (!bankFilter && banks.data) {
@@ -53,16 +49,11 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
     [sites.data],
   );
 
-  const cycleLabel = useMemo(() => {
-    const cycle = cycles.data?.find((c) => c.id === cycleId);
-    return cycle ? formatCycleLabel(cycle) : '';
-  }, [cycles.data, cycleId]);
-
   async function handleExport(format: 'csv' | 'xlsx') {
-    if (!cycleId || !bankFilter || !bankSheet.data) return;
+    if (!cycle || !bankFilter || !bankSheet.data) return;
     setIsExporting(true);
     try {
-      await downloadBankSheetExport(cycleId, bankFilter, bankSheet.data.bankLabel, format, selectedSiteIds);
+      await downloadBankSheetExport(cycle, bankFilter, bankSheet.data.bankLabel, format, selectedSiteIds);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Export failed');
     } finally {
@@ -70,7 +61,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
     }
   }
 
-  const isLoading = cycles.isLoading || banks.isLoading || sites.isLoading;
+  const isLoading = cycleLoading || banks.isLoading || sites.isLoading;
 
   return (
     <AppShell user={user} title="Bank Sheet" subtitle="Generate and export released payroll by bank">
@@ -78,26 +69,17 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
         <CardHeader>
           <div className="flex items-center gap-2.5">
             <CardTitle>Bank Sheet</CardTitle>
-            {cycleLabel && <Badge tone="gray">{cycleLabel}</Badge>}
+            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="bank-sheet-cycle">
-                Cycle
-              </label>
-              <select
+            {hasAnyCycle && (
+              <PayrollCycleSelectField
                 id="bank-sheet-cycle"
-                className={selectClassName}
-                value={cycleId ?? ''}
-                onChange={(e) => setCycleId(e.target.value)}
-              >
-                {(cycles.data ?? []).map((cycle) => (
-                  <option key={cycle.id} value={cycle.id}>
-                    {formatCycleLabel(cycle)} {cycle.status === 'DRAFT' ? '(Draft)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+                cycles={cycles}
+                selectedCycleId={cycleId}
+                onSelect={selectCycle}
+              />
+            )}
             <div className="flex flex-col gap-1">
               <label className="text-[10px] font-semibold uppercase tracking-wide text-text-muted" htmlFor="bank-sheet-bank">
                 Bank
@@ -154,14 +136,21 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!isLoading && (cycles.data ?? []).length === 0 && (
+          {!isLoading && cycleError && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-danger">Could not load the payroll cycle</p>
+              <p className="text-xs text-text-muted">{cycleError.message}</p>
+            </div>
+          )}
+
+          {!isLoading && !cycleError && !hasAnyCycle && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-text">No payroll cycles exist yet</p>
               <p className="text-xs text-text-muted">A Bank Sheet can only be generated once a cycle exists.</p>
             </div>
           )}
 
-          {!isLoading && (cycles.data ?? []).length > 0 && bankSheet.error && (
+          {!isLoading && !cycleError && hasAnyCycle && bankSheet.error && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-danger">Could not load the Bank Sheet</p>
               <p className="text-xs text-text-muted">

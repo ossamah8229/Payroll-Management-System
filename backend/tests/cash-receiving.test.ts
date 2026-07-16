@@ -326,6 +326,11 @@ describe('Phase 4 Checkpoint 4 — Cash Receiving Sheets', () => {
     );
     expect(csvRes.status).toBe(200);
     expect(csvRes.headers['content-type']).toContain('text/csv');
+    // Period-aware filename (already the established convention here, confirmed unaffected by
+    // Phase 5 Checkpoint 4's own filename work on Bank Sheet/Payslips).
+    expect(csvRes.headers['content-disposition']).toBe(
+      'attachment; filename="cash-receiving-sheet-2900-11.csv"',
+    );
     const csvText = csvRes.text;
     expect(csvText).toContain('Export Cash Employee');
     expect(csvText).toContain('Total');

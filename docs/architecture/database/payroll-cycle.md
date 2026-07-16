@@ -59,6 +59,24 @@ creation) is restricted, as of this checkpoint, to bootstrapping the very first 
 any `PayrollCycle` row exists, that route rejects with a typed conflict directing the caller to this
 rollover route instead, regardless of the existing cycle's own status.
 
+**Implemented Phase 5 Checkpoint 4 (2026-07-16) — the Historical Payroll Cycle Selector.** No schema
+change. Two additions built directly on this table's own already-complete data:
+
+- **`GET /api/v1/payroll-cycles`'s DTO gained `isCurrentDraft`** — derived server-side
+  (`status === 'DRAFT'`), no additional query, so every frontend page treats "which cycle is
+  editable" as a fact the API states rather than a status string each page re-interprets.
+- **`ARCHIVED` now also gates `PayrollEntry` mutability**, not just its own row's fields — see
+  `database/payroll-entry.md §12`'s Immutability note and `docs/architecture/workflows/
+  payroll-lifecycle.md §4`'s "Archived (Locked)" for the full rule and its rationale. Nothing on
+  this table's own columns changed to support this; `assertEntryEditable` now reads
+  `PayrollEntry.cycle.status` (already an existing relation) in addition to `PayrollEntry.released`.
+
+The Historical Payroll Cycle Selector itself is a frontend concern (route architecture, a shared
+selector, default-cycle-selection) — see `docs/architecture/workflows/payroll-lifecycle.md §4` for
+the full design; nothing about how this table is queried changed, since every read path
+(`listPayrollEntries`, `getBankSheet`, `getCashReceivingSheet`, `listPayslips`/`getPayslip`) already
+took an explicit `cycleId` and never assumed a "current cycle" before this checkpoint either.
+
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |

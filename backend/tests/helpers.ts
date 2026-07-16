@@ -132,6 +132,45 @@ export async function createTestUser(options: {
   });
 }
 
+/** Phase 5 Checkpoint 4 security correction (2026-07-16) — keys that must never appear anywhere in
+ * an HTTP JSON response body, checked recursively (not just at the top level, since a leak
+ * typically hides inside a nested actor/relation object, exactly how the `passwordHash` defect this
+ * checkpoint fixed was shaped — see `docs/architecture/system-conventions.md`'s "No raw Prisma
+ * model" convention). Deliberately case-insensitive substring matching on the key name, not an
+ * exact-match list, so a differently-cased or prefixed variant (`PasswordHash`, `userPasswordHash`)
+ * still trips it. */
+const DEFAULT_FORBIDDEN_RESPONSE_KEYS = ['passwordhash', 'session', 'csrf', 'storagekey', 'absolutepath'];
+
+/**
+ * Walks an arbitrary JSON-shaped value (a parsed HTTP response body) and throws if any object key,
+ * at any depth, matches one of the forbidden substrings — case-insensitively. Used to prove a
+ * response is free of a known-sensitive field class (password hashes, session/CSRF secrets,
+ * storage keys, filesystem paths) without having to enumerate every possible nesting path by hand,
+ * and without false-positiving on legitimate domain identifiers (a `siteId`/`cycleId`/`userId`
+ * field name doesn't contain any forbidden substring, so it's untouched).
+ */
+export function assertNoSensitiveKeys(value: unknown, extraForbiddenKeys: string[] = [], path = '$'): void {
+  const forbidden = [...DEFAULT_FORBIDDEN_RESPONSE_KEYS, ...extraForbiddenKeys.map((key) => key.toLowerCase())];
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoSensitiveKeys(item, extraForbiddenKeys, `${path}[${index}]`));
+    return;
+  }
+
+  if (value && typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase();
+      const hit = forbidden.find((forbiddenKey) => normalizedKey.includes(forbiddenKey));
+      if (hit) {
+        throw new Error(
+          `assertNoSensitiveKeys: forbidden key "${key}" (matches "${hit}") found at ${path}.${key}`,
+        );
+      }
+      assertNoSensitiveKeys(nested, extraForbiddenKeys, `${path}.${key}`);
+    }
+  }
+}
+
 /** Extracts a named cookie's value from a supertest response's Set-Cookie header. */
 export function extractCookie(res: SuperTestResponse, name: string): string | undefined {
   const setCookie = res.headers['set-cookie'];

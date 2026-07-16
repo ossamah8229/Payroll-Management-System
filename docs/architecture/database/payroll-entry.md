@@ -158,44 +158,50 @@ yet typed the account number must not have that in-progress edit rejected.
 - **Cascade:** all FKs `RESTRICT` — a `PayrollEntry` is never orphaned by deleting its cycle,
   employee, site, bank, or linked advance
 - **Module owner:** Payroll Entry (writes while Draft); read by nearly every other module
-- **Immutability (corrected 2026-07-14, Phase 5 Checkpoint 1 architecture review):** mutable only
-  while `released = false`. Immutability is driven **exclusively** by this row's own `released`
-  flag — never by the parent `PayrollCycle.status`. `hold` has **no bearing on mutability** — it only
-  affects downstream inclusion in Release/Bank Sheet/Cash Sheet, and remains an ordinarily-editable
-  field like any other while the entry is unlocked. Once `released = true`, every column on the row —
-  including `hold` — is frozen; there is deliberately no correctable path for `hold`/`released`
-  themselves (`CorrectionField`, `database/conventions-and-enums.md §1`, excludes them, since they are
-  workflow state, not correctable payroll data). A held, unreleased entry (`released = false`,
-  `hold = true`) stays **ordinarily editable even after its parent cycle finalizes**
-  (`docs/architecture/workflows/payroll-lifecycle.md §4`, "Released") — Finalize Cycle is a pure
-  cycle-level `DRAFT` → `RELEASED` transition and never touches `PayrollEntry.released` itself. The
-  only legitimate way to affect payment for a problem discovered later, for an entry that never
-  released, is via a hold/release decision in a *future* Draft cycle's own entry — there is no
-  post-finalization release path for a held entry yet (a documented, deliberately deferred product
-  gap, same doc). **Prior wording here (`released = false` **and** the parent cycle `status = 'DRAFT'`)
-  described a dormant conflict**: no route could ever set a cycle's status to anything but `DRAFT`
-  before Checkpoint 1, so the cycle-status clause never actually fired in practice; once Finalize
-  Cycle shipped it would have wrongly frozen every held/straggler entry the moment its cycle
-  finalized, contradicting the finalization precondition's own hold exemption. Enforced at the
-  application layer (`payroll-entry.service.ts`'s `assertEntryEditable`, no update route reaches a
+- **Immutability (corrected 2026-07-14, Phase 5 Checkpoint 1; extended 2026-07-16, Phase 5
+  Checkpoint 4):** mutable while `released = false`, **as long as the parent `PayrollCycle.status` is
+  not `ARCHIVED`**. Between `Draft` and `Released`, immutability is driven **exclusively** by this
+  row's own `released` flag — never by cycle status. `hold` has **no bearing on mutability** in either
+  state — it only affects downstream inclusion in Release/Bank Sheet/Cash Sheet, and remains an
+  ordinarily-editable field like any other while the entry is unlocked. Once `released = true`, every
+  column on the row — including `hold` — is frozen; there is deliberately no correctable path for
+  `hold`/`released` themselves (`CorrectionField`, `database/conventions-and-enums.md §1`, excludes
+  them, since they are workflow state, not correctable payroll data). A held, unreleased entry
+  (`released = false`, `hold = true`) stays **ordinarily editable through `Draft` and `Released`**
+  (`docs/architecture/workflows/payroll-lifecycle.md §4`) — Finalize Cycle is a pure cycle-level
+  `DRAFT` → `RELEASED` transition and never touches `PayrollEntry.released` itself — **but locks the
+  instant its cycle becomes `Archived`** (Checkpoint 4's own approved decision, chosen to keep an
+  Archived cycle's data — and the Backup Package generated at archive time — genuinely stable
+  afterward, rather than lettable-still-drift). The only legitimate way to affect payment for a
+  problem discovered later, for an entry that never released, is via a hold/release decision in a
+  *future* Draft cycle's own entry — there is no post-finalization release path for a held entry yet
+  (a documented, deliberately deferred product gap, same doc) — and once the entry's own cycle
+  archives, that future-cycle path is the *only* remaining one; there is no reopening the archived
+  row itself. Enforced at the application layer (`payroll-entry.service.ts`'s `assertEntryEditable`,
+  which now takes the entry's own `cycle.status` alongside `released`; no update route reaches a
   locked row) and recommended as a database-level `BEFORE UPDATE` trigger blocking any column change
-  once `released = true`, for the same defense-in-depth reasoning as the Audit Log
-  (`database/audit-log.md §16`).
-  **This is the one rule every Payroll Entry mutation surface enforces (final review, 2026-07-14) —
-  not only the single-entity PATCH/DELETE routes**: single-entity update/delete and work-line
-  add/update/delete (`assertEntryEditable`, directly); "Copy to All" bulk update
-  (`bulkUpdatePayrollEntries` — filters its matched set to `released = false` rather than calling
-  `assertEntryEditable` per row, but enforces the identical boundary); the CSV/Excel importer
-  (`importPayrollEntries` — calls `assertEntryEditable` per row, skipping only already-released ones
-  with a "locked" reason); and Advance Deduction Deferral (`deferAdvanceSchedule`,
-  `database/advances.md §15` — calls `assertEntryEditable` on the *source* entry, so a held,
-  unreleased entry may still have its deduction deferred even after its own cycle finalizes; the
-  deferral *target* period's own cycle, if one already exists, must independently still be `DRAFT` —
-  an unrelated, preserved check, see that section). **None of these five surfaces ever gates on
-  `PayrollCycle.status` for editability purposes** — a whole-cycle `status !== 'DRAFT'` check survives
-  only where its real purpose is something else entirely (cycle creation eligibility, per-Unit
-  release, cycle finalization itself, or the Advance target-period check just mentioned), never as a
-  substitute for this row-level rule.
+  once `released = true` **or** the parent cycle is `Archived`, for the same defense-in-depth
+  reasoning as the Audit Log (`database/audit-log.md §16`).
+  **This is the one rule every Payroll Entry mutation surface enforces (final review, 2026-07-14;
+  extended 2026-07-16) — not only the single-entity PATCH/DELETE routes**: single-entity update/delete
+  and work-line add/update/delete (`assertEntryEditable`, directly); "Copy to All" bulk update
+  (`bulkUpdatePayrollEntries` — filters its matched set to `released = false` and the cycle not being
+  `Archived`, rather than calling `assertEntryEditable` per row, but enforces the identical boundary;
+  an `Archived` cycle's bulk request degrades gracefully to `appliedCount: 0` for the whole matched
+  set, never a thrown error, the same shape it already used for an all-released set); the CSV/Excel
+  importer (`importPayrollEntries` — calls `assertEntryEditable` per row, now passing the cycle's own
+  already-fetched status, skipping every row with a "locked" reason once the cycle is `Archived`, or
+  only already-released ones otherwise); and Advance Deduction Deferral (`deferAdvanceSchedule`,
+  `database/advances.md §15` — calls `assertEntryEditable` on the *source* entry, which already
+  includes its own `cycle` relation, so this surface inherited the Checkpoint 4 extension with zero
+  code change; a held, unreleased entry may still have its deduction deferred through `Released`,
+  exactly as before, and now also locks the instant its own cycle archives; the deferral *target*
+  period's own cycle, if one already exists, must independently still be `DRAFT` — an unrelated,
+  preserved check, see that section). **None of these five surfaces ever gates on
+  `PayrollCycle.status` for reasons unrelated to this row-level rule** — a whole-cycle
+  `status !== 'DRAFT'` check survives only where its real purpose is something else entirely (cycle
+  creation eligibility, per-Unit release, cycle finalization itself, or the Advance target-period
+  check just mentioned).
 - **Optimistic locking required:** yes — this is the primary candidate. Multiple Payroll Staff (or
   multiple tabs, or an autosave retry after a network hiccup) may edit different rows concurrently;
   `version` prevents a lost update on the same row

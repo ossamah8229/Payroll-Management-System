@@ -461,6 +461,11 @@ describe('Phase 4 Checkpoint 3 — Bank Sheets', () => {
     );
     expect(csvRes.status).toBe(200);
     expect(csvRes.headers['content-type']).toContain('text/csv');
+    // Period-aware filename (Phase 5 Checkpoint 4) — the payroll period is embedded so two
+    // different historical cycles' exports are never indistinguishable on disk.
+    expect(csvRes.headers['content-disposition']).toBe(
+      'attachment; filename="bank-sheet-export-test-bank-2900-12.csv"',
+    );
     const csvText = csvRes.text;
     expect(csvText).toContain('Export Employee');
     expect(csvText).toContain('9999999999');

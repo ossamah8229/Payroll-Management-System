@@ -195,3 +195,49 @@ elsewhere to the same permission holders) is deliberately **not** audited — on
 disclosure, matching this codebase's existing "one summary entry per operation, not per row" audit
 convention. Also new for this same checkpoint: `Cache-Control: no-store` on Payslip responses, a step
 beyond the precedent above, justified by the same sensitivity difference.
+
+## 4. API Response Serialization — No Raw Prisma Model
+
+**No HTTP route may return a raw Prisma model or relation object. Every API response containing
+users, payroll, financial data, or storage metadata must be assembled through an explicit DTO.**
+
+Established as a permanent convention 2026-07-16 (Phase 5 Checkpoint 4 security correction), after a
+confirmed defect: `backend/src/modules/users/users.service.ts`'s `listUsers`/`getUser`/`createUser`/
+`updateUser` called `prisma.user.findMany()`/`findUnique()`/`create()` with no `select`, and each of
+`GET /api/v1/users`, `GET /api/v1/users/:id`, `POST /api/v1/users`, and `PATCH /api/v1/users/:id`
+returned that raw row straight into `res.json({ user })`/`{ users }` — including `passwordHash`. Not
+a Phase 5 Checkpoint 4 regression (the routes predate it), but found and fixed during Checkpoint 4's
+final review. A companion review of every Payroll Cycle/Backup Package/Salary Release response this
+codebase exposes (`GET/POST /payroll-cycles`, finalize, rollover, Backup Package list/detail, the
+Salary Release unit-status payload) found those already clean — none of them fetch or return a raw
+`User` relation; `PayrollCycle.createdBy`/`releasedBy`/`archivedBy` are plain scalar FK strings, and
+the one place that does look up a `User` relation (`payroll-release.service.ts`'s
+`getUnitReleaseStatus`, `include: { releasedBy: true }`) already narrows it to `{ id, name }` before
+it's ever returned — a correct precedent this convention formalizes retroactively, not a new pattern.
+
+**The fix, and the standing rule going forward:**
+
+1. **Fetch narrow.** Use Prisma's `select` (not `include`) so a sensitive column is never pulled out
+   of the database for a read path that doesn't need it — not merely stripped from the object after
+   the fact. `users.service.ts`'s `USER_SUMMARY_SELECT` is the reference example.
+2. **Assemble explicitly.** Build the response shape as a plain object literal naming every field,
+   the same pattern `auth.service.ts`'s `loadSessionUser` (returning `SessionUser`, never a raw
+   `User`) and `payroll-release.service.ts`'s `getUnitReleaseStatus` (`releasedBy: { id, name }`)
+   already established — Checkpoint 4's fix brings the Users module in line with a pattern the rest
+   of the codebase already followed, not a new one.
+3. **Never expose:** `passwordHash`, any other authentication secret, session/CSRF internals, a raw
+   storage key (`BackupPackageFile.storageKey` — already stripped by `backup-packages.routes.ts`'s
+   `serializeBackupPackage`, the other pre-existing correct precedent), an absolute filesystem path,
+   or a `User`'s `roleId`/`avatarStorageKey`/`themeAccentColor` unless a specific page genuinely
+   consumes it.
+4. **A nested actor** (who released/archived/generated something) is always `{ id, name }` — never
+   the full `User` row, never `email` unless the specific page genuinely displays it.
+
+**Regression coverage:** `backend/tests/helpers.ts`'s `assertNoSensitiveKeys()` walks a parsed JSON
+response body recursively (not just the top level — a leak typically hides inside a nested relation
+object, exactly how the `passwordHash` defect was shaped) and fails if any key anywhere matches a
+forbidden substring (`passwordHash`, `session`, `csrf`, `storageKey`, `absolutePath`, case-insensitive
+substring match, extensible per-call). Used in `backend/tests/users.test.ts` (the direct fix) and
+`backend/tests/payroll-lifecycle-response-security.test.ts` (the negative-finding confirmation across
+cycle list/detail, Finalize, rollover, Backup Package list/detail, and the Salary Release unit-status
+payload, across Draft/Released/Archived cycles).

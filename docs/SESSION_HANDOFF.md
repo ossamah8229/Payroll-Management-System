@@ -132,6 +132,55 @@ be enough to resume correctly without re-deriving context from scratch — per
   assert concurrency/field/immutability properties the checkpoint review required proving directly.
   Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 3" entry. **Do not begin Phase 5
   Checkpoint 4 (Payroll Cycle Selector) or Phase 6 without their own explicit go-ahead.**
+- **This session (2026-07-16): Phase 5 Checkpoint 4 — Historical Payroll Cycle Selector —
+  IMPLEMENTED, NOT YET COMMITTED (pending user review).** A read-only architecture review ran first
+  (approved with four final decisions — Archived cycles are fully locked for ordinary Payroll Entry
+  editing; historical navigation uses route segments `/payroll-cycles/:cycleId/...`; the Payroll
+  Cycle list stays globally visible, data stays server-side permission/site-filtered; historical
+  export filenames include the payroll period), then implementation. **Backend:**
+  `assertEntryEditable` extended to also reject once `cycle.status === 'ARCHIVED'` across every
+  mutation surface (single-entity update/delete, work-line add/update/delete,
+  `bulkUpdatePayrollEntries`, `importPayrollEntries`, `deferAdvanceSchedule` inherited with zero code
+  change); `listPayrollCycles` gained a derived `isCurrentDraft` boolean, no schema change; Bank
+  Sheet/single Payslip PDF/Payslip batch ZIP filenames now include the cycle's period slug (Cash
+  Receiving already had this). **Frontend:** five nested routes added alongside the existing flat
+  ones, which now redirect to a resolved default cycle (newest Draft → newest Released → newest
+  Archived) instead of carrying their own state; a new shared `useSelectedPayrollCycle` hook and
+  `<PayrollCycleSelectField>`/`<PayrollCycleStatusBadge>` component pair replace three independent
+  duplicated ad hoc selectors (Bank Sheet, Cash Receiving, Payslips); Payroll Entry gained a full
+  Archived read-only mode with a banner; Salary Release gated its Finalize/Rollover actions to
+  Draft/Released-only and now navigates straight to the new Draft after a rollover; a dormant
+  frontend bug (`isEntryEditable` stricter than the backend) was found and fixed as part of making
+  non-Draft cycles reachable for the first time. React Query cache keys were not redesigned — the
+  existing `cycleId`-aware keys already isolated data correctly. **Tests:** 8 new backend tests
+  (`payroll-cycle-archived-lock.test.ts`) plus filename assertions in three existing suites — full
+  backend suite **477/477** (469 prior + 8 new); 7 new frontend unit tests
+  (`use-payroll-cycles.test.ts`) — full frontend suite **21/21** (14 prior + 7 new). typecheck/lint/
+  build clean across all three workspaces. Full record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5,
+  Checkpoint 4" entry.
+- **Same day (2026-07-16), before commit: security correction — a confirmed `passwordHash` response
+  leak, requested as a "Payroll Cycle response serialization" fix.** Investigation traced it instead
+  to `backend/src/modules/users/users.service.ts` (`listUsers`/`getUser`/`createUser`/`updateUser`,
+  returning the raw Prisma `User` row into every Users route's JSON response) — a long-standing,
+  previously-noticed-but-deferred gap (Phase 3.5 Checkpoint 2's own record already flagged it in
+  passing, choosing only to keep the Tasks module's own `assignedTo`/`assignedBy` fields narrow
+  rather than fix Users itself). Fixed with an explicit Prisma `select` + DTO assembly matching the
+  frontend's own already-narrow `ManagedUser` shape. The requested narrow review of every
+  directly-related Payroll Cycle/Backup Package/Salary Release response confirmed those were already
+  clean (a genuine negative finding — `PayrollCycle`'s actor columns are plain scalar FK strings;
+  Backup Package responses already strip `storageKey`; the one nested `User` relation actually
+  queried, `payroll-release.service.ts`'s unit-status payload, already narrowed to `{ id, name }`).
+  New permanent convention recorded: `docs/architecture/system-conventions.md §4`, "No HTTP route may
+  return a raw Prisma model or relation object." 10 new regression tests (4 in `users.test.ts`, 6 in
+  the new `payroll-lifecycle-response-security.test.ts`, using a new recursive
+  `assertNoSensitiveKeys()` helper in `tests/helpers.ts`) — full backend suite **487/487** (477 prior
+  + 10 new). Live-reconfirmed against a freshly compiled server: the leak is gone, and the full
+  Checkpoint 4 Archived-lock matrix (single-entry/bulk/work-line/import, held-then-archived and
+  released-then-archived entries) was independently re-verified end-to-end. One non-blocking
+  observation surfaced but deliberately left unfixed (out of the requested narrow scope): a malformed
+  `cycleId` produces a verbose 500 in non-production `NODE_ENV` only (already masked in real
+  production by the existing `isProduction` gate) — pre-existing, not a Checkpoint 4 regression. Full
+  record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 4 — security correction" entry.
 - **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
   4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
@@ -1385,7 +1434,7 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 
 ## 7. Next steps, in order
 
-**Updated 2026-07-15 — Phase 1, Phase 2, Phase 2.5, Phase 3 (all seven checkpoints), and Phase 3.5
+**Updated 2026-07-16 — Phase 1, Phase 2, Phase 2.5, Phase 3 (all seven checkpoints), and Phase 3.5
 (all four checkpoints) remain closed with full DB-backed evidence — see §1/§2. Phase 4 (all six
 checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and committed, but is
 **code-complete, not fully closed** — see §1's Checkpoint 6.3 entry and
@@ -1395,8 +1444,11 @@ checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and commi
 Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`), and Checkpoint 2 (Backup Packages reusable
 domain/generator, COMMITTED `3ea879e`) are complete. Checkpoint 3 (cycle archiving, automatic backup
 generation, and new-cycle rollover) is complete, 2026-07-15, full backend suite 469/469,
-**COMMITTED as `957ab9d`**, see §1's "Phase 5, Checkpoint 3" entry.
-Checkpoint 4 and phase close-out each still require their own separate, explicit go-ahead.**
+**COMMITTED as `957ab9d`**, see §1's "Phase 5, Checkpoint 3" entry. **Checkpoint 4 (Historical
+Payroll Cycle Selector) is implemented, tested, and documented, 2026-07-16, full backend suite
+477/477, full frontend suite 21/21 — but NOT YET COMMITTED, per its own explicit "do not commit"
+instruction, pending user review of the full deliverable report** — see §1's "Phase 5, Checkpoint 4"
+entry. Phase close-out still requires its own separate, explicit go-ahead.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest
@@ -1406,9 +1458,10 @@ Checkpoint 4 and phase close-out each still require their own separate, explicit
    `@embedded-postgres/darwin-x64` in the scratchpad, hydrate its symlinks, `initdb -U postgres -A
    trust`, start with `-c unix_socket_directories=''` (TCP only), create role `payroll` (password
    `payroll_dev_password`) and database `payroll_dev`, then `cp backend/.env.example backend/.env`,
-   `npx prisma migrate deploy` (15 migrations as of Phase 5 Checkpoint 3), seed **twice** (confirm
-   idempotency), `npm run test --workspace backend` (expect **469/469** as of Phase 5 Checkpoint 3
-   — **use the `npm run test` script itself**, which sets `NODE_ENV=test` and `--runInBand`; running
+   `npx prisma migrate deploy` (15 migrations as of Phase 5 Checkpoint 3 — Checkpoint 4 added no
+   migration), seed **twice** (confirm idempotency), `npm run test --workspace backend` (expect
+   **477/477** as of Phase 5 Checkpoint 4 — **use the `npm run test` script itself**, which sets
+   `NODE_ENV=test` and `--runInBand`; running
    `npx jest` directly after sourcing `backend/.env` overrides `NODE_ENV` to `development` and drops
    the login rate limiter from 1000/window to 10/window, producing a cascade of spurious 429
    failures that look like real regressions but aren't).
@@ -1423,7 +1476,7 @@ Checkpoint 4 and phase close-out each still require their own separate, explicit
    `SELECT count(*) FROM pg_stat_activity` returning to baseline (~9) before re-running; this has
    been a known "Jest did not exit one second after…" artifact since Checkpoint 6.1/6.2 and was
    re-confirmed, not newly introduced, during Checkpoint 6.3.
-3. **Confirm the 469/469 baseline is green before touching any new code.**
+3. **Confirm the 477/477 baseline is green before touching any new code.**
 4. **Close the one outstanding Phase 4 condition before treating the phase as fully closed: a real
    Render (or genuine Linux container) deployment smoke test.** Neither Docker/Podman/Colima nor
    Render API access nor a configured git remote were available in this session (same constraint as
@@ -1433,17 +1486,19 @@ Checkpoint 4 and phase close-out each still require their own separate, explicit
    (Times New Roman or its documented fallback), memory stability under a representative batch,
    graceful shutdown. Only then update `docs/PROJECT_PROGRESS.md` §2's Phase 4 row from
    "code-complete" to "closed."
-5. **Phase 5 (Cycle Finalization, Archiving, and Backups) requires its own separate, explicit
-   authorization to begin** implementation planning, per this project's standing
-   per-checkpoint/per-phase practice — do not start it opportunistically. It also needs
-   `StorageProvider` (`docs/PROJECT_PROGRESS.md` §3 item 4) built first — confirmed deferred until
-   before Phase 5, not scheduled into any prior phase. Design for hosting portability (§3 item 13).
+5. **Phase 5 Checkpoint 4 is implemented and documented but not yet committed — review its
+   deliverable report and either request changes or approve the commit before anything else in
+   Phase 5 proceeds.** Do not begin Phase 5 close-out, Phase 6, or any further Phase 5 work
+   (Backup Package UI, Corrections, Balance Adjustments, Employee Statements,
+   `PayrollUnitReadiness`, Late Entry release) until Checkpoint 4 is committed and its own explicit
+   go-ahead is given for whatever comes next — per this project's standing per-checkpoint/per-phase
+   practice.
 6. Decide how Broom Services' own disbursement source bank account(s) should be modeled
    (`docs/PROJECT_PROGRESS.md` §3 item 7) — still open, unrelated to Payslips.
-7. When explicitly instructed to begin **Phase 5**, follow the same standing Definition of Done:
-   **architecture compliance → implementation → typecheck → lint → build → backend tests →
-   real-stack Playwright → HTML prototype review/update → documentation updates → ask before
-   committing.**
+7. Once Checkpoint 4 is committed and Phase 5 close-out is explicitly authorized, follow the same
+   standing Definition of Done for whatever comes next: **architecture compliance → implementation →
+   typecheck → lint → build → backend tests → real-stack verification → HTML prototype review/update
+   → documentation updates → ask before committing.**
 
 ## 8. Risks and assumptions
 

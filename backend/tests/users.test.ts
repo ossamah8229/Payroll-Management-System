@@ -1,7 +1,7 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { cleanTestData, createAuthenticatedAgent } from './helpers';
+import { assertNoSensitiveKeys, cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
 
@@ -159,5 +159,98 @@ describe('User Management', () => {
       .set('x-csrf-token', csrfToken)
       .send({ email: 'reset-target@test.local', password: 'BrandNewPassword1!' });
     expect(loginRes.status).toBe(200);
+  });
+
+  describe('response serialization security (Phase 5 Checkpoint 4 correction, 2026-07-16)', () => {
+    /** The confirmed defect: `listUsers`/`getUser`/`createUser`/`updateUser` previously returned
+     * the raw Prisma `User` row — including `passwordHash` — straight into the HTTP response. Fixed
+     * by an explicit `select` + DTO assembly in `users.service.ts` (`toUserSummary`); these tests
+     * pin that fix against every route that touches a `User` row's own response shape. */
+    it('never includes passwordHash (or any other forbidden key) in the create response', async () => {
+      const site = await makeSite('Test Site Users Security Create');
+      const { agent, csrfToken } = await masterAdminAgent('users-security-create-admin@test.local');
+
+      const res = await agent
+        .post('/api/v1/users')
+        .set('x-csrf-token', csrfToken)
+        .send({
+          name: 'Security Check User',
+          email: 'security-check-create@test.local',
+          password: 'AnotherPassword1!',
+          roleCode: ROLE_CODES.PAYROLL_STAFF,
+          siteIds: [site.id],
+        });
+
+      expect(res.status).toBe(201);
+      expect(() => assertNoSensitiveKeys(res.body)).not.toThrow();
+      // Direct assertion too, not only the generic recursive walk — makes the specific defect this
+      // checkpoint fixed impossible to silently regress even if the generic helper's key list ever
+      // changes.
+      expect(res.body.user.passwordHash).toBeUndefined();
+      expect(res.body.user.role).toEqual({ code: ROLE_CODES.PAYROLL_STAFF, name: expect.any(String) });
+    });
+
+    it('never includes passwordHash in the list or single-user detail response', async () => {
+      const { agent, csrfToken } = await masterAdminAgent('users-security-list-admin@test.local');
+      await agent
+        .post('/api/v1/users')
+        .set('x-csrf-token', csrfToken)
+        .send({
+          name: 'Security List Target',
+          email: 'security-check-list@test.local',
+          password: 'AnotherPassword1!',
+          roleCode: ROLE_CODES.PAYROLL_STAFF,
+        });
+
+      const listRes = await agent.get('/api/v1/users');
+      expect(listRes.status).toBe(200);
+      expect(() => assertNoSensitiveKeys(listRes.body)).not.toThrow();
+
+      const targetId = listRes.body.users.find(
+        (user: { email: string }) => user.email === 'security-check-list@test.local',
+      ).id;
+      const detailRes = await agent.get(`/api/v1/users/${targetId}`);
+      expect(detailRes.status).toBe(200);
+      expect(() => assertNoSensitiveKeys(detailRes.body)).not.toThrow();
+      expect(detailRes.body.user.passwordHash).toBeUndefined();
+    });
+
+    it('never includes passwordHash in the update response', async () => {
+      const { agent, csrfToken } = await masterAdminAgent('users-security-update-admin@test.local');
+      const createRes = await agent
+        .post('/api/v1/users')
+        .set('x-csrf-token', csrfToken)
+        .send({
+          name: 'Security Update Target',
+          email: 'security-check-update@test.local',
+          password: 'AnotherPassword1!',
+          roleCode: ROLE_CODES.PAYROLL_STAFF,
+        });
+
+      const updateRes = await agent
+        .patch(`/api/v1/users/${createRes.body.user.id}`)
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Renamed Security Update Target' });
+
+      expect(updateRes.status).toBe(200);
+      expect(() => assertNoSensitiveKeys(updateRes.body)).not.toThrow();
+    });
+
+    it('database-level confirmation: the raw stored passwordHash is a real argon2 hash, never returned by any route', async () => {
+      const { agent, csrfToken } = await masterAdminAgent('users-security-dbcheck-admin@test.local');
+      const createRes = await agent
+        .post('/api/v1/users')
+        .set('x-csrf-token', csrfToken)
+        .send({
+          name: 'DB Check Target',
+          email: 'security-check-dbcheck@test.local',
+          password: 'AnotherPassword1!',
+          roleCode: ROLE_CODES.PAYROLL_STAFF,
+        });
+
+      const stored = await prisma.user.findUniqueOrThrow({ where: { id: createRes.body.user.id } });
+      expect(stored.passwordHash).toMatch(/^\$argon2/);
+      expect(JSON.stringify(createRes.body)).not.toContain(stored.passwordHash);
+    });
   });
 });

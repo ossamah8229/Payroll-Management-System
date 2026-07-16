@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest, ApiError } from '@/lib/api-client';
+import { formatCyclePeriodSlug, type PayrollCycle } from '@/hooks/use-payroll-cycles';
 
 export interface CashReceivingRow {
   entryId: string;
@@ -44,16 +45,19 @@ export function useCashReceivingSheet(cycleId: string | undefined, siteIds: stri
 }
 
 /** Triggers a browser download of the Cash Receiving Sheet export — bypasses `apiRequest` since the
- * response is a file, mirroring `downloadBankSheetExport` (`use-bank-sheet.ts`) exactly. */
+ * response is a file, mirroring `downloadBankSheetExport` (`use-bank-sheet.ts`) exactly. The
+ * client-side `link.download` filename wins over the server's own `Content-Disposition` for this
+ * blob-fetch download path, so it independently includes the same period slug the backend's own
+ * filename already did (Phase 5 Checkpoint 4 closes the one place that period was previously lost). */
 export async function downloadCashReceivingExport(
-  cycleId: string,
+  cycle: Pick<PayrollCycle, 'id' | 'year' | 'month'>,
   format: 'csv' | 'xlsx',
   siteIds?: string[],
 ): Promise<void> {
   const params = new URLSearchParams({ format });
   if (siteIds?.length) params.set('siteIds', siteIds.join(','));
 
-  const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/cash-receiving/export?${params.toString()}`, {
+  const response = await fetch(`/api/v1/payroll-cycles/${cycle.id}/cash-receiving/export?${params.toString()}`, {
     credentials: 'include',
   });
   if (!response.ok) {
@@ -63,7 +67,7 @@ export async function downloadCashReceivingExport(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `cash-receiving-sheet.${format}`;
+  link.download = `cash-receiving-sheet-${formatCyclePeriodSlug(cycle)}.${format}`;
   link.click();
   URL.revokeObjectURL(url);
 }

@@ -60,8 +60,23 @@ export function App() {
           <RequireSession>{(user) => <EmployeesPage user={user} />}</RequireSession>
         }
       />
+      {/*
+       * Historical Payroll Cycle Selector routing (Phase 5 Checkpoint 4) — every cycle-aware page
+       * is mounted at two paths, both rendering the exact same component: the original flat path
+       * (kept as a compatibility redirect — `useSelectedPayrollCycle` resolves the default cycle
+       * and navigates to the canonical URL below) and the canonical `/payroll-cycles/:cycleId/...`
+       * path a bookmark/refresh/back-forward can target directly. `useParams` returns `undefined`
+       * for `cycleId` on the flat route and the actual value on the nested one — the same page
+       * component handles both via one shared hook, not two separate implementations.
+       */}
       <Route
         path="/payroll-entry"
+        element={
+          <RequireSession>{(user) => <PayrollEntryPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/payroll-cycles/:cycleId/payroll-entry"
         element={
           <RequireSession>{(user) => <PayrollEntryPage user={user} />}</RequireSession>
         }
@@ -73,13 +88,31 @@ export function App() {
         }
       />
       <Route
+        path="/payroll-cycles/:cycleId/release"
+        element={
+          <RequireSession>{(user) => <SalaryReleasePage user={user} />}</RequireSession>
+        }
+      />
+      <Route
         path="/bank-sheet"
         element={
           <RequireSession>{(user) => <BankSheetPage user={user} />}</RequireSession>
         }
       />
       <Route
+        path="/payroll-cycles/:cycleId/bank-sheet"
+        element={
+          <RequireSession>{(user) => <BankSheetPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
         path="/cash-receiving"
+        element={
+          <RequireSession>{(user) => <CashReceivingPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/payroll-cycles/:cycleId/cash-receiving"
         element={
           <RequireSession>{(user) => <CashReceivingPage user={user} />}</RequireSession>
         }
@@ -92,6 +125,12 @@ export function App() {
       />
       <Route
         path="/payslips"
+        element={
+          <RequireSession>{(user) => <PayslipsPage user={user} />}</RequireSession>
+        }
+      />
+      <Route
+        path="/payroll-cycles/:cycleId/payslips"
         element={
           <RequireSession>{(user) => <PayslipsPage user={user} />}</RequireSession>
         }

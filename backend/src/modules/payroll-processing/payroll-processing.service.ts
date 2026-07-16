@@ -275,8 +275,15 @@ async function bootstrapPayrollEntries(params: BootstrapPayrollEntriesParams): P
   };
 }
 
+/**
+ * `isCurrentDraft` (Phase 5 Checkpoint 4) is derived here, not stored — trivially `status ===
+ * 'DRAFT'`, but computed server-side so every page consuming this list treats "which one is the
+ * editable cycle" as a fact the API states, not a status string each page re-interprets itself.
+ * No additional query: this list already has every row's own `status` in hand.
+ */
 export async function listPayrollCycles() {
-  return prisma.payrollCycle.findMany({ orderBy: [{ year: 'desc' }, { month: 'desc' }] });
+  const cycles = await prisma.payrollCycle.findMany({ orderBy: [{ year: 'desc' }, { month: 'desc' }] });
+  return cycles.map((cycle) => ({ ...cycle, isCurrentDraft: cycle.status === 'DRAFT' }));
 }
 
 export async function getPayrollCycle(id: string) {

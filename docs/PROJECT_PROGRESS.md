@@ -3560,6 +3560,111 @@ migration status/typecheck/lint/build clean across all three workspaces, confirm
 
 - **COMMITTED as `957ab9d`.**
 
+### Phase 5, Checkpoint 4 — Historical Payroll Cycle Selector — IMPLEMENTED, 2026-07-16, NOT YET COMMITTED (pending user review)
+
+Read-only architecture review (2026-07-16, no code) approved with four final decisions: Archived
+cycles are fully locked for ordinary Payroll Entry editing; historical navigation uses route segments
+(`/payroll-cycles/:cycleId/...`); the Payroll Cycle list stays globally visible, actual data stays
+server-side permission/site-filtered; historical export filenames include the payroll period. Full
+narrative: `docs/IMPLEMENTATION_PLAN.md`'s Phase 5 Checkpoint 4 entry.
+
+**Backend:** `assertEntryEditable` extended to reject once `cycle.status === 'ARCHIVED'` (mirrors its
+existing `released` check) across every mutation surface — single-entity update/delete, work-line
+add/update/delete, `bulkUpdatePayrollEntries`, `importPayrollEntries`, and `deferAdvanceSchedule`
+(inherited with zero code change). `listPayrollCycles` gained a derived `isCurrentDraft` boolean, no
+schema change. Bank Sheet, single Payslip PDF, and Payslip batch ZIP filenames now include the
+cycle's period slug (Cash Receiving already had this); file contents unchanged.
+
+**Frontend:** five nested routes (`/payroll-cycles/:cycleId/{payroll-entry,release,bank-sheet,
+cash-receiving,payslips}`) added alongside the existing flat routes, which now redirect to the
+resolved default cycle (newest Draft → newest Released → newest Archived) rather than carrying their
+own state; a malformed/nonexistent explicit `cycleId` is never silently redirected. New shared
+`useSelectedPayrollCycle` hook and `<PayrollCycleSelectField>`/`<PayrollCycleStatusBadge>` component
+pair (`docs/design-system.md §2.6`) replace three independent duplicated ad hoc selectors (Bank Sheet,
+Cash Receiving, Payslips). Payroll Entry gained an Archived read-only banner and full read-only
+behavior (edit/delete/bulk/import/hold/work-lines all disabled) while keeping filter/export/navigation
+live; fixed a dormant bug where its own `isEntryEditable` was stricter than the backend. Salary
+Release now supports Draft/Released/Archived cycle views with action visibility gated per state, all
+confirm modals close on cycle change, and a successful rollover navigates straight to the new Draft's
+Release page. React Query cache keys were not redesigned — the existing `cycleId`-aware keys already
+isolated data correctly.
+
+**Tests:** 8 new backend tests (`payroll-cycle-archived-lock.test.ts`) plus filename assertions in
+three existing suites. 7 new frontend unit tests (`use-payroll-cycles.test.ts`) — full frontend suite
+**21/21** (14 prior + 7 new). typecheck/lint/production builds clean across all three workspaces.
+
+### Phase 5, Checkpoint 4 — security correction (2026-07-16, before commit): `passwordHash` response leak
+
+Approved in principle, but flagged for one fix before commit: a confirmed `passwordHash` leak,
+framed by the request as a "Payroll Cycle response" issue. Investigation traced it precisely instead:
+`backend/src/modules/users/users.service.ts`'s `listUsers`/`getUser`/`createUser`/`updateUser` all
+called Prisma without a `select`, so `GET/POST/PATCH /api/v1/users` and `GET /api/v1/users/:id`
+returned the raw `User` row — including `passwordHash` — straight into the JSON response. Not a
+Checkpoint 4 regression (these routes predate it, untouched by anything above), found only because
+this checkpoint's own final review looked.
+
+**This closes a previously-noticed, deliberately-deferred gap** — Phase 3.5 Checkpoint 2's own record
+(§1, above) already flagged in passing that `users.service.ts`'s `listUsers()`/`getUser()` returned
+the full row including `passwordHash`, at the time choosing only to make sure the Tasks module itself
+didn't repeat the mistake (`assignedTo`/`assignedBy` were built with an explicit `select` from the
+start) rather than fixing the Users module itself, which was out of that checkpoint's scope. This
+checkpoint is where it's finally fixed.
+
+**Fix:** an explicit `USER_SUMMARY_SELECT` (Prisma `select`, so `passwordHash` is never even fetched
+for these read paths) plus a `toUserSummary()` DTO assembly function, returning exactly the shape the
+frontend's own `ManagedUser` type already expected (`id`, `name`, `email`, `isActive`, `lastLoginAt`,
+`role: { code, name }`, `siteAssignments: [{ siteId, site }]`) — no `passwordHash`, `roleId`,
+`avatarStorageKey`, or `themeAccentColor`.
+
+**Narrow review of the directly-related surfaces the request asked for** — `GET/POST
+/payroll-cycles`, finalize, rollover, Backup Package list/detail, the Salary Release unit-status
+payload — found them **already clean**: `PayrollCycle.createdBy`/`releasedBy`/`archivedBy` are plain
+scalar FK strings (no `User` relation is ever included on a Payroll Cycle response); Backup Package
+list/detail already strip `storageKey` (`backup-packages.routes.ts`'s `serializeBackupPackage`, a
+Checkpoint 2 pre-commit fix); the one place a `User` relation is actually queried
+(`payroll-release.service.ts`'s `getUnitReleaseStatus`, `include: { releasedBy: true }`) already
+narrows it to `{ id, name }` before returning it. No further leak found in this scope — a genuine
+negative finding, not a gap in the review.
+
+**New permanent convention recorded** (none existed before): `docs/architecture/
+system-conventions.md §4`, "No HTTP route may return a raw Prisma model or relation object. Every API
+response containing users, payroll, financial data, or storage metadata must be assembled through an
+explicit DTO."
+
+**Regression tests, 10 new:** 4 in `users.test.ts` (create/list/detail/update responses proven free
+of `passwordHash`, plus a database-level check that the stored hash is a real argon2 hash never
+echoed back anywhere in the response body); 6 in the new
+`backend/tests/payroll-lifecycle-response-security.test.ts` (cycle list/detail, Finalize, rollover,
+Backup Package list/detail, and the Salary Release unit-status payload, across Draft/Released/Archived
+cycles, plus `isCurrentDraft` correctness) — all using a new shared `assertNoSensitiveKeys()` helper
+(`backend/tests/helpers.ts`) that recursively rejects `passwordHash`/`session`/`csrf`/`storageKey`/
+`absolutePath` anywhere in a response body, not only at the top level. Full backend suite: **487/487**
+(477 prior + 10 new).
+
+**Live-reconfirmed against a freshly compiled server** (real PostgreSQL, real login/CSRF/cookies):
+`passwordHash` confirmed absent from every Users route response; the full Checkpoint 4 Archived-lock
+matrix (single-entry edit, "Copy to All" bulk update, work-line add, and CSV import — across both a
+held-then-archived entry and a genuinely released-then-archived entry, correctly distinguishing the
+two different rejection messages by precedence) independently re-verified end-to-end across a fresh
+4-cycle Draft→Released→Archived→Draft→...→Archived chain; all five cycle-aware routes resolve;
+Finalize/rollover precondition enforcement re-confirmed (finalize rejected on a non-Draft cycle,
+rollover rejected on a non-Released cycle); Payroll Staff confirmed to see the full, globally-visible
+cycle list while employee/entry data stayed site-scoped; all four export filenames re-confirmed
+period-aware and unchanged. Verification data cleaned up afterward; DB confirmed empty before the
+final suite re-run.
+
+**One further, non-blocking observation, not fixed (out of the requested narrow scope):** a malformed
+(non-UUID) `cycleId` in the URL produces a raw `PrismaClientKnownRequestError` message — including an
+absolute filesystem path — in a 500 response body, but **only when `NODE_ENV !== 'production'`**;
+`backend/src/common/middleware/error-handler.ts`'s existing, deliberate `isProduction` gate already
+masks this to a generic "Something went wrong" in real production. Pre-existing (not introduced by
+Checkpoint 4), a minor input-validation gap (a clean 400/404 would be better than a 500) rather than a
+live production leak. Left untouched per the explicit "do not turn this into a repository-wide
+security refactor" instruction; recorded here so it isn't lost.
+
+**Not yet committed** — this section documents the fix that was applied before commit, per the same
+session's own explicit approval-in-principle-then-fix-then-commit sequencing.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -3572,7 +3677,7 @@ migration status/typecheck/lint/build clean across all three workspaces, confirm
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Payroll Cycle Selector) and phase close-out not yet started — each requires its own explicit go-ahead |
+| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) approved in principle 2026-07-16; a `passwordHash` response-serialization defect found during final review (in the Users module, not Checkpoint 4's own code) was fixed and regression-tested before commit — see §1's Checkpoint 4 entries. Phase close-out review pending |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -3931,8 +4036,11 @@ outstanding).
    domain/generator, committed `3ea879e`) are complete, per this project's standing
    per-checkpoint/per-phase practice. **Checkpoint 3 (cycle archiving, automatic backup generation,
    and new-cycle rollover) is complete, 2026-07-15, committed as `957ab9d`** — see §1's Checkpoint 3
-   entry. Checkpoint 4 (Payroll Cycle Selector) and phase close-out
-   each still require their own separate, explicit go-ahead, same as every other phase. **Known,
+   entry. **Checkpoint 4 (Historical Payroll Cycle Selector) was approved in principle 2026-07-16;
+   final review found and fixed a `passwordHash` response-serialization defect (Users module, not
+   Checkpoint 4's own code — see §1's security-correction entry) before commit** — see §1's Checkpoint
+   4 entries. Phase close-out
+   still requires its own separate, explicit go-ahead, same as every other phase. **Known,
    documented gaps carried forward**: there is no post-finalization release path for a held entry yet
    (Checkpoint 1's own approved scope) — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s
    "Released" state description; Payslip PDFs and an Audit Log export inside a Backup Package remain

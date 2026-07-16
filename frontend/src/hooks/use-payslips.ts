@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { MAX_BATCH_PAYSLIPS_PER_REQUEST } from '@payroll/shared';
 import { apiRequest, ApiError, readCookie } from '@/lib/api-client';
+import { formatCyclePeriodSlug, type PayrollCycle } from '@/hooks/use-payroll-cycles';
 
 export { MAX_BATCH_PAYSLIPS_PER_REQUEST };
 
@@ -81,14 +82,22 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
 }
 
 /** Triggers a browser download of one employee's Payslip PDF — bypasses `apiRequest` since the
- * response is a file, mirroring `downloadCashReceivingExport` (`use-cash-receiving.ts`) exactly. */
-export async function downloadPayslipPdf(cycleId: string, employeeId: string, employeeName: string): Promise<void> {
-  const response = await fetch(payslipPdfUrl(cycleId, employeeId, 'attachment'), { credentials: 'include' });
+ * response is a file, mirroring `downloadCashReceivingExport` (`use-cash-receiving.ts`) exactly.
+ * The client-side `link.download` filename wins over the server's own `Content-Disposition` for
+ * this blob-fetch path, so it independently includes the same period slug the backend's own
+ * filename now does (Phase 5 Checkpoint 4). */
+export async function downloadPayslipPdf(
+  cycle: Pick<PayrollCycle, 'id' | 'year' | 'month'>,
+  employeeId: string,
+  employeeName: string,
+): Promise<void> {
+  const response = await fetch(payslipPdfUrl(cycle.id, employeeId, 'attachment'), { credentials: 'include' });
   if (!response.ok) {
     throw new ApiError(response.status, 'EXPORT_FAILED', 'Failed to download the Payslip');
   }
   const blob = await response.blob();
-  triggerBlobDownload(blob, `payslip-${employeeName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`);
+  const employeeSlug = employeeName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  triggerBlobDownload(blob, `payslip-${employeeSlug}-${formatCyclePeriodSlug(cycle)}.pdf`);
 }
 
 /**
@@ -97,9 +106,13 @@ export async function downloadPayslipPdf(cycleId: string, employeeId: string, em
  * `AbortSignal` so the caller can cancel a slow batch; an aborted `fetch` rejects with a
  * `DOMException` named `AbortError`, which the caller distinguishes from a genuine failure.
  */
-export async function downloadPayslipsBatch(cycleId: string, employeeIds: string[], signal: AbortSignal): Promise<void> {
+export async function downloadPayslipsBatch(
+  cycle: Pick<PayrollCycle, 'id' | 'year' | 'month'>,
+  employeeIds: string[],
+  signal: AbortSignal,
+): Promise<void> {
   const csrfToken = readCookie('csrf_token');
-  const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/payslips/batch`, {
+  const response = await fetch(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -120,5 +133,5 @@ export async function downloadPayslipsBatch(cycleId: string, employeeIds: string
   }
 
   const blob = await response.blob();
-  triggerBlobDownload(blob, 'payslips-batch.zip');
+  triggerBlobDownload(blob, `payslips-${formatCyclePeriodSlug(cycle)}.zip`);
 }

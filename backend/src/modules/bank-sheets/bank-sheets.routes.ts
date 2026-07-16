@@ -4,6 +4,7 @@ import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
+import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { exportBankSheetToCsv, exportBankSheetToXlsx, getBankSheet } from './bank-sheets.service';
 
 function requireIdParam(id: string | undefined): string {
@@ -54,10 +55,12 @@ bankSheetRouter.get('/export', requirePermission(PERMISSIONS.BANK_SHEETS_VIEW), 
     const siteIds = parseSiteIdsQuery(req.query.siteIds);
     const format = req.query.format === 'xlsx' ? 'xlsx' : 'csv';
 
-    const { buffer, rowCount, bankLabel } =
+    const [cycle, { buffer, rowCount, bankLabel }] = await Promise.all([
+      getPayrollCycle(cycleId),
       format === 'xlsx'
-        ? await exportBankSheetToXlsx(req.currentUser!, cycleId, bankFilter, siteIds)
-        : await exportBankSheetToCsv(req.currentUser!, cycleId, bankFilter, siteIds);
+        ? exportBankSheetToXlsx(req.currentUser!, cycleId, bankFilter, siteIds)
+        : exportBankSheetToCsv(req.currentUser!, cycleId, bankFilter, siteIds),
+    ]);
 
     await recordAuditLog({
       actorUserId: req.currentUser!.id,
@@ -69,7 +72,11 @@ bankSheetRouter.get('/export', requirePermission(PERMISSIONS.BANK_SHEETS_VIEW), 
       userAgent: req.get('user-agent') ?? null,
     });
 
-    const filename = `bank-sheet-${bankLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.${format}`;
+    // Period-aware filename (Phase 5 Checkpoint 4) — matches Cash Receiving's own existing
+    // convention exactly, so two different historical periods' exports are never indistinguishable
+    // on disk.
+    const period = `${cycle.year}-${String(cycle.month).padStart(2, '0')}`;
+    const filename = `bank-sheet-${bankLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${period}.${format}`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader(
       'Content-Type',
