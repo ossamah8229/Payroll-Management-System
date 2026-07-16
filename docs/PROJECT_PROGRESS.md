@@ -3861,7 +3861,7 @@ per-session convention — it does not persist between sessions.
 
 ---
 
-### Post-Phase-5 Stabilization Checkpoint 2 — UI consistency, accessibility, prototype reconciliation (2026-07-16)
+### Post-Phase-5 Stabilization Checkpoint 2 — UI consistency, accessibility, prototype reconciliation — COMPLETE, 2026-07-16, COMMITTED as `d1c543e`
 
 Phase 6 has **not** started. Continuing the same audit-approved, checkpointed remediation as
 Checkpoint 1 (`638f45c`/`a139931`), this checkpoint implements exactly **AUD-006, AUD-007, AUD-008,
