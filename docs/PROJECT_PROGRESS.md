@@ -3761,7 +3761,7 @@ locally-cached Chromium binary and proves nothing about the actual Render/Linux 
 
 ---
 
-### Post-Phase-5 Stabilization Checkpoint 1 — audit-approved fixes (2026-07-16)
+### Post-Phase-5 Stabilization Checkpoint 1 — audit-approved fixes — COMPLETE, 2026-07-16, COMMITTED as `638f45c`
 
 Phase 6 has **not** started. A separate, independent, review-only audit session (no code changes)
 produced a prioritized findings report against the closed Phase 0–5 state; the user then explicitly
