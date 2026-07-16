@@ -9,12 +9,13 @@ calculations, payslips, and related HR/finance workflows.
 > is not yet marked fully closed**: one condition, a real Render/Linux-container deployment smoke
 > test, was genuinely attempted and could not be completed in the sandboxed development environment
 > used so far (no Docker/Podman/Colima, no Render API access). **Phase 5 (Cycle Finalization,
-> Archiving, and Backups) is IN PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider`
-> foundation, committed), Checkpoint 1 (Finalize Cycle, committed), and Checkpoint 2 (Backup
-> Packages reusable domain/generator, committed) are complete. Checkpoint 3 (cycle archiving,
-> automatic backup generation, and new-cycle rollover) is complete and committed. **Checkpoint 4
-> (Historical Payroll Cycle Selector) is complete and committed.** Phase close-out requires its own
-> separate, explicit authorization. See "Current Status" below,
+> Archiving, and Backups) is COMPLETE AND CLOSED**: all five checkpoints — Checkpoint 0
+> (`StorageProvider` foundation), Checkpoint 1 (Finalize Cycle), Checkpoint 2 (Backup Packages
+> reusable domain/generator), Checkpoint 3 (cycle archiving, automatic backup generation, and
+> new-cycle rollover), and Checkpoint 4 (Historical Payroll Cycle Selector) — are implemented,
+> tested, and committed, and a final real-browser (Playwright/Chromium) verification pass closed
+> the one remaining gap with zero defects found. Phase 6 requires its own separate, explicit
+> authorization before any work begins. See "Current Status" below,
 > `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
 > `docs/SESSION_HANDOFF.md` for details.
 
@@ -178,12 +179,13 @@ npm run dev:frontend          # http://localhost:5173
 
 Phase 4 is code-complete and committed but not yet fully closed — the one outstanding condition is a
 real Render (or genuine Linux container) deployment smoke test, which this development environment
-has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is IN
-PROGRESS**: the architecture review, Checkpoint 0 (`StorageProvider` foundation), Checkpoint 1
-(Finalize Cycle), and Checkpoint 2 (Backup Packages reusable domain/generator) are complete, all
-committed. Checkpoint 3 (cycle archiving, automatic backup generation on the archive transition,
-and new-cycle rollover) is complete and committed (`957ab9d`). **Checkpoint 4 (Historical Payroll
-Cycle Selector) is complete and committed (`10e3194`).**
-Phase close-out still requires its own separate, explicit authorization, per this project's standing
-per-checkpoint/per-phase practice. See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and
-`docs/SESSION_HANDOFF.md` for the full handoff to the next development session.
+has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is
+COMPLETE AND CLOSED**: Checkpoint 0 (`StorageProvider` foundation), Checkpoint 1 (Finalize Cycle),
+Checkpoint 2 (Backup Packages reusable domain/generator), Checkpoint 3 (cycle archiving, automatic
+backup generation, and new-cycle rollover, `957ab9d`), and Checkpoint 4 (Historical Payroll Cycle
+Selector, `10e3194`) are all implemented, tested, and committed, and a final real-browser
+(Playwright/Chromium) verification pass — 108 assertions, zero unexpected console errors, zero
+defects found — closed the one remaining gap. Phase 6 requires its own separate, explicit
+authorization before any work begins, per this project's standing per-checkpoint/per-phase practice.
+See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the
+full handoff to the next development session.

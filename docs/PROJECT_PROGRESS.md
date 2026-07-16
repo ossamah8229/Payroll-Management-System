@@ -3666,6 +3666,99 @@ security refactor" instruction; recorded here so it isn't lost.
 verified before that commit, per the same session's own explicit
 approval-in-principle-then-fix-then-commit sequencing.
 
+### Phase 5 — final browser verification and close-out (2026-07-16)
+
+**Phase 5 is now COMPLETE AND CLOSED.** The one remaining gap from every prior checkpoint's own
+verification pass — genuine browser-based verification, previously unavailable in this sandboxed
+environment — was closed this session using a real Playwright-driven Chromium browser (v149.0.7827.55,
+already cached locally from a prior session; installed as a scratchpad-only dev dependency, never
+added to any workspace's `package.json`).
+
+**Real-stack configuration:** a completely fresh embedded PostgreSQL 18.4 instance (wiped and
+re-initialized, all 15 migrations applied, freshly seeded), a freshly compiled backend
+(`node dist/src/server.js`), the real production frontend build served via `vite preview` on port
+5173 with `VITE_API_URL` pointed at the backend's own origin on port 4000 — the same cross-origin
+frontend/backend topology the real Render deployment uses (`vite.config.ts`'s own documented
+`server.proxy` is dev-only; production talks to the backend's real URL directly) — a real filesystem
+`StorageProvider` (cleared before the run), and real HTTP sessions/cookies/CSRF throughout, no mocked
+APIs anywhere.
+
+**Scenarios covered (108 assertions, all passing, across two independent fresh full runs):**
+Master Admin login through the real login page and full sidebar navigation; creating 2 Project Sites
+(3 Units total) and 3 Employees entirely through the UI; creating the first Payroll Cycle through the
+real "Start First Payroll Cycle" UI, confirming the `/payroll-cycles/{id}/...` URL, refresh, and
+browser back/forward all behave correctly; Draft Payroll Entry (single-entry edit, hold toggle,
+"Copy to All" bulk update, Split-by-Unit work-line interaction including adding a genuine second work
+line, Site filtering); Salary Release and Finalize (Unit release, the Finalize precondition genuinely
+blocking with an unheld/unreleased entry present, resolving it, Finalize succeeding, Unit-release
+actions disappearing, Rollover action appearing); Released-cycle editing behavior (a released entry
+provably immutable via disabled fields, the held entry still editable, bulk update on a Released cycle
+silently skipping released rows, Import remaining available, Bank Sheet/Cash Receiving/Payslips
+showing released-and-non-held data only); Rollover (a due Advance and a departed employee recorded
+through the real UI beforehand, a second held-entry edit after Finalize for the fresh-backup check,
+the confirmation modal's exact archive/backup/next-month copy verified, duplicate-submission
+genuinely blocked at the UI level — proven by a second click throwing a real Playwright timeout
+against a disabled button, not merely asserted — exactly one rollover HTTP request sent, the outgoing
+cycle Archived, the new cycle Draft at the correct next month, the departed employee's obligation-only
+entry present); the Historical Cycle Selector across all five cycle-aware pages (newest-first
+ordering, correct labels/badges, URL sync, refresh persistence, back/forward restoration, a
+well-formed-but-nonexistent cycle id and a malformed cycle id both correctly *not* silently
+redirected, a stale confirmation modal closing on cycle switch, Payslip batch selection resetting on
+cycle change, no prior-cycle data persisting after a switch); the Archived-cycle lock (the read-only
+banner, every mutating control disabled or hidden, a direct mutation attempt fired through the
+browser's own authenticated session via `page.request` rejected server-side, filtering/navigation/
+export all still functional); historical reports and filenames for the Archived cycle (Bank Sheet and
+Cash Receiving rendering correct historical data, Payslip preview and single/batch download all
+working, every downloaded filename confirmed period-aware — `bank-sheet-cash-2032-01.csv`,
+`cash-receiving-sheet-2032-01.csv`, `payslip-{employee}-2032-01.pdf`, `payslips-2032-01.zip` — and
+downloaded content confirmed to belong to the selected historical cycle); role and site-scoping (a
+Payroll Staff user and a Finance user both created and logged in through the real UI, Payroll Staff
+confirmed to see the full global cycle list while its Payroll Entry/network access stayed strictly
+site-scoped to Alpha with a direct cross-scope API attempt rejected 403, Finance confirmed to see
+Salary Release/Bank Sheet/Cash Receiving/Payslips but not Payroll Entry, with a direct write attempt
+and an Advances access attempt both rejected 403); Backup integrity (the rollover-created Backup
+Package confirmed `READY`, `archivedWithBackupPackageId` confirmed pointing at that exact package, the
+package's own CSV confirmed to contain the held-entry's post-Finalize edit, the archived cycle
+confirmed stable afterward, no `storageKey` or filesystem path found in any browser-facing API
+response).
+
+**Console/network result: zero unexpected errors.** Every entry captured across both full runs was one
+of three already-understood, non-defect categories, identified separately per the review's own
+instruction: (1) the ordinary pre-login `401` each fresh session's initial `useSession()` probe
+produces, before login — three occurrences, one per browser context (Master Admin, Payroll Staff,
+Finance); (2) `net::ERR_ABORTED` fetch cancellations produced by React Query's own abort-on-unmount
+behavior when the automated script navigates faster than a human ever would — a byproduct of
+automation speed, not a defect, and not reproducible under ordinary interactive use; (3) the two
+already-known, already-documented (Checkpoint 4's own security-correction entry above) non-blocking
+`500`s from deliberately visiting a malformed `cycleId` URL as part of the "does not silently
+redirect" negative test, masked in real production by the existing `isProduction` error-handler gate.
+No genuine, previously-unknown defect was found anywhere in the walkthrough — the working tree needed
+zero code changes as a result of this verification pass.
+
+**Automated regression, re-run after the full walkthrough:** `prisma validate` clean; `prisma migrate
+status` — still 15 migrations, zero drift (this verification pass added no schema change); `typecheck`/
+`lint` clean across all three workspaces (same 4 pre-existing `react-refresh` warnings only);
+production builds clean across all three workspaces; backend suite **487/487** (unchanged baseline —
+no new test file was added to the repository, since a Playwright browser suite was intentionally kept
+out of the committed workspace per this task's own scope, run instead as scratchpad-only tooling);
+frontend suite **21/21** (unchanged baseline).
+
+**Cleanup confirmed:** every scratchpad Playwright script, its `node_modules`, and its temporary
+downloads were deleted after the run; the verification database (all Sites/Units/Employees/Cycles/
+Users created during the walkthrough) was wiped by re-provisioning a genuinely fresh PostgreSQL
+instance rather than attempting a partial row-level cleanup; `backend/storage/` was cleared; both the
+compiled backend and `vite preview` processes were stopped; the frontend production build was
+re-generated once more without the temporary `VITE_API_URL` override, restoring the exact default
+build (`index-EtUPl6NR.js`, matching the hash from before this verification pass began). `git status`
+confirmed a clean working tree throughout — no browser artifacts, downloads, traces, or generated test
+files were ever staged.
+
+**Phase 4's own outstanding Render/Linux-container Chromium deployment smoke test was NOT performed
+this session** (no Docker/Podman/Colima, no Render API access, no git remote, the same constraint
+every prior session has hit) — it remains open, explicitly kept separate from Phase 5's own closure,
+not conflated with the Playwright-in-this-sandbox verification just completed above, which used a
+locally-cached Chromium binary and proves nothing about the actual Render/Linux container runtime.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -3678,7 +3771,7 @@ approval-in-principle-then-fix-then-commit sequencing.
 | 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
-| 5 | Cycle Finalization, Archiving, Backups | **IN PROGRESS.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. Phase close-out review pending |
+| 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
@@ -4031,17 +4124,21 @@ outstanding).
    `--disable-setuid-sandbox`, PDF generation (individual and a representative batch), font
    rendering (Times New Roman or its documented fallback), memory stability under a real batch,
    graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
-3. **Phase 5 (Cycle Finalization, Archiving, and Backups) IN PROGRESS, authorized 2026-07-14** — the
+3. **Phase 5 (Cycle Finalization, Archiving, and Backups) is COMPLETE AND CLOSED, 2026-07-16** — the
    architecture review, Checkpoint 0 (`StorageProvider` foundation, committed `d87b9b0`),
    Checkpoint 1 (Finalize Cycle, committed `cad93bc`), and Checkpoint 2 (Backup Packages reusable
    domain/generator, committed `3ea879e`) are complete, per this project's standing
-   per-checkpoint/per-phase practice. **Checkpoint 3 (cycle archiving, automatic backup generation,
-   and new-cycle rollover) is complete, 2026-07-15, committed as `957ab9d`** — see §1's Checkpoint 3
-   entry. **Checkpoint 4 (Historical Payroll Cycle Selector) is complete, 2026-07-16, committed as
-   `10e3194`** — its final review found and fixed a `passwordHash` response-serialization defect
+   per-checkpoint/per-phase practice. Checkpoint 3 (cycle archiving, automatic backup generation,
+   and new-cycle rollover) is complete, 2026-07-15, committed as `957ab9d` — see §1's Checkpoint 3
+   entry. Checkpoint 4 (Historical Payroll Cycle Selector) is complete, 2026-07-16, committed as
+   `10e3194` — its final review found and fixed a `passwordHash` response-serialization defect
    (Users module, not Checkpoint 4's own code — see §1's security-correction entry) before that
-   commit — see §1's Checkpoint 4 entries. Phase close-out
-   still requires its own separate, explicit go-ahead, same as every other phase. **Known,
+   commit — see §1's Checkpoint 4 entries. **The one remaining gap every checkpoint's own
+   verification had carried forward — genuine browser-based verification — was closed this same
+   session with a real Playwright/Chromium run (108/108 assertions, zero unexpected console
+   errors, zero defects found) — see §1's "Phase 5 — final browser verification and close-out"
+   entry.** Phase 6 requires its own separate, explicit go-ahead before any work begins, same as
+   every other phase. **Known,
    documented gaps carried forward**: there is no post-finalization release path for a held entry yet
    (Checkpoint 1's own approved scope) — see `docs/architecture/workflows/payroll-lifecycle.md §4`'s
    "Released" state description; Payslip PDFs and an Audit Log export inside a Backup Package remain

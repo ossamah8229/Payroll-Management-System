@@ -181,6 +181,33 @@ be enough to resume correctly without re-deriving context from scratch — per
   `cycleId` produces a verbose 500 in non-production `NODE_ENV` only (already masked in real
   production by the existing `isProduction` gate) — pre-existing, not a Checkpoint 4 regression. Full
   record: `docs/PROJECT_PROGRESS.md` §1's "Phase 5, Checkpoint 4 — security correction" entry.
+- **Later the same day (2026-07-16): Phase 5 final browser verification and close-out — Phase 5 is
+  now COMPLETE AND CLOSED.** The one gap every prior checkpoint's own verification had carried
+  forward — genuine browser rendering/JS/interaction/network/console verification, never available
+  in this sandbox before — was closed using a real Playwright-driven Chromium browser (locally
+  cached from a prior session, installed scratchpad-only, never a workspace dependency) against a
+  fully fresh real-stack environment (fresh PostgreSQL, all 15 migrations, fresh seed, freshly
+  compiled backend, the real production frontend build cross-origin against the backend — the same
+  topology real deployment uses — a cleared real filesystem `StorageProvider`, real cookies/CSRF, no
+  mocks). **108 assertions across the entire Phase 5 lifecycle passed, reproduced stable across two
+  independent fresh runs, with zero unexpected console/network errors** — login/navigation, first-cycle
+  creation via the real UI, Draft Payroll Entry editing (single-entry/hold/bulk/Split-by-Unit/filter),
+  Finalize (precondition genuinely blocking, then resolving), Released-cycle behavior, Rollover
+  (a due Advance and departed employee recorded through the UI beforehand, the confirmation modal's
+  exact copy verified, duplicate-submission genuinely blocked — a real disabled-button timeout, not
+  just asserted), the Historical Cycle Selector across all five pages, the Archived-cycle lock
+  (including a direct browser-session mutation attempt, server-rejected), historical filenames/content
+  for an Archived cycle, Payroll Staff and Finance role/site-scoping through the real UI (both users
+  created via the UI, both logged in independently, both confirmed correctly scoped), and Backup
+  Package integrity. **No defect was found — the working tree needed zero code changes.** Full
+  backend/frontend suites re-confirmed unchanged (487/487, 21/21); `prisma validate`/migration status
+  (still zero drift)/typecheck/lint/production builds all re-confirmed clean. All verification data,
+  browser artifacts, and the scratchpad Playwright install were deleted; the database was
+  re-provisioned genuinely fresh and empty; both test servers stopped; the frontend production build
+  regenerated once more without the temporary cross-origin override. Full record:
+  `docs/PROJECT_PROGRESS.md` §1's "Phase 5 — final browser verification and close-out" entry.
+  **Phase 4's own outstanding Render/Linux-container Chromium deployment smoke test was not performed
+  this session and remains separately open** — not conflated with this sandboxed Playwright run.
 - **Prior to this session: Phase 4 Checkpoint 6.3 work (Payslip Frontend, Batch Generation, and Phase
   4 Close-Out, below) is reviewed, approved, verified, and COMMITTED as `7ff696b`.** This doc-only
   follow-up pass records that hash here, matching this project's own established convention (the
@@ -1439,17 +1466,18 @@ DB-backed item was verified against live PostgreSQL, same as Phase 1's five.
 checkpoints, including Payslips 6.1–6.3) is now implemented, tested, and committed, but is
 **code-complete, not fully closed** — see §1's Checkpoint 6.3 entry and
 `docs/PROJECT_PROGRESS.md` §1's "Phase 4 close-out review" for the single outstanding condition
-(real Render/Linux-container deployment verification). **Phase 5 is IN PROGRESS, authorized
-2026-07-14 — architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
-Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`), and Checkpoint 2 (Backup Packages reusable
-domain/generator, COMMITTED `3ea879e`) are complete. Checkpoint 3 (cycle archiving, automatic backup
-generation, and new-cycle rollover) is complete, 2026-07-15, full backend suite 469/469,
-**COMMITTED as `957ab9d`**, see §1's "Phase 5, Checkpoint 3" entry. **Checkpoint 4 (Historical
-Payroll Cycle Selector) is complete, 2026-07-16, full backend suite 487/487 (including a
-`passwordHash` response-serialization fix found during final review — Users module, not Checkpoint
-4's own code), full frontend suite 21/21 — COMMITTED as `10e3194`** — see §1's "Phase 5, Checkpoint
-4" and security-correction entries. Phase close-out still requires its own separate, explicit
-go-ahead.**
+(real Render/Linux-container deployment verification). **Phase 5 is COMPLETE AND CLOSED, 2026-07-16**
+— architecture review, Checkpoint 0 (`StorageProvider` foundation, COMMITTED `d87b9b0`),
+Checkpoint 1 (Finalize Cycle, COMMITTED `cad93bc`), Checkpoint 2 (Backup Packages reusable
+domain/generator, COMMITTED `3ea879e`), Checkpoint 3 (cycle archiving, automatic backup
+generation, and new-cycle rollover, COMMITTED `957ab9d`), and Checkpoint 4 (Historical
+Payroll Cycle Selector, full backend suite 487/487 including a `passwordHash`
+response-serialization fix found during final review — Users module, not Checkpoint
+4's own code — full frontend suite 21/21, COMMITTED as `10e3194`) are all complete. **The final
+browser verification pass (real Playwright/Chromium, 108/108 assertions, zero unexpected console
+errors, zero defects found) closed the one remaining gap this same session** — see §1's "Phase 5 —
+final browser verification and close-out" entry. Phase 6 requires its own separate, explicit
+go-ahead before any work begins.**
 
 1. **Re-read the doc set in order** (`docs/PROJECT_PRINCIPLES.md` → `docs/architecture/*.md` →
    `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`), confirm branch/latest
@@ -1487,19 +1515,22 @@ go-ahead.**
    (Times New Roman or its documented fallback), memory stability under a representative batch,
    graceful shutdown. Only then update `docs/PROJECT_PROGRESS.md` §2's Phase 4 row from
    "code-complete" to "closed."
-5. **Phase 5 Checkpoint 4 is committed (`10e3194`), and a read-only Phase 5 close-out review has been
-   performed this same session — see the close-out report delivered in that conversation turn
-   (checkpoints 0–4 all verified committed and tested; browser verification remains the one
-   documented, carried-forward gap).** Do not begin Corrections, Balance Adjustments, Employee
-   Statements, `PayrollUnitReadiness`, Late Entry release, Backup Package UI, or any Phase 6 work
-   until the user gives its own explicit go-ahead — per this project's standing
-   per-checkpoint/per-phase practice.
+5. **Phase 5 is fully COMPLETE AND CLOSED, 2026-07-16** — all five checkpoints committed
+   (`d87b9b0`/`cad93bc`/`3ea879e`/`957ab9d`/`10e3194`) and the final real-browser verification pass
+   (108/108 assertions, zero unexpected console errors, zero defects) has been performed and
+   recorded — see `docs/PROJECT_PROGRESS.md` §1's "Phase 5 — final browser verification and
+   close-out" entry. **Do not begin Corrections, Balance Adjustments, Employee Statements,
+   `PayrollUnitReadiness`, Late Entry release, Backup Package UI, or any Phase 6 work until the user
+   gives its own explicit go-ahead** — per this project's standing per-checkpoint/per-phase practice.
 6. Decide how Broom Services' own disbursement source bank account(s) should be modeled
    (`docs/PROJECT_PROGRESS.md` §3 item 7) — still open, unrelated to Payslips.
-7. Once Checkpoint 4 is committed and Phase 5 close-out is explicitly authorized, follow the same
-   standing Definition of Done for whatever comes next: **architecture compliance → implementation →
-   typecheck → lint → build → backend tests → real-stack verification → HTML prototype review/update
-   → documentation updates → ask before committing.**
+7. The Phase 4 Render/Linux-container Chromium deployment smoke test remains open, explicitly
+   separate from Phase 5's own closure — pick it up if genuine deploy access ever becomes available
+   in this sandbox.
+8. When explicitly instructed to begin **Phase 6**, follow the same standing Definition of Done:
+   **architecture compliance → implementation → typecheck → lint → build → backend tests →
+   real-stack verification → HTML prototype review/update → documentation updates → ask before
+   committing.**
 
 ## 8. Risks and assumptions
 

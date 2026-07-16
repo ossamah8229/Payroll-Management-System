@@ -1598,8 +1598,11 @@ finalization precondition keys off `PayrollEntry.released`/`.hold` only.
 `StorageProvider` foundation** (below) → Checkpoint 1 — Finalize Cycle → Checkpoint 2 — Backup
 Package generator → Checkpoint 3 — cycle archiving, automatic backup generation, and new-cycle
 rollover (archive + backup + departed-employee carry-forward via Advances) → Checkpoint 4 — Payroll
-Cycle Selector → Phase close-out. Checkpoints 0–4 are COMPLETE and COMMITTED (below). Phase close-out
-is not yet authorized — it still requires its own explicit go-ahead.
+Cycle Selector → Phase close-out. **Phase 5 is COMPLETE AND CLOSED (2026-07-16)** — Checkpoints 0–4
+are COMPLETE and COMMITTED (below), and the final browser-based verification pass (real Playwright/
+Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see the
+close-out entry at the end of this section. Phase 6 requires its own separate, explicit go-ahead
+before any work begins.
 
 **Checkpoint 0 — `StorageProvider` foundation — COMPLETE, 2026-07-14, COMMITTED as `d87b9b0`.** The storage abstraction
 originally planned for Phase 0 (never built — see `docs/PROJECT_PROGRESS.md` §3 item 4) and
@@ -1963,9 +1966,47 @@ malformed (non-UUID) `cycleId` in the URL produces a raw `PrismaClientKnownReque
 pre-existing input-validation gap (a 500 instead of a clean 400/404), not a live leak, not introduced
 by Checkpoint 4, and not touched here to keep this correction narrowly scoped as instructed.
 
-**🛑 Review checkpoint.** Stop here before Corrections. Once Phase 6 is built, Archived cycles will
-start receiving live corrections against real historical data — the archiving/backup mechanics need
-to be trusted first.
+**Phase 5 close-out — final browser verification, 2026-07-16. Phase 5 is COMPLETE AND CLOSED.** Every
+checkpoint above had its own real-stack HTTP verification, but genuine browser-based verification
+(rendering, JS execution, interaction, network observation, console capture) had never been possible
+in any prior session in this sandbox. Closed this session using a real Playwright-driven Chromium
+browser (a locally-cached binary from a prior session's own Puppeteer/Playwright usage, installed as a
+scratchpad-only dev dependency — never added to any workspace's `package.json`) against a completely
+fresh real-stack environment: fresh PostgreSQL with all 15 migrations and a fresh seed, a freshly
+compiled backend, the real production frontend build served via `vite preview` with `VITE_API_URL`
+pointed at the backend's own origin (the same cross-origin topology the real Render deployment uses),
+a cleared real filesystem `StorageProvider`, real HTTP sessions/cookies/CSRF, no mocked APIs. 108
+assertions across the full lifecycle — login/navigation, first-cycle creation, Draft Payroll Entry
+(edit/hold/bulk/split/filter), Finalize (including the precondition genuinely blocking), Released-cycle
+behavior, Rollover (a due Advance and a departed employee recorded through the real UI beforehand, the
+confirmation modal's exact copy verified, duplicate-submission genuinely blocked — a second click
+throwing a real timeout against a disabled button, not merely asserted — exactly one HTTP request
+sent), the Historical Cycle Selector across all five cycle-aware pages, the Archived-cycle lock
+(including a direct mutation attempt through the browser's own session, server-rejected), historical
+report/filename verification for an Archived cycle (all four filename patterns and their content
+confirmed), role/site-scoping for both a Payroll Staff and a Finance user created and logged in
+through the real UI, and Backup Package integrity — all passed, reproduced stable across two
+independent fresh full runs. **Zero unexpected console/network errors** — every captured entry was one
+of three already-understood non-defect categories (the ordinary pre-login session-probe 401, React
+Query's own abort-on-unmount `net::ERR_ABORTED` from automation-speed navigation, and the
+already-documented malformed-cycle-id 500 from the deliberate negative test above). **No defect was
+found; the working tree needed zero code changes as a result of this pass.** Full backend/frontend
+suites re-confirmed unchanged (487/487, 21/21) after the walkthrough, along with `prisma validate`/
+migration status (still zero drift)/typecheck/lint/production builds. All verification data, browser
+artifacts, and the scratchpad Playwright installation itself were deleted afterward; the database was
+returned to a genuinely fresh, empty state; both test servers were stopped; the frontend production
+build was regenerated once more without the temporary `VITE_API_URL` override. Full record:
+`docs/PROJECT_PROGRESS.md` §1's "Phase 5 — final browser verification and close-out" entry.
+**Phase 4's own outstanding Render/Linux-container Chromium deployment smoke test was not performed
+this session and remains separately open** — explicitly not conflated with this sandboxed Playwright
+run, which proves nothing about the real Render/Linux container runtime.
+
+**🛑 Review checkpoint — PASSED, 2026-07-16. Phase 5 (Checkpoints 0–4 plus final browser verification)
+is now fully complete and closed.** Do not begin Corrections, Balance Adjustments, Employee
+Statements, `PayrollUnitReadiness`, Late Entry release, Backup Package UI, or any other Phase 6 work
+without its own separate, explicit go-ahead. Once Phase 6 is built, Archived cycles will start
+receiving live corrections against real historical data — the archiving/backup mechanics needed to be
+trusted first, and now are.
 
 ---
 
