@@ -4016,6 +4016,86 @@ exports plain functions alongside components, the same pattern already accepted 
 `button.tsx`); `prisma validate`/`migrate status`/`migrate diff` all clean, zero drift (no schema
 touched); production builds clean across all three workspaces.
 
+### Post-Phase-5 Stabilization Checkpoint 3 — authentication hardening, backup lifecycle reliability — COMPLETE, 2026-07-17
+
+Repository preflight confirmed before any code change: branch `main`, working tree clean, latest
+commits `d1c543e`/`2d4e167` (Checkpoint 2) present, baseline **507/507** backend / **23/23** frontend
+/ 15 migrations / zero schema drift all reconfirmed against a freshly-provisioned local Postgres
+(`embedded-postgres`, per this project's own no-Docker-in-sandbox convention), Phase 6 not started.
+Per the explicit instruction, implements exactly **AUD-009** (session revocation after password
+reset) and **AUD-011** (recovery for stale `GENERATING` Backup Packages) — not AUD-012 (route-level
+code splitting) or AUD-013 (permanent Playwright/E2E harness), both still deliberately deferred.
+
+**AUD-009 — session revocation on password change/reset.** Both password-change paths — self-service
+`POST /auth/change-password` and Master Admin's `POST /users/:id/reset-password` — now invalidate
+every existing session for the affected user immediately, including the requesting session itself.
+No schema change: the existing `BackupPackage`-adjacent pattern of "look up fresh, never cache"
+already meant no session-versioning column was needed — instead, a new
+`invalidateAllSessionsForUser` (`backend/src/lib/session-store.ts`) deletes every row in the
+connect-pg-simple-owned `session` table whose JSON payload's `userId` matches, via one raw SQL
+`DELETE`. The next request on any now-deleted session fails auth immediately (the same "next request
+fails" guarantee already proven for deactivation). Both route handlers additionally call
+`req.session.destroy()` on the current request's own session when it belongs to the affected user
+(always true for self-service change; conditionally true for admin reset, only in the self-reset
+edge case) — mirroring `/auth/logout` — so that request's own response reflects the invalidation
+immediately and clears the `connect.sid` cookie, rather than only failing on that session's next use.
+An admin resetting someone *else's* password keeps their own session, unaffected. See
+`docs/architecture/authentication.md`'s "Session revocation on password change" note.
+
+**AUD-011 — recovery for stale `GENERATING` Backup Packages.** Generation is fully synchronous
+within one request/process's own lifetime (Phase 5's own architecture), so a row still `GENERATING`
+long after its own `updatedAt` can only mean the process that reserved it crashed or was restarted
+mid-attempt, before `failBackupPackageGeneration`'s own catch block ever ran. A new
+`recoverStaleGeneratingBackupPackages` (`backend/src/modules/backup-packages/
+backup-packages.service.ts`) sweeps for exactly this — any `GENERATING` row older than 15 minutes
+(`STALE_GENERATING_THRESHOLD_MS`, comfortably beyond the commit transaction's own 30-second timeout
+and any realistic large-payroll export time) is transitioned to `FAILED`, reusing a new shared
+`markBackupPackageFailed` primitive that both this sweep and the existing live-failure path
+(`failBackupPackageGeneration`, refactored to call it) now share — no duplicated update+audit code.
+The recovery audit entries use a distinct, system-attributed (`actorUserId: null`) action,
+`backup_package.generation_recovered`, so a reviewer can tell a caught exception apart from a
+later-discovered abandoned row. Called at two lifecycle points, never a background worker/queue/
+scheduler: process startup (`server.ts`, before the server accepts traffic — confirmed by the
+real-stack restart test below) and the top of `reserveBackupPackageVersion` itself (before every new
+reservation — covering both manual generation and rollover, since both call that one shared
+primitive). A `READY` or already-`FAILED` row is never selected (idempotent, no version history ever
+revisited). See `docs/architecture/database/payroll-cycle.md §17`'s new subsection.
+
+**Tests added:** `backend/tests/auth.test.ts` (self-service change-password: current session, a
+second independent session for the same user, and an unrelated user's session, plus old/new-password
+login and unchanged audit behavior); `backend/tests/users.test.ts` (admin-triggered reset: target's
+sessions invalidated including a second browser session, acting admin's own session untouched unless
+self-targeting, old/new-password login, unchanged audit behavior); `backend/tests/
+backup-packages.test.ts` (a new `AUD-011: stale GENERATING recovery` block — stale-past-threshold
+recovery + idempotent repeat calls, a fresh/within-threshold `GENERATING` row left untouched, `READY`/
+already-`FAILED` rows never revisited, recovery-before-generation preserving correct version
+numbering end-to-end through the real HTTP route, and a failure-injection case proving a defensive
+DB-update failure during recovery is logged, not thrown).
+
+**Verification performed:** `prisma validate` clean; `prisma migrate status` — 15 migrations, up to
+date, zero drift (no schema change was needed for either finding); backend suite **516/516** (507
+baseline + 9 new); frontend suite **23/23** (unchanged — no frontend code touched); `typecheck`/
+`lint` clean across backend and frontend; production builds clean for both workspaces.
+
+**Real-stack verification (real Postgres, real running backend + frontend dev servers, real
+Chromium via Puppeteer, not mocked).** Authentication: two independent, isolated browser contexts
+("browser sessions") both logged in as the same user; a real UI password change (Settings → My
+Profile) via one context; confirmed both the changing session and the second, untouched browser
+context lost authorization immediately (no restart); confirmed login with the old password then
+failed and login with the new password succeeded; the seeded account's password was restored
+afterward for a clean environment. Backup recovery: a real `READY` Backup Package was generated
+end-to-end through the live API for a real payroll cycle; a second, `GENERATING` row was inserted
+directly (simulating an in-flight generation) and backdated 20 minutes; the real backend process was
+then killed (`SIGKILL`, both the `tsx watch` supervisor and its child) to genuinely simulate a crash
+and restarted fresh — the startup log recorded `Recovered stale GENERATING Backup Package(s)
+abandoned by a previous process` naming exactly that row's id, confirmed in Postgres as `FAILED`
+with a `backup_package.generation_recovered` audit entry, while the pre-existing `READY` version was
+byte-for-byte untouched; a further generation immediately after restart succeeded normally,
+correctly reserving the next version (not reusing the recovered one). Leftover fixture data created
+by this manual pass (a non-`Test`-prefixed site/employees, outside the automated suite's own cleanup
+scope) was identified and removed afterward, and the full suite re-run to confirm **516/516** with a
+clean database.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)

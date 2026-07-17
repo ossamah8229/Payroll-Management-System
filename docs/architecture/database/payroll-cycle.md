@@ -232,6 +232,30 @@ always generates a fresh Backup Package version" note in `payroll-lifecycle.md �
 `PayrollCycle` row records which specific version gated its archive via
 `PayrollCycle.archivedWithBackupPackageId` (§10).
 
+**Stale `GENERATING` recovery implemented Post-Phase-5 Stabilization Checkpoint 3 (AUD-011,
+2026-07-17)** — generation is fully synchronous within one request/process's own lifetime, so a row
+still `GENERATING` more than 15 minutes after its own `updatedAt` (`STALE_GENERATING_THRESHOLD_MS`,
+`backup-packages.service.ts`) can only mean the process that reserved it crashed or was restarted
+mid-attempt, before `failBackupPackageGeneration`'s own catch block ever ran to mark it `FAILED`.
+`recoverStaleGeneratingBackupPackages` sweeps for exactly this — any `GENERATING` row past the
+threshold is transitioned to `FAILED` (reusing the same status-update-plus-audit primitive a live
+in-request failure uses, `markBackupPackageFailed`), under a distinct system-attributed
+(`actorUserId: null`) `backup_package.generation_recovered` audit action so a reviewer can tell a
+caught exception apart from a later-discovered abandoned row. Called at two lifecycle points: at
+process startup (`server.ts`, before the server accepts traffic) and at the top of
+`reserveBackupPackageVersion` itself (immediately before every new reservation — covering both
+manual generation and rollover, since both call that one shared primitive). Deliberately **not** a
+background worker, interval, or queue — both call sites are ordinary synchronous steps inside an
+existing lifecycle event, matching this schema's own "no hidden background processing" principle.
+A `READY` or already-`FAILED` row is never selected by the sweep's own `status = 'GENERATING'`
+filter, so this can never revisit or corrupt a completed package's own version history, and is
+naturally idempotent — a row already recovered no longer matches on a repeat call. No storage
+cleanup is attempted for a recovered row (unlike a live failure's own best-effort `writtenKeys`
+cleanup) — there is no in-memory record of what a crashed process wrote, and `StorageProvider` has
+no listing operation to discover orphans by key prefix; an orphaned, unreferenced storage object
+from the abandoned attempt is the same accepted outcome already documented for the live-failure
+path's own best-effort limits (`docs/architecture/system-conventions.md §2`).
+
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |

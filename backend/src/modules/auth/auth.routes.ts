@@ -133,18 +133,30 @@ authRouter.patch('/me', requireAuth, async (req, res, next) => {
 authRouter.post('/change-password', requireAuth, async (req, res, next) => {
   try {
     const input = changePasswordSchema.parse(req.body);
-    await changeOwnPassword(req.currentUser!.id, input);
+    const userId = req.currentUser!.id;
+    await changeOwnPassword(userId, input);
 
     await recordAuditLog({
-      actorUserId: req.currentUser!.id,
+      actorUserId: userId,
       action: 'user.password-changed',
       entityType: 'User',
-      entityId: req.currentUser!.id,
+      entityId: userId,
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });
 
-    res.status(204).send();
+    // AUD-009: `changeOwnPassword` already deleted every session row for this user, including
+    // this very request's own — `req.session.destroy()` here (same pattern as `/logout`) clears
+    // this request's own cookie too, rather than leaving the client holding a cookie that only
+    // fails on its *next* use.
+    req.session.destroy((error) => {
+      if (error) {
+        next(error);
+        return;
+      }
+      res.clearCookie('connect.sid');
+      res.status(204).send();
+    });
   } catch (error) {
     next(error);
   }

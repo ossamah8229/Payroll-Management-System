@@ -195,11 +195,19 @@ export interface ReservedBackupPackageVersion {
  * generations landing on the same version). Shared by manual generation (`generateBackupPackage`,
  * below) and rollover (`payroll-processing.service.ts`'s `archiveAndCreateNextPayrollCycle`) — the
  * one place either caller reserves a version.
+ *
+ * **AUD-011:** also the "before creating a new Backup Package" lifecycle point —
+ * `recoverStaleGeneratingBackupPackages` runs first, so a stale `GENERATING` row left behind by a
+ * crashed process for this cycle (or any other) is recovered before a new version is reserved.
+ * `nextVersion` below is unaffected either way: a recovered row keeps its own version number
+ * whether `GENERATING` or `FAILED`, so `MAX(version) + 1` is correct regardless of ordering.
  */
 export async function reserveBackupPackageVersion(
   cycleId: string,
   currentUser: SessionUser,
 ): Promise<ReservedBackupPackageVersion> {
+  await recoverStaleGeneratingBackupPackages();
+
   const releaseStatusSummary = await computeReleaseStatusSummary(cycleId);
   const applicationVersion = getApplicationVersion();
   const databaseSchemaVersion = await getDatabaseSchemaVersion();
@@ -414,11 +422,53 @@ export async function commitBackupPackageReady(
 }
 
 /**
+ * Shared "mark a reserved-but-unfinished `BackupPackage` `FAILED`" primitive — the status/
+ * `failureReason` update (own catch/log so a failure here never masks the real, original error)
+ * and the corresponding audit entry (same). Used by both `failBackupPackageGeneration` (an
+ * exception during this process's own live generation attempt, actor = the requesting user) and
+ * `recoverStaleGeneratingBackupPackages` (AUD-011, below — a `GENERATING` row left behind by a
+ * crashed/restarted process, actor = the system itself, `actorUserId: null`, matching this
+ * codebase's existing convention for a system-attributed audit entry, e.g. `auth.login.failed`) —
+ * the one shared "how do we fail a package" step, not two copies of the update+audit pattern.
+ */
+async function markBackupPackageFailed(params: {
+  backupPackageId: string;
+  failureReason: string;
+  auditAction: string;
+  auditActorUserId: string | null;
+  auditMetadata: Prisma.InputJsonValue;
+  requestMeta: RequestMeta;
+}): Promise<void> {
+  const { backupPackageId, failureReason, auditAction, auditActorUserId, auditMetadata, requestMeta } = params;
+
+  await prisma.backupPackage
+    .update({ where: { id: backupPackageId }, data: { status: 'FAILED', failureReason } })
+    .catch((updateError: unknown) => {
+      logger.error(
+        { updateError, backupPackageId },
+        'Backup Package generation: failed to mark the package FAILED after an earlier error',
+      );
+    });
+
+  await recordAuditLog({
+    actorUserId: auditActorUserId,
+    action: auditAction,
+    entityType: 'BackupPackage',
+    entityId: backupPackageId,
+    metadata: auditMetadata,
+    ipAddress: requestMeta.ipAddress,
+    userAgent: requestMeta.userAgent,
+  }).catch((auditError: unknown) => {
+    logger.error({ auditError, backupPackageId }, `Backup Package generation: failed to write the ${auditAction} audit entry`);
+  });
+}
+
+/**
  * Shared failure path for a reserved version that never reached `READY` — best-effort deletes this
  * attempt's own already-written storage objects (never blocks or masks the original error; a
  * cleanup failure leaves an orphaned, unreferenced storage object, an accepted outcome per
- * docs/architecture/system-conventions.md §2), marks the reserved row `FAILED` with a safe
- * diagnostic, and writes the `backup_package.generation_failed` audit entry. Used by
+ * docs/architecture/system-conventions.md §2), then delegates the status update and
+ * `backup_package.generation_failed` audit entry to `markBackupPackageFailed` above. Used by
  * `generateBackupPackage`'s own catch block (unchanged behavior) and by rollover's catch block
  * (`payroll-processing.service.ts`) — the one shared cleanup routine, not two copies of it.
  */
@@ -443,29 +493,79 @@ export async function failBackupPackageGeneration(params: {
   }
 
   const failureReason = safeFailureReason(error);
-  await prisma.backupPackage
-    .update({ where: { id: backupPackageId }, data: { status: 'FAILED', failureReason } })
-    .catch((updateError: unknown) => {
-      logger.error(
-        { updateError, backupPackageId },
-        'Backup Package generation: failed to mark the package FAILED after an earlier error',
-      );
-    });
-
-  await recordAuditLog({
-    actorUserId: currentUser.id,
-    action: 'backup_package.generation_failed',
-    entityType: 'BackupPackage',
-    entityId: backupPackageId,
-    metadata: { cycleId, version, failureReason },
-    ipAddress: requestMeta.ipAddress,
-    userAgent: requestMeta.userAgent,
-  }).catch((auditError: unknown) => {
-    logger.error(
-      { auditError, backupPackageId },
-      'Backup Package generation: failed to write the generation_failed audit entry',
-    );
+  await markBackupPackageFailed({
+    backupPackageId,
+    failureReason,
+    auditAction: 'backup_package.generation_failed',
+    auditActorUserId: currentUser.id,
+    auditMetadata: { cycleId, version, failureReason },
+    requestMeta,
   });
+}
+
+/** AUD-011 (Post-Phase-5 Stabilization Checkpoint 3): how long a `BackupPackage` may sit
+ * `GENERATING` before `recoverStaleGeneratingBackupPackages` (below) treats it as abandoned —
+ * comfortably beyond the `commitBackupPackageReady` transaction's own 30-second timeout and any
+ * realistic in-memory assembly time for even a large payroll's CSV/XLSX exports, so a genuinely
+ * slow-but-live generation is never mistaken for a crashed one. */
+const STALE_GENERATING_THRESHOLD_MS = 15 * 60 * 1000;
+
+/**
+ * AUD-011 — recovery for a `BackupPackage` left stuck `GENERATING` by a process that crashed or
+ * was killed mid-attempt (before `failBackupPackageGeneration`'s own catch block ever ran).
+ *
+ * A `GENERATING` row is only ever created immediately before a fully synchronous generation
+ * attempt (reserve → assemble → write storage → commit, all within one request/process's own
+ * lifetime — see this module's file-level doc comment). There is no legitimate way for a row to
+ * still be `GENERATING` once `STALE_GENERATING_THRESHOLD_MS` has elapsed: the process that
+ * reserved it either finished (`READY`/`FAILED`) or died mid-attempt. This sweep finds any such
+ * row and transitions it to `FAILED` via the same `markBackupPackageFailed` primitive a live
+ * in-request failure uses, under a distinct `backup_package.generation_recovered` audit action
+ * (system-attributed, `actorUserId: null` — no requesting user exists for a startup/pre-generation
+ * sweep) so an audit reviewer can tell a caught exception apart from a later-discovered abandoned
+ * row. The `status: 'GENERATING'` filter means a `READY` or already-`FAILED` row is never selected
+ * in the first place — this can never revisit or corrupt a completed package's own version
+ * history, and is naturally idempotent: a row this sweep already moved to `FAILED` no longer
+ * matches on a repeat call.
+ *
+ * No best-effort storage cleanup is attempted here (unlike `failBackupPackageGeneration`) — after
+ * a crash there is no in-memory `writtenKeys` list to consult, and this interface has no `list`
+ * operation to discover orphans by prefix (`storage-provider.ts`'s own scope note). An orphaned,
+ * unreferenced storage object from the abandoned attempt is the same accepted outcome
+ * `docs/architecture/system-conventions.md §2` already documents for the live-failure cleanup
+ * path's own best-effort limits.
+ *
+ * Called at two lifecycle points — process startup (`server.ts`, before accepting traffic) and
+ * the top of `reserveBackupPackageVersion` (immediately before every new reservation, covering
+ * both manual generation and rollover) — never a background worker, interval, or queue, per this
+ * checkpoint's "no queues or schedulers" requirement.
+ */
+export async function recoverStaleGeneratingBackupPackages(): Promise<{ recoveredIds: string[] }> {
+  const cutoff = new Date(Date.now() - STALE_GENERATING_THRESHOLD_MS);
+  const stale = await prisma.backupPackage.findMany({
+    where: { status: 'GENERATING', updatedAt: { lt: cutoff } },
+    select: { id: true, cycleId: true, version: true },
+  });
+
+  for (const pkg of stale) {
+    await markBackupPackageFailed({
+      backupPackageId: pkg.id,
+      failureReason: 'Recovered: generation was abandoned by a crashed or restarted process',
+      auditAction: 'backup_package.generation_recovered',
+      auditActorUserId: null,
+      auditMetadata: { cycleId: pkg.cycleId, version: pkg.version },
+      requestMeta: { ipAddress: null, userAgent: null },
+    });
+  }
+
+  if (stale.length > 0) {
+    logger.warn(
+      { recoveredIds: stale.map((pkg) => pkg.id) },
+      'Recovered stale GENERATING Backup Package(s) abandoned by a previous process',
+    );
+  }
+
+  return { recoveredIds: stale.map((pkg) => pkg.id) };
 }
 
 /**

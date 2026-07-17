@@ -38,6 +38,22 @@ resistant to GPU/ASIC cracking better than bcrypt at equivalent cost settings). 
 reversibly-encrypted password is ever stored. Password reset (where needed) invalidates all existing
 sessions for that user.
 
+**Session revocation on password change (AUD-009, Post-Phase-5 Stabilization Checkpoint 3).** Both
+password-change paths — self-service (`POST /auth/change-password`) and Master Admin's
+user-management reset (`POST /users/:id/reset-password`) — invalidate every existing session
+belonging to the affected user immediately after the new password is stored, including the
+requesting session itself. This reuses the exact mechanism deactivation already relies on (above):
+`invalidateAllSessionsForUser` (`backend/src/lib/session-store.ts`) deletes every row in the
+connect-pg-simple `session` table whose payload's `userId` matches, straight in Postgres — no
+process restart, in-memory cache, or additional session-versioning column required, since sessions
+are already looked up fresh on every request (`attachUser`). The next request on any now-deleted
+session fails auth immediately, the same "next request fails" guarantee deactivation provides. The
+route handler additionally calls `req.session.destroy()` on the current request's own session
+(mirroring `/auth/logout`) so that request's own response reflects the invalidation immediately —
+clearing the `connect.sid` cookie — rather than only failing on that session's next use. An admin
+resetting someone *else's* password keeps their own session; resetting their *own* password
+invalidates it too, handled the same way.
+
 ## Role-Based Access Control (RBAC)
 
 **Three roles as of 2026-07-05 (Phase 3 architecture review)** — **Master User** (renamed from

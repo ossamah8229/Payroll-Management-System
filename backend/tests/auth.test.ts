@@ -138,4 +138,76 @@ describe('Authentication', () => {
       expect(meRes.status).toBe(401);
     },
   );
+
+  describe('AUD-009: session revocation on self-service password change', () => {
+    async function loginAgent(email: string, password: string) {
+      const agent = request.agent(app);
+      const csrfToken = await primeCsrf(agent);
+      const res = await agent
+        .post('/api/v1/auth/login')
+        .set('x-csrf-token', csrfToken)
+        .send({ email, password });
+      if (res.status !== 200) {
+        throw new Error(`Test login failed with status ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+      return { agent, csrfToken };
+    }
+
+    it(
+      'invalidates the current session, a second browser session for the same user, ' +
+        'leaves other users authenticated, and requires the new password to log back in',
+      async () => {
+        await createTestUser({ email: 'reset-self@test.local', password: PASSWORD, roleCode: 'TEST_ROLE_AUTH' });
+        await createTestUser({ email: 'unrelated@test.local', password: PASSWORD, roleCode: 'TEST_ROLE_AUTH' });
+
+        // Two independent "browser" sessions for the same user, plus one for an unrelated user.
+        const sessionA = await loginAgent('reset-self@test.local', PASSWORD);
+        const sessionB = await loginAgent('reset-self@test.local', PASSWORD);
+        const unrelated = await loginAgent('unrelated@test.local', PASSWORD);
+
+        expect((await sessionA.agent.get('/api/v1/auth/me')).status).toBe(200);
+        expect((await sessionB.agent.get('/api/v1/auth/me')).status).toBe(200);
+        expect((await unrelated.agent.get('/api/v1/auth/me')).status).toBe(200);
+
+        const changeRes = await sessionA.agent
+          .post('/api/v1/auth/change-password')
+          .set('x-csrf-token', sessionA.csrfToken)
+          .send({ currentPassword: PASSWORD, newPassword: 'BrandNewPassword1!' });
+        expect(changeRes.status).toBe(204);
+
+        // Current session (the one that made the change-password request) is invalidated.
+        expect((await sessionA.agent.get('/api/v1/auth/me')).status).toBe(401);
+        // A second, independent browser session for the same user is also invalidated.
+        expect((await sessionB.agent.get('/api/v1/auth/me')).status).toBe(401);
+        // An unrelated user's session is untouched.
+        expect((await unrelated.agent.get('/api/v1/auth/me')).status).toBe(200);
+
+        // Old password no longer works.
+        const oldPasswordAgent = request.agent(app);
+        const oldPasswordCsrf = await primeCsrf(oldPasswordAgent);
+        const oldLoginRes = await oldPasswordAgent
+          .post('/api/v1/auth/login')
+          .set('x-csrf-token', oldPasswordCsrf)
+          .send({ email: 'reset-self@test.local', password: PASSWORD });
+        expect(oldLoginRes.status).toBe(401);
+
+        // New password logs in successfully.
+        const freshAgent = request.agent(app);
+        const freshCsrf = await primeCsrf(freshAgent);
+        const newLoginRes = await freshAgent
+          .post('/api/v1/auth/login')
+          .set('x-csrf-token', freshCsrf)
+          .send({ email: 'reset-self@test.local', password: 'BrandNewPassword1!' });
+        expect(newLoginRes.status).toBe(200);
+
+        // Audit behavior unchanged: exactly one password-changed entry for this user.
+        const user = await prisma.user.findUniqueOrThrow({ where: { email: 'reset-self@test.local' } });
+        const entries = await prisma.auditLog.findMany({
+          where: { action: 'user.password-changed', entityId: user.id },
+        });
+        expect(entries).toHaveLength(1);
+        expect(entries[0]!.actorUserId).toBe(user.id);
+      },
+    );
+  });
 });

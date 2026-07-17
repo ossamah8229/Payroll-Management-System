@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import type { CreateUserInput, ResetUserPasswordInput, UpdateUserInput } from '@payroll/shared';
 import { ROLE_CODES } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import { invalidateAllSessionsForUser } from '../../lib/session-store';
 import { badRequest, notFound } from '../../common/http-error';
 
 /** The safe, explicit User Management response shape (Phase 5 Checkpoint 4 security correction,
@@ -185,6 +186,11 @@ export async function updateUser(
   return getUser(targetUserId);
 }
 
+/** AUD-009 (Post-Phase-5 Stabilization Checkpoint 3): every existing session belonging to
+ * `targetUserId` is invalidated once the new password is stored — the same immediate-invalidation
+ * guarantee deactivation already provides (docs/architecture/authentication.md). Master Admin's
+ * own session is untouched unless resetting their own account (the route handler,
+ * `users.routes.ts`, additionally destroys the current request's own session in that one case). */
 export async function resetUserPassword(targetUserId: string, input: ResetUserPasswordInput): Promise<void> {
   const exists = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } });
   if (!exists) {
@@ -192,4 +198,5 @@ export async function resetUserPassword(targetUserId: string, input: ResetUserPa
   }
   const passwordHash = await argon2.hash(input.newPassword);
   await prisma.user.update({ where: { id: targetUserId }, data: { passwordHash } });
+  await invalidateAllSessionsForUser(targetUserId);
 }

@@ -91,6 +91,25 @@ usersRouter.post('/:id/reset-password', async (req, res, next) => {
       userAgent: req.get('user-agent') ?? null,
     });
 
+    // AUD-009: `resetUserPassword` already deleted every session row for the target user. In the
+    // ordinary case the acting Master Admin is resetting someone *else's* password, so the
+    // admin's own session (a different row) is untouched and this just responds normally. In the
+    // edge case where a Master Admin resets their own account's password, their own current
+    // session row was just deleted too — `req.session.destroy()` (same pattern as `/logout` and
+    // `/auth/change-password`) clears this request's own cookie so its response reflects that
+    // immediately, rather than only on this session's next request.
+    if (req.currentUser!.id === id) {
+      req.session.destroy((error) => {
+        if (error) {
+          next(error);
+          return;
+        }
+        res.clearCookie('connect.sid');
+        res.status(204).send();
+      });
+      return;
+    }
+
     res.status(204).send();
   } catch (error) {
     next(error);

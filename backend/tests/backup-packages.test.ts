@@ -6,6 +6,7 @@ import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
 import { storageProvider, resolveStorageRoot } from '../src/lib/storage';
 import * as payrollEntryExportService from '../src/modules/payroll-entry/payroll-entry-import-export.service';
+import { recoverStaleGeneratingBackupPackages } from '../src/modules/backup-packages/backup-packages.service';
 import { cleanTestData, createAuthenticatedAgent, extractCookie } from './helpers';
 
 const app = createApp();
@@ -104,11 +105,11 @@ describe('Phase 5 Checkpoint 2 — Backup Packages', () => {
     });
   }
 
-  async function makeDraftCycle(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, month: number) {
+  async function makeDraftCycle(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, month: number, year = 2900) {
     const res = await admin.agent
       .post('/api/v1/payroll-cycles')
       .set('x-csrf-token', admin.csrfToken)
-      .send({ year: 2900, month });
+      .send({ year, month });
     if (res.status !== 201) throw new Error(`cycle create failed: ${res.status} ${JSON.stringify(res.body)}`);
     return res.body.cycle as { id: string; year: number; month: number; status: string };
   }
@@ -172,15 +173,15 @@ describe('Phase 5 Checkpoint 2 — Backup Packages', () => {
   /** Standard fixture: one Bank (+ implicit Cash), one released bank-account employee, one held
    * cash employee — enough to exercise every one of the five generated files with genuinely
    * non-empty content, then finalized so the cycle is eligible for backup generation. */
-  async function makeReadyCycle(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, month: number) {
-    const { site, unit } = await makeSiteWithUnit(`Test Site Backup ${month}`);
-    const bank = await makeBank(`TBK${month}`, `Test Backup Bank ${month}`);
-    const bankedEmployee = await makeEmployee(site.id, unit.id, `Backup Banked Employee ${month}`, {
+  async function makeReadyCycle(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, month: number, year = 2900) {
+    const { site, unit } = await makeSiteWithUnit(`Test Site Backup ${year}-${month}`);
+    const bank = await makeBank(`TBK${year}${month}`.slice(0, 10), `Test Backup Bank ${year}-${month}`);
+    const bankedEmployee = await makeEmployee(site.id, unit.id, `Backup Banked Employee ${year}-${month}`, {
       bankId: bank.id,
       accountNumber: '1234567890',
     });
-    const cashEmployee = await makeEmployee(site.id, unit.id, `Backup Cash Employee ${month}`);
-    const cycle = await makeDraftCycle(admin, month);
+    const cashEmployee = await makeEmployee(site.id, unit.id, `Backup Cash Employee ${year}-${month}`);
+    const cycle = await makeDraftCycle(admin, month, year);
     const bankedEntry = await createEntry(admin, cycle.id, bankedEmployee.id);
     const cashEntry = await createEntry(admin, cycle.id, cashEmployee.id);
     await holdEntry(admin, cashEntry.id, cashEntry.version);
@@ -969,5 +970,212 @@ describe('Phase 5 Checkpoint 2 — Backup Packages', () => {
          VALUES (gen_random_uuid(), gen_random_uuid(), 1, 'NOT_A_REAL_STATUS', gen_random_uuid(), '0.1.0', 'test', '{}')`,
       ),
     ).rejects.toThrow();
+  });
+
+  // --- AUD-011 (Post-Phase-5 Stabilization Checkpoint 3): stale GENERATING recovery ---------------
+
+  describe('AUD-011: stale GENERATING recovery', () => {
+    /** Directly backdates a row's `updatedAt` past `recoverStaleGeneratingBackupPackages`'s own
+     * staleness threshold — raw SQL (not `prisma.backupPackage.update`) so the write is a genuine
+     * `UPDATE ... SET "updatedAt" = ...` and isn't itself subject to Prisma's own `@updatedAt`
+     * auto-management touching the value back to "now". */
+    async function backdateUpdatedAt(backupPackageId: string, ageMs: number): Promise<void> {
+      await prisma.$executeRaw`UPDATE "BackupPackage" SET "updatedAt" = ${new Date(Date.now() - ageMs)} WHERE id = ${backupPackageId}::uuid`;
+    }
+
+    async function createGeneratingPackage(cycleId: string, generatedBy: string, version = 1) {
+      return prisma.backupPackage.create({
+        data: {
+          cycleId,
+          version,
+          status: 'GENERATING',
+          generatedBy,
+          applicationVersion: '0.1.0',
+          databaseSchemaVersion: 'test',
+          releaseStatusSummary: { entryCount: 0, releasedCount: 0, heldCount: 0 },
+        },
+      });
+    }
+
+    const STALE_AGE_MS = 20 * 60 * 1000; // 20 minutes — past the service's own 15-minute threshold
+
+    it('transitions a GENERATING package older than the staleness threshold to FAILED, writes a system-attributed audit entry, and is idempotent on repeat calls', async () => {
+      const admin = await masterAdminAgent('backup-recovery-stale-admin@test.local');
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { email: 'backup-recovery-stale-admin@test.local' },
+      });
+      const { cycle } = await makeReadyCycle(admin, 1, 2901);
+
+      const stale = await createGeneratingPackage(cycle.id, user.id);
+      await backdateUpdatedAt(stale.id, STALE_AGE_MS);
+
+      const firstSweep = await recoverStaleGeneratingBackupPackages();
+      expect(firstSweep.recoveredIds).toContain(stale.id);
+
+      const recovered = await prisma.backupPackage.findUniqueOrThrow({ where: { id: stale.id } });
+      expect(recovered.status).toBe('FAILED');
+      expect(recovered.failureReason).toBeTruthy();
+
+      const auditEntries = await prisma.auditLog.findMany({
+        where: { action: 'backup_package.generation_recovered', entityId: stale.id },
+      });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]!.actorUserId).toBeNull();
+      const metadata = auditEntries[0]!.metadata as { cycleId?: string; version?: number };
+      expect(metadata.cycleId).toBe(cycle.id);
+      expect(metadata.version).toBe(1);
+
+      // Repeated execution is safe: the row no longer matches status=GENERATING, so a second
+      // sweep finds nothing and writes no duplicate audit entry — never revisits an already-FAILED
+      // row.
+      const secondSweep = await recoverStaleGeneratingBackupPackages();
+      expect(secondSweep.recoveredIds).not.toContain(stale.id);
+      const auditEntriesAfterSecondSweep = await prisma.auditLog.findMany({
+        where: { action: 'backup_package.generation_recovered', entityId: stale.id },
+      });
+      expect(auditEntriesAfterSecondSweep).toHaveLength(1);
+    });
+
+    it('never touches a GENERATING package within the staleness threshold — a genuinely in-flight generation is not mistaken for an abandoned one', async () => {
+      const admin = await masterAdminAgent('backup-recovery-fresh-admin@test.local');
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { email: 'backup-recovery-fresh-admin@test.local' },
+      });
+      const { cycle } = await makeReadyCycle(admin, 2, 2901);
+
+      const fresh = await createGeneratingPackage(cycle.id, user.id);
+
+      const sweep = await recoverStaleGeneratingBackupPackages();
+      expect(sweep.recoveredIds).not.toContain(fresh.id);
+
+      const stillGenerating = await prisma.backupPackage.findUniqueOrThrow({ where: { id: fresh.id } });
+      expect(stillGenerating.status).toBe('GENERATING');
+
+      const auditEntries = await prisma.auditLog.count({
+        where: { action: 'backup_package.generation_recovered', entityId: fresh.id },
+      });
+      expect(auditEntries).toBe(0);
+    });
+
+    it('never touches a READY or an already-FAILED package, even when old — version history is never corrupted or revisited', async () => {
+      const admin = await masterAdminAgent('backup-recovery-ready-failed-admin@test.local');
+      const { cycle } = await makeReadyCycle(admin, 3, 2901);
+
+      const readyRes = await generateBackup(admin, cycle.id);
+      expect(readyRes.status).toBe(201);
+      const readyId = readyRes.body.backupPackage.id as string;
+      await backdateUpdatedAt(readyId, 60 * 60 * 1000);
+
+      const spy = jest
+        .spyOn(payrollEntryExportService, 'exportPayrollEntriesToCsv')
+        .mockRejectedValueOnce(new Error('simulated failure'));
+      let failedId: string;
+      try {
+        const failedRes = await generateBackup(admin, cycle.id);
+        expect(failedRes.status).toBe(500);
+        failedId = (
+          await prisma.backupPackage.findFirstOrThrow({ where: { cycleId: cycle.id, status: 'FAILED' } })
+        ).id;
+      } finally {
+        spy.mockRestore();
+      }
+      await backdateUpdatedAt(failedId, 60 * 60 * 1000);
+
+      const readyBefore = await prisma.backupPackage.findUniqueOrThrow({ where: { id: readyId } });
+      const failedBefore = await prisma.backupPackage.findUniqueOrThrow({ where: { id: failedId } });
+
+      await recoverStaleGeneratingBackupPackages();
+
+      const readyAfter = await prisma.backupPackage.findUniqueOrThrow({ where: { id: readyId } });
+      const failedAfter = await prisma.backupPackage.findUniqueOrThrow({ where: { id: failedId } });
+      expect(readyAfter.status).toBe('READY');
+      expect(readyAfter.updatedAt).toEqual(readyBefore.updatedAt);
+      expect(failedAfter.status).toBe('FAILED');
+      expect(failedAfter.failureReason).toBe(failedBefore.failureReason);
+      expect(failedAfter.updatedAt).toEqual(failedBefore.updatedAt);
+
+      const recoveredAudits = await prisma.auditLog.count({
+        where: { action: 'backup_package.generation_recovered', entityId: { in: [readyId, failedId] } },
+      });
+      expect(recoveredAudits).toBe(0);
+    });
+
+    it('recovers a stale GENERATING row for a cycle before reserving a new version — version numbering stays correct and the new generation succeeds normally', async () => {
+      const admin = await masterAdminAgent('backup-recovery-before-generate-admin@test.local');
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { email: 'backup-recovery-before-generate-admin@test.local' },
+      });
+      const { cycle } = await makeReadyCycle(admin, 4, 2901);
+
+      const stale = await createGeneratingPackage(cycle.id, user.id);
+      await backdateUpdatedAt(stale.id, STALE_AGE_MS);
+
+      // Generates through the ordinary HTTP route (no direct call to the recovery function) —
+      // proves the sweep is wired into `reserveBackupPackageVersion` itself, the one shared
+      // reservation primitive both manual generation and rollover call, not only callable
+      // standalone.
+      const genRes = await generateBackup(admin, cycle.id);
+      expect(genRes.status).toBe(201);
+
+      const staleAfter = await prisma.backupPackage.findUniqueOrThrow({ where: { id: stale.id } });
+      expect(staleAfter.status).toBe('FAILED');
+
+      // The new generation reserved version 2, not version 1 again — the stale row's own version
+      // number is preserved, never reused or overwritten by recovery.
+      expect(genRes.body.backupPackage.version).toBe(2);
+      const allVersions = await prisma.backupPackage.findMany({
+        where: { cycleId: cycle.id },
+        orderBy: { version: 'asc' },
+        select: { version: true, status: true },
+      });
+      expect(allVersions).toEqual([
+        { version: 1, status: 'FAILED' },
+        { version: 2, status: 'READY' },
+      ]);
+    });
+
+    it('generation before any recovery is needed proceeds normally, and repeated generation keeps incrementing versions correctly', async () => {
+      const admin = await masterAdminAgent('backup-recovery-noop-admin@test.local');
+      const { cycle } = await makeReadyCycle(admin, 5, 2901);
+
+      const firstRes = await generateBackup(admin, cycle.id);
+      expect(firstRes.status).toBe(201);
+      expect(firstRes.body.backupPackage.version).toBe(1);
+
+      const secondRes = await generateBackup(admin, cycle.id);
+      expect(secondRes.status).toBe(201);
+      expect(secondRes.body.backupPackage.version).toBe(2);
+    });
+
+    it('failure-injection: a defensive failure while marking a stale row FAILED is logged, never thrown, and the sweep still reports the row as processed', async () => {
+      const admin = await masterAdminAgent('backup-recovery-injection-admin@test.local');
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { email: 'backup-recovery-injection-admin@test.local' },
+      });
+      const { cycle } = await makeReadyCycle(admin, 6, 2901);
+
+      const stale = await createGeneratingPackage(cycle.id, user.id);
+      await backdateUpdatedAt(stale.id, STALE_AGE_MS);
+
+      const updateSpy = jest
+        .spyOn(prisma.backupPackage, 'update')
+        .mockRejectedValueOnce(new Error('simulated DB failure'));
+      try {
+        await expect(recoverStaleGeneratingBackupPackages()).resolves.toEqual({ recoveredIds: [stale.id] });
+      } finally {
+        updateSpy.mockRestore();
+      }
+
+      // The status update itself failed and was caught/logged (matching
+      // `failBackupPackageGeneration`'s own defensive-catch behavior for the identical "mark
+      // FAILED" step) rather than throwing and aborting the sweep — the audit entry, a separate
+      // step, was still written.
+      const stillGenerating = await prisma.backupPackage.findUniqueOrThrow({ where: { id: stale.id } });
+      expect(stillGenerating.status).toBe('GENERATING');
+      const auditEntries = await prisma.auditLog.findMany({
+        where: { action: 'backup_package.generation_recovered', entityId: stale.id },
+      });
+      expect(auditEntries).toHaveLength(1);
+    });
   });
 });

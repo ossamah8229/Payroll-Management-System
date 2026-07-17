@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
 import type { ChangePasswordInput, PermissionKey, RoleCode, SessionUser, UpdateProfileInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import { invalidateAllSessionsForUser } from '../../lib/session-store';
 import { badRequest } from '../../common/http-error';
 
 /**
@@ -79,9 +80,12 @@ export async function updateOwnProfile(userId: string, input: UpdateProfileInput
 /**
  * Self-service password change — requires proving the current password first (unlike Master
  * Admin's user-management reset, which doesn't, since that path is already gated by
- * `users:manage`). Every other active session for this user stays valid; only a targeted
- * deactivation invalidates sessions immediately (docs/architecture/authentication.md), and a
- * voluntary password change isn't that.
+ * `users:manage`). **AUD-009 (Post-Phase-5 Stabilization Checkpoint 3):** every existing session
+ * for this user — including the one making this very request — is invalidated once the new
+ * password is stored, the same immediate-invalidation guarantee deactivation already provides
+ * (docs/architecture/authentication.md). The route handler (`auth.routes.ts`) additionally
+ * destroys the current request's own session/cookie so its response reflects that immediately,
+ * rather than only on that session's next request.
  */
 export async function changeOwnPassword(userId: string, input: ChangePasswordInput): Promise<void> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
@@ -93,4 +97,5 @@ export async function changeOwnPassword(userId: string, input: ChangePasswordInp
 
   const passwordHash = await argon2.hash(input.newPassword);
   await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  await invalidateAllSessionsForUser(userId);
 }

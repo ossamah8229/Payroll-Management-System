@@ -1,7 +1,8 @@
+import request from 'supertest';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { assertNoSensitiveKeys, cleanTestData, createAuthenticatedAgent } from './helpers';
+import { assertNoSensitiveKeys, cleanTestData, createAuthenticatedAgent, extractCookie } from './helpers';
 
 const app = createApp();
 
@@ -159,6 +160,95 @@ describe('User Management', () => {
       .set('x-csrf-token', csrfToken)
       .send({ email: 'reset-target@test.local', password: 'BrandNewPassword1!' });
     expect(loginRes.status).toBe(200);
+  });
+
+  describe('AUD-009: session revocation on admin-triggered password reset', () => {
+    async function loginAgent(email: string, password: string) {
+      const agent = request.agent(app);
+      const primeRes = await agent.get('/health');
+      const csrfToken = extractCookie(primeRes, 'csrf_token');
+      if (!csrfToken) throw new Error('Expected /health to issue a csrf_token cookie');
+      const loginRes = await agent.post('/api/v1/auth/login').set('x-csrf-token', csrfToken).send({ email, password });
+      if (loginRes.status !== 200) {
+        throw new Error(`Test login failed with status ${loginRes.status}: ${JSON.stringify(loginRes.body)}`);
+      }
+      return { agent, csrfToken };
+    }
+
+    it(
+      "invalidates every existing session for the target user (a second browser session included), " +
+        'leaves the acting Master Admin authenticated, and requires the new password to log back in',
+      async () => {
+        const { agent: adminAgent, csrfToken } = await masterAdminAgent('users-reset-sessions-admin@test.local');
+
+        const createRes = await adminAgent
+          .post('/api/v1/users')
+          .set('x-csrf-token', csrfToken)
+          .send({
+            name: 'Reset Sessions Target',
+            email: 'reset-sessions-target@test.local',
+            password: 'OriginalPassword1!',
+            roleCode: ROLE_CODES.PAYROLL_STAFF,
+          });
+        expect(createRes.status).toBe(201);
+        const targetId = createRes.body.user.id;
+
+        const targetSessionA = await loginAgent('reset-sessions-target@test.local', 'OriginalPassword1!');
+        const targetSessionB = await loginAgent('reset-sessions-target@test.local', 'OriginalPassword1!');
+
+        expect((await targetSessionA.agent.get('/api/v1/auth/me')).status).toBe(200);
+        expect((await targetSessionB.agent.get('/api/v1/auth/me')).status).toBe(200);
+
+        const resetRes = await adminAgent
+          .post(`/api/v1/users/${targetId}/reset-password`)
+          .set('x-csrf-token', csrfToken)
+          .send({ newPassword: 'BrandNewPassword1!' });
+        expect(resetRes.status).toBe(204);
+
+        // Both of the target's own sessions ("second browser session" included) are invalidated.
+        expect((await targetSessionA.agent.get('/api/v1/auth/me')).status).toBe(401);
+        expect((await targetSessionB.agent.get('/api/v1/auth/me')).status).toBe(401);
+
+        // The acting Master Admin's own session is untouched — resetting someone else's password
+        // never invalidates an unrelated user's (here, the admin's own) session.
+        expect((await adminAgent.get('/api/v1/auth/me')).status).toBe(200);
+
+        // Old password no longer works.
+        const oldPasswordAgent = request.agent(app);
+        const oldPasswordPrimeRes = await oldPasswordAgent.get('/health');
+        const oldPasswordCsrf = extractCookie(oldPasswordPrimeRes, 'csrf_token')!;
+        const oldLoginRes = await oldPasswordAgent
+          .post('/api/v1/auth/login')
+          .set('x-csrf-token', oldPasswordCsrf)
+          .send({ email: 'reset-sessions-target@test.local', password: 'OriginalPassword1!' });
+        expect(oldLoginRes.status).toBe(401);
+
+        // New password logs in successfully.
+        const newSession = await loginAgent('reset-sessions-target@test.local', 'BrandNewPassword1!');
+        expect((await newSession.agent.get('/api/v1/auth/me')).status).toBe(200);
+
+        // Audit behavior unchanged: exactly one password-reset entry, attributed to the admin.
+        const entries = await prisma.auditLog.findMany({
+          where: { action: 'user.password-reset', entityId: targetId },
+        });
+        expect(entries).toHaveLength(1);
+        expect(entries[0]!.actorUserId).not.toBe(targetId);
+      },
+    );
+
+    it('also invalidates the acting Master Admin\'s own session when they reset their own password', async () => {
+      const { agent, csrfToken, userId } = await masterAdminAgent('users-reset-self-admin@test.local');
+
+      expect((await agent.get('/api/v1/auth/me')).status).toBe(200);
+
+      const resetRes = await agent
+        .post(`/api/v1/users/${userId}/reset-password`)
+        .set('x-csrf-token', csrfToken)
+        .send({ newPassword: 'BrandNewSelfPassword1!' });
+      expect(resetRes.status).toBe(204);
+
+      expect((await agent.get('/api/v1/auth/me')).status).toBe(401);
+    });
   });
 
   describe('response serialization security (Phase 5 Checkpoint 4 correction, 2026-07-16)', () => {
