@@ -22,9 +22,8 @@ be enough to resume correctly without re-deriving context from scratch — per
 before any implementation begins — architecture-only work already froze its design alongside Phase
 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record.
 
-**Latest commits:** `3102c74` (Stabilization Checkpoint 3 implementation) / `31e688f` (its doc-hash
-follow-up). Checkpoint 4's own commit hash is recorded in `docs/PROJECT_PROGRESS.md` §1's own dated
-entry once made — check there for the exact hash rather than trusting a number hand-copied here.
+**Latest commits:** `4764afb` (Stabilization Checkpoint 4 implementation — AUD-012/AUD-013), doc-hash
+follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
 - **Checkpoint 1** (AUD-001–005: backend start-script fix, CSV-formula-injection sanitizer,
@@ -35,8 +34,8 @@ entry once made — check there for the exact hash rather than trusting a number
 - **Checkpoint 3** (AUD-009 session revocation on password change/reset; AUD-011 stale `GENERATING`
   Backup Package recovery) — `3102c74`/`31e688f`.
 - **Checkpoint 4** (AUD-012 route-level frontend code splitting; AUD-013 the permanent Playwright
-  E2E harness, `tests/e2e/`, plus the documentation reconciliation it identified as needed) — this
-  session's own work; see `docs/PROJECT_PROGRESS.md` §1 for the commit hash and full record.
+  E2E harness, `tests/e2e/`, plus the documentation reconciliation it identified as needed) —
+  `4764afb`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical

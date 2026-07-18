@@ -4096,7 +4096,7 @@ by this manual pass (a non-`Test`-prefixed site/employees, outside the automated
 scope) was identified and removed afterward, and the full suite re-run to confirm **516/516** with a
 clean database.
 
-### Post-Phase-5 Stabilization Checkpoint 4 — frontend performance, permanent E2E harness — COMPLETE, 2026-07-18
+### Post-Phase-5 Stabilization Checkpoint 4 — frontend performance, permanent E2E harness — COMPLETE, 2026-07-18, COMMITTED as `4764afb`
 
 Repository preflight confirmed: branch `main`, working tree clean, commits `3102c74`/`31e688f`
 (Checkpoint 3) present, baseline **516/516** backend / **23/23** frontend / 15 migrations / zero
