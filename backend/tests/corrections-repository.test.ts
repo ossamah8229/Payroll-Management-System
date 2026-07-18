@@ -1,6 +1,6 @@
 import { prisma } from '../src/lib/prisma';
 import { cleanTestData, createTestUser } from './helpers';
-import { acquirePayrollEntryLock } from '../src/modules/corrections/corrections.lock';
+import { acquirePayrollEntryLock, withPayrollEntryLock } from '../src/modules/corrections/corrections.lock';
 import {
   assertAdjustmentTypeValid,
   getApprovedCorrectionsForEntry,
@@ -359,6 +359,33 @@ describe('Phase 6 Checkpoint 2 — corrections repository, orchestration, and ad
 
       await Promise.all([first, second]);
       expect(secondAcquiredAt - secondStart).toBeLessThan(holdMs / 2);
+    }, 10000);
+
+    it('withPayrollEntryLock acquires the lock, runs the callback, and returns its result', async () => {
+      const { entry } = await makeFixtures('lock-wrapper');
+      const result = await prisma.$transaction((tx) => withPayrollEntryLock(entry.id, tx, async () => 'callback-ran'));
+      expect(result).toBe('callback-ran');
+    });
+
+    it('withPayrollEntryLock serializes the SAME PayrollEntry exactly like the raw acquire helper', async () => {
+      const { entry } = await makeFixtures('lock-wrapper-serialize');
+      const holdMs = 400;
+
+      const first = prisma.$transaction((tx) =>
+        withPayrollEntryLock(entry.id, tx, () => new Promise((resolve) => setTimeout(resolve, holdMs))),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const secondStart = Date.now();
+      let secondAcquiredAt = 0;
+      const second = prisma.$transaction((tx) =>
+        withPayrollEntryLock(entry.id, tx, async () => {
+          secondAcquiredAt = Date.now();
+        }),
+      );
+
+      await Promise.all([first, second]);
+      expect(secondAcquiredAt - secondStart).toBeGreaterThanOrEqual(holdMs - 150);
     }, 10000);
   });
 });

@@ -155,6 +155,37 @@ describe('Baseline reconstruction', () => {
     expect(result.newValue).toBe('54000');
   });
 
+  it('Checkpoint 2A Review 1 — three-deep replay: two already-approved corrections (A, B) plus a proposed third (C) resolves to B, never A, regardless of array order', () => {
+    // Released: Gross = 50,000. Approved A: 50,000 -> 52,000. Approved B: 52,000 -> 54,000.
+    // Proposed C: 54,000 -> 55,000. The reconstructed baseline immediately before C must be
+    // 54,000 (B's newValue) — never 52,000 (A's) and never the original 50,000. days === cycleDays
+    // and otHours === 0 makes netSalary === grossPay exactly (no proration/OT/EOBI noise), so the
+    // net-salary assertions below can compare directly against the grossPay figures themselves.
+    const entry = makeEntry({ grossPay: new Prisma.Decimal('50000'), eobiApplicable: false }, [
+      makeWorkLine({ days: new Prisma.Decimal('30'), cycleDays: 30, otHours: new Prisma.Decimal('0') }),
+    ]);
+    const a = makeCorrectionHistory({ id: 'A', field: 'GROSS_PAY', newValue: '52000', approvedAt: new Date('2026-02-01T00:00:00Z') });
+    const b = makeCorrectionHistory({ id: 'B', field: 'GROSS_PAY', newValue: '54000', approvedAt: new Date('2026-02-02T00:00:00Z') });
+
+    for (const history of [[a, b], [b, a]]) {
+      const baseline = reconstructBaseline(entry, history);
+      const grossPay = baseline.fields.find((f) => f.field === 'GROSS_PAY')!;
+      expect(grossPay.value).toBe('54000');
+      expect(grossPay.sourceCorrectionId).toBe('B');
+
+      const preview = calculateCorrection(entry, history, {
+        field: 'GROSS_PAY',
+        proposedNewValue: '55000',
+        adjustmentTypeId: 'adj-1',
+      });
+      expect(preview.oldValue).toBe('54000');
+      expect(preview.newValue).toBe('55000');
+      expect(preview.oldNetSalary).toBe('54000.00');
+      expect(preview.newNetSalary).toBe('55000.00');
+      expect(preview.delta).toEqual({ amount: '1000.00', classification: 'PAYABLE' });
+    }
+  });
+
   it('reversal: a later Correction reversing an earlier one requires no special-case handling — it just becomes the most recent', () => {
     const entry = makeEntry();
     const corrections = [
