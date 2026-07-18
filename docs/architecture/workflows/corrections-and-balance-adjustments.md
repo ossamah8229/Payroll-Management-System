@@ -216,6 +216,22 @@ per-adjustment or per-cycle-batch action, both reusing the existing `payroll:ent
 Ledger. Departed-employee `RECOVERY` is never materialized, the identical Product Decision
 Resolution rule already enforced for settlement above.
 
+**Scope note, Phase 6 Checkpoint 5A (2026-07-18) — reservation-aware settlement.** A post-Checkpoint-5
+architectural review found a genuine gap at the seam between the two paragraphs above: Checkpoint 4's
+settlement recording (`recordCorrectionPayment`/`recordBalanceAdjustmentSettlement`) validated a
+proposed amount only against `remainingAmount`, never against Checkpoint 5's own reservation ledger.
+Since a materialization never touches `remainingAmount`/`.status`, an amount already reserved into a
+Draft cycle's own `PayrollEntry` (and therefore already counted in that entry's `calcNet`, headed for
+payment/deduction at that cycle's eventual release) could *also* be settled independently — the same
+obligation processed twice. Every settlement path (standalone, cycle-scoped, and the read-only
+preview) now reads the same `getActiveReservedAmount` ledger `determineMaterialization` reads and
+rejects (`RESERVED_AMOUNT_UNAVAILABLE`) a settlement that would exceed `remainingAmount −
+Σ(ACTIVE reservations)`. This does not change who is allowed to settle or materialize, add a new
+permission, or touch the schema — it only makes the settlement-side ceiling reservation-aware, mirroring
+the ceiling materialization already enforced. The reverse direction (settle first, materialize second)
+was already safe: materializing a `SETTLED` adjustment is rejected (`FULLY_SETTLED`), and a partial
+settlement's `remainingAmount` decrement is read fresh by any later materialization attempt.
+
 ```
 Correction Approved
         ↓
