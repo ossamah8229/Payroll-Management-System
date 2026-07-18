@@ -19,6 +19,7 @@ import {
   assertCycleExists,
   createBalanceAdjustmentSettlementRow,
   createCorrectionPaymentRow,
+  getActiveReservedAmount,
   getBalanceAdjustmentById,
   listBalanceAdjustmentSettlements,
   updateBalanceAdjustmentAfterSettlement,
@@ -29,10 +30,20 @@ import {
  * Phase 6 Checkpoint 4 — settlement lifecycle orchestration: locking, validation coordination, and
  * authorization for recording how an outstanding `BalanceAdjustment` gets settled. Delegates every
  * read/write to `corrections.repository.ts`, every calculation to the pure
- * `corrections.settlement.ts` (unchanged by anything here), and every lock to
- * `corrections.lock.ts`'s `acquireBalanceAdjustmentLock`. Does not implement automatic Draft-cycle
- * materialization, `PayrollEntry` deductions, bank-sheet/cash-sheet integration, or any
- * frontend-facing concern — those remain later checkpoints.
+ * `corrections.settlement.ts`, and every lock to `corrections.lock.ts`'s
+ * `acquireBalanceAdjustmentLock`. Does not implement `PayrollEntry` deductions, bank-sheet/cash-sheet
+ * integration, or any frontend-facing concern — those remain later checkpoints.
+ *
+ * **Checkpoint 5A (2026-07-18) — reservation-aware settlement.** Every settlement path (standalone
+ * `CorrectionPayment`, cycle-scoped `BalanceAdjustmentSettlement`, and the read-only preview) now
+ * reads `getActiveReservedAmount` (`corrections.repository.ts`, the same reservation ledger
+ * Checkpoint 5's `corrections.materialization.ts` reads as `activeReservedAmount`) and passes it
+ * into the pure calculation so `RESERVED_AMOUNT_UNAVAILABLE` rejects a settlement that would double-
+ * process an amount already reserved into a Draft cycle's own `PayrollEntry` (and therefore already
+ * headed for that cycle's release). See that checkpoint's own review report for the full analysis —
+ * this was a genuine gap: Checkpoint 5's materialization already treated Checkpoint 4-recorded
+ * settlements as reducing `availableToMaterialize` (via `remainingAmount`), but the reverse was never
+ * true — settlement never checked reservations.
  */
 
 function assertNotFound(adjustment: BalanceAdjustmentDetail | null, id: string): asserts adjustment is BalanceAdjustmentDetail {
@@ -130,9 +141,11 @@ export async function recordCorrectionPayment(
       await assertBankExists(input.bankId, tx);
     }
 
+    const activeReservedAmount = await getActiveReservedAmount(balanceAdjustmentId, tx);
     const result = calculateStandalonePayment({
       remainingAmount: adjustment.remainingAmount.toString(),
       status: adjustment.status,
+      activeReservedAmount,
     });
 
     const correctionPayment = await createCorrectionPaymentRow(
@@ -203,10 +216,12 @@ export async function recordBalanceAdjustmentSettlement(
 
     await assertCycleExists(input.cycleId, tx);
 
+    const activeReservedAmount = await getActiveReservedAmount(balanceAdjustmentId, tx);
     const result = calculateSettlement({
       remainingAmount: adjustment.remainingAmount.toString(),
       status: adjustment.status,
       proposedAmount: input.amount,
+      activeReservedAmount,
     });
 
     const settlement = await createBalanceAdjustmentSettlementRow(
@@ -254,9 +269,15 @@ export async function previewSettlement(
   assertNotFound(adjustment, balanceAdjustmentId);
   assertSiteAccess(currentUser, adjustment.employee.siteId);
 
+  const activeReservedAmount = await getActiveReservedAmount(balanceAdjustmentId);
+
   if (input.mode === 'STANDALONE') {
     assertPayableOnly(adjustment);
-    return calculateStandalonePayment({ remainingAmount: adjustment.remainingAmount.toString(), status: adjustment.status });
+    return calculateStandalonePayment({
+      remainingAmount: adjustment.remainingAmount.toString(),
+      status: adjustment.status,
+      activeReservedAmount,
+    });
   }
 
   if (!input.amount) {
@@ -270,6 +291,7 @@ export async function previewSettlement(
     remainingAmount: adjustment.remainingAmount.toString(),
     status: adjustment.status,
     proposedAmount: input.amount,
+    activeReservedAmount,
   });
 }
 

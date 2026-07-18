@@ -36,6 +36,7 @@ export type SettlementValidationErrorCode =
   | 'NEGATIVE_SETTLEMENT_AMOUNT'
   | 'INVALID_SETTLEMENT_AMOUNT'
   | 'OVER_SETTLEMENT'
+  | 'RESERVED_AMOUNT_UNAVAILABLE'
   | 'WRONG_ADJUSTMENT_TYPE_FOR_PAYMENT'
   | 'DEPARTED_EMPLOYEE_RECOVERY_PENDING'
   | 'INVALID_BANK'
@@ -70,6 +71,15 @@ export interface SettlementCalculationInput {
   status: 'PENDING' | 'SETTLED';
   /** The amount this settlement event proposes to apply. */
   proposedAmount: string;
+  /** Sum of every `ACTIVE` `BalanceAdjustmentMaterialization` row for this adjustment, across every
+   * Draft cycle — the same reservation ledger `corrections.materialization.ts`'s own
+   * `availableToMaterialize` reads (Checkpoint 5). Money already reserved into a Draft cycle's own
+   * `PayrollEntry.correctionBalancePayable`/`.correctionBalanceRecovery` (and therefore already
+   * counted in that entry's `calcNet`) is not available for a *second*, independent settlement here
+   * — settling it too would pay or deduct the same obligation twice, once through that cycle's
+   * eventual release and once through this settlement. Defaults to `'0'` (no reservation) so every
+   * existing caller/test that never mentions materialization keeps its exact prior behavior. */
+  activeReservedAmount?: string;
 }
 
 export interface SettlementCalculationResult {

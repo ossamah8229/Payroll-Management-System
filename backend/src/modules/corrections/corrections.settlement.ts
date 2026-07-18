@@ -64,6 +64,19 @@ export function calculateSettlement(input: SettlementCalculationInput): Settleme
     });
   }
 
+  // Review Question 1 fix — a reservation-aware settlement ceiling, the settlement-side mirror of
+  // `corrections.materialization.ts`'s own `availableToMaterialize`. Without this, an amount already
+  // reserved into a Draft cycle's own PayrollEntry (and therefore already headed for that cycle's
+  // release) could also be settled here, paying or deducting the same obligation twice.
+  const activeReserved = new Decimal(input.activeReservedAmount ?? '0');
+  const availableForSettlement = remaining.minus(activeReserved);
+  if (proposed.greaterThan(availableForSettlement)) {
+    throw new SettlementValidationError({
+      code: 'RESERVED_AMOUNT_UNAVAILABLE',
+      message: `The settlement amount (${proposed.toFixed(2)}) exceeds the amount available for settlement (${availableForSettlement.toFixed(2)}) — ${activeReserved.toFixed(2)} of the remaining balance (${remaining.toFixed(2)}) is already reserved by an active Draft-cycle materialization and must be resolved before it can also be settled here.`,
+    });
+  }
+
   const newRemainingAmount = remaining.minus(proposed);
   const fullySettled = newRemainingAmount.isZero();
 
