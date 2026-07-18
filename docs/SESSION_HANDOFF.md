@@ -31,7 +31,7 @@ data: `CorrectionRequest` creation/approval/rejection, immutable `Correction` +
 or frontend correction workflow exist yet.** Do not begin Checkpoint 4 without its own separate,
 explicit go-ahead.
 
-**Latest commits:** `<PHASE6_CKPT3_COMMIT>` (Phase 6 Checkpoint 3 implementation), doc-hash
+**Latest commits:** `6189ba9` (Phase 6 Checkpoint 3 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -59,7 +59,7 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
   checkpoint to write data; `corrections.service.ts`/`corrections.routes.ts`: request
   creation/listing/detail, transactional approve/reject, immutable `Correction` +
   `BalanceAdjustment` creation, advisory-lock-protected concurrency, one aggregate audit event per
-  approval) — `<PHASE6_CKPT3_COMMIT>`.
+  approval) — `6189ba9`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
