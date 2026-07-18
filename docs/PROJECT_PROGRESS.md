@@ -4096,6 +4096,123 @@ by this manual pass (a non-`Test`-prefixed site/employees, outside the automated
 scope) was identified and removed afterward, and the full suite re-run to confirm **516/516** with a
 clean database.
 
+### Post-Phase-5 Stabilization Checkpoint 4 — frontend performance, permanent E2E harness — COMPLETE, 2026-07-18
+
+Repository preflight confirmed: branch `main`, working tree clean, commits `3102c74`/`31e688f`
+(Checkpoint 3) present, baseline **516/516** backend / **23/23** frontend / 15 migrations / zero
+schema drift reconfirmed, Phase 6 not started. Implements the final two approved stabilization
+findings: **AUD-012** (route-level frontend code splitting) and **AUD-013** (a permanent, committed
+Playwright E2E harness, plus the documentation reconciliation it identified as needed). No product,
+business-rule, schema, or UI redesign changes.
+
+**AUD-012 — route-level code splitting.** Every authenticated page-level route
+(`frontend/src/App.tsx`) is now `React.lazy`-loaded, plus the always-mounted `TasksWorkspace`
+topbar widget (`components/layout/topbar.tsx`) — neither gated by a route, so both would otherwise
+sit in the initial bundle regardless of which pages a session ever visits. `LoginPage`/
+`NotFoundPage` deliberately stay eager (the very first screen an unauthenticated session renders,
+and the tiny catch-all route, respectively). A new shared `RouteLoadingFallback`
+(`components/layout/route-loading-fallback.tsx`) — a centered pulse on the app's own `bg-bg` token,
+`role="status"`/`aria-live="polite"`, no fake sidebar/topbar — is the one fallback both the
+`Suspense` boundary and the pre-existing session-loading check now render, so a user can't tell
+which kind of "loading" they're seeing. A new minimal `RouteErrorBoundary`
+(`components/layout/route-error-boundary.tsx`) catches a failed chunk `import()` (most commonly: an
+old tab open past a new deploy asking for a chunk hash that no longer exists) and offers a Reload
+button — deliberately no telemetry hook or broader error-reporting system. No new router or
+bundler; no manual `manualChunks` configuration — the default Rollup split was not "demonstrably
+poor" (this checkpoint's own bar for adding one).
+
+**Bundle results:** initial entry chunk **790.82 kB → 427.65 kB** (44.6% smaller, gzip **225.45 kB →
+134.33 kB**, 40.4% smaller) — the JavaScript every session must download before first paint,
+regardless of which page it lands on. Total JS across all chunks is materially unchanged (**786.38
+kB**, matching the original 790.82 kB — code was relocated, not removed), split across **35 chunks**
+by Vite's own default algorithm: 12 page-specific chunks (`employees-page`, `payroll-entry-page`,
+etc.), one large shared `app-shell` chunk (92.46 kB, every authenticated page's own Sidebar+Topbar,
+loaded once and cached), and ~20 small shared-dependency chunks Rollup factored out automatically.
+The build's own ">500 kB chunk" warning, present before this checkpoint, no longer appears — the
+largest chunk (the entry) is now 427.65 kB. Real-stack verified (real backend + a real production
+`vite build` served via `vite preview`, cross-origin, real Chromium via Puppeteer): direct navigation
+to `/login` loads only the entry chunk; each authenticated route's own chunk (plus `app-shell`, once)
+loads only on first visit to that route, both via fresh navigation and via client-side
+(`react-router`) navigation; a full reload and a refresh on a nested `/payroll-cycles/:cycleId/...`
+route both work; zero new console/page errors or failed chunk requests across all eleven routes.
+
+**AUD-013 — permanent Playwright E2E harness.** Replaces this project's own prior pattern (every
+phase/checkpoint before this one) of writing a one-off Puppeteer verification script, running it
+once, and discarding it. New root-level `playwright.config.ts` + `tests/e2e/` (specs, fixtures,
+helpers, and `setup/e2e-environment.ts` — the environment orchestrator). Chromium only; `workers: 1`
+(the payroll-lifecycle spec mutates real, shared cycle state end-to-end — proving worker isolation
+for that was out of this checkpoint's scope). **Database provisioning reuses the exact
+`embedded-postgres` approach already proven stable across Stabilization Checkpoints 1–3** — its own
+dedicated port (`55432`), database (`payroll_e2e`), and credentials, entirely distinct from a
+developer's normal `payroll_dev` (port `5432`, via the pre-existing root `docker-compose.yml` or the
+same embedded-postgres approach by hand) — provisioned fresh and fully torn down (including its own
+data directory) every run; never reused, never a developer's own database. The real compiled backend
+(`node dist/server.js`, `NODE_ENV=test` — `production` would set `secure` session cookies, which
+break over the plain HTTP this harness runs on; `test` also relaxes the login rate limiter the same
+way the backend's own integration suite already relies on) and the real **production** frontend
+build (not `vite dev` — the only way to genuinely exercise AUD-012's own route-split chunks) are
+both started as ordinary detached child processes, killed by process group in teardown so no
+subprocess (e.g. `npx`'s own spawned `vite` binary) is ever left orphaned.
+
+**Six spec files, 15 tests, run in a deliberate file order** (`01`–`06`, since several depend on
+state an earlier one creates — see each file's own header comment and `tests/e2e/README.md`):
+startup/auth (backend health, frontend load, login, authenticated shell render, logout); the one
+full Draft → Released → Archived(+rollover) payroll lifecycle path driven through the real UI (owns
+the one-time `POST /payroll-cycles` bootstrap — every cycle after the first comes only from
+rollover); core navigation (every route direct-navigated and one client-side lazy-route navigation,
+zero console/page errors, zero failed chunks, a nested-route refresh); AUD-009 session-revocation
+regression (two independent browser contexts, a dedicated test user so its password change can't
+affect any other spec's own login, both sessions lose authorization the moment the password
+changes); Backup Package generation reaching `READY` through the real stack with no `storageKey`
+leak (API-only — no frontend UI for this exists yet, Phase 5 Checkpoint 2's own approved scope);
+and a UI regression smoke covering five durable stabilization-era invariants (Payslips filter
+alignment/AUD-004, no document-level scroll, standard-vs-compact table density, no sidebar emoji,
+modal centering/Escape-to-close) with tolerant geometric assertions, never exact-pixel snapshots.
+
+**Explicitly documented scope boundary:** AUD-011's crash-recovery path is *not* re-tested by this
+harness — killing/restarting the real backend process mid-suite would make the harness's own
+lifecycle unstable, since it depends on that one backend process staying up for the rest of the run.
+That path already has dedicated, real-stack coverage in `backend/tests/backup-packages.test.ts`'s
+own `AUD-011: stale GENERATING recovery` block (Checkpoint 3) — same start/kill/restart mechanism,
+no browser attached. Documented in `tests/e2e/README.md`, not silently skipped.
+
+**A real, reproducible bug found and fixed during implementation, not by inspection:** the CSRF-aware
+API test helper (`tests/e2e/helpers/api.ts`) initially issued requests as paths relative to
+`playwright.config.ts`'s own `baseURL` (the frontend, port 4200) — which resolved fine for `page.goto`
+navigations but silently targeted the wrong origin for direct `context.request` calls, since `vite
+preview` (a static file server) has no `/api` proxy, unlike `vite dev`'s own dev-only one. Fixed by
+targeting the backend's own URL directly, matching exactly how the real frontend build itself talks
+to the backend cross-origin via `VITE_API_URL` in production. A second real bug, found by the
+harness's own "clean-clone simulation" verification pass (removing every `dist/` directory and
+re-running from nothing): `prisma/seed.ts` imports `@payroll/shared`, so the environment
+orchestrator's own `shared` build had to move ahead of the migrate+seed step, not merely ahead of
+starting the backend/frontend servers — a fresh clone with no prior `npm run build` has no
+`shared/dist` at all until that build runs.
+
+**Files/directories added:** `playwright.config.ts`; `tests/e2e/` (`README.md`, `global-setup.ts`,
+`global-teardown.ts`, `setup/config.ts`, `setup/e2e-environment.ts`, `fixtures/auth.ts`,
+`helpers/api.ts`, `helpers/fixtures.ts`, `specs/01`–`06`); `frontend/src/components/layout/
+route-loading-fallback.tsx` and `route-error-boundary.tsx`. **Modified:** `frontend/src/App.tsx`
+(lazy route imports, `Suspense`/`RouteErrorBoundary` wiring), `frontend/src/components/layout/
+topbar.tsx` (lazy `TasksWorkspace`), root `package.json` (`@playwright/test`/`embedded-postgres`
+devDependencies, `test:e2e`/`test:e2e:headed`/`test:e2e:ui`/`test:e2e:report` scripts), root
+`.gitignore` (E2E artifact directories). The empty, untracked, never-populated `tests/unit/` and
+`tests/integration/` placeholder directories (leftover from early scaffolding, superseded in
+practice by `backend/tests/` and `frontend/src/**/*.test.tsx` respectively) were removed rather than
+retained unexplained. New `docs/architecture/testing.md` consolidates what kind of test lives where,
+how each provisions its database, and this checkpoint's own AUD-011 scope-boundary note — the one
+place this project's testing story is current going forward, rather than re-derived per checkpoint.
+
+**Verification performed:** `prisma validate` clean; `prisma migrate status` — still 15 migrations,
+zero drift (no schema touched); backend suite **516/516** (unchanged — no backend code touched);
+frontend suite **23/23** (unchanged — no new frontend unit tests added; per this checkpoint's own
+instruction, dynamic-import route-loading logic is proven by the real Playwright suite, not brittle
+jsdom mocks); new E2E suite **15/15**, stable across four consecutive full runs including one
+genuine clean-clone simulation (every `dist/` directory removed, `npm run test:e2e` run from
+nothing, no undocumented manual step); `typecheck`/`lint` clean across all three workspaces (same 6
+pre-existing frontend `react-refresh` warnings, zero new); production builds clean for all three
+workspaces, zero new warnings.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)

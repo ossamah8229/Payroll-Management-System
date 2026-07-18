@@ -3,7 +3,7 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status (2026-07-16):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
+> **Status (2026-07-18):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
 > evidence**. **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances, Payslips) is
 > code-complete and committed — all six checkpoints implemented and tested — but
 > is not yet marked fully closed**: one condition, a real Render/Linux-container deployment smoke
@@ -14,10 +14,14 @@ calculations, payslips, and related HR/finance workflows.
 > reusable domain/generator), Checkpoint 3 (cycle archiving, automatic backup generation, and
 > new-cycle rollover), and Checkpoint 4 (Historical Payroll Cycle Selector) — are implemented,
 > tested, and committed, and a final real-browser (Playwright/Chromium) verification pass closed
-> the one remaining gap with zero defects found. Phase 6 requires its own separate, explicit
-> authorization before any work begins. See "Current Status" below,
+> the one remaining gap with zero defects found. **All four Post-Phase-5 Stabilization checkpoints
+> are now also complete**: authentication/audit-log hardening and UI consistency fixes (Checkpoints
+> 1–2), session revocation on password change and Backup Package crash recovery (Checkpoint 3), and
+> route-level frontend code splitting plus a permanent Playwright E2E harness (Checkpoint 4,
+> `tests/e2e/`) — see `docs/architecture/testing.md` for the current testing story. Phase 6 requires
+> its own separate, explicit authorization before any work begins. See "Current Status" below,
 > `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
-> `docs/SESSION_HANDOFF.md` for details.
+> `docs/SESSION_HANDOFF.md` §0 for the current authoritative summary.
 
 ## Getting Started
 
@@ -31,6 +35,14 @@ See `backend/README.md` for database migration/seed setup, then:
 ```bash
 npm run dev:backend           # http://localhost:4000
 npm run dev:frontend          # http://localhost:5173
+```
+
+**Running tests** — see `docs/architecture/testing.md` for the full breakdown:
+
+```bash
+npm run test:backend          # Jest, against real PostgreSQL — needs the DB above
+npm run test:frontend         # Vitest, no database needed
+npx playwright install chromium && npm run test:e2e   # provisions/tears down its own database
 ```
 
 ## Current Status
@@ -142,10 +154,11 @@ npm run dev:frontend          # http://localhost:5173
 ├── database/             # Database schema and data
 │   ├── migrations/       # Schema migration scripts
 │   └── seeds/            # Seed/fixture data for development and testing
-├── tests/                # Automated tests
-│   ├── unit/             # Unit tests
-│   ├── integration/      # Integration tests
-│   └── e2e/              # End-to-end tests
+├── tests/
+│   └── e2e/              # Permanent Playwright E2E harness (AUD-013) — see tests/e2e/README.md.
+│                         #   Backend unit/integration tests live in backend/tests/ (Jest, against
+│                         #   real PostgreSQL); frontend unit tests are colocated in frontend/src/
+│                         #   (Vitest) — see docs/architecture/testing.md for the full breakdown.
 ├── scripts/              # Developer/build/deployment utility scripts
 ├── assets/               # Static assets
 │   ├── images/           # General images used across the project
@@ -167,7 +180,10 @@ npm run dev:frontend          # http://localhost:5173
   authorities).
 - **database/** — Everything related to persistent storage: schema migrations and seed
   data for local/dev environments.
-- **tests/** — Automated test suites, separated by scope (unit, integration, end-to-end).
+- **tests/e2e/** — The permanent, committed Playwright end-to-end harness (`npm run test:e2e`).
+  Backend unit/integration tests live alongside the backend itself (`backend/tests/`, Jest against
+  real PostgreSQL); frontend unit tests are colocated with the components they cover
+  (`frontend/src/**/*.test.tsx`, Vitest). See `docs/architecture/testing.md`.
 - **scripts/** — Helper scripts for setup, builds, deployments, or maintenance tasks.
 - **assets/** — Static, non-code files such as images and branding materials.
 - **config/** — Configuration files for different environments (development, staging,
@@ -180,12 +196,11 @@ npm run dev:frontend          # http://localhost:5173
 Phase 4 is code-complete and committed but not yet fully closed — the one outstanding condition is a
 real Render (or genuine Linux container) deployment smoke test, which this development environment
 has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is
-COMPLETE AND CLOSED**: Checkpoint 0 (`StorageProvider` foundation), Checkpoint 1 (Finalize Cycle),
-Checkpoint 2 (Backup Packages reusable domain/generator), Checkpoint 3 (cycle archiving, automatic
-backup generation, and new-cycle rollover, `957ab9d`), and Checkpoint 4 (Historical Payroll Cycle
-Selector, `10e3194`) are all implemented, tested, and committed, and a final real-browser
-(Playwright/Chromium) verification pass — 108 assertions, zero unexpected console errors, zero
-defects found — closed the one remaining gap. Phase 6 requires its own separate, explicit
-authorization before any work begins, per this project's standing per-checkpoint/per-phase practice.
-See `docs/PROJECT_PROGRESS.md` §5 for the exact next action and `docs/SESSION_HANDOFF.md` for the
-full handoff to the next development session.
+COMPLETE AND CLOSED**, and **all four Post-Phase-5 Stabilization checkpoints are now also complete**
+— session revocation (AUD-009), Backup Package crash recovery (AUD-011), route-level frontend code
+splitting (AUD-012), and a permanent Playwright E2E harness (AUD-013) close out the last of the
+audit-approved findings. **Phase 6 requires its own separate, explicit authorization before any work
+begins**, per this project's standing per-checkpoint/per-phase practice — there is no further
+stabilization work queued. See `docs/SESSION_HANDOFF.md` §0 for the current authoritative summary
+(latest commits, test counts, essential commands) and `docs/PROJECT_PROGRESS.md` §1 for the full
+dated history.

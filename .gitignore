@@ -31,3 +31,13 @@ backend/storage/
 # up as a real dependency of backup-packages.routes.ts. backup-packages.test.ts removes its own
 # generated content in its own afterAll; this covers the directory itself as defense in depth.
 backend/storage-test-unused/
+
+# Playwright E2E harness (AUD-013, Post-Phase-5 Stabilization Checkpoint 4) —
+# tests/e2e/setup/e2e-environment.ts's own ephemeral database/storage/logs/PID-state directory,
+# never committed and always removed by its own teardown; the two generated report/artifact
+# directories `playwright test` itself produces.
+tests/e2e/.tmp/
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/

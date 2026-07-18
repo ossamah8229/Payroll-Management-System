@@ -2252,6 +2252,14 @@ produces.
   `docs/PROJECT_PROGRESS.md`'s "Phase 2 checkpoint" section for the audit that motivated it — it
   caught real defects, e.g. a table header/value alignment mismatch and a design-system-contradicting
   label-casing inconsistency, that static review and `typecheck`/`lint`/`build` alone did not).
+  **Updated 2026-07-18 (Post-Phase-5 Stabilization Checkpoint 4, AUD-013):** every phase through Phase
+  5 and the first three stabilization checkpoints satisfied this rule with a one-off Puppeteer/
+  Playwright script, written fresh and discarded per checkpoint. A permanent, committed harness now
+  exists — `tests/e2e/` (`npm run test:e2e`, see `docs/architecture/testing.md`). A future phase with
+  frontend work should extend that harness's smoke suite with its own new spec(s) where the new
+  surface is high-value and durable, rather than writing another one-off script; a quick throwaway
+  script is still fine for one-time exploratory debugging, but should not substitute for the
+  permanent suite as this checklist's own verification step.
 - **HTML prototype review — added 2026-07-10, mandatory from this point forward, alongside the
   Playwright rule above.** This formalizes a practice that had only ever been an informal, unwritten
   habit in prior sessions (`docs/prototypes/*.html` generated "at meaningful UI milestones" per

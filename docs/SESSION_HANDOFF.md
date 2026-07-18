@@ -6,21 +6,59 @@ be enough to resume correctly without re-deriving context from scratch — per
 `docs/PROJECT_PRINCIPLES.md` → `docs/architecture/overview.md` → rest of `docs/architecture/*.md` →
 `docs/IMPLEMENTATION_PLAN.md` → this file → `docs/PROJECT_PROGRESS.md`.
 
-> **Currency notice (added 2026-07-16):** §1 below was last updated during Phase 2/2.5 and does not
-> reflect Phase 3, Phase 3.5, Phase 4, Phase 5, or the two Post-Phase-5 Stabilization checkpoints
-> that followed — all of which are complete. **`docs/PROJECT_PROGRESS.md` §1 is the current,
-> authoritative chronological record; treat it as correct wherever it disagrees with anything below.**
-> Current state in brief: Phases 0–5 are closed. Post-Phase-5 Stabilization Checkpoint 1 (AUD-001
-> backend start-script fix, AUD-002 CSV-formula-injection sanitizer, AUD-003 malformed-UUID 400
-> handling, AUD-004 Payslips filter alignment, AUD-005 the Phase 5 prototype) is COMMITTED as
-> `638f45c`/`a139931`. Post-Phase-5 Stabilization Checkpoint 2 (AUD-006 prototype icon/emoji cleanup,
-> AUD-007 prototype shell-scroll fix, AUD-008 contrast, AUD-010 control-height/table-density
-> consistency, and full living-prototype reconciliation) is this session's own work — see
-> `docs/PROJECT_PROGRESS.md` §1's own dated entry for the full record, including final commit
-> hash(es). Phase 6 has not started. Remaining approved stabilization work: AUD-009 (session
-> revocation on password reset), AUD-011 (stale `GENERATING` Backup Package recovery), AUD-012
-> (route-level code splitting), AUD-013 (committed E2E harness / doc cleanup) — none implemented yet,
-> each its own future checkpoint.
+> **Currency notice (added 2026-07-16, superseded by §0 below, added 2026-07-18):** §1 below was
+> last updated during Phase 2/2.5 and does not reflect Phase 3 onward — all of which is complete.
+> **`docs/PROJECT_PROGRESS.md` §1 is the current, authoritative chronological record; treat it as
+> correct wherever it disagrees with anything below §0.** The rest of this file (§1 onward) is
+> retained as historical narrative of how each phase was actually built — still useful for *why*,
+> not for *what's true now*. For current state, read §0 first.
+
+---
+
+## 0. Current state (authoritative as of 2026-07-18 — read this section first)
+
+**All of Phases 0–5 and all four Post-Phase-5 Stabilization checkpoints are complete.** Phase 6
+(Corrections & Balance Adjustments) has **not** started and requires its own explicit go-ahead
+before any implementation begins — architecture-only work already froze its design alongside Phase
+3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record.
+
+**Latest commits:** `3102c74` (Stabilization Checkpoint 3 implementation) / `31e688f` (its doc-hash
+follow-up). Checkpoint 4's own commit hash is recorded in `docs/PROJECT_PROGRESS.md` §1's own dated
+entry once made — check there for the exact hash rather than trusting a number hand-copied here.
+
+**Stabilization checkpoints, all complete:**
+- **Checkpoint 1** (AUD-001–005: backend start-script fix, CSV-formula-injection sanitizer,
+  malformed-UUID 400 handling, Payslips filter alignment, the Phase 5 prototype) — `638f45c`/`a139931`.
+- **Checkpoint 2** (AUD-006/007/008/010: prototype icon/emoji cleanup, prototype shell-scroll fix,
+  contrast, control-height/table-density consistency, full living-prototype reconciliation) —
+  `d1c543e`/`2d4e167`.
+- **Checkpoint 3** (AUD-009 session revocation on password change/reset; AUD-011 stale `GENERATING`
+  Backup Package recovery) — `3102c74`/`31e688f`.
+- **Checkpoint 4** (AUD-012 route-level frontend code splitting; AUD-013 the permanent Playwright
+  E2E harness, `tests/e2e/`, plus the documentation reconciliation it identified as needed) — this
+  session's own work; see `docs/PROJECT_PROGRESS.md` §1 for the commit hash and full record.
+
+**Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
+how its database is provisioned — treat any older count anywhere else in this file as a historical
+snapshot, not current): backend **516/516**, frontend **23/23**, E2E **15/15**. 15 migrations, zero
+schema drift.
+
+**Exact next step:** Phase 6 (Corrections & Balance Adjustments) architecture review/implementation
+— but only on explicit authorization. Do not begin it, and do not begin a fifth stabilization
+checkpoint, without that go-ahead; all four approved AUD findings are now closed.
+
+**Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
+
+```bash
+npm install
+npx playwright install chromium   # once — E2E's own browser binaries
+
+npm run typecheck && npm run lint && npm run build
+
+npm run test:backend              # requires a provisioned payroll_dev — docs/architecture/testing.md
+npm run test:frontend
+npm run test:e2e                  # provisions and tears down its own database automatically
+```
 
 ---
 

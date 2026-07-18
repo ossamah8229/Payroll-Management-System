@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { LogOut, Settings, User as UserIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -11,7 +12,16 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useLogout } from '@/hooks/use-session';
-import { TasksWorkspace } from '@/components/tasks/tasks-workspace';
+import { Skeleton } from '@/components/ui/skeleton';
+
+/** AUD-012 (Post-Phase-5 Stabilization Checkpoint 4) — `TasksWorkspace` renders in every
+ * authenticated page's topbar (not gated by a route), so it would otherwise sit in the initial
+ * bundle regardless of whether a session ever opens it. Lazy-loaded here instead, with a small
+ * inline fallback sized to the icon-button trigger it replaces — never the full-screen
+ * `RouteLoadingFallback`, which would be visually wrong for a widget this size. */
+const TasksWorkspace = lazy(() =>
+  import('@/components/tasks/tasks-workspace').then((m) => ({ default: m.TasksWorkspace })),
+);
 
 /**
  * docs/design-system.md §2.1: "Topbar: page title + subtitle on the left, contextual global
@@ -53,7 +63,9 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-3">
-        <TasksWorkspace user={user} />
+        <Suspense fallback={<Skeleton className="h-8 w-8 rounded-full" />}>
+          <TasksWorkspace user={user} />
+        </Suspense>
 
         <DropdownMenu>
           <DropdownMenuTrigger className="flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent-light">
