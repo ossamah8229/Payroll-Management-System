@@ -26,7 +26,7 @@ alongside Phase 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that reco
 correction APIs, or frontend correction workflow exist yet** — Checkpoint 1 is schema/domain
 foundation only. Do not begin Checkpoint 2 without its own separate, explicit go-ahead.
 
-**Latest commits:** `<PHASE6_CKPT1_COMMIT>` (Phase 6 Checkpoint 1 implementation), doc-hash
+**Latest commits:** `ac58748` (Phase 6 Checkpoint 1 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -44,7 +44,7 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 **Phase 6, in progress:**
 - **Checkpoint 1** (Corrections Domain & Schema Foundation — five new models, five new enums,
   migration `20260718100000_phase6_corrections_domain`, no calculation/approval/settlement/API/
-  frontend logic) — `<PHASE6_CKPT1_COMMIT>`.
+  frontend logic) — `ac58748`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
