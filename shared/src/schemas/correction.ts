@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emptyToNull } from './common';
 
 /**
  * Phase 6 Checkpoint 1 (Corrections & Balance Adjustments — domain and schema foundation only).
@@ -9,9 +10,8 @@ import { z } from 'zod';
  * conventions-and-enums.md` §1), the same convention every other Prisma enum in this codebase
  * already follows (e.g. `advanceTypeSchema` in `./advance.ts`).
  *
- * Deliberately just the enum mirrors — no request/response DTOs, no mutation input schemas. Those
- * belong to whichever later checkpoint introduces the route that needs them (Checkpoint 4); this
- * checkpoint has no HTTP surface yet.
+ * The enum mirrors below are Checkpoint 1's own. Checkpoint 3 (transactional request/approval)
+ * adds the mutation/query input schemas further down this file.
  */
 
 export const correctionFieldSchema = z.enum([
@@ -54,3 +54,82 @@ export type BalanceAdjustmentStatus = z.infer<typeof balanceAdjustmentStatusSche
 
 export const balanceAdjustmentPaymentTimingSchema = z.enum(['IMMEDIATE', 'DEFERRED']);
 export type BalanceAdjustmentPaymentTiming = z.infer<typeof balanceAdjustmentPaymentTimingSchema>;
+
+/**
+ * Phase 6 Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation).
+ *
+ * `proposedNewValue`/`amount` fields below are transported as a plain, non-empty, <=80-char
+ * string — the same `varchar(80)` wire convention `Correction.newValue`/
+ * `CorrectionRequest.proposedNewValue` already use — never a typed `decimalString` regex, since a
+ * `CorrectionField` value may be a decimal (most fields), an integer (`CYCLE_DAYS`), or the
+ * literal string `"true"`/`"false"` (`EOBI_APPLICABLE`). Per-field shape/bounds validation is the
+ * calculation engine's job (`backend/src/modules/corrections/corrections.calculation.ts`'s
+ * `parseAndValidateFieldValue`), not this schema's — the same division of labor Checkpoint 2
+ * already established between Zod (transport shape) and the domain engine (semantic validity).
+ */
+const correctionFieldValueString = z.string().trim().min(1, 'A value is required').max(80);
+
+/** Submits a `CorrectionRequest` against one field of a released `PayrollEntry`
+ * (`POST /payroll-entries/:entryId/correction-requests`, `payroll:entry`) — "any authorized
+ * payroll user may propose a correction" (Product Decision Resolution). The server always
+ * recomputes the baseline/delta itself at approval time; nothing here is trusted as a frozen
+ * calculation. **No `reversesCorrectionId` here** — `CorrectionRequest` (`backend/prisma/
+ * schema.prisma`) has no such column; a reversal is only ever declared at approval time (below),
+ * matching the Architecture Review's own wording ("the direct-correction and request-approval
+ * endpoints accept an optional reversesCorrectionId") — a requester proposes a value, only the
+ * approving Master User declares that value a reversal of a specific prior `Correction`. */
+export const createCorrectionRequestSchema = z.object({
+  field: correctionFieldSchema,
+  proposedNewValue: correctionFieldValueString,
+  adjustmentTypeId: z.string().uuid('An Adjustment Type is required'),
+  reason: z.string().trim().min(1, 'A reason is required'),
+});
+export type CreateCorrectionRequestInput = z.infer<typeof createCorrectionRequestSchema>;
+
+/** Dry-run preview of a correction's calculated delta — never persists anything
+ * (`POST /payroll-entries/:entryId/corrections/preview`, `payroll:entry` or
+ * `corrections:approve`). Unlike request creation, a preview *does* accept `reversesCorrectionId`
+ * — it mirrors what either a direct correction or an approval-time calculation would actually
+ * compute, and both of those accept it. */
+export const previewCorrectionSchema = createCorrectionRequestSchema.omit({ reason: true }).extend({
+  reversesCorrectionId: z.string().uuid().nullable().optional(),
+});
+export type PreviewCorrectionInput = z.infer<typeof previewCorrectionSchema>;
+
+/**
+ * Approves a `PENDING` `CorrectionRequest` (`POST /correction-requests/:id/approve`,
+ * `corrections:approve`). Every field here is an optional override of the request's own stored
+ * proposal — "the Master User may adjust the proposed field/value/Adjustment Type before
+ * confirming" (`docs/architecture/workflows/corrections-and-balance-adjustments.md`) — omitted
+ * fields fall back to what the requester originally proposed. `reversesCorrectionId` is the one
+ * field with no request-side default (the requester never proposed one) — provide it here to
+ * declare this approval a reversal of a specific prior `Correction` against the same entry+field.
+ * `paymentTiming` is required only when the recalculated delta turns out `PAYABLE` (checked
+ * server-side once the sign is known, not here — this schema cannot know the sign in advance);
+ * `recoveryInstallmentAmount` is always optional (`NULL` legitimately means "recover the full
+ * balance next cycle").
+ */
+export const approveCorrectionRequestSchema = z.object({
+  field: correctionFieldSchema.optional(),
+  proposedNewValue: correctionFieldValueString.optional(),
+  adjustmentTypeId: z.string().uuid().optional(),
+  reversesCorrectionId: z.string().uuid().nullable().optional(),
+  paymentTiming: balanceAdjustmentPaymentTimingSchema.optional(),
+  recoveryInstallmentAmount: z.preprocess(emptyToNull, z.string().trim().min(1).max(80).nullable().optional()),
+});
+export type ApproveCorrectionRequestInput = z.infer<typeof approveCorrectionRequestSchema>;
+
+/** Rejects a `PENDING` `CorrectionRequest` (`POST /correction-requests/:id/reject`,
+ * `corrections:approve`) — mandatory reason, mirroring `Correction.reason`'s own convention. */
+export const rejectCorrectionRequestSchema = z.object({
+  rejectionReason: z.string().trim().min(1, 'A rejection reason is required'),
+});
+export type RejectCorrectionRequestInput = z.infer<typeof rejectCorrectionRequestSchema>;
+
+/** `GET /correction-requests` (`corrections:approve`) — the Master User's review queue, filterable
+ * by status and/or the source entry. Both optional; an empty query lists everything. */
+export const listCorrectionRequestsQuerySchema = z.object({
+  status: correctionRequestStatusSchema.optional(),
+  payrollEntryId: z.string().uuid().optional(),
+});
+export type ListCorrectionRequestsQuery = z.infer<typeof listCorrectionRequestsQuerySchema>;

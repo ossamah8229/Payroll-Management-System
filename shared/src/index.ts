@@ -77,19 +77,29 @@ export type {
 } from './schemas/advance';
 
 export {
+  approveCorrectionRequestSchema,
   balanceAdjustmentPaymentTimingSchema,
   balanceAdjustmentStatusSchema,
   balanceAdjustmentTypeSchema,
   correctionFieldSchema,
   correctionRequestStatusSchema,
+  createCorrectionRequestSchema,
+  listCorrectionRequestsQuerySchema,
+  previewCorrectionSchema,
+  rejectCorrectionRequestSchema,
   WORK_LINE_CORRECTION_FIELDS,
 } from './schemas/correction';
 export type {
+  ApproveCorrectionRequestInput,
   BalanceAdjustmentPaymentTiming,
   BalanceAdjustmentStatus,
   BalanceAdjustmentType,
   CorrectionField,
   CorrectionRequestStatus,
+  CreateCorrectionRequestInput,
+  ListCorrectionRequestsQuery,
+  PreviewCorrectionInput,
+  RejectCorrectionRequestInput,
 } from './schemas/correction';
 
 export {

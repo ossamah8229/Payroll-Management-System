@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { HttpError } from '../http-error';
 import { logger } from '../../lib/logger';
 import { isProduction } from '../../config/env';
+import { CorrectionValidationError, type CorrectionValidationErrorCode } from '../../modules/corrections/corrections.types';
 
 interface ErrorResponseBody {
   error: {
@@ -12,6 +13,34 @@ interface ErrorResponseBody {
     details?: unknown;
   };
 }
+
+/** Phase 6 Checkpoint 3 — `CorrectionValidationError` (`modules/corrections/corrections.types.ts`)
+ * is a deliberately HTTP-agnostic domain error (Checkpoint 2's own design: pure calculation code
+ * has no business knowing status codes exist). This is the one place that knowledge is added back
+ * — every code maps to the status a REST client would expect, kept as a single exhaustive lookup
+ * so a new code added later can't silently fall through to 500. `*_NOT_FOUND` codes mirror this
+ * codebase's existing `notFound()` (404) convention; `REQUEST_NOT_PENDING` mirrors `conflict()`
+ * (409, a resource-state conflict, same class as a stale optimistic-locking `version`); everything
+ * else is a 400 — the caller's own input was invalid, not a resource-state or existence problem. */
+const CORRECTION_ERROR_STATUS: Record<CorrectionValidationErrorCode, number> = {
+  ENTRY_NOT_FOUND: 404,
+  REQUEST_NOT_FOUND: 404,
+  REVERSAL_TARGET_NOT_FOUND: 404,
+  REQUEST_NOT_PENDING: 409,
+  UNSUPPORTED_FIELD: 400,
+  IMMUTABLE_FIELD: 400,
+  INVALID_ADJUSTMENT_TYPE: 400,
+  SPLIT_WORK_LINE_RESTRICTED: 400,
+  ZERO_DELTA: 400,
+  INVALID_NUMERIC_VALUE: 400,
+  ENTRY_NOT_RELEASED: 400,
+  MALFORMED_ENUM_COMBINATION: 400,
+  REVERSAL_TARGET_MISMATCH: 400,
+  REVERSAL_SELF_REFERENCE: 400,
+  PAYMENT_TIMING_REQUIRED: 400,
+  PAYMENT_TIMING_NOT_APPLICABLE: 400,
+  RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE: 400,
+};
 
 /**
  * Single place every error in the request lifecycle funnels through. Zod validation errors and
@@ -37,6 +66,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
       error: { code: err.code ?? 'ERROR', message: err.message },
     };
     res.status(err.statusCode).json(body);
+    return;
+  }
+
+  if (err instanceof CorrectionValidationError) {
+    const body: ErrorResponseBody = {
+      error: { code: err.code, message: err.message },
+    };
+    res.status(CORRECTION_ERROR_STATUS[err.code]).json(body);
     return;
   }
 

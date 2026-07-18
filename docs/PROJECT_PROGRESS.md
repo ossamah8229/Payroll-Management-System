@@ -4383,6 +4383,114 @@ Checkpoint 2 implemented only the deterministic, side-effect-free calculation en
 reconstruction, delta calculation, and validation — plus the not-yet-wired advisory-lock helper. Do
 not begin Checkpoint 3 without its own explicit go-ahead.
 
+### Phase 6 Checkpoint 2A — Calculation Engine Verification & Architecture Alignment — COMPLETE, COMMITTED as `1aede0a`
+
+A review-only checkpoint verifying Checkpoint 2's implementation against the approved architecture
+before any write behavior was introduced. **No production-code defects were found** — replay
+ordering, the exact three-correction chain scenario, timestamp-tie determinism, reversal handling,
+payroll-formula reuse, the advisory lock, and repository purity were all directly verified by
+re-reading the code and, for the replay scenario, by executing it directly. Two test coverage gaps
+were closed (a permanent test for the three-correction chain; two tests for the previously-untested
+`withPayrollEntryLock` wrapper) — test-only, no production code changed. **One substantive finding**:
+`ZERO_DELTA`'s rejection and the architecture's `BalanceAdjustmentType.NONE` path were confirmed
+genuinely incompatible under a literal reading — flagged as a recommendation for product-owner
+resolution, not resolved in that checkpoint (review-only scope). See Checkpoint 3, below, for that
+resolution. Verification: backend **612/612** (609 baseline + 3 new), frontend **23/23** unchanged,
+E2E **15/15** (one transient 14/15 failure investigated, confirmed environmental — no frontend/E2E
+code was touched this checkpoint — and resolved by a clean retry, both runs recorded).
+
+### Phase 6 Checkpoint 3 — Transactional Correction Approval & Balance Adjustment Creation — COMPLETE, COMMITTED as `<PHASE6_CKPT3_COMMIT>`
+
+Repository preflight confirmed: branch `main`, working tree clean, commits `1002209`/`379d197`
+(Checkpoint 2) and `1aede0a` (Checkpoint 2A) present, baseline backend **612/612** / frontend
+**23/23** / E2E **15/15** / 16 migrations / zero schema drift reconfirmed. **The first Phase 6
+checkpoint to write anything** — implements the transactional `CorrectionRequest` → approve/reject
+→ immutable `Correction` + `BalanceAdjustment` pipeline. No schema change, no new migration (16
+migrations, unchanged). Does not implement settlement, `CorrectionPayment` processing,
+`BalanceAdjustmentSettlement` creation, Draft-cycle materialization, bank/cash processing, the
+Corrections Ledger, or any frontend workflow — all remain later checkpoints.
+
+**ZERO_DELTA architecture clarification (resolved, per this checkpoint's own explicit instruction):**
+`docs/architecture/workflows/corrections-and-balance-adjustments.md`'s `NONE`-type paragraph now
+carries a dated amendment recording that a zero-net-difference correction is rejected outright at
+approval time (`ZERO_DELTA`) — no `Correction`/`BalanceAdjustment` created — so `NONE` is not
+reachable through the ordinary single-field workflow this document describes. The enum value is
+retained (not removed — a schema change was explicitly out of this checkpoint's scope), kept for
+forward compatibility with a possible future multi-field/batch-correction scenario.
+
+**Approval transaction** (`corrections.service.ts`, `approveCorrectionRequest`) — one
+`prisma.$transaction`, in order: load the request (to find its `PayrollEntry`) → authorize (site
+access) → acquire the `PayrollEntry`-scoped advisory lock (`corrections.lock.ts`, Checkpoint 2) →
+re-read the request, authoritative and post-lock → confirm `PENDING` → re-read the entry and its
+full approved-correction history, fresh → recalculate via the unchanged Checkpoint 2 pure engine
+(field/value/adjustmentType/reversal overridable, "may adjust before confirming," per the
+Architecture Review) → reject `ZERO_DELTA` internally → create the immutable `Correction` → create
+the `BalanceAdjustment` (`amount`/`remainingAmount` = `abs(delta)`, `type` = `PAYABLE`/`RECOVERY`,
+`paymentTiming` required only for `PAYABLE`, `recoveryInstallmentAmount` optional and `RECOVERY`-only,
+an auto-composed `remark`) → flip the request to `APPROVED` via a conditional `updateMany`
+(`WHERE status = 'PENDING'`, a defense-in-depth backstop alongside the lock, per the Product
+Decision Resolution's own "conditional updates retained as a secondary safeguard") → one aggregate
+`correction.approved` audit event cross-referencing the request and the resulting
+`BalanceAdjustment`. Rejection follows the same lock-then-conditional-update pattern (closing a
+reject-vs-approve race the lock alone wouldn't, since rejection doesn't otherwise touch the
+correction history) — a separate `correction_request.rejected` audit event.
+
+**Reversal**: no separate model — `Correction.reversesCorrectionId`, declared only at approval time
+(not request-creation time — `CorrectionRequest` has no such column; confirmed not a Checkpoint 1
+defect, since the Architecture Review's own route table already specifies "the request-approval
+endpoint accepts an optional reversesCorrectionId"), validated against the same entry+field.
+Multiple corrections may reverse the same target — the schema's own one-to-many
+`reversedByCorrections` relation permits this deliberately; no artificial "already reversed"
+restriction was added.
+
+**Deliberately deferred**: a "direct correction" route (Master User corrects a released entry
+personally, bypassing `CorrectionRequest` entirely) — the Architecture Review describes this as a
+second valid path to an identical `Correction` row, but this checkpoint's own brief scopes
+"Implement" to request creation/listing/detail, approval, and rejection only. Left as a thin,
+straightforward addition for a later checkpoint (skip the request-lookup/status-flip steps;
+everything else — lock, recalculation, `Correction`/`BalanceAdjustment` creation, audit — is already
+directly reusable).
+
+**API routes** (`corrections.routes.ts`, mounted in `app.ts`): `POST
+/payroll-entries/:entryId/correction-requests` (`payroll:entry`), `GET
+/payroll-entries/:entryId/corrections` and `POST .../corrections/preview` (`payroll:entry` or
+`corrections:approve`, matching the Architecture Review's own dual-permission convention), `GET
+/correction-requests` / `GET /:id` / `POST /:id/approve` / `POST /:id/reject` (`corrections:approve`
+only — Master Admin, today). No new permission key — `corrections:approve` was already reserved
+(Checkpoint 1); `payroll:entry` is reused for request submission exactly as the Architecture Review
+specified ("Payroll Staff already holds it, it's already site-scoped").
+
+**Error handling**: `CorrectionValidationError` (Checkpoint 2's HTTP-agnostic domain error, extended
+here with five new codes) is now mapped through the existing global error handler via one
+exhaustive `CorrectionValidationErrorCode -> status` lookup — `*_NOT_FOUND` -> 404,
+`REQUEST_NOT_PENDING` -> 409, everything else -> 400. No raw Prisma error ever reaches a client.
+
+**Files created:** `backend/src/modules/corrections/corrections.service.ts`,
+`corrections.routes.ts`; `backend/tests/corrections-service.test.ts` (39 tests, full HTTP stack via
+`createAuthenticatedAgent` — request creation, approval, sequential approval, real-Postgres
+concurrent approval, rejection, reversal, API security, and transaction-rollback tests using
+`jest.spyOn` against this module's own exports, the same precedent
+`payroll-cycle-rollover.test.ts` already established).
+**Files modified:** `corrections.repository.ts` (CorrectionRequest/Correction/BalanceAdjustment
+read/write primitives — thin CRUD only, no business logic), `corrections.types.ts` (five new error
+codes), `shared/src/schemas/correction.ts` + `shared/src/index.ts` (request/approve/reject/list/
+preview Zod schemas), `backend/src/app.ts` (router mounts), `error-handler.ts` (the new mapping),
+`docs/architecture/workflows/corrections-and-balance-adjustments.md` (the ZERO_DELTA amendment).
+
+**Verification performed:** `prisma validate`/`migrate status` — 16 migrations, zero drift
+(unchanged); full backend suite **651/651** (612 baseline + 39 new, zero regressions); frontend
+suite **23/23** (unchanged); E2E suite **15/15** (unchanged, clean run); `typecheck`/`lint` clean
+across all three workspaces; production builds clean for all three workspaces.
+
+**Explicitly confirmed at close of this checkpoint:** source `PayrollEntry` records remain
+immutable (never written by approval); historical `Correction` rows remain immutable (a second
+correction to the same field creates a new row, never edits the first); no settlement logic, no
+`CorrectionPayment` processing, no `BalanceAdjustmentSettlement` creation, no Draft-cycle
+materialization, and no frontend correction workflow exist yet; no Backup Package was regenerated.
+Checkpoint 3 implemented only transactional request approval/rejection and
+`Correction`/`BalanceAdjustment` creation. Do not begin Checkpoint 4 without its own explicit
+go-ahead.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -4396,7 +4504,7 @@ not begin Checkpoint 3 without its own explicit go-ahead.
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
-| 6 | Corrections & Balance Adjustments (highest-risk logic) | **Started, 2026-07-18.** Architecture Review (review-only, comprehensive) and its Product Decision Resolution (review-only) both complete, refining the 2026-07-05 frozen design. Checkpoint 1 (Corrections Domain & Schema Foundation) CLOSED, committed as `ac58748` — see §1. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine — pure functions, no side effects, no schema change) CLOSED, committed as `1002209` — see §1. No approval workflow, settlement logic, correction APIs, or frontend workflow exist yet. Checkpoint 3 not started |
+| 6 | Corrections & Balance Adjustments (highest-risk logic) | **Started, 2026-07-18.** Architecture Review (review-only, comprehensive) and its Product Decision Resolution (review-only) both complete, refining the 2026-07-05 frozen design. Checkpoint 1 (Corrections Domain & Schema Foundation) CLOSED, committed as `ac58748` — see §1. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, committed as `1002209` — see §1. Checkpoint 2A (review-only verification, no defects, two coverage-gap tests added) CLOSED, committed as `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation — the first checkpoint to write data; request creation/approval/rejection, immutable `Correction` + `BalanceAdjustment` creation, advisory-lock-protected concurrency) CLOSED, committed as `<PHASE6_CKPT3_COMMIT>` — see §1. No settlement logic, `CorrectionPayment` processing, `BalanceAdjustmentSettlement` creation, Draft-cycle materialization, or frontend workflow exist yet. Checkpoint 4 not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |

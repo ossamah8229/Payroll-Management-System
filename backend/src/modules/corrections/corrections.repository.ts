@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import type { EntryWithWorkLines } from '../payroll-entry/payroll-entry.service';
 import { calculateCorrection } from './corrections.calculation';
@@ -9,13 +10,16 @@ import {
 } from './corrections.types';
 
 /**
- * Phase 6 Checkpoint 2 — read-only data access for the correction calculation engine. Every
- * export here only reads (Prisma `findUnique`/`findMany`); there is deliberately no `create`/
- * `update`/`delete` in this file — persisting a `Correction`/`BalanceAdjustment` is Checkpoint 3's
- * scope, not this one's. Every function accepts an optional transaction client, defaulting to the
- * shared `prisma` singleton, following this codebase's established pattern
- * (`src/modules/audit-log/audit-log.service.ts`'s `recordAuditLog`) so a future transactional
- * caller can pass its own `tx` and have these reads participate in the same transaction.
+ * Phase 6 Checkpoints 2 and 3 — data access for the correction domain. Checkpoint 2's own exports
+ * (through `previewCorrection`, below) are read-only. Checkpoint 3 adds thin, business-logic-free
+ * `create`/`update` primitives for `CorrectionRequest`/`Correction`/`BalanceAdjustment` — every one
+ * of them just a Prisma call with typed params, no branching, no validation beyond what Prisma's
+ * own generated types enforce; all lifecycle sequencing, locking, and validation coordination
+ * lives in `corrections.service.ts`, not here (Checkpoint 3's own "Repository and service
+ * structure" — "no business-policy duplication"). Every function accepts an optional transaction
+ * client, defaulting to the shared `prisma` singleton, following this codebase's established
+ * pattern (`src/modules/audit-log/audit-log.service.ts`'s `recordAuditLog`) so a caller can pass
+ * its own `tx` and have these participate in the same transaction.
  */
 
 /** Loads a `PayrollEntry` with its work lines for the correction engine. Throws `ENTRY_NOT_FOUND`
@@ -92,12 +96,13 @@ export async function assertAdjustmentTypeValid(
 }
 
 /**
- * The one orchestration entry point this checkpoint exposes: loads everything
- * `calculateCorrection` needs (the entry, its approved-correction history, the reversal target if
- * any) and validates `adjustmentTypeId`, then delegates to the pure engine. Performs reads only —
- * no `Correction`/`BalanceAdjustment` row is created, no `AuditLog` entry is written, no
- * transaction is opened. Not wired to any route; Checkpoint 4 is what will expose this behind
- * `POST /corrections/preview` or equivalent.
+ * Loads everything `calculateCorrection` needs (the entry, its approved-correction history, the
+ * reversal target if any) and validates `adjustmentTypeId`, then delegates to the pure engine.
+ * Performs reads only — no `Correction`/`BalanceAdjustment` row is created, no `AuditLog` entry is
+ * written. Used two ways: standalone, read-only, outside any transaction, by
+ * `POST /payroll-entries/:entryId/corrections/preview` (Checkpoint 3's dry-run route); and inside
+ * `approveCorrectionRequest`'s own transaction (`corrections.service.ts`), passed a `tx` so the
+ * recalculation participates in that transaction's advisory-lock-protected snapshot.
  */
 export async function previewCorrection(
   payrollEntryId: string,
@@ -114,4 +119,134 @@ export async function previewCorrection(
   }
 
   return calculateCorrection(entry, approvedCorrections, input, reversalTarget);
+}
+
+// --- CorrectionRequest: reads -----------------------------------------------------------------
+
+const correctionRequestDetailInclude = {
+  payrollEntry: { select: { id: true, employeeId: true, siteId: true, cycleId: true } },
+  adjustmentType: true,
+  requestedBy: { select: { id: true, name: true, email: true } },
+  reviewedBy: { select: { id: true, name: true, email: true } },
+  resultingCorrection: true,
+} satisfies Prisma.CorrectionRequestInclude;
+
+export type CorrectionRequestDetail = Prisma.CorrectionRequestGetPayload<{
+  include: typeof correctionRequestDetailInclude;
+}>;
+
+export async function getCorrectionRequestById(
+  id: string,
+  client: PrismaTransactionClient = prisma,
+): Promise<CorrectionRequestDetail | null> {
+  return client.correctionRequest.findUnique({ where: { id }, include: correctionRequestDetailInclude });
+}
+
+export interface ListCorrectionRequestsFilters {
+  status?: 'PENDING' | 'APPROVED' | 'REJECTED';
+  payrollEntryId?: string;
+  /** Non-Master-Admin callers are scoped to their own assigned sites — `null`/`undefined` means
+   * unrestricted (Master Admin only; enforced by the service layer, never inferred here). */
+  siteIds?: string[];
+}
+
+export async function listCorrectionRequests(
+  filters: ListCorrectionRequestsFilters,
+  client: PrismaTransactionClient = prisma,
+): Promise<CorrectionRequestDetail[]> {
+  return client.correctionRequest.findMany({
+    where: {
+      ...(filters.status && { status: filters.status }),
+      ...(filters.payrollEntryId && { payrollEntryId: filters.payrollEntryId }),
+      ...(filters.siteIds && { payrollEntry: { siteId: { in: filters.siteIds } } }),
+    },
+    include: correctionRequestDetailInclude,
+    orderBy: { requestedAt: 'desc' },
+  });
+}
+
+// --- CorrectionRequest: writes -----------------------------------------------------------------
+
+export async function createCorrectionRequestRow(
+  data: Prisma.CorrectionRequestUncheckedCreateInput,
+  client: PrismaTransactionClient = prisma,
+): Promise<CorrectionRequestDetail> {
+  const created = await client.correctionRequest.create({ data });
+  return getCorrectionRequestById(created.id, client) as Promise<CorrectionRequestDetail>;
+}
+
+/**
+ * Both status-transition writes below use a conditional `updateMany` (`WHERE status = 'PENDING'`)
+ * and return the affected row count, rather than a blind `update` — a defense-in-depth backstop
+ * (Product Decision Resolution: "database constraints and conditional updates retained as a
+ * secondary safeguard, not a replacement" for the advisory lock) matching this codebase's existing
+ * optimistic-locking convention. `corrections.service.ts`'s callers already serialize via the
+ * advisory lock before reaching this point, so `count` is expected to be `1` on the ordinary path;
+ * `0` here means the request was already decided by a concurrent transaction, surfaced as
+ * `REQUEST_NOT_PENDING`, never a silent no-op.
+ */
+export async function markCorrectionRequestApproved(
+  id: string,
+  data: { reviewedById: string; resultingCorrectionId: string },
+  client: PrismaTransactionClient = prisma,
+): Promise<number> {
+  const result = await client.correctionRequest.updateMany({
+    where: { id, status: 'PENDING' },
+    data: {
+      status: 'APPROVED',
+      reviewedById: data.reviewedById,
+      reviewedAt: new Date(),
+      resultingCorrectionId: data.resultingCorrectionId,
+    },
+  });
+  return result.count;
+}
+
+export async function markCorrectionRequestRejected(
+  id: string,
+  data: { reviewedById: string; rejectionReason: string },
+  client: PrismaTransactionClient = prisma,
+): Promise<number> {
+  const result = await client.correctionRequest.updateMany({
+    where: { id, status: 'PENDING' },
+    data: {
+      status: 'REJECTED',
+      reviewedById: data.reviewedById,
+      reviewedAt: new Date(),
+      rejectionReason: data.rejectionReason,
+    },
+  });
+  return result.count;
+}
+
+// --- Correction / BalanceAdjustment: writes -----------------------------------------------------
+
+export async function createCorrectionRow(
+  data: Prisma.CorrectionUncheckedCreateInput,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.correction.create({ data });
+}
+
+export async function createBalanceAdjustmentRow(
+  data: Prisma.BalanceAdjustmentUncheckedCreateInput,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustment.create({ data });
+}
+
+// --- Approved-correction history for one entry (dual-permission GET route) ---------------------
+
+/** Full approved-`Correction` history for one entry, newest first — read-only, no baseline
+ * replay performed here (that's `reconstructBaseline`'s job, called separately by the route if
+ * it also wants the current effective state alongside the raw history). */
+export async function listCorrectionsForEntry(
+  payrollEntryId: string,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.correction.findMany({
+    where: { payrollEntryId },
+    orderBy: { approvedAt: 'desc' },
+    include: { adjustmentType: true, approvedBy: { select: { id: true, name: true, email: true } } },
+  });
 }

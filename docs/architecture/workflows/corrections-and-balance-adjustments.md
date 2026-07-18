@@ -206,7 +206,15 @@ Concretely:
   already `SETTLED` (there is nothing to pay or recover, so it never enters the `PENDING` queue or
   appears on any payment artifact). This keeps "every approved Correction always creates a Balance
   Adjustment" literally true without ever showing a meaningless "PKR 0 payable" line anywhere.
-  **Unchanged by this session's revisions.**
+  **Unchanged by this session's revisions.** **Amended, Phase 6 Checkpoint 3 (2026-07-18):** as of
+  Checkpoint 2's calculation engine and Checkpoint 3's transactional approval, a zero-net-difference
+  correction is rejected outright at approval time (`ZERO_DELTA`, a typed domain error) — no
+  `Correction` and no `BalanceAdjustment` are created at all. This `NONE` path is therefore **not
+  reachable through the ordinary single-field correction/approval workflow** described in this
+  document; `BalanceAdjustmentType.NONE` remains in the schema (not removed — a schema change is
+  out of scope for a documentation clarification) purely for forward compatibility with a future
+  multi-field or batch-correction scenario where the *combined* effect might still legitimately net
+  to zero while individual fields change. No checkpoint currently builds a path that reaches it.
 - **`PAYABLE`, `DEFERRED`** — unchanged from before this session: created `PENDING`, automatically
   surfaces as part of that employee's payroll the next time a Draft cycle is active (whether or not
   the employee happens to have another entry open sooner in the *same* cycle — deferred deliberately

@@ -2021,11 +2021,20 @@ implemented and migrated, with `Correction.reversesCorrectionId` added per the P
 Resolution. **Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) is also complete**
 — see `docs/PROJECT_PROGRESS.md` §1's own Checkpoint 2 entry: a pure, side-effect-free calculation
 engine (`backend/src/modules/corrections/`) implementing baseline reconstruction, delta
-calculation, the Product Decision Resolution's transaction-scoped advisory lock (not yet wired into
-any write path), and full domain validation — no schema change, no database mutation beyond reads.
-**No approval workflow, settlement logic, correction APIs, or frontend workflow exist yet** —
-everything below this note remains the forward-looking design for Checkpoint 3 onward, not yet
-built. Do not begin Checkpoint 3 without its own separate, explicit go-ahead.
+calculation, the Product Decision Resolution's transaction-scoped advisory lock, and full domain
+validation. **Checkpoint 2A (review-only verification) found no defects and closed two test
+coverage gaps.** **Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation)
+is also complete** — the advisory lock is now wired into the first real write path:
+`CorrectionRequest` creation/listing/detail, transactional approval (immutable `Correction` +
+`BalanceAdjustment` creation, one aggregate audit event) and rejection, all behind the API routes
+`docs/PROJECT_PROGRESS.md` §1's own Checkpoint 3 entry lists in full. The `ZERO_DELTA` vs.
+`BalanceAdjustmentType.NONE` tension Checkpoint 2A flagged is now resolved (documented in
+`docs/architecture/workflows/corrections-and-balance-adjustments.md`'s own dated amendment): `NONE`
+is not reachable through the ordinary approval workflow, and is retained in the schema only for
+forward compatibility. **No settlement logic, `CorrectionPayment` processing,
+`BalanceAdjustmentSettlement` creation, Draft-cycle materialization, or frontend workflow exist
+yet** — everything below this note remains the forward-looking design for Checkpoint 4 onward, not
+yet built. Do not begin Checkpoint 4 without its own separate, explicit go-ahead.
 
 **Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
 `PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,

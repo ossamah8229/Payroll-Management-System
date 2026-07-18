@@ -31,6 +31,7 @@ import { payslipsRouter } from './modules/payslips/payslips.routes';
 import { advancesRouter } from './modules/advances/advances.routes';
 import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
 import { backupPackageDetailRouter, backupPackagesRouter } from './modules/backup-packages/backup-packages.routes';
+import { correctionRequestsRouter, payrollEntryCorrectionsRouter } from './modules/corrections/corrections.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -128,8 +129,15 @@ export function createApp(): Express {
   // Checkpoint 2).
   app.use('/api/v1/payroll-cycles/:cycleId/backup-packages', backupPackagesRouter);
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
+  // Phase 6 Checkpoint 3 — mounted ahead of payrollEntriesRouter's own /:id route, same reasoning
+  // as every other :id-nested-route-mounted-first case above (its own sub-paths, /corrections and
+  // /correction-requests, never collide with payrollEntriesRouter's bare /:id anyway, but this
+  // keeps the "more specific first" convention consistent).
+  app.use('/api/v1/payroll-entries/:entryId', payrollEntryCorrectionsRouter);
   app.use('/api/v1/payroll-entries', payrollEntriesRouter);
   app.use('/api/v1/work-lines', workLinesRouter);
+  // Phase 6 Checkpoint 3 — flat top-level resource, matching Advances' own pattern.
+  app.use('/api/v1/correction-requests', correctionRequestsRouter);
   // Phase 4 Checkpoint 5 — flat top-level resource, matching Banks' own pattern (Advances relate
   // to Employee, not to a specific Payroll Cycle route).
   app.use('/api/v1/advances', advancesRouter);

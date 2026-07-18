@@ -1,11 +1,11 @@
 import type { CorrectionField } from '@payroll/shared';
 
 /**
- * Phase 6 Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine — pure calculation
- * only, no side effects). Shared domain types for the correction calculation engine, kept
- * independent of both Prisma's generated types and any HTTP concern so Checkpoint 3
- * (transactional approval/settlement) and Checkpoint 5 (frontend workflow, via the eventual API
- * layer) can consume them without redesign — `docs/architecture/workflows/
+ * Phase 6 Checkpoints 2 (Baseline Reconstruction & Delta Calculation Engine — pure calculation)
+ * and 3 (transactional request/approval, `Correction`/`BalanceAdjustment` creation — no
+ * settlement). Shared domain types for the correction domain, kept independent of both Prisma's
+ * generated types and any HTTP concern so a later checkpoint (frontend workflow, via the API
+ * layer built here) can consume them without redesign — `docs/architecture/workflows/
  * corrections-and-balance-adjustments.md`, Product Decision Resolution (2026-07-18).
  */
 
@@ -24,7 +24,13 @@ export type CorrectionValidationErrorCode =
   | 'REVERSAL_TARGET_NOT_FOUND'
   | 'REVERSAL_TARGET_MISMATCH'
   | 'REVERSAL_SELF_REFERENCE'
-  | 'ENTRY_NOT_FOUND';
+  | 'ENTRY_NOT_FOUND'
+  /** Phase 6 Checkpoint 3 additions — the transactional request/approval workflow. */
+  | 'REQUEST_NOT_FOUND'
+  | 'REQUEST_NOT_PENDING'
+  | 'PAYMENT_TIMING_REQUIRED'
+  | 'PAYMENT_TIMING_NOT_APPLICABLE'
+  | 'RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE';
 
 /** The typed shape every `CorrectionValidationError` carries — exported separately from the error
  * class itself so a caller can build/inspect this shape (e.g. for a future API error response)

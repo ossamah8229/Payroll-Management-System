@@ -18,17 +18,20 @@ be enough to resume correctly without re-deriving context from scratch — per
 ## 0. Current state (authoritative as of 2026-07-18 — read this section first)
 
 **All of Phases 0–5 and all four Post-Phase-5 Stabilization checkpoints are complete. Phase 6
-(Corrections & Balance Adjustments) has started.** The Architecture Review and its Product Decision
-Resolution (both review-only, no repository changes) are complete, refining the design frozen
-alongside Phase 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record. **Checkpoint 1
-(Corrections Domain & Schema Foundation) is complete** — see `docs/PROJECT_PROGRESS.md` §1's "Phase
-6 started" entry. **Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) is also
-complete** — a pure, side-effect-free calculation engine, no schema change. **No correction
-approval workflow, correction application, settlement logic, correction APIs, or frontend
-correction workflow exist yet.** Do not begin Checkpoint 3 without its own separate, explicit
-go-ahead.
+(Corrections & Balance Adjustments) is in progress.** The Architecture Review and its Product
+Decision Resolution (both review-only, no repository changes) are complete, refining the design
+frozen alongside Phase 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record.
+**Checkpoint 1 (Corrections Domain & Schema Foundation), Checkpoint 2 (Baseline Reconstruction &
+Delta Calculation Engine), Checkpoint 2A (review-only verification, no defects found), and
+Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) are all complete** —
+see `docs/PROJECT_PROGRESS.md` §1's own dated entries for each. Checkpoint 3 is the first to write
+data: `CorrectionRequest` creation/approval/rejection, immutable `Correction` +
+`BalanceAdjustment` creation, all advisory-lock-protected. **No settlement logic,
+`CorrectionPayment` processing, `BalanceAdjustmentSettlement` creation, Draft-cycle materialization,
+or frontend correction workflow exist yet.** Do not begin Checkpoint 4 without its own separate,
+explicit go-ahead.
 
-**Latest commits:** `1002209` (Phase 6 Checkpoint 2 implementation), doc-hash
+**Latest commits:** `<PHASE6_CKPT3_COMMIT>` (Phase 6 Checkpoint 3 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -49,16 +52,22 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
   frontend logic) — `ac58748`.
 - **Checkpoint 2** (Baseline Reconstruction & Delta Calculation Engine — pure functions only, no
   schema change, no side effects; `backend/src/modules/corrections/`: baseline reconstruction,
-  delta calculation, the not-yet-wired advisory-lock helper, full domain validation) —
-  `1002209`.
+  delta calculation, the advisory-lock helper, full domain validation) — `1002209`.
+- **Checkpoint 2A** (review-only verification — no defects; two test coverage gaps closed) —
+  `1aede0a`.
+- **Checkpoint 3** (Transactional Correction Approval & Balance Adjustment Creation — the first
+  checkpoint to write data; `corrections.service.ts`/`corrections.routes.ts`: request
+  creation/listing/detail, transactional approve/reject, immutable `Correction` +
+  `BalanceAdjustment` creation, advisory-lock-protected concurrency, one aggregate audit event per
+  approval) — `<PHASE6_CKPT3_COMMIT>`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
-snapshot, not current): backend **609/609**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
+snapshot, not current): backend **651/651**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
 schema drift.
 
-**Exact next step:** Phase 6 Checkpoint 3 — but only on explicit authorization. Do not begin it
-without that go-ahead; Checkpoint 2's own scope is fully closed.
+**Exact next step:** Phase 6 Checkpoint 4 — but only on explicit authorization. Do not begin it
+without that go-ahead; Checkpoint 3's own scope is fully closed.
 
 **Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
 
