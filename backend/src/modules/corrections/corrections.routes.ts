@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   approveCorrectionRequestSchema,
   createCorrectionRequestSchema,
+  listBalanceAdjustmentsQuerySchema,
   listCorrectionRequestsQuerySchema,
   materializeBalanceAdjustmentSchema,
   PERMISSIONS,
@@ -25,6 +26,7 @@ import {
 } from './corrections.service';
 import {
   getBalanceAdjustmentDetail,
+  listBalanceAdjustmentsForUser,
   listSettlementsForAdjustment,
   previewSettlement,
   recordBalanceAdjustmentSettlement,
@@ -184,6 +186,23 @@ const BALANCE_VIEW_PERMISSIONS = [PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECT
 export const balanceAdjustmentsRouter = Router();
 
 balanceAdjustmentsRouter.use(requireAuth);
+
+/** Phase 6 Checkpoint 6 — the Corrections Ledger's own list route. Mounted ahead of `/:id` below
+ * only in source order for readability; Express already distinguishes the exact `/` path from
+ * `/:id` regardless of declaration order. */
+balanceAdjustmentsRouter.get('/', requirePermission(BALANCE_VIEW_PERMISSIONS), async (req, res, next) => {
+  try {
+    const query = listBalanceAdjustmentsQuerySchema.parse({
+      status: typeof req.query.status === 'string' ? req.query.status : undefined,
+      type: typeof req.query.type === 'string' ? req.query.type : undefined,
+      employeeId: typeof req.query.employeeId === 'string' ? req.query.employeeId : undefined,
+    });
+    const balanceAdjustments = await listBalanceAdjustmentsForUser(req.currentUser!, query);
+    res.status(200).json({ balanceAdjustments });
+  } catch (error) {
+    next(error);
+  }
+});
 
 balanceAdjustmentsRouter.get('/:id', requirePermission(BALANCE_VIEW_PERMISSIONS), async (req, res, next) => {
   try {

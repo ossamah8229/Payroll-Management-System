@@ -176,6 +176,16 @@ export const previewSettlementSchema = z.object({
 });
 export type PreviewSettlementInput = z.infer<typeof previewSettlementSchema>;
 
+/** `GET /balance-adjustments` (Phase 6 Checkpoint 6) — the Corrections Ledger's own list query,
+ * filterable by status/type/employee. Every filter optional; an empty query lists everything the
+ * caller's own site access permits. */
+export const listBalanceAdjustmentsQuerySchema = z.object({
+  status: balanceAdjustmentStatusSchema.optional(),
+  type: balanceAdjustmentTypeSchema.optional(),
+  employeeId: z.string().uuid().optional(),
+});
+export type ListBalanceAdjustmentsQuery = z.infer<typeof listBalanceAdjustmentsQuerySchema>;
+
 /**
  * Phase 6 Checkpoint 5 (Draft-Cycle Materialization). `targetCycleId` is always optional —
  * omitted, it resolves to the current Draft cycle server-side (`getCurrentDraftCycle`); provided,

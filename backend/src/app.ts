@@ -37,6 +37,7 @@ import {
   payrollCycleMaterializationsRouter,
   payrollEntryCorrectionsRouter,
 } from './modules/corrections/corrections.routes';
+import { adjustmentTypesRouter } from './modules/adjustment-types/adjustment-types.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -148,6 +149,9 @@ export function createApp(): Express {
   app.use('/api/v1/correction-requests', correctionRequestsRouter);
   // Phase 6 Checkpoint 4 — flat top-level resource, same pattern.
   app.use('/api/v1/balance-adjustments', balanceAdjustmentsRouter);
+  // Phase 6 Checkpoint 6 — read-only lookup route for the Corrections frontend's Adjustment Type
+  // dropdown, matching Banks' own flat-top-level-lookup-resource pattern.
+  app.use('/api/v1/adjustment-types', adjustmentTypesRouter);
   // Phase 4 Checkpoint 5 — flat top-level resource, matching Banks' own pattern (Advances relate
   // to Employee, not to a specific Payroll Cycle route).
   app.use('/api/v1/advances', advancesRouter);

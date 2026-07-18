@@ -37,6 +37,15 @@ const AdvancesPage = lazy(() => import('@/routes/advances-page').then((m) => ({ 
 const PayslipsPage = lazy(() => import('@/routes/payslips-page').then((m) => ({ default: m.PayslipsPage })));
 const SettingsPage = lazy(() => import('@/routes/settings-page').then((m) => ({ default: m.SettingsPage })));
 const UsersPage = lazy(() => import('@/routes/users-page').then((m) => ({ default: m.UsersPage })));
+const CorrectionsPage = lazy(() =>
+  import('@/routes/corrections-page').then((m) => ({ default: m.CorrectionsPage })),
+);
+const CorrectionRequestDetailPage = lazy(() =>
+  import('@/routes/correction-request-detail-page').then((m) => ({ default: m.CorrectionRequestDetailPage })),
+);
+const BalanceAdjustmentDetailPage = lazy(() =>
+  import('@/routes/balance-adjustment-detail-page').then((m) => ({ default: m.BalanceAdjustmentDetailPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -153,6 +162,24 @@ export function App() {
             path="/payroll-cycles/:cycleId/payslips"
             element={
               <RequireSession>{(user) => <PayslipsPage user={user} />}</RequireSession>
+            }
+          />
+          <Route
+            path="/corrections"
+            element={
+              <RequireSession>{(user) => <CorrectionsPage user={user} />}</RequireSession>
+            }
+          />
+          <Route
+            path="/corrections/requests/:id"
+            element={
+              <RequireSession>{(user) => <CorrectionRequestDetailPage user={user} />}</RequireSession>
+            }
+          />
+          <Route
+            path="/corrections/ledger/:id"
+            element={
+              <RequireSession>{(user) => <BalanceAdjustmentDetailPage user={user} />}</RequireSession>
             }
           />
           <Route

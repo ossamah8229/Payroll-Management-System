@@ -1,0 +1,365 @@
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { formatMoney, PERMISSIONS, type SessionUser } from '@payroll/shared';
+import { AppShell } from '@/components/layout/app-shell';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { FilterField } from '@/components/ui/filter-field';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/cn';
+import { ApiError } from '@/lib/api-client';
+import { useProjectSites } from '@/hooks/use-project-sites';
+import { useCorrectionRequests, type CorrectionRequest } from '@/hooks/use-correction-requests';
+import { useBalanceAdjustments, type BalanceAdjustment } from '@/hooks/use-balance-adjustments';
+import {
+  balanceAdjustmentStatusTone,
+  balanceAdjustmentTypeLabel,
+  balanceAdjustmentTypeTone,
+  correctionFieldLabel,
+  correctionRequestStatusTone,
+  cyclePeriodLabel,
+} from '@/components/corrections/correction-labels';
+
+const selectClassName =
+  'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'border-b-2 px-1 pb-2.5 text-xs font-medium transition-colors',
+        active ? 'border-accent text-text' : 'border-transparent text-text-muted hover:text-text',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function matchesSearch(name: string, code: string | null, search: string): boolean {
+  const needle = search.trim().toLowerCase();
+  if (!needle) return true;
+  return name.toLowerCase().includes(needle) || (code ?? '').toLowerCase().includes(needle);
+}
+
+// --- Review Queue --------------------------------------------------------------------------
+
+function ReviewQueueTab() {
+  const navigate = useNavigate();
+  const sites = useProjectSites();
+  const [status, setStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | ''>('PENDING');
+  const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
+  const [search, setSearch] = useState('');
+
+  const requests = useCorrectionRequests(status ? { status } : {});
+
+  const siteOptions = useMemo(
+    () => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })),
+    [sites.data],
+  );
+
+  const rows = useMemo(() => {
+    const list = requests.data ?? [];
+    return list.filter((request) => {
+      if (selectedSiteIds.length > 0 && !selectedSiteIds.includes(request.payrollEntry.siteId)) return false;
+      if (!matchesSearch(request.payrollEntry.employee.name, request.payrollEntry.employee.employeeCode, search)) return false;
+      return true;
+    });
+  }, [requests.data, selectedSiteIds, search]);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-end gap-3">
+        <FilterField id="queue-status-filter" label="Status">
+          <select
+            id="queue-status-filter"
+            className={selectClassName}
+            value={status}
+            onChange={(e) => setStatus(e.target.value as typeof status)}
+          >
+            <option value="PENDING">Pending</option>
+            <option value="APPROVED">Approved</option>
+            <option value="REJECTED">Rejected</option>
+            <option value="">All statuses</option>
+          </select>
+        </FilterField>
+        <MultiSelectFilter
+          id="queue-site-filter"
+          label="Site"
+          options={siteOptions}
+          selectedIds={selectedSiteIds}
+          onChange={setSelectedSiteIds}
+        />
+        <FilterField id="queue-search" label="Employee">
+          <Input
+            id="queue-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Name or code…"
+            className="w-56"
+          />
+        </FilterField>
+      </div>
+
+      {requests.isLoading && (
+        <div className="flex flex-col gap-2 p-[18px]">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      )}
+
+      {!requests.isLoading && requests.error && (
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-danger">Could not load the Review Queue</p>
+          <p className="text-xs text-text-muted">
+            {requests.error instanceof ApiError ? requests.error.message : 'Something went wrong'}
+          </p>
+        </div>
+      )}
+
+      {!requests.isLoading && !requests.error && rows.length === 0 && (
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-text">No correction requests match this filter</p>
+          <p className="text-xs text-text-muted">Adjust the filters, or check back once a request is submitted.</p>
+        </div>
+      )}
+
+      {!requests.isLoading && !requests.error && rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <Table className="min-w-full">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">Employee</TableHead>
+                <TableHead className="whitespace-nowrap">Code</TableHead>
+                <TableHead className="whitespace-nowrap">Payroll Period</TableHead>
+                <TableHead className="whitespace-nowrap">Field</TableHead>
+                <TableHead className="whitespace-nowrap">Proposed Value</TableHead>
+                <TableHead className="whitespace-nowrap">Submitted By</TableHead>
+                <TableHead className="whitespace-nowrap">Submitted At</TableHead>
+                <TableHead className="whitespace-nowrap">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((request: CorrectionRequest) => (
+                <TableRow
+                  key={request.id}
+                  className="cursor-pointer hover:bg-bg"
+                  onClick={() => navigate(`/corrections/requests/${request.id}`)}
+                >
+                  <TableCell className="whitespace-nowrap font-medium">{request.payrollEntry.employee.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">{request.payrollEntry.employee.employeeCode ?? '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap">{cyclePeriodLabel(request.payrollEntry.cycle)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{correctionFieldLabel(request.field)}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">{request.proposedNewValue}</TableCell>
+                  <TableCell className="whitespace-nowrap">{request.requestedBy.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">{new Date(request.requestedAt).toLocaleString()}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge tone={correctionRequestStatusTone(request.status)}>{request.status}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </>
+  );
+}
+
+// --- Corrections Ledger ----------------------------------------------------------------------
+
+function CorrectionsLedgerTab() {
+  const navigate = useNavigate();
+  const sites = useProjectSites();
+  const [statusFilter, setStatusFilter] = useState<'PENDING' | 'SETTLED' | ''>('');
+  const [typeFilter, setTypeFilter] = useState<'PAYABLE' | 'RECOVERY' | ''>('');
+  const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
+  const [search, setSearch] = useState('');
+
+  const adjustments = useBalanceAdjustments({
+    status: statusFilter || undefined,
+    type: typeFilter || undefined,
+  });
+
+  const siteOptions = useMemo(
+    () => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })),
+    [sites.data],
+  );
+
+  const rows = useMemo(() => {
+    const list = adjustments.data ?? [];
+    return list.filter((row) => {
+      if (selectedSiteIds.length > 0 && !selectedSiteIds.includes(row.employee.siteId)) return false;
+      if (!matchesSearch(row.employee.name, row.employee.employeeCode, search)) return false;
+      return true;
+    });
+  }, [adjustments.data, selectedSiteIds, search]);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-end gap-3">
+        <FilterField id="ledger-status-filter" label="Status">
+          <select
+            id="ledger-status-filter"
+            className={selectClassName}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+          >
+            <option value="">All statuses</option>
+            <option value="PENDING">Pending</option>
+            <option value="SETTLED">Settled</option>
+          </select>
+        </FilterField>
+        <FilterField id="ledger-type-filter" label="Type">
+          <select
+            id="ledger-type-filter"
+            className={selectClassName}
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as typeof typeFilter)}
+          >
+            <option value="">All types</option>
+            <option value="PAYABLE">Payable</option>
+            <option value="RECOVERY">Recovery</option>
+          </select>
+        </FilterField>
+        <MultiSelectFilter
+          id="ledger-site-filter"
+          label="Site"
+          options={siteOptions}
+          selectedIds={selectedSiteIds}
+          onChange={setSelectedSiteIds}
+        />
+        <FilterField id="ledger-search" label="Employee">
+          <Input
+            id="ledger-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Name or code…"
+            className="w-56"
+          />
+        </FilterField>
+      </div>
+
+      {adjustments.isLoading && (
+        <div className="flex flex-col gap-2 p-[18px]">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      )}
+
+      {!adjustments.isLoading && adjustments.error && (
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-danger">Could not load the Corrections Ledger</p>
+          <p className="text-xs text-text-muted">
+            {adjustments.error instanceof ApiError ? adjustments.error.message : 'Something went wrong'}
+          </p>
+        </div>
+      )}
+
+      {!adjustments.isLoading && !adjustments.error && rows.length === 0 && (
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-text">No Balance Adjustments match this filter</p>
+          <p className="text-xs text-text-muted">Every approved correction that carries a balance will appear here.</p>
+        </div>
+      )}
+
+      {!adjustments.isLoading && !adjustments.error && rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <Table className="min-w-full">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">Employee</TableHead>
+                <TableHead className="whitespace-nowrap">Code</TableHead>
+                <TableHead className="whitespace-nowrap">Adjustment Type</TableHead>
+                <TableHead className="whitespace-nowrap">Type</TableHead>
+                <TableHead className="whitespace-nowrap text-right">Original Amount</TableHead>
+                <TableHead className="whitespace-nowrap text-right">Remaining</TableHead>
+                <TableHead className="whitespace-nowrap">Source Cycle</TableHead>
+                <TableHead className="whitespace-nowrap">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row: BalanceAdjustment) => (
+                <TableRow
+                  key={row.id}
+                  className="cursor-pointer hover:bg-bg"
+                  onClick={() => navigate(`/corrections/ledger/${row.id}`)}
+                >
+                  <TableCell className="whitespace-nowrap font-medium">{row.employee.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">{row.employee.employeeCode ?? '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap">{row.adjustmentType.label}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge tone={balanceAdjustmentTypeTone(row.type)}>{balanceAdjustmentTypeLabel(row.type)}</Badge>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right tabular-nums">{formatMoney(row.amount)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-right tabular-nums">{formatMoney(row.remainingAmount)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{cyclePeriodLabel(row.sourceCycle)}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge tone={balanceAdjustmentStatusTone(row.status)}>{row.status}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * The Corrections operational hub (Phase 6 Checkpoint 6) — two tabs over the two primary views the
+ * checkpoint's own brief specifies: the Review Queue (`corrections:approve` only — the backend's
+ * `GET /correction-requests` itself is gated identically, so this tab is hidden rather than shown
+ * and then always 403ing) and the Corrections Ledger (either `payroll:entry` or
+ * `corrections:approve`, matching `GET /balance-adjustments`'s own `BALANCE_VIEW_PERMISSIONS`).
+ * "Request Correction" is deliberately not a third tab here — it opens from an eligible Payroll
+ * Entry view instead, per the brief's own information architecture.
+ */
+export function CorrectionsPage({ user }: { user: SessionUser }) {
+  const canApprove = user.permissions.includes(PERMISSIONS.CORRECTIONS_APPROVE);
+  const canView = canApprove || user.permissions.includes(PERMISSIONS.PAYROLL_ENTRY);
+  const [tab, setTab] = useState<'queue' | 'ledger'>(canApprove ? 'queue' : 'ledger');
+
+  if (!canView) {
+    return (
+      <AppShell user={user} title="Corrections" subtitle="Review Queue and Corrections Ledger">
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-text">You do not have access to Corrections</p>
+          <p className="text-xs text-text-muted">Ask a Master User for the corrections:approve or payroll:entry permission.</p>
+        </div>
+      </AppShell>
+    );
+  }
+
+  return (
+    <AppShell user={user} title="Corrections" subtitle="Review Queue and Corrections Ledger">
+      <Card>
+        <CardHeader className="flex-col items-start gap-3 border-b-0 pb-0">
+          <CardTitle>Corrections</CardTitle>
+          <div className="flex gap-6">
+            {canApprove && (
+              <TabButton active={tab === 'queue'} onClick={() => setTab('queue')}>
+                Review Queue
+              </TabButton>
+            )}
+            <TabButton active={tab === 'ledger'} onClick={() => setTab('ledger')}>
+              Corrections Ledger
+            </TabButton>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 border-t border-border">
+          {tab === 'queue' && canApprove && <ReviewQueueTab />}
+          {tab === 'ledger' && <CorrectionsLedgerTab />}
+        </CardContent>
+      </Card>
+    </AppShell>
+  );
+}

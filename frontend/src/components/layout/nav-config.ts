@@ -7,6 +7,7 @@ import {
   HandCoins,
   Landmark,
   LayoutDashboard,
+  ScrollText,
   UserCog,
   Users,
   Wallet,
@@ -69,6 +70,18 @@ export const navSections: NavSection[] = [
         // is a materially more sensitive per-person disclosure than any aggregate sheet those
         // permissions gate. Granted to Master Admin, Payroll Staff, and Finance alike.
         requiredPermission: 'payslips:view',
+      },
+      {
+        label: 'Corrections',
+        to: '/corrections',
+        icon: ScrollText,
+        // Phase 6 Checkpoint 6 — gated on payroll:entry (Payroll Staff's own request/preview/view
+        // permission, per the backend's own ENTRY_VIEW_PERMISSIONS/BALANCE_VIEW_PERMISSIONS
+        // convention). corrections:approve is Master Admin only today, and Master Admin already
+        // holds every permission including payroll:entry, so this single key covers every current
+        // holder of either; the page itself still branches its own in-page UI (Review Queue tab
+        // hidden without corrections:approve) rather than relying on nav visibility alone.
+        requiredPermission: 'payroll:entry',
       },
     ],
   },

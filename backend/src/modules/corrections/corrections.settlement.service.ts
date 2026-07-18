@@ -1,4 +1,5 @@
 import type {
+  ListBalanceAdjustmentsQuery,
   PreviewSettlementInput,
   RecordBalanceAdjustmentSettlementInput,
   RecordCorrectionPaymentInput,
@@ -7,7 +8,7 @@ import type {
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
 import { acquireBalanceAdjustmentLock } from './corrections.lock';
 import { calculateSettlement, calculateStandalonePayment } from './corrections.settlement';
 import {
@@ -21,6 +22,7 @@ import {
   createCorrectionPaymentRow,
   getActiveReservedAmount,
   getBalanceAdjustmentById,
+  listBalanceAdjustments,
   listBalanceAdjustmentSettlements,
   updateBalanceAdjustmentAfterSettlement,
   type BalanceAdjustmentDetail,
@@ -307,4 +309,19 @@ export async function listSettlementsForAdjustment(currentUser: SessionUser, bal
   assertNotFound(adjustment, balanceAdjustmentId);
   assertSiteAccess(currentUser, adjustment.employee.siteId);
   return listBalanceAdjustmentSettlements(balanceAdjustmentId);
+}
+
+/** Phase 6 Checkpoint 6 — the Corrections Ledger's own data source. Site-scoping mirrors
+ * `listCorrectionRequestsForUser`'s (`corrections.service.ts`) exact convention: unrestricted for
+ * a Master Admin, the caller's own assigned sites otherwise. */
+export async function listBalanceAdjustmentsForUser(
+  currentUser: SessionUser,
+  query: ListBalanceAdjustmentsQuery,
+): Promise<BalanceAdjustmentDetail[]> {
+  return listBalanceAdjustments({
+    status: query.status,
+    type: query.type,
+    employeeId: query.employeeId,
+    siteIds: isMasterAdmin(currentUser) ? undefined : currentUser.siteIds,
+  });
 }

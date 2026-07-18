@@ -124,8 +124,20 @@ export async function previewCorrection(
 
 // --- CorrectionRequest: reads -----------------------------------------------------------------
 
+/** Phase 6 Checkpoint 6 — `employee`/`cycle` nested under `payrollEntry` added (read-only select
+ * expansion of an already-joined relation, no new join, no new lifecycle) so the Review Queue can
+ * display employee identity and payroll period without a per-row follow-up fetch. */
 const correctionRequestDetailInclude = {
-  payrollEntry: { select: { id: true, employeeId: true, siteId: true, cycleId: true } },
+  payrollEntry: {
+    select: {
+      id: true,
+      employeeId: true,
+      siteId: true,
+      cycleId: true,
+      employee: { select: { id: true, name: true, employeeCode: true } },
+      cycle: { select: { id: true, year: true, month: true } },
+    },
+  },
   adjustmentType: true,
   requestedBy: { select: { id: true, name: true, email: true } },
   reviewedBy: { select: { id: true, name: true, email: true } },
@@ -239,7 +251,9 @@ export async function createBalanceAdjustmentRow(
 // --- Phase 6 Checkpoint 4: BalanceAdjustment settlement ------------------------------------------
 
 const balanceAdjustmentDetailInclude = {
-  employee: { select: { id: true, name: true, siteId: true, dateOfLeaving: true } },
+  // Phase 6 Checkpoint 6 — `employeeCode` added (read-only select expansion of the same
+  // already-joined relation) so the Corrections Ledger can display it without a follow-up fetch.
+  employee: { select: { id: true, name: true, employeeCode: true, siteId: true, dateOfLeaving: true } },
   correction: { select: { id: true, field: true, payrollEntryId: true } },
   adjustmentType: true,
   sourceCycle: { select: { id: true, year: true, month: true } },
@@ -257,6 +271,38 @@ export async function getBalanceAdjustmentById(
   client: PrismaTransactionClient = prisma,
 ): Promise<BalanceAdjustmentDetail | null> {
   return client.balanceAdjustment.findUnique({ where: { id }, include: balanceAdjustmentDetailInclude });
+}
+
+/**
+ * Phase 6 Checkpoint 6 — the Corrections Ledger's own data source. No general "list all
+ * BalanceAdjustments" route existed before this checkpoint (Checkpoint 4's own module comment
+ * explicitly deferred it as "the Corrections Ledger, explicitly out of this checkpoint's scope").
+ * Read-only, reuses `balanceAdjustmentDetailInclude` unchanged — the exact same shape the
+ * single-record `getBalanceAdjustmentById` above already returns, just as a filtered list. Mirrors
+ * `listCorrectionRequests`'s own `siteIds` convention (`undefined` = unrestricted, Master Admin
+ * only; enforced by the service layer, never inferred here).
+ */
+export interface ListBalanceAdjustmentsFilters {
+  status?: 'PENDING' | 'SETTLED';
+  type?: 'PAYABLE' | 'RECOVERY' | 'NONE';
+  employeeId?: string;
+  siteIds?: string[];
+}
+
+export async function listBalanceAdjustments(
+  filters: ListBalanceAdjustmentsFilters,
+  client: PrismaTransactionClient = prisma,
+): Promise<BalanceAdjustmentDetail[]> {
+  return client.balanceAdjustment.findMany({
+    where: {
+      ...(filters.status && { status: filters.status }),
+      ...(filters.type && { type: filters.type }),
+      ...(filters.employeeId && { employeeId: filters.employeeId }),
+      ...(filters.siteIds && { employee: { siteId: { in: filters.siteIds } } }),
+    },
+    include: balanceAdjustmentDetailInclude,
+    orderBy: { createdAt: 'desc' },
+  });
 }
 
 export async function listBalanceAdjustmentSettlements(

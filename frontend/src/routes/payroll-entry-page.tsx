@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Download, Lock, Plus, Upload } from 'lucide-react';
+import { Download, FileEdit, Lock, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
@@ -25,6 +25,7 @@ import {
 import { PayrollEntryGrid } from '@/components/payroll-entry/payroll-entry-grid';
 import { NewCycleModal } from '@/components/payroll-entry/new-cycle-modal';
 import { CopyToAllToolbar } from '@/components/payroll-entry/copy-to-all-toolbar';
+import { RequestCorrectionModal } from '@/components/corrections/request-correction-modal';
 
 function GridLoadingState() {
   return (
@@ -149,6 +150,10 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   } = useSelectedPayrollCycle('payroll-entry');
   const hasAnyCycle = cycles.length > 0;
   const isArchived = cycle?.status === 'ARCHIVED';
+  // Phase 6 Checkpoint 6 — corrections apply only to a Released/Archived cycle's own already-
+  // recorded figures (never the still-editable Draft), matching `assertEntryIsReleased` server-side.
+  const isCorrectable = cycle?.status === 'RELEASED' || cycle?.status === 'ARCHIVED';
+  const [requestCorrectionOpen, setRequestCorrectionOpen] = useState(false);
   const {
     data: entries,
     isLoading: entriesLoading,
@@ -223,6 +228,12 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export Excel
                   </Button>
+                  {isCorrectable && user.permissions.includes(PERMISSIONS.PAYROLL_ENTRY) && (
+                    <Button variant="secondary" onClick={() => setRequestCorrectionOpen(true)}>
+                      <FileEdit className="h-3.5 w-3.5" aria-hidden />
+                      Request Correction
+                    </Button>
+                  )}
                   {!isArchived && (
                     <>
                       <Button
@@ -306,6 +317,13 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           open={Boolean(importResult)}
           onOpenChange={(open) => !open && setImportResult(undefined)}
           result={importResult}
+        />
+      )}
+      {isCorrectable && (
+        <RequestCorrectionModal
+          open={requestCorrectionOpen}
+          onOpenChange={setRequestCorrectionOpen}
+          entries={filteredEntries}
         />
       )}
     </AppShell>
