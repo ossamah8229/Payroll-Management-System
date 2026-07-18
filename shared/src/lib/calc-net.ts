@@ -49,6 +49,15 @@ export interface PayrollEntryCalcInput {
   advanceDeduction: MoneyInput;
   eidAdvanceDeduction: MoneyInput;
   fine: MoneyInput;
+  /** Phase 6 Checkpoint 5 — sum of this entry's own `BalanceAdjustmentMaterialization` reservations
+   * where the underlying `BalanceAdjustment.type = PAYABLE` (`PayrollEntry.correctionBalancePayable`).
+   * Optional, defaults to `0` — every caller from before Checkpoint 5 is unaffected. Added to
+   * `totalEarning`, same as `allowance`. */
+  correctionBalancePayable?: MoneyInput;
+  /** Phase 6 Checkpoint 5 — sum of this entry's own `BalanceAdjustmentMaterialization` reservations
+   * where the underlying `BalanceAdjustment.type = RECOVERY` (`PayrollEntry.correctionBalanceRecovery`).
+   * Optional, defaults to `0`. Added to `totalDeduction`, same as `fine`. */
+  correctionBalanceRecovery?: MoneyInput;
   /** Always at least one line (docs/architecture/database/payroll-entry.md §12a) — calcNet does not
    * special-case a single-line entry; it is simply the case where every sum below has one term. */
   workLines: PayrollWorkLineCalcInput[];
@@ -80,11 +89,21 @@ export interface CalcNetResult {
   otEarned: string;
   /** Final, rounded to 2 decimal places. */
   leaveEarned: string;
-  /** Final, rounded to 2 decimal places. earnedAmount + otEarned + allowance + leaveEarned. */
+  /** Final, rounded to 2 decimal places. `PayrollEntryCalcInput.correctionBalancePayable`
+   * (defaulted to `0` if omitted), echoed for display parity with every other `totalEarning`
+   * component. */
+  correctionBalancePayable: string;
+  /** Final, rounded to 2 decimal places. earnedAmount + otEarned + allowance + leaveEarned +
+   * correctionBalancePayable. */
   totalEarning: string;
   /** Final, rounded to 2 decimal places. `eobiApplicable ? eobiAmount : 0`. */
   eobiDeduction: string;
-  /** Final, rounded to 2 decimal places. eobiDeduction + advanceDeduction + eidAdvanceDeduction + fine. */
+  /** Final, rounded to 2 decimal places. `PayrollEntryCalcInput.correctionBalanceRecovery`
+   * (defaulted to `0` if omitted), echoed for display parity with every other `totalDeduction`
+   * component. */
+  correctionBalanceRecovery: string;
+  /** Final, rounded to 2 decimal places. eobiDeduction + advanceDeduction + eidAdvanceDeduction +
+   * fine + correctionBalanceRecovery. */
   totalDeduction: string;
   /** Final, rounded to 2 decimal places. totalEarning - totalDeduction. */
   netSalary: string;
@@ -169,13 +188,15 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
   const leaveEarned = roundMoney(leaveEarnedFull);
   const allowance = roundMoney(toDecimal(entry.allowance));
 
-  const totalEarning = earnedAmount.plus(otEarned).plus(allowance).plus(leaveEarned);
+  const correctionBalancePayable = roundMoney(toDecimal(entry.correctionBalancePayable ?? 0));
+  const totalEarning = earnedAmount.plus(otEarned).plus(allowance).plus(leaveEarned).plus(correctionBalancePayable);
 
   const eobiDeduction = entry.eobiApplicable ? roundMoney(toDecimal(entry.eobiAmount)) : new Decimal(0);
   const advanceDeduction = roundMoney(toDecimal(entry.advanceDeduction));
   const eidAdvanceDeduction = roundMoney(toDecimal(entry.eidAdvanceDeduction));
   const fine = roundMoney(toDecimal(entry.fine));
-  const totalDeduction = eobiDeduction.plus(advanceDeduction).plus(eidAdvanceDeduction).plus(fine);
+  const correctionBalanceRecovery = roundMoney(toDecimal(entry.correctionBalanceRecovery ?? 0));
+  const totalDeduction = eobiDeduction.plus(advanceDeduction).plus(eidAdvanceDeduction).plus(fine).plus(correctionBalanceRecovery);
 
   const netSalary = totalEarning.minus(totalDeduction);
 
@@ -185,8 +206,10 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
     earnedAmount: earnedAmount.toFixed(TWO_DP),
     otEarned: otEarned.toFixed(TWO_DP),
     leaveEarned: leaveEarned.toFixed(TWO_DP),
+    correctionBalancePayable: correctionBalancePayable.toFixed(TWO_DP),
     totalEarning: totalEarning.toFixed(TWO_DP),
     eobiDeduction: eobiDeduction.toFixed(TWO_DP),
+    correctionBalanceRecovery: correctionBalanceRecovery.toFixed(TWO_DP),
     totalDeduction: totalDeduction.toFixed(TWO_DP),
     netSalary: netSalary.toFixed(TWO_DP),
   };

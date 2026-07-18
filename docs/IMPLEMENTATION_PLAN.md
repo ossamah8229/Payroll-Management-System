@@ -2039,10 +2039,35 @@ cycle-scoped `BalanceAdjustmentSettlement` (partial-or-full, either type, caller
 Checkpoint 2/3's `PayrollEntry`-keyed one) plus a conditional-update concurrency backstop. The
 Product Decision Resolution's "Recovery from departed employees remains permanently pending" rule
 is implemented exactly — no settlement path, automatic or manual, exists for a departed employee's
-`RECOVERY` balance. **No automatic Draft-cycle materialization, `PayrollEntry` deductions, bank-
-sheet/cash-sheet integration, or frontend workflow exist yet** — everything below this note remains
-the forward-looking design for Checkpoint 5 onward, not yet built. Do not begin Checkpoint 5
-without its own separate, explicit go-ahead.
+`RECOVERY` balance. **Checkpoint 5 (Draft-Cycle Materialization of Outstanding Balance Adjustments)
+is also complete** — a dedicated `BalanceAdjustmentMaterialization` reservation model (new,
+additive migration, approved only after two rounds of user-driven schema revision — see
+`docs/PROJECT_PROGRESS.md` §1's own Checkpoint 5 entry for the full decision record) that projects
+an eligible `PAYABLE` (`DEFERRED` only — `IMMEDIATE` remains Checkpoint 4's own `CorrectionPayment`
+path) or `RECOVERY` obligation into the current Draft cycle's `PayrollEntry.correctionBalancePayable`/
+`.correctionBalanceRecovery` aggregate columns, feeding `calcNet` via two new optional,
+backward-compatible input fields, without ever touching `BalanceAdjustment.remainingAmount`/
+`.status` or creating a `CorrectionPayment`/`BalanceAdjustmentSettlement` — materialization is a
+reservation/projection, not a settlement; the `ACTIVE → CONSUMED`/`CANCELLED` transition remains a
+later checkpoint's own event, not built here. Idempotent per (`BalanceAdjustment`, target
+`PayrollCycle`) via a database unique constraint; over-materialization across sequential Draft
+cycles is prevented by an `availableToMaterialize = remainingAmount − Σ(ACTIVE reservations)`
+formula, re-derived on every materialization attempt, never cached. Wired into
+`archiveAndCreateNextPayrollCycle` as the second consumer of the existing Materialization Hook seam
+(Advances' `materializeScheduledAdvanceDeductions` was the first), plus manual/batch HTTP routes
+reusing Checkpoint 3/4's existing `payroll:entry`/`corrections:approve` permissions — no new
+permission key. Departed-employee `RECOVERY` is never materialized (the same Product Decision
+Resolution rule Checkpoint 4 already enforces for settlement). Concurrency is protected by a
+documented, deterministic lock order (native `SELECT ... FOR UPDATE` on the target `PayrollCycle`
+first, then Checkpoint 4's existing `BalanceAdjustment` advisory lock second — chosen specifically
+because Finalize Cycle's own transaction takes no advisory lock, only an implicit row lock via its
+conditional `UPDATE`); a genuine cross-checkpoint deadlock this lock order surfaced under real
+concurrent load (materialize racing a Checkpoint 4 settlement for the same adjustment+cycle) is
+resolved by mapping Postgres's own deadlock/serialization-failure codes to a clean 409 in the shared
+error handler, rather than a misleading 500. **No automatic bank-sheet/cash-sheet integration or
+frontend workflow exist yet** — everything below this note remains the forward-looking design for
+Checkpoint 6 onward, not yet built. Do not begin Checkpoint 6 without its own separate, explicit
+go-ahead.
 
 **Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
 `PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,

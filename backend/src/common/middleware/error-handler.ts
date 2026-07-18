@@ -6,6 +6,7 @@ import { logger } from '../../lib/logger';
 import { isProduction } from '../../config/env';
 import { CorrectionValidationError, type CorrectionValidationErrorCode } from '../../modules/corrections/corrections.types';
 import { SettlementValidationError, type SettlementValidationErrorCode } from '../../modules/corrections/corrections.settlement.types';
+import { MaterializationValidationError, type MaterializationOrchestrationErrorCode } from '../../modules/corrections/corrections.materialization.types';
 
 interface ErrorResponseBody {
   error: {
@@ -61,6 +62,18 @@ const SETTLEMENT_ERROR_STATUS: Record<SettlementValidationErrorCode, number> = {
   INVALID_CYCLE: 400,
 };
 
+/** Phase 6 Checkpoint 5 — same discipline, for `MaterializationValidationError`
+ * (`modules/corrections/corrections.materialization.types.ts`). Per-adjustment ineligibility
+ * (`ALREADY_MATERIALIZED`, `NO_AVAILABLE_AMOUNT`, etc.) is never thrown as an HTTP error — those
+ * are typed `{ eligible: false, reason }` results, an expected outcome for a preview or batch scan,
+ * not an exceptional one. Only orchestration-level failures (no target cycle at all, a missing
+ * adjustment) reach here. */
+const MATERIALIZATION_ERROR_STATUS: Record<MaterializationOrchestrationErrorCode, number> = {
+  NO_CURRENT_DRAFT: 404,
+  TARGET_NOT_DRAFT: 409,
+  BALANCE_ADJUSTMENT_NOT_FOUND: 404,
+};
+
 /**
  * Single place every error in the request lifecycle funnels through. Zod validation errors and
  * typed `HttpError`s get a clean, predictable response; anything else is logged with full detail
@@ -104,6 +117,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
+  if (err instanceof MaterializationValidationError) {
+    const body: ErrorResponseBody = {
+      error: { code: err.code, message: err.message },
+    };
+    res.status(MATERIALIZATION_ERROR_STATUS[err.code]).json(body);
+    return;
+  }
+
   // Known Prisma constraint violations get a clean 4xx response rather than falling through to
   // the generic 500 below — every CRUD module hits these (unique names/codes, RESTRICT deletes).
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
@@ -134,6 +155,26 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     if (err.code === 'P2023') {
       res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'One or more identifiers in the request are malformed' },
+      });
+      return;
+    }
+
+    // Phase 6 Checkpoint 5 — a raw query (`$queryRaw`/`$executeRaw`, e.g.
+    // `lockPayrollCycleForUpdate`'s `SELECT ... FOR UPDATE`) that fails at the database surfaces as
+    // P2010, with the underlying Postgres SQLSTATE in `err.meta.code`. `40P01` (deadlock_detected)
+    // and `40001` (serialization_failure) are both transient concurrency conflicts, not server
+    // faults: this codebase's own documented lock order (cycle, then adjustment — see
+    // `corrections.materialization.service.ts`) is a strict *program* order, but Postgres's deadlock
+    // detector can still fire across two genuinely independent code paths that each hold one
+    // resource and want the other (e.g. materialize holding the cycle's `FOR UPDATE` row lock while
+    // waiting on the `BalanceAdjustment` advisory lock, racing a concurrent settlement that holds
+    // that same advisory lock and then triggers an implicit FK-check lock on the very same cycle row
+    // via `BalanceAdjustmentSettlement.cycleId`). Postgres itself resolves the cycle by aborting one
+    // side — this maps that abort to the same 409 "reload and try again" class as
+    // `STALE_CONCURRENT_WRITE`, rather than a misleading 500.
+    if (err.code === 'P2010' && (err.meta?.code === '40P01' || err.meta?.code === '40001')) {
+      res.status(409).json({
+        error: { code: 'CONCURRENT_CONFLICT', message: 'This request conflicted with another in-progress change. Please try again.' },
       });
       return;
     }

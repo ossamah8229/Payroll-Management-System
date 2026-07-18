@@ -3,6 +3,7 @@ import {
   approveCorrectionRequestSchema,
   createCorrectionRequestSchema,
   listCorrectionRequestsQuerySchema,
+  materializeBalanceAdjustmentSchema,
   PERMISSIONS,
   previewCorrectionSchema,
   previewSettlementSchema,
@@ -29,6 +30,12 @@ import {
   recordBalanceAdjustmentSettlement,
   recordCorrectionPayment,
 } from './corrections.settlement.service';
+import {
+  getBalanceAdjustmentMaterializations,
+  materializeBalanceAdjustment,
+  materializeEligibleAdjustmentsForCycle,
+  previewMaterialization,
+} from './corrections.materialization.service';
 
 /**
  * Phase 6 Checkpoint 3 API surface — exactly the route capabilities this checkpoint's own brief
@@ -40,6 +47,12 @@ import {
  * outstanding-balance reads. No general "list all BalanceAdjustments" browse route — that is the
  * Corrections Ledger, explicitly out of this checkpoint's scope; every route here operates on one
  * already-known `BalanceAdjustment` id.
+ *
+ * Phase 6 Checkpoint 5 adds materialization preview/recording/listing on `balanceAdjustmentsRouter`
+ * (one adjustment at a time) plus `payrollCycleMaterializationsRouter` (the batch "materialize
+ * every eligible adjustment into this Draft cycle" action, cycle-scoped since it isn't about one
+ * already-known adjustment id). No frontend, no Corrections Ledger — unchanged from Checkpoint 4's
+ * own scope boundary.
  */
 
 function requireIdParam(id: string | undefined): string {
@@ -232,3 +245,71 @@ balanceAdjustmentsRouter.post('/:id/payments', requirePermission(PERMISSIONS.COR
     next(error);
   }
 });
+
+// --- Phase 6 Checkpoint 5: Draft-cycle materialization -------------------------------------------
+
+balanceAdjustmentsRouter.get(
+  '/:id/materializations',
+  requirePermission(BALANCE_VIEW_PERMISSIONS),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const materializations = await getBalanceAdjustmentMaterializations(req.currentUser!, id);
+      res.status(200).json({ materializations });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+balanceAdjustmentsRouter.post(
+  '/:id/materializations/preview',
+  requirePermission(BALANCE_VIEW_PERMISSIONS),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = materializeBalanceAdjustmentSchema.parse(req.body);
+      const preview = await previewMaterialization(req.currentUser!, id, input.targetCycleId);
+      res.status(200).json({ preview });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+balanceAdjustmentsRouter.post(
+  '/:id/materializations',
+  requirePermission(PERMISSIONS.CORRECTIONS_APPROVE),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = materializeBalanceAdjustmentSchema.parse(req.body);
+      const result = await materializeBalanceAdjustment(req.currentUser!, id, input.targetCycleId, requestMetaFrom(req));
+      res.status(201).json({ result });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/** Mounted at /api/v1/payroll-cycles/:cycleId (Phase 6 Checkpoint 5) — the batch materialization
+ * action, cycle-scoped since it isn't about one already-known BalanceAdjustment id. Kept in this
+ * module (not payroll-processing.routes.ts) since it's a correction-domain concern, mounted
+ * separately alongside every other :cycleId-nested router already registered in app.ts. */
+export const payrollCycleMaterializationsRouter = Router({ mergeParams: true });
+
+payrollCycleMaterializationsRouter.use(requireAuth);
+
+payrollCycleMaterializationsRouter.post(
+  '/',
+  requirePermission(PERMISSIONS.CORRECTIONS_APPROVE),
+  async (req, res, next) => {
+    try {
+      const cycleId = requireIdParam(req.params.cycleId);
+      const summary = await materializeEligibleAdjustmentsForCycle(req.currentUser!, cycleId, requestMetaFrom(req));
+      res.status(200).json({ summary });
+    } catch (error) {
+      next(error);
+    }
+  },
+);

@@ -34,6 +34,7 @@ import { backupPackageDetailRouter, backupPackagesRouter } from './modules/backu
 import {
   balanceAdjustmentsRouter,
   correctionRequestsRouter,
+  payrollCycleMaterializationsRouter,
   payrollEntryCorrectionsRouter,
 } from './modules/corrections/corrections.routes';
 
@@ -132,6 +133,9 @@ export function createApp(): Express {
   // Same reasoning again — mounted ahead of payrollCyclesRouter's own /:id route (Phase 5
   // Checkpoint 2).
   app.use('/api/v1/payroll-cycles/:cycleId/backup-packages', backupPackagesRouter);
+  // Phase 6 Checkpoint 5 — same reasoning again, mounted ahead of payrollCyclesRouter's own /:id
+  // route.
+  app.use('/api/v1/payroll-cycles/:cycleId/materializations', payrollCycleMaterializationsRouter);
   app.use('/api/v1/payroll-cycles', payrollCyclesRouter);
   // Phase 6 Checkpoint 3 — mounted ahead of payrollEntriesRouter's own /:id route, same reasoning
   // as every other :id-nested-route-mounted-first case above (its own sub-paths, /corrections and

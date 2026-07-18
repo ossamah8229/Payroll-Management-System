@@ -72,6 +72,13 @@ export async function cleanTestData(): Promise<void> {
     where: { payrollEntry: { cycle: { year: { gte: 2900 } } } },
     data: { reversesCorrectionId: null },
   });
+  // BalanceAdjustmentMaterialization (Phase 6 Checkpoint 5, docs/architecture/database/
+  // balance-adjustments.md — materialization reservation model) is RESTRICT on all three of
+  // balanceAdjustmentId/payrollEntryId/cycleId, plus a nullable RESTRICT settlementId — deleted
+  // before BalanceAdjustmentSettlement/BalanceAdjustment/PayrollEntry/PayrollCycle below. Scoped by
+  // the same fake year>=2900 convention via its own cycle relation (no text column of its own to
+  // prefix).
+  await prisma.balanceAdjustmentMaterialization.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.balanceAdjustmentSettlement.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.correctionPayment.deleteMany({
     where: { balanceAdjustment: { correction: { payrollEntry: { cycle: { year: { gte: 2900 } } } } } },

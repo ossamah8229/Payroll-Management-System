@@ -7,6 +7,7 @@ import { badRequest, conflict, notFound } from '../../common/http-error';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { materializeScheduledAdvanceDeductions } from '../advances/advances.service';
+import { materializeCorrectionObligationsForNewCycle } from '../corrections/corrections.materialization.service';
 import {
   reserveBackupPackageVersion,
   assembleBackupPackageFiles,
@@ -33,8 +34,12 @@ import {
  * approved architecture decision, superseding the fuller framework `docs/architecture/workflows/
  * outstanding-obligations.md` describes as a future possibility) — both `createPayrollCycle` and
  * `archiveAndCreateNextPayrollCycle` call Advances' own `materializeScheduledAdvanceDeductions`
- * directly. Should Phase 6 (Balance Adjustments/Corrections) become a genuine second consumer
- * needing the same seam, that is the point to generalize this into a real registry, not before.
+ * directly. **Phase 6 Checkpoint 5 is now that second consumer**: `archiveAndCreateNextPayrollCycle`
+ * also calls `materializeCorrectionObligationsForNewCycle` (`corrections.materialization.service.ts`)
+ * after bootstrap, the same way — `createPayrollCycle` deliberately does not (the very first cycle
+ * ever has no prior released `PayrollEntry`, so no `Correction`/`BalanceAdjustment` could possibly
+ * exist yet to materialize). Two consumers, both called directly by name, is still not enough to
+ * justify a real registry — revisit only if a third one appears.
  */
 
 const CHUNK_SIZE = 500;
@@ -664,6 +669,21 @@ export async function archiveAndCreateNextPayrollCycle(
           );
         }
 
+        // Phase 6 Checkpoint 5 — the correction-obligation Materialization Hook, same
+        // extensibility seam as Advances above. No `resolvedPeriod` gate — corrections have no
+        // scheduled-period concept of their own; every PENDING RECOVERY/DEFERRED-PAYABLE
+        // BalanceAdjustment for an employee who now has an entry in this new cycle is a candidate,
+        // every time.
+        const correctionObligationsMaterialized = await materializeCorrectionObligationsForNewCycle(
+          {
+            cycleId: newCycle.id,
+            employeeIdToEntryId: bootstrap.employeeIdToEntryId,
+            actorUserId: currentUser.id,
+            requestMeta,
+          },
+          tx,
+        );
+
         const [outgoingEntryCount, outgoingHeldUnreleasedCount] = await Promise.all([
           tx.payrollEntry.count({ where: { cycleId: outgoingCycleId } }),
           tx.payrollEntry.count({ where: { cycleId: outgoingCycleId, hold: true, released: false } }),
@@ -722,6 +742,7 @@ export async function archiveAndCreateNextPayrollCycle(
               entriesCreated: bootstrap.entryCount,
               departedObligationEntries: bootstrap.departedObligationEntryCount,
               advancesMaterialized,
+              correctionObligationsMaterialized,
             },
             ipAddress: requestMeta.ipAddress,
             userAgent: requestMeta.userAgent,
@@ -739,6 +760,7 @@ export async function archiveAndCreateNextPayrollCycle(
           entriesCreated: bootstrap.entryCount,
           departedObligationEntries: bootstrap.departedObligationEntryCount,
           advancesMaterialized,
+          correctionObligationsMaterialized,
         };
       },
       { timeout: 30_000 },

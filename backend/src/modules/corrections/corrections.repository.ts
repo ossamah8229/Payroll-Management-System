@@ -334,6 +334,128 @@ export async function updateBalanceAdjustmentAfterSettlement(
   return result.count;
 }
 
+// --- Phase 6 Checkpoint 5: Draft-cycle materialization -------------------------------------------
+
+export async function getActiveReservedAmount(
+  balanceAdjustmentId: string,
+  client: PrismaTransactionClient = prisma,
+): Promise<string> {
+  const result = await client.balanceAdjustmentMaterialization.aggregate({
+    where: { balanceAdjustmentId, status: 'ACTIVE' },
+    _sum: { amount: true },
+  });
+  return (result._sum.amount ?? 0).toString();
+}
+
+export async function getMaterializationForCycle(
+  balanceAdjustmentId: string,
+  cycleId: string,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustmentMaterialization.findUnique({
+    where: { balanceAdjustmentId_cycleId: { balanceAdjustmentId, cycleId } },
+  });
+}
+
+export async function getPayrollEntryForEmployeeInCycle(
+  employeeId: string,
+  cycleId: string,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.payrollEntry.findUnique({ where: { cycleId_employeeId: { cycleId, employeeId } } });
+}
+
+export async function createMaterializationRow(
+  data: Prisma.BalanceAdjustmentMaterializationUncheckedCreateInput,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustmentMaterialization.create({ data });
+}
+
+/** Every materialization row for one `PayrollEntry`, with its underlying `BalanceAdjustment.type`
+ * — the service layer sums these (split PAYABLE/RECOVERY) to recompute
+ * `correctionBalancePayable`/`.correctionBalanceRecovery` from scratch, never incrementally. */
+export async function listMaterializationsForEntry(
+  payrollEntryId: string,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustmentMaterialization.findMany({
+    where: { payrollEntryId },
+    select: { amount: true, balanceAdjustment: { select: { type: true } } },
+  });
+}
+
+export async function updatePayrollEntryCorrectionAggregates(
+  payrollEntryId: string,
+  data: { correctionBalancePayable: string; correctionBalanceRecovery: string },
+  client: PrismaTransactionClient = prisma,
+): Promise<void> {
+  await client.payrollEntry.update({
+    where: { id: payrollEntryId },
+    data: {
+      correctionBalancePayable: data.correctionBalancePayable,
+      correctionBalanceRecovery: data.correctionBalanceRecovery,
+      // Same optimistic-locking convention `materializeScheduledAdvanceDeductions` (Advances,
+      // Phase 4 Checkpoint 5) already uses for this exact kind of hook-driven PayrollEntry write.
+      version: { increment: 1 },
+    },
+  });
+}
+
+export async function getCurrentDraftCycle(client: PrismaTransactionClient = prisma) {
+  return client.payrollCycle.findFirst({ where: { status: 'DRAFT' } });
+}
+
+export async function getCycleById(cycleId: string, client: PrismaTransactionClient = prisma) {
+  return client.payrollCycle.findUnique({ where: { id: cycleId } });
+}
+
+/**
+ * Native Postgres row-level lock (`SELECT ... FOR UPDATE`), not a custom advisory lock — the
+ * deliberate choice for the target `PayrollCycle`, first in the documented lock order (cycle, then
+ * `BalanceAdjustment` — `corrections.materialization.service.ts`'s own module comment). Finalize
+ * Cycle's own transaction (`payroll-processing.service.ts`) already takes an implicit row lock on
+ * this same row via its own conditional `UPDATE ... WHERE status = 'DRAFT'` — a `FOR UPDATE` select
+ * here participates in that *same* native Postgres lock queue automatically, with zero changes to
+ * Finalize's own code. A custom advisory lock would not achieve this: it only serializes against
+ * other code that explicitly takes the identical lock, and Finalize takes none.
+ */
+export async function lockPayrollCycleForUpdate(
+  cycleId: string,
+  client: PrismaTransactionClient,
+): Promise<{ id: string; status: string } | null> {
+  const rows = await client.$queryRaw<
+    { id: string; status: string }[]
+  >`SELECT "id", "status" FROM "PayrollCycle" WHERE "id" = ${cycleId}::uuid FOR UPDATE`;
+  return rows[0] ?? null;
+}
+
+/** Every `PayrollEntry` in a cycle, reduced to just its own id + `employeeId` — the
+ * `employeeIdToEntryId` shape `materializeScheduledAdvanceDeductions` (Advances) already
+ * established as the Materialization Hook convention, built here for the manual/batch route;
+ * the archive-and-create-next orchestrator already has its own copy to pass in directly. */
+export async function listEntriesForCycle(cycleId: string, client: PrismaTransactionClient = prisma) {
+  return client.payrollEntry.findMany({ where: { cycleId }, select: { id: true, employeeId: true } });
+}
+
+/** Every `PENDING` `BalanceAdjustment` eligible in principle for cycle materialization
+ * (`RECOVERY`, or `PAYABLE` with `paymentTiming = DEFERRED`) for a given set of employees —
+ * final eligibility (already-materialized, departed, remaining/available amount) is still decided
+ * by `corrections.materialization.ts`'s pure `determineMaterialization`, not here. */
+export async function listMaterializableAdjustments(
+  employeeIds: string[],
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustment.findMany({
+    where: {
+      employeeId: { in: employeeIds },
+      status: 'PENDING',
+      OR: [{ type: 'RECOVERY' }, { type: 'PAYABLE', paymentTiming: 'DEFERRED' }],
+    },
+    include: { employee: { select: { id: true, siteId: true, dateOfLeaving: true } } },
+  });
+}
+
 // --- Approved-correction history for one entry (dual-permission GET route) ---------------------
 
 /** Full approved-`Correction` history for one entry, newest first — read-only, no baseline

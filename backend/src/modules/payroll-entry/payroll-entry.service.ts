@@ -38,6 +38,12 @@ export function computeEntryCalc(entry: EntryWithWorkLines): CalcNetResult {
     advanceDeduction: entry.advanceDeduction.toString(),
     eidAdvanceDeduction: entry.eidAdvanceDeduction.toString(),
     fine: entry.fine.toString(),
+    // Phase 6 Checkpoint 5 — passed through so a materialized correction obligation
+    // (BalanceAdjustmentMaterialization, backend/src/modules/corrections/) is reflected in this
+    // entry's own calculated net salary everywhere computeEntryCalc is the single computation
+    // path (the grid, entry detail, exports) — not just at materialization-creation time.
+    correctionBalancePayable: entry.correctionBalancePayable.toString(),
+    correctionBalanceRecovery: entry.correctionBalanceRecovery.toString(),
     workLines: entry.workLines.map((line) => ({
       sortOrder: line.sortOrder,
       days: line.days.toString(),

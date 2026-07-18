@@ -442,20 +442,22 @@ model PayrollCycle {
   /// already-archived cycle — this FK is that direct, queryable answer, additive only.
   archivedWithBackupPackageId String?            @db.Uuid
 
-  sourceCycle                  PayrollCycle?                 @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
-  derivedCycles                PayrollCycle[]                @relation("PayrollCycleSource")
-  createdByUser                User                          @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  releasedByUser               User?                         @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  archivedByUser               User?                         @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
-  archivedWithBackupPackage    BackupPackage?                @relation("PayrollCycleArchivedWithBackupPackage", fields: [archivedWithBackupPackageId], references: [id], onDelete: Restrict)
-  entries                      PayrollEntry[]
-  unitReleases                 PayrollUnitRelease[]
-  scheduledPayrollPeriods      ScheduledPayrollPeriod[]
-  backupPackages               BackupPackage[]
+  sourceCycle                       PayrollCycle?                      @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  derivedCycles                     PayrollCycle[]                     @relation("PayrollCycleSource")
+  createdByUser                     User                               @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  releasedByUser                    User?                              @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  archivedByUser                    User?                              @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  archivedWithBackupPackage         BackupPackage?                     @relation("PayrollCycleArchivedWithBackupPackage", fields: [archivedWithBackupPackageId], references: [id], onDelete: Restrict)
+  entries                           PayrollEntry[]
+  unitReleases                      PayrollUnitRelease[]
+  scheduledPayrollPeriods           ScheduledPayrollPeriod[]
+  backupPackages                    BackupPackage[]
   /// Phase 6 Checkpoint 1 — schema/domain foundation only.
-  balanceAdjustmentsSourced    BalanceAdjustment[]           @relation("BalanceAdjustmentSourceCycle")
-  balanceAdjustmentsSettled    BalanceAdjustment[]           @relation("BalanceAdjustmentSettledInCycle")
-  balanceAdjustmentSettlements BalanceAdjustmentSettlement[]
+  balanceAdjustmentsSourced         BalanceAdjustment[]                @relation("BalanceAdjustmentSourceCycle")
+  balanceAdjustmentsSettled         BalanceAdjustment[]                @relation("BalanceAdjustmentSettledInCycle")
+  balanceAdjustmentSettlements      BalanceAdjustmentSettlement[]
+  /// Phase 6 Checkpoint 5 — schema/domain foundation only (Draft-cycle projection reservations).
+  balanceAdjustmentMaterializations BalanceAdjustmentMaterialization[]
 
   @@unique([year, month])
   @@index([archivedWithBackupPackageId])
@@ -508,10 +510,10 @@ model ScheduledPayrollPeriod {
 /// `lateReason IS NOT NULL ⇒ released = true` are Prisma-DSL-inexpressible and added by raw SQL
 /// in the migration.
 model PayrollEntry {
-  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cycleId              String    @db.Uuid
-  employeeId           String    @db.Uuid
-  siteId               String    @db.Uuid
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId                   String    @db.Uuid
+  employeeId                String    @db.Uuid
+  siteId                    String    @db.Uuid
   /// **Added Phase 4 Checkpoint 6.1 (Payslips backend foundation, 2026-07-12).** Frozen copy of
   /// `Employee.name`/`.fatherName` at this entry's creation, closing the historical-correctness gap
   /// `bank-sheets.service.ts`'s `buildRow` comment and `PROJECT_PROGRESS.md`'s "Snapshot-name
@@ -521,63 +523,76 @@ model PayrollEntry {
   /// columns. Nullable because pre-existing rows are backfilled best-effort from current `Employee`
   /// data (see this migration's own header comment), not because a newly created entry may
   /// legitimately omit them — `createPayrollEntry`/`createPayrollCycle` always populate both.
-  employeeNameSnapshot String?   @db.VarChar(160)
-  fatherNameSnapshot   String?   @db.VarChar(160)
-  designation          String    @db.VarChar(80)
-  bankId               String?   @db.Uuid
-  branchCode           String?   @db.VarChar(20)
-  accountNumber        String?   @db.VarChar(40)
+  employeeNameSnapshot      String?   @db.VarChar(160)
+  fatherNameSnapshot        String?   @db.VarChar(160)
+  designation               String    @db.VarChar(80)
+  bankId                    String?   @db.Uuid
+  branchCode                String?   @db.VarChar(20)
+  accountNumber             String?   @db.VarChar(40)
   /// **Added Phase 4 banking refinement (2026-07-11).** Copied from `Employee` at entry creation
   /// (or carried forward at new-cycle creation), then ordinarily Draft-editable — same "copied,
   /// not linked" convention as every other field in this group. Replaces `accountTitle` (removed
   /// the same pass); the account holder is always the entry's own `Employee.name` snapshot.
-  iban                 String?   @db.VarChar(34)
-  grossPay             Decimal   @db.Decimal(12, 2)
-  allowance            Decimal   @default(0) @db.Decimal(12, 2)
-  leaveDays            Decimal   @default(0) @db.Decimal(5, 2)
-  leaveRate            Decimal?  @db.Decimal(10, 2)
-  eobiAmount           Decimal   @default(400.00) @db.Decimal(10, 2)
-  eobiApplicable       Boolean   @default(true)
-  advanceDeduction     Decimal   @default(0) @db.Decimal(12, 2)
+  iban                      String?   @db.VarChar(34)
+  grossPay                  Decimal   @db.Decimal(12, 2)
+  allowance                 Decimal   @default(0) @db.Decimal(12, 2)
+  leaveDays                 Decimal   @default(0) @db.Decimal(5, 2)
+  leaveRate                 Decimal?  @db.Decimal(10, 2)
+  eobiAmount                Decimal   @default(400.00) @db.Decimal(10, 2)
+  eobiApplicable            Boolean   @default(true)
+  advanceDeduction          Decimal   @default(0) @db.Decimal(12, 2)
   /// **Added Phase 4 Checkpoint 5.** The specific `LOAN`-type Advance this cycle's
   /// `advanceDeduction` reduces — recorded at the moment the deduction is entered/materialized,
   /// never re-inferred later from "whichever advance is currently active" (docs/architecture/
   /// database/advances.md §15). Frozen once the entry releases, exactly like every other field here.
-  advanceId            String?   @db.Uuid
-  eidAdvanceDeduction  Decimal   @default(0) @db.Decimal(12, 2)
+  advanceId                 String?   @db.Uuid
+  eidAdvanceDeduction       Decimal   @default(0) @db.Decimal(12, 2)
   /// **Added Phase 4 Checkpoint 5.** Same as `advanceId`, for the `EID_ADVANCE`-type Advance this
   /// cycle's `eidAdvanceDeduction` reduces.
-  eidAdvanceId         String?   @db.Uuid
-  fine                 Decimal   @default(0) @db.Decimal(12, 2)
-  hold                 Boolean   @default(false)
-  released             Boolean   @default(false)
-  releasedAt           DateTime? @db.Timestamptz(6)
-  releasedBy           String?   @db.Uuid
-  lateReason           String?
+  eidAdvanceId              String?   @db.Uuid
+  fine                      Decimal   @default(0) @db.Decimal(12, 2)
+  /// Phase 6 Checkpoint 5 — sum of this entry's own `BalanceAdjustmentMaterialization` rows whose
+  /// `BalanceAdjustment.type = PAYABLE` (always a single, full `DEFERRED` reservation — no partial
+  /// PAYABLE materialization exists, mirroring `CorrectionPayment`'s own "no partial" rule).
+  /// Recomputed by full re-sum, not incremented, every time a materialization is created for this
+  /// entry — always independently reproducible from those rows, never an independent source of
+  /// truth. Added to `totalEarning` by `calcNet`.
+  correctionBalancePayable  Decimal   @default(0) @db.Decimal(12, 2)
+  /// Phase 6 Checkpoint 5 — same convention as `correctionBalancePayable`, for
+  /// `BalanceAdjustment.type = RECOVERY` materializations (one or more installment reservations).
+  /// Added to `totalDeduction` by `calcNet`.
+  correctionBalanceRecovery Decimal   @default(0) @db.Decimal(12, 2)
+  hold                      Boolean   @default(false)
+  released                  Boolean   @default(false)
+  releasedAt                DateTime? @db.Timestamptz(6)
+  releasedBy                String?   @db.Uuid
+  lateReason                String?
   /// Approved Phase 3 Checkpoint 0 addition — not in docs/architecture/database/payroll-entry.md §12 as originally
   /// frozen. Editable while the entry is editable; frozen into the permanent snapshot once
   /// released, exactly like every other Draft-editable field.
-  remarks              String?
+  remarks                   String?
   /// User-controlled drag-to-reorder position within the cycle. Assigned by the application at
   /// entry-creation time (Checkpoint 1), not a database sequence.
-  sortOrder            Int       @default(0)
+  sortOrder                 Int       @default(0)
   /// Optimistic-locking token — incremented on every update (Checkpoint 1).
-  version              Int       @default(1)
-  createdAt            DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt            DateTime  @updatedAt @db.Timestamptz(6)
+  version                   Int       @default(1)
+  createdAt                 DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime  @updatedAt @db.Timestamptz(6)
 
-  cycle                  PayrollCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  employee               Employee                @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  site                   ProjectSite             @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  bank                   Bank?                   @relation(fields: [bankId], references: [id], onDelete: Restrict)
-  releasedByUser         User?                   @relation("PayrollEntryReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  workLines              PayrollEntryWorkLine[]
-  advance                Advance?                @relation("PayrollEntryAdvance", fields: [advanceId], references: [id], onDelete: Restrict)
-  eidAdvance             Advance?                @relation("PayrollEntryEidAdvance", fields: [eidAdvanceId], references: [id], onDelete: Restrict)
-  advanceScheduleChanges AdvanceScheduleChange[]
+  cycle                             PayrollCycle                       @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  employee                          Employee                           @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  site                              ProjectSite                        @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  bank                              Bank?                              @relation(fields: [bankId], references: [id], onDelete: Restrict)
+  releasedByUser                    User?                              @relation("PayrollEntryReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  workLines                         PayrollEntryWorkLine[]
+  advance                           Advance?                           @relation("PayrollEntryAdvance", fields: [advanceId], references: [id], onDelete: Restrict)
+  eidAdvance                        Advance?                           @relation("PayrollEntryEidAdvance", fields: [eidAdvanceId], references: [id], onDelete: Restrict)
+  advanceScheduleChanges            AdvanceScheduleChange[]
   /// Phase 6 Checkpoint 1 — schema/domain foundation only.
-  corrections            Correction[]
-  correctionRequests     CorrectionRequest[]
+  corrections                       Correction[]
+  correctionRequests                CorrectionRequest[]
+  /// Phase 6 Checkpoint 5 — schema/domain foundation only (Draft-cycle projection reservations).
+  balanceAdjustmentMaterializations BalanceAdjustmentMaterialization[]
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
@@ -872,13 +887,15 @@ model BalanceAdjustment {
   settledAt                 DateTime?                       @db.Timestamptz(6)
   createdAt                 DateTime                        @default(now()) @db.Timestamptz(6)
 
-  correction        Correction                    @relation(fields: [correctionId], references: [id], onDelete: Restrict)
-  employee          Employee                      @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  sourceCycle       PayrollCycle                  @relation("BalanceAdjustmentSourceCycle", fields: [sourceCycleId], references: [id], onDelete: Restrict)
-  adjustmentType    AdjustmentType                @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
-  settledInCycle    PayrollCycle?                 @relation("BalanceAdjustmentSettledInCycle", fields: [settledInCycleId], references: [id], onDelete: Restrict)
+  correction        Correction                         @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  employee          Employee                           @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  sourceCycle       PayrollCycle                       @relation("BalanceAdjustmentSourceCycle", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  adjustmentType    AdjustmentType                     @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
+  settledInCycle    PayrollCycle?                      @relation("BalanceAdjustmentSettledInCycle", fields: [settledInCycleId], references: [id], onDelete: Restrict)
   correctionPayment CorrectionPayment?
   settlements       BalanceAdjustmentSettlement[]
+  /// Phase 6 Checkpoint 5 — schema/domain foundation only (Draft-cycle projection reservations).
+  materializations  BalanceAdjustmentMaterialization[]
 
   @@index([employeeId, status])
   @@index([status])
@@ -934,11 +951,73 @@ model BalanceAdjustmentSettlement {
   amountApplied       Decimal  @db.Decimal(12, 2)
   appliedAt           DateTime @default(now()) @db.Timestamptz(6)
 
-  balanceAdjustment BalanceAdjustment @relation(fields: [balanceAdjustmentId], references: [id], onDelete: Restrict)
-  cycle             PayrollCycle      @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  balanceAdjustment BalanceAdjustment                 @relation(fields: [balanceAdjustmentId], references: [id], onDelete: Restrict)
+  cycle             PayrollCycle                      @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  /// Phase 6 Checkpoint 5 — the reservation this settlement consumed, where applicable. Set (by a
+  /// later checkpoint, not Checkpoint 5) at the same moment a `BalanceAdjustmentMaterialization`
+  /// flips `ACTIVE` -> `CONSUMED`; null for a settlement that never went through a materialization
+  /// reservation at all (e.g. a standalone `CorrectionPayment`-adjacent settlement, or any
+  /// settlement recorded before Checkpoint 5 existed).
+  materialization   BalanceAdjustmentMaterialization?
 
   @@unique([balanceAdjustmentId, cycleId])
   @@index([balanceAdjustmentId])
+  @@index([cycleId])
+}
+
+/// Closed, code-coupled set — the `BalanceAdjustmentMaterialization` lifecycle. `ACTIVE` is the
+/// only state Phase 6 Checkpoint 5 itself ever sets; `CONSUMED`/`CANCELLED` are reserved for a
+/// later checkpoint that owns the materialization -> settlement transition (Product Decision
+/// Resolution boundary: Checkpoint 5 is Draft-cycle *projection* only, never settlement).
+enum MaterializationStatus {
+  ACTIVE
+  CONSUMED
+  CANCELLED
+}
+
+/// Phase 6 Checkpoint 5 — the immutable, per-adjustment, per-cycle *reservation* record: "this
+/// outstanding obligation has been projected into this Draft PayrollEntry's calculation." A
+/// materialization is deliberately not a settlement — creating one never touches
+/// `BalanceAdjustment.remainingAmount`/`.status`, `CorrectionPayment`, or
+/// `BalanceAdjustmentSettlement`. Instead it *reserves* part of the adjustment's remaining balance
+/// so a later Draft cycle cannot re-project the same money: `availableToMaterialize =
+/// remainingAmount - SUM(amount WHERE status = 'ACTIVE')`, across every cycle for that adjustment,
+/// not just the current one. `CONSUMED` rows are excluded from that sum by design — once a
+/// materialization is actually settled, `remainingAmount` itself has already dropped by the same
+/// amount, so counting the (by-then-stale) reservation a second time would double-subtract.
+///
+/// `PayrollEntry.correctionBalancePayable`/`.correctionBalanceRecovery` are aggregates derived from
+/// these rows for a given entry — always reproducible by re-summing them, never an independent
+/// source of truth. A future checkpoint performing the `ACTIVE` -> `CONSUMED` transition must
+/// validate, transactionally, that the linked `BalanceAdjustmentSettlement` (`settlementId`)
+/// references the *same* `balanceAdjustmentId` and `cycleId` as this row — application-layer only,
+/// deliberately not a DB constraint (would require unnecessary column duplication across two
+/// already-linked tables).
+model BalanceAdjustmentMaterialization {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  balanceAdjustmentId String                @db.Uuid
+  payrollEntryId      String                @db.Uuid
+  /// Denormalized from `payrollEntry.cycleId` — present so `@@unique([balanceAdjustmentId, cycleId])`
+  /// can enforce "one materialization per adjustment per target cycle" directly, without a join.
+  cycleId             String                @db.Uuid
+  amount              Decimal               @db.Decimal(12, 2)
+  status              MaterializationStatus @default(ACTIVE)
+  /// Reserved, not yet set by Checkpoint 5 — see this model's own comment and
+  /// `BalanceAdjustmentSettlement.materialization`, above. `@unique` so one settlement can never be
+  /// credited as consuming more than one reservation.
+  settlementId        String?               @unique @db.Uuid
+  consumedAt          DateTime?             @db.Timestamptz(6)
+  cancelledAt         DateTime?             @db.Timestamptz(6)
+  createdAt           DateTime              @default(now()) @db.Timestamptz(6)
+
+  balanceAdjustment BalanceAdjustment            @relation(fields: [balanceAdjustmentId], references: [id], onDelete: Restrict)
+  payrollEntry      PayrollEntry                 @relation(fields: [payrollEntryId], references: [id], onDelete: Restrict)
+  cycle             PayrollCycle                 @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  settlement        BalanceAdjustmentSettlement? @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+
+  @@unique([balanceAdjustmentId, cycleId])
+  @@index([balanceAdjustmentId, status])
+  @@index([payrollEntryId])
   @@index([cycleId])
 }
 

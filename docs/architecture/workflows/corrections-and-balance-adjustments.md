@@ -191,6 +191,31 @@ sweep will call the same underlying mechanism rather than reinventing it. **Depa
 settlement path, automatic or manual, exists for it; no receivables/collections system exists
 anywhere in this codebase, the same accepted gap already tolerated for an uncollectable `Advance`.
 
+**Scope note, Phase 6 Checkpoint 5 (2026-07-18):** Checkpoint 5 builds a distinct, additional
+mechanism this section's diagram does not yet show — **Draft-cycle materialization**
+(`BalanceAdjustmentMaterialization`, a new table) — and it is important not to conflate it with the
+"automatically surfaces... settled on that entry's release" pipeline narrated above, which **remains
+not yet built**. What Checkpoint 5 actually does: for an eligible `PENDING` `PAYABLE` (`DEFERRED`
+only) or `RECOVERY` `BalanceAdjustment`, it projects the amount that *would* settle into the current
+Draft cycle's own `PayrollEntry` — via two new aggregate columns, `correctionBalancePayable`/
+`correctionBalanceRecovery`, that feed `calcNet` — so the obligation is visible in that entry's own
+calculated net salary while the cycle is still Draft. **It is a reservation, not a settlement**: a
+materialization row never touches `BalanceAdjustment.remainingAmount`/`.status`, and never creates a
+`CorrectionPayment`/`BalanceAdjustmentSettlement`. Actually marking the obligation settled (the
+`remainingAmount` decrement, the `SETTLED` status flip, the `BalanceAdjustmentSettlement` row this
+section describes) still requires Checkpoint 4's own manual recording action — release does not yet
+automatically call it. Over-materialization across sequential Draft cycles is prevented by an
+`availableToMaterialize = remainingAmount − Σ(ACTIVE reservations across every cycle)` formula,
+re-derived on every attempt; one `BalanceAdjustment` may only ever have one `ACTIVE` reservation per
+target cycle (a database unique constraint), making a repeated or concurrent materialization attempt
+against the same adjustment+cycle a safe, idempotent no-op. Materialization is wired automatically
+into `archiveAndCreateNextPayrollCycle` (the same "Materialization Hook" extensibility seam Advances'
+`materializeScheduledAdvanceDeductions` already established) and is also available as a manual
+per-adjustment or per-cycle-batch action, both reusing the existing `payroll:entry`/
+`corrections:approve` permissions — no new permission key, no frontend surface, no Corrections
+Ledger. Departed-employee `RECOVERY` is never materialized, the identical Product Decision
+Resolution rule already enforced for settlement above.
+
 ```
 Correction Approved
         ↓

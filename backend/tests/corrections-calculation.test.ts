@@ -66,6 +66,8 @@ function makeEntry(
     eidAdvanceDeduction: new Prisma.Decimal('0'),
     eidAdvanceId: null,
     fine: new Prisma.Decimal('0'),
+    correctionBalancePayable: new Prisma.Decimal('0'),
+    correctionBalanceRecovery: new Prisma.Decimal('0'),
     hold: false,
     released: true,
     releasedAt: new Date('2026-01-05T00:00:00Z'),

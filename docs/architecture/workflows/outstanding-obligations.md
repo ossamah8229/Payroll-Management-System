@@ -94,3 +94,27 @@ Payroll Processing's bootstrap its own additional direct call, mirroring Advance
 building a registry ahead of that second real need. Should Phase 6 (Balance Adjustments) or a later
 module become a genuine second consumer of this same seam, *that* is the point to evaluate whether a
 real registry is justified, not before.
+
+---
+
+**Resolved 2026-07-18 (Phase 6 Checkpoint 5) — Balance Adjustments is now the second real consumer,
+and a registry was still not built, per the rule stated just above.** Checkpoint 5 adds
+`materializeCorrectionObligationsForNewCycle` (`corrections.materialization.service.ts`), called by
+`archiveAndCreateNextPayrollCycle` immediately after `materializeScheduledAdvanceDeductions` —
+another direct, explicit call, not a dispatch through a registered-provider list. It runs inside the
+same already-open rollover transaction the new cycle's entries were just created in, taking the exact
+`employeeIdToEntryId` map Advances' own call already builds, so the two providers do not duplicate
+that lookup. **Materialization is a distinct concept from settlement**, so this call is *narrower*
+than the "Payroll Materialization Hook" description above might suggest: it never marks a
+`BalanceAdjustment` settled, never touches `remainingAmount`/`status`, and never creates a
+`CorrectionPayment`/`BalanceAdjustmentSettlement` — it only ever writes an `ACTIVE`
+`BalanceAdjustmentMaterialization` reservation row and recomputes the new entry's own
+`correctionBalancePayable`/`correctionBalanceRecovery` aggregate columns, feeding `calcNet`
+(`docs/architecture/workflows/corrections-and-balance-adjustments.md`'s own Checkpoint 5 scope note
+has the full mechanism). Provider independence held exactly as this file's own principle requires:
+Advances' own materialization and Balance Adjustments' own materialization run one after the other
+in a fixed, arbitrary order inside the same transaction, neither reads the other's output, and
+neither assumes anything about whether the other ran. No registry was introduced — two real,
+concurrently-existing direct-call consumers now exist, but per this file's own standing rule, a
+registry is justified only once maintaining N direct calls is demonstrably worse than the
+abstraction, which two calls does not yet demonstrate.

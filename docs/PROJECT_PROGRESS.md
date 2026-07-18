@@ -4575,6 +4575,158 @@ Checkpoint 5 without its own explicit go-ahead.
 
 ---
 
+### Phase 6 Checkpoint 5 — Draft-Cycle Materialization of Outstanding Balance Adjustments — COMPLETE
+
+Repository preflight confirmed: branch `main`, working tree clean, commit `9f9c88d` (Checkpoint 4
+implementation) present, baseline backend **700/700** / frontend **23/23** / E2E **15/15** / 16
+migrations / zero schema drift reconfirmed. Materializes eligible `BalanceAdjustment` obligations
+into the current Draft payroll cycle, without modifying historical payroll, corrections, or
+settlements — preserving a hard distinction between the immutable correction obligation
+(`BalanceAdjustment`), its cycle-scoped materialization (new: `BalanceAdjustmentMaterialization`),
+and actual settlement/payment (`CorrectionPayment`/`BalanceAdjustmentSettlement`, Checkpoint 4,
+untouched by this checkpoint). No frontend correction screens, no Corrections Ledger.
+
+**Schema investigation (this checkpoint's own required "First task") and the resulting three-round
+revision, in full — the most consequential part of this checkpoint's process, not just its
+result:** the approved Checkpoint 1–4 schema had no way to represent materialization identity or
+idempotency at all — confirmed genuine, not worked around, by comparing against the one real
+precedent for this exact kind of write (Advances' `materializeScheduledAdvanceDeductions`, which
+writes directly into dedicated `PayrollEntry` columns; no equivalent columns existed for
+corrections, and reusing `advanceDeduction`/`allowance`/`fine` would have conflated a correction
+balance with an unrelated payroll field, violating the frozen architecture). Per the checkpoint's own
+explicit instruction, this gap was reported and no migration was written before a design was
+presented for approval:
+1. **First proposal** (two plain `PayrollEntry` aggregate columns, reusing `BalanceAdjustmentSettlement`
+   for traceability) was rejected: Checkpoint 4 established `BalanceAdjustmentSettlement` as
+   representing an *actual* settlement (decrementing `remainingAmount`); reusing it for
+   materialization would have incorrectly marked a Draft-cycle obligation as settled before that
+   cycle is even finalized.
+2. **Second proposal** (a dedicated `BalanceAdjustmentMaterialization` model, no reservation
+   tracking) was caught as having a real double-projection bug: since materialization never
+   decrements `remainingAmount`, the same obligation could be re-materialized into every sequential
+   Draft cycle, projecting more money than was ever actually owed.
+3. **Third round** added the final integrity requirements: a `MaterializationStatus` lifecycle
+   (`ACTIVE`/`CONSUMED`/`CANCELLED`, only `ACTIVE` ever created by this checkpoint), an
+   `availableToMaterialize = remainingAmount − Σ(ACTIVE reservations across every cycle)` formula
+   (re-derived on every attempt, never cached), a unique `settlementId`, exact CHECK-constraint
+   combinations tying `status` to `consumedAt`/`cancelledAt`/`settlementId`, and the supporting
+   indexes for the availability query.
+
+**Migration** `20260718110000_phase6_correction_materialization` (17th migration, additive only):
+new `MaterializationStatus` enum; new `BalanceAdjustmentMaterialization` model
+(`@@unique([balanceAdjustmentId, cycleId])` — the actual idempotency guarantee — plus
+`@@index([balanceAdjustmentId, status])`/`@@index([payrollEntryId])`/`@@index([cycleId])`); two new
+`PayrollEntry` columns, `correctionBalancePayable`/`correctionBalanceRecovery` (`Decimal(12,2)`,
+default `0`, both `>= 0` via hand-added CHECK constraints, matching every other money column in this
+schema). Hand-added CHECK constraint enforces `amount > 0` and the exact valid
+`(status, consumedAt, cancelledAt, settlementId)` combinations. Applied cleanly; `prisma generate`
+regenerated the client.
+
+**`calcNet` extension** (`shared/src/lib/calc-net.ts`): two new **optional**, backward-compatible
+input fields — `correctionBalancePayable` folds into `totalEarning`, `correctionBalanceRecovery`
+folds into `totalDeduction` — both default to `0` when omitted, so every pre-existing caller is
+unaffected. `computeEntryCalc` (`payroll-entry.service.ts`) threads the two new `PayrollEntry`
+columns through, so materialized amounts are reproducibly visible in the grid/entry-detail calc.
+`payslips.service.ts`'s own separate calc-input construction is a deliberate, documented scope
+boundary — not touched this checkpoint.
+
+**Eligibility engine** (`corrections.materialization.ts`, pure, no Prisma/HTTP — mirrors
+`corrections.calculation.ts`/`corrections.settlement.ts`'s own design): `determineMaterialization`
+— target cycle must be DRAFT → not already materialized for that cycle → adjustment not `SETTLED` →
+type supported (`RECOVERY`, or `PAYABLE` with `paymentTiming = DEFERRED`; `NONE` and `IMMEDIATE
+PAYABLE` rejected — the latter uses Checkpoint 4's own `CorrectionPayment` path instead) → target
+employee has a `PayrollEntry` in the target cycle → `RECOVERY` against a departed employee rejected
+(the Product Decision Resolution's "Recovery from departed employees remains permanently pending"
+rule, reused verbatim) → `remainingAmount > 0` → `availableToMaterialize > 0`. Amount selection:
+`PAYABLE` always takes the full `availableToMaterialize`; `RECOVERY` takes
+`min(availableToMaterialize, recoveryInstallmentAmount ?? availableToMaterialize)`. All arithmetic
+via `decimal.js`.
+
+**Idempotency and concurrency** (`corrections.materialization.service.ts`): idempotency is
+guaranteed by the `@@unique([balanceAdjustmentId, cycleId])` constraint plus a pre-check read — a
+repeat or concurrent duplicate attempt against the same adjustment+cycle always resolves to exactly
+one `MATERIALIZED` and any others `SKIPPED (ALREADY_MATERIALIZED)`, never two rows. **Documented,
+deterministic lock order — always cycle, then adjustment, never the reverse:** (1)
+`lockPayrollCycleForUpdate` — a native Postgres `SELECT ... FOR UPDATE` on the target `PayrollCycle`
+row, deliberately not a custom advisory lock, chosen specifically because Finalize Cycle's own
+transaction takes no advisory lock at all (only an implicit row lock via its own conditional
+`UPDATE ... WHERE status = 'DRAFT'`) — a `FOR UPDATE` select is the only mechanism that naturally
+serializes against that without changing Finalize's own code; (2) `acquireBalanceAdjustmentLock`,
+Checkpoint 4's existing advisory lock, reused unchanged. **A genuine cross-checkpoint deadlock was
+found and fixed under real concurrent-load testing**, not merely theorized: materializing and
+settling the *same* adjustment into/against the *same* cycle concurrently can deadlock — the
+materialize transaction holds the cycle's `FOR UPDATE` row lock and then waits on the adjustment's
+advisory lock, while a concurrent settlement holds that advisory lock and then triggers an implicit
+FK-check lock on that same `PayrollCycle` row via `BalanceAdjustmentSettlement.cycleId`'s foreign
+key. Postgres's own deadlock detector correctly aborts one side with `40P01`; the fix maps that
+(and `40001`, serialization failure) to a clean `409 CONCURRENT_CONFLICT` in the shared error
+handler (`error-handler.ts`), the same "reload and try again" class as `STALE_CONCURRENT_WRITE`,
+rather than a misleading `500`. Neither Finalize's own code nor Checkpoint 4's settlement
+transaction was modified.
+
+**Archive-and-create-next integration**: `materializeCorrectionObligationsForNewCycle`
+(`corrections.materialization.service.ts`) is the second direct consumer of the existing
+Materialization Hook seam (`docs/architecture/workflows/outstanding-obligations.md`'s own dated
+resolution note) — called from `archiveAndCreateNextPayrollCycle` immediately after Advances' own
+`materializeScheduledAdvanceDeductions`, inside the same already-open rollover transaction, reusing
+the same `employeeIdToEntryId` map. No registry was introduced (per that file's own standing rule —
+two real consumers still doesn't justify one).
+
+**Manual/batch materialization and API routes**: `previewMaterialization` (read-only dry run, no
+lock), `materializeBalanceAdjustment` (single, explicit or current-Draft target cycle),
+`materializeEligibleAdjustmentsForCycle` (batch scan of every `PENDING` candidate for a cycle, one
+independent transaction per adjustment — partial-success semantics, typed skip reasons). Routes:
+`GET/POST /balance-adjustments/:id/materializations[/preview]` (view: `payroll:entry` OR
+`corrections:approve`; create: `corrections:approve`) and `POST
+/payroll-cycles/:cycleId/materializations` (batch, `corrections:approve`) — no new permission key.
+
+**Hard "Materialized ≠ Settled" rule, enforced structurally, not just by convention**: no code path
+introduced this checkpoint ever creates a `CorrectionPayment`/`BalanceAdjustmentSettlement` or
+touches `BalanceAdjustment.remainingAmount`/`.status` — a materialization row is a reservation only.
+The `ACTIVE → CONSUMED`/`CANCELLED` transition remains a later, unbuilt checkpoint's own event; this
+checkpoint only ever creates `ACTIVE` rows.
+
+**Files created:** `corrections.materialization.ts`, `corrections.materialization.types.ts`,
+`corrections.materialization.service.ts`; `backend/tests/corrections-materialization.test.ts` (55
+tests — pure eligibility/amount-selection, PAYABLE, RECOVERY, departed employee, idempotency,
+real-Postgres concurrency including the deadlock scenario above, archive-and-create-next
+integration, batch result, audit, API security).
+**Files modified:** `prisma/schema.prisma` + new migration; `shared/src/lib/calc-net.ts`;
+`payroll-entry.service.ts` (`computeEntryCalc`); `corrections.repository.ts` (materialization
+read/write primitives, `lockPayrollCycleForUpdate`); `corrections.routes.ts` (new
+`payrollCycleMaterializationsRouter` + `balanceAdjustmentsRouter` additions);
+`payroll-processing.service.ts` (Hook wiring in `archiveAndCreateNextPayrollCycle`); `app.ts`
+(router mount); `error-handler.ts` (`MaterializationValidationError` mapping + the new `P2010`
+deadlock/serialization-failure → 409 mapping); `shared/src/schemas/correction.ts` +
+`shared/src/index.ts` (`materializeBalanceAdjustmentSchema`); `backend/tests/helpers.ts`
+(`cleanTestData` extended for the new `BalanceAdjustmentMaterialization` table's RESTRICT FKs);
+`backend/tests/corrections-calculation.test.ts` + `frontend/src/components/payroll-entry/
+columns.test.ts` (fixture updates for the two new required `PayrollEntry` columns).
+
+**Verification performed:** `prisma validate`/`migrate status` — 17 migrations, zero drift; full
+backend suite **755/755** (700 baseline + 55 new, zero regressions, confirmed stable across three
+consecutive full runs of the new file to rule out the deadlock fix being flaky); frontend suite
+**23/23** (unchanged); `typecheck`/`lint` clean across all three workspaces; production builds clean
+for all three workspaces. Two transient failures observed once during a full-suite run
+(`payslips.test.ts`'s N+1-query-count assertion, `payroll-entry-performance.test.ts`'s
+indexed-query-plan assertion) were investigated by re-running both files in isolation — both passed
+cleanly on retry, consistent with this project's own documented query-planner-sensitivity-under-load
+pattern (`docs/architecture/testing.md`), not a regression from this checkpoint's migration.
+
+**Explicitly confirmed at close of this checkpoint:** `PayrollEntry`/`Correction`/`BalanceAdjustment`
+rows remain immutable (no materialization write ever touches them beyond the two new aggregate
+columns, which are always fully recomputed, never incremented); no adjustment was ever
+over-materialized across sequential Draft cycles (the reservation formula, tested directly);
+materializing the same adjustment into the same cycle twice, concurrently or sequentially, always
+produces exactly one financial effect; departed-employee `RECOVERY` remains permanently pending,
+never materialized; materialization never equals settlement — no `CorrectionPayment`/
+`BalanceAdjustmentSettlement` was ever created by this checkpoint, and `remainingAmount`/`status`
+were never touched; no frontend correction screen, no Corrections Ledger, no bank-sheet/cash-sheet
+export change, and no historical Backup Package regeneration exist. Checkpoint 5 implemented only
+Draft-cycle materialization. Do not begin Checkpoint 6 without its own explicit go-ahead.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

@@ -175,3 +175,14 @@ export const previewSettlementSchema = z.object({
   amount: z.preprocess(emptyToNull, decimalString.nullable().optional()),
 });
 export type PreviewSettlementInput = z.infer<typeof previewSettlementSchema>;
+
+/**
+ * Phase 6 Checkpoint 5 (Draft-Cycle Materialization). `targetCycleId` is always optional —
+ * omitted, it resolves to the current Draft cycle server-side (`getCurrentDraftCycle`); provided,
+ * it must itself still be `DRAFT` at materialization time (re-checked transactionally, never
+ * trusted from this input alone). Used identically by the single-adjustment preview/create routes.
+ */
+export const materializeBalanceAdjustmentSchema = z.object({
+  targetCycleId: z.string().uuid().optional(),
+});
+export type MaterializeBalanceAdjustmentInput = z.infer<typeof materializeBalanceAdjustmentSchema>;
