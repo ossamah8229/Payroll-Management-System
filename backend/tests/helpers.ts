@@ -58,6 +58,27 @@ export async function cleanTestData(): Promise<void> {
   });
   await prisma.backupPackageFile.deleteMany({ where: { backupPackage: { cycle: { year: { gte: 2900 } } } } });
   await prisma.backupPackage.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
+  // Corrections & Balance Adjustments (Phase 6 Checkpoint 1, docs/architecture/database/
+  // corrections.md §13/§13a, docs/architecture/database/balance-adjustments.md §14/§14a/§14b) — all
+  // RESTRICT, so deletion order matters: `Correction.reversesCorrectionId` is a nullable
+  // self-reference and must be cleared first (a reversal chain would otherwise block deleting the
+  // row it points to); `BalanceAdjustmentSettlement`/`CorrectionPayment` both reference
+  // `BalanceAdjustment` and must go before it; `BalanceAdjustment` references `Correction` and must
+  // go before it; `CorrectionRequest` references `Correction` (`resultingCorrectionId`) and must
+  // also go before it; `Correction`/`CorrectionRequest` both reference `PayrollEntry` and must be
+  // gone before `payrollEntry.deleteMany` below. Scoped by the same fake year>=2900 convention as
+  // every other table here with no text column of its own to prefix.
+  await prisma.correction.updateMany({
+    where: { payrollEntry: { cycle: { year: { gte: 2900 } } } },
+    data: { reversesCorrectionId: null },
+  });
+  await prisma.balanceAdjustmentSettlement.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
+  await prisma.correctionPayment.deleteMany({
+    where: { balanceAdjustment: { correction: { payrollEntry: { cycle: { year: { gte: 2900 } } } } } },
+  });
+  await prisma.balanceAdjustment.deleteMany({ where: { correction: { payrollEntry: { cycle: { year: { gte: 2900 } } } } } });
+  await prisma.correctionRequest.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
+  await prisma.correction.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
   await prisma.payrollEntry.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.advance.deleteMany({ where: { employee: { site: { name: { startsWith: 'Test Site ' } } } } });
   await prisma.scheduledPayrollPeriod.deleteMany({ where: { year: { gte: 2900 } } });
@@ -91,6 +112,10 @@ export async function cleanTestData(): Promise<void> {
   await prisma.projectUnit.deleteMany({ where: { site: { name: { startsWith: 'Test Site ' } } } });
   await prisma.projectSite.deleteMany({ where: { name: { startsWith: 'Test Site ' } } });
   await prisma.bank.deleteMany({ where: { code: { startsWith: 'TB' } } });
+  // AdjustmentType (Phase 2 seed data + Phase 6 Checkpoint 1's own schema tests) — test-created
+  // rows are scoped by a 'TEST_' code prefix, same convention as Role/Permission above; the 7
+  // seeded production types (Attendance Correction, etc.) are never touched.
+  await prisma.adjustmentType.deleteMany({ where: { code: { startsWith: 'TEST_' } } });
 }
 
 export async function createTestUser(options: {

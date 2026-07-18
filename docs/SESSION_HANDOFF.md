@@ -17,12 +17,16 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-18 — read this section first)
 
-**All of Phases 0–5 and all four Post-Phase-5 Stabilization checkpoints are complete.** Phase 6
-(Corrections & Balance Adjustments) has **not** started and requires its own explicit go-ahead
-before any implementation begins — architecture-only work already froze its design alongside Phase
-3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record.
+**All of Phases 0–5 and all four Post-Phase-5 Stabilization checkpoints are complete. Phase 6
+(Corrections & Balance Adjustments) has started.** The Architecture Review and its Product Decision
+Resolution (both review-only, no repository changes) are complete, refining the design frozen
+alongside Phase 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record. **Checkpoint 1
+(Corrections Domain & Schema Foundation) is complete** — see `docs/PROJECT_PROGRESS.md` §1's "Phase
+6 started" entry. **No calculation engine, correction approval workflow, settlement logic,
+correction APIs, or frontend correction workflow exist yet** — Checkpoint 1 is schema/domain
+foundation only. Do not begin Checkpoint 2 without its own separate, explicit go-ahead.
 
-**Latest commits:** `4764afb` (Stabilization Checkpoint 4 implementation — AUD-012/AUD-013), doc-hash
+**Latest commits:** `<PHASE6_CKPT1_COMMIT>` (Phase 6 Checkpoint 1 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -37,14 +41,18 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
   E2E harness, `tests/e2e/`, plus the documentation reconciliation it identified as needed) —
   `4764afb`.
 
+**Phase 6, in progress:**
+- **Checkpoint 1** (Corrections Domain & Schema Foundation — five new models, five new enums,
+  migration `20260718100000_phase6_corrections_domain`, no calculation/approval/settlement/API/
+  frontend logic) — `<PHASE6_CKPT1_COMMIT>`.
+
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
-snapshot, not current): backend **516/516**, frontend **23/23**, E2E **15/15**. 15 migrations, zero
+snapshot, not current): backend **550/550**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
 schema drift.
 
-**Exact next step:** Phase 6 (Corrections & Balance Adjustments) architecture review/implementation
-— but only on explicit authorization. Do not begin it, and do not begin a fifth stabilization
-checkpoint, without that go-ahead; all four approved AUD findings are now closed.
+**Exact next step:** Phase 6 Checkpoint 2 — but only on explicit authorization. Do not begin it
+without that go-ahead; Checkpoint 1's own scope is fully closed.
 
 **Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
 

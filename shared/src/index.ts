@@ -77,6 +77,22 @@ export type {
 } from './schemas/advance';
 
 export {
+  balanceAdjustmentPaymentTimingSchema,
+  balanceAdjustmentStatusSchema,
+  balanceAdjustmentTypeSchema,
+  correctionFieldSchema,
+  correctionRequestStatusSchema,
+  WORK_LINE_CORRECTION_FIELDS,
+} from './schemas/correction';
+export type {
+  BalanceAdjustmentPaymentTiming,
+  BalanceAdjustmentStatus,
+  BalanceAdjustmentType,
+  CorrectionField,
+  CorrectionRequestStatus,
+} from './schemas/correction';
+
+export {
   createTaskSchema,
   listTasksQuerySchema,
   taskPrioritySchema,

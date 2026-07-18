@@ -4213,6 +4213,92 @@ nothing, no undocumented manual step); `typecheck`/`lint` clean across all three
 pre-existing frontend `react-refresh` warnings, zero new); production builds clean for all three
 workspaces, zero new warnings.
 
+### Phase 6 started, 2026-07-18 — Checkpoint 1: Corrections Domain & Schema Foundation
+
+Repository preflight confirmed: branch `main`, working tree clean, commit `4764afb`/`544bdc2`
+(Post-Phase-5 Stabilization Checkpoint 4, the last of all four) present, baseline **516/516** backend
+/ **23/23** frontend / **15/15** E2E / 15 migrations / zero schema drift reconfirmed. All four
+Post-Phase-5 Stabilization checkpoints are closed. The Phase 6 Architecture Review (review-only, no
+repository changes) and its Product Decision Resolution (review-only, no repository changes) both
+precede this checkpoint and are not repeated here. **This checkpoint is scope-limited to the
+Corrections & Balance Adjustments schema/domain foundation only** — no calculation engine, no
+baseline reconstruction, no correction approval workflow, no settlement logic, no Draft-cycle
+materialization, no bank/cash processing, no reporting, no frontend correction workflow, no
+correction APIs, and no permissions enforcement (the `corrections:approve` permission constant
+already existed, reserved but unused, from an earlier phase — confirmed, not re-added).
+
+**Schema added** (`backend/prisma/schema.prisma`): five new models —
+`CorrectionRequest` (the pending-proposal half of the workflow; `PENDING`/`APPROVED`/`REJECTED`,
+never edited after the one permitted transition), `Correction` (the immutable, always-already-approved
+event; deliberately carries no `employeeId`/`sourceCycleId`/financial-classification/target-cycle —
+those live only on `BalanceAdjustment`, per "avoid duplicated financial state," Architecture Review
+§3), `BalanceAdjustment` (the one place this domain's live financial state lives —
+`remainingAmount` is the single authoritative outstanding-balance figure), `CorrectionPayment` (the
+standalone settlement artifact for an `IMMEDIATE PAYABLE` adjustment with no open `PayrollEntry` to
+fold into), and `BalanceAdjustmentSettlement` (append-only per-cycle installment history, the
+business-history counterpart to `AuditLog`, same precedent as `EmployeeTransferHistory`) — plus five
+new enums (`CorrectionField`, `CorrectionRequestStatus`, `BalanceAdjustmentType`,
+`BalanceAdjustmentStatus`, `BalanceAdjustmentPaymentTiming`) and back-relations added to `User`,
+`Employee`, `Bank`, `AdjustmentType`, `PayrollCycle`, and `PayrollEntry`. `Correction.reversesCorrectionId`
+(nullable, self-referencing, `ON DELETE RESTRICT`) implemented exactly as approved by the Product
+Decision Resolution (Decision 5/Q6). Every design decision, and every deliberate deviation from the
+checkpoint brief's own generic field list, is documented inline in the schema's own model/field
+comments rather than only here.
+
+**Migration**: `backend/prisma/migrations/20260718100000_phase6_corrections_domain/` — generated via
+`prisma migrate diff` against the live database (this sandbox has no shadow-database permission,
+same documented workaround as `20260711160000_advances`), with the same known spurious
+`DROP TABLE "session"` line manually removed (connect-pg-simple's table, not part of the Prisma
+schema) and 16 hand-added CHECK constraints appended (blank-reason guards, self-reversal rejection,
+`CorrectionRequest`/`BalanceAdjustment` state-invariant guards, `remainingAmount` bounds,
+type-restricted nullable fields, positive-amount guards) — Prisma's schema DSL cannot express any of
+these. Purely additive: no destructive changes, no data backfill, no mutation of any historical
+payroll data. Applied via `prisma migrate deploy` — **16 migrations total**, `prisma migrate status`
+reports up to date, `prisma validate` passes. One invariant ("`SETTLED` with no `settledInCycleId`
+requires a linked `CorrectionPayment`") is cross-table and cannot be expressed as a Postgres CHECK —
+documented as an application-layer-only invariant, deferred to whichever future checkpoint implements
+settlement.
+
+**Shared package**: `shared/src/schemas/correction.ts` (new) — Zod enum mirrors of all five new
+Prisma enums, plus `WORK_LINE_CORRECTION_FIELDS` (the four `CorrectionField` values that live on
+`PayrollEntryWorkLine`, not `PayrollEntry`, restricted to single-work-line entries per Product
+Decision Resolution Q1). Deliberately just enum mirrors — no request/response DTOs or mutation input
+schemas, since this checkpoint has no HTTP surface yet; those belong to whichever later checkpoint
+adds the route that needs them. Exported from `shared/src/index.ts` following the exact pattern of
+every other schema module.
+
+**Tests added**: `backend/tests/corrections-schema.test.ts` (new, 34 tests) — schema/domain-only,
+modeled on the Phase 3 Checkpoint 0 precedent (`payroll-schema.test.ts`), direct-Prisma, no
+service/route layer. Covers every model's happy path and relations, every hand-added CHECK
+constraint (blank-reason, self-reversal rejection, all state-invariant guards, `remainingAmount`
+bounds, type-restricted nullable fields), FK RESTRICT behavior, and every unique constraint —
+explicitly no calculation/approval/settlement-workflow tests, per this checkpoint's own scope.
+`backend/tests/helpers.ts`'s `cleanTestData()` updated with FK-safe deletion order for the five new
+tables (documented inline: `reversesCorrectionId` cleared first, dependents before `BalanceAdjustment`
+before `Correction`) and an `AdjustmentType` `TEST_`-prefix cleanup clause.
+
+**Verification performed:** `prisma validate` clean; `prisma migrate status` — 16 migrations, zero
+drift; full backend suite **550/550** (516 baseline + 34 new, zero regressions); frontend suite
+**23/23** (unchanged, no frontend code touched); E2E suite **15/15** (unchanged, no regression);
+`typecheck`/`lint` clean across all three workspaces (same 6 pre-existing frontend `react-refresh`
+warnings, zero new); production builds clean for all three workspaces (`shared` → `backend` →
+`frontend`).
+
+**Deliberate scope decisions**: no backend service/route/controller scaffolding was added — the
+checkpoint brief's own "repository/service scaffolding where required" and "placeholder modules if
+necessary" language is conditional, and empty stub files would violate this project's standing
+"no half-finished implementations" principle; Prisma + the new Zod enum mirrors constitute the
+complete domain layer a schema-only checkpoint calls for. No nullable "approver" field was added to
+`Correction` — it would contradict the already-approved "`Correction` is always created
+already-approved" design; `approvedById` serves as both creator and approver for a direct correction,
+while `CorrectionRequest.requestedById` (a separate table) captures the original proposer for a
+request-originated one.
+
+**Explicitly confirmed at close of this checkpoint:** no calculation engine, no correction approval
+workflow, no settlement logic, no correction APIs (beyond the plain Zod enum mirrors), and no
+frontend correction workflow exist yet. Checkpoint 1 established the immutable correction domain
+schema only. Do not begin Checkpoint 2 without its own explicit go-ahead.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -4226,7 +4312,7 @@ workspaces, zero new warnings.
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
-| 6 | Corrections & Balance Adjustments (highest-risk logic) | Architecture frozen alongside Phase 3, 2026-07-05 (`CorrectionRequest`, immediate/deferred, installment recovery). Implementation not started |
+| 6 | Corrections & Balance Adjustments (highest-risk logic) | **Started, 2026-07-18.** Architecture Review (review-only, comprehensive) and its Product Decision Resolution (review-only) both complete, refining the 2026-07-05 frozen design. Checkpoint 1 (Corrections Domain & Schema Foundation) implemented and tested — see §1. No calculation engine, approval workflow, settlement logic, correction APIs, or frontend workflow exist yet — schema/domain foundation only. Checkpoint 2 not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
@@ -4557,16 +4643,21 @@ workspaces, zero new warnings.
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-13 — Phase 4 (all six checkpoints) is implemented, tested, and committed, but is
-code-complete rather than fully closed; Phase 5 has not been authorized or started.** See §1's
-"Phase 4 close-out review" and §2's Phase 4 row for the exact reason (deployment verification
-outstanding).
+**Updated 2026-07-18 — Phase 6 has started. Post-Phase-5 Stabilization (all four checkpoints) and
+the Phase 6 Architecture Review + Product Decision Resolution (both review-only) are complete.
+Checkpoint 1 (Corrections Domain & Schema Foundation) is implemented, tested, and committed — see
+§1's "Phase 6 started" entry and §2's Phase 6 row.** Current baseline: backend **550/550**, frontend
+**23/23**, E2E **15/15**, 16 migrations, zero schema drift. **Do not begin Phase 6 Checkpoint 2
+(or any later checkpoint) without its own separate, explicit go-ahead** — same standing
+per-checkpoint practice as every other phase. The items below (originally written 2026-07-13, for
+Phase 4/5) are carried forward for their still-open content only; their own test-count/database
+figures are stale — use the baseline above instead.
 
 1. **Re-provision the local database before running DB-backed tests** — it does not survive between
    sessions. Recipe unchanged: `@embedded-postgres/darwin-x64` in the scratchpad, `initdb`, start
    TCP-only, create the `payroll`/`payroll_dev` role/database, `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed twice (confirm idempotency), `npm run test --workspace backend`
-   (expect **469/469** as of Phase 5 Checkpoint 3 — run via the `npm run test` script, which sets
+   (expect **550/550** as of Phase 6 Checkpoint 1 — run via the `npm run test` script, which sets
    `NODE_ENV=test` and `--runInBand`; do not run `npx jest` directly with a sourced `.env`, which
    overrides `NODE_ENV` to `development` and drops the login rate limit from 1000/window to
    10/window, producing spurious 429s).

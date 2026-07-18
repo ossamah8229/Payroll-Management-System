@@ -132,21 +132,27 @@ model User {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  role                    Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  siteAssignments         UserSiteAssignment[]
-  auditLogEntries         AuditLog[]
-  companySettingsUpdates  CompanySettings[]
-  employeeTransfers       EmployeeTransferHistory[]
-  payrollCyclesCreated    PayrollCycle[]            @relation("PayrollCycleCreatedBy")
-  payrollCyclesReleased   PayrollCycle[]            @relation("PayrollCycleReleasedBy")
-  payrollCyclesArchived   PayrollCycle[]            @relation("PayrollCycleArchivedBy")
-  payrollEntriesReleased  PayrollEntry[]            @relation("PayrollEntryReleasedBy")
-  payrollUnitReleases     PayrollUnitRelease[]      @relation("PayrollUnitReleaseReleasedBy")
-  tasksAssignedToMe       Task[]                    @relation("TaskAssignedTo")
-  tasksAssignedByMe       Task[]                    @relation("TaskAssignedBy")
-  taskNotifications       TaskNotification[]
-  advanceScheduleChanges  AdvanceScheduleChange[]
-  backupPackagesGenerated BackupPackage[]           @relation("BackupPackageGeneratedBy")
+  role                        Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  siteAssignments             UserSiteAssignment[]
+  auditLogEntries             AuditLog[]
+  companySettingsUpdates      CompanySettings[]
+  employeeTransfers           EmployeeTransferHistory[]
+  payrollCyclesCreated        PayrollCycle[]            @relation("PayrollCycleCreatedBy")
+  payrollCyclesReleased       PayrollCycle[]            @relation("PayrollCycleReleasedBy")
+  payrollCyclesArchived       PayrollCycle[]            @relation("PayrollCycleArchivedBy")
+  payrollEntriesReleased      PayrollEntry[]            @relation("PayrollEntryReleasedBy")
+  payrollUnitReleases         PayrollUnitRelease[]      @relation("PayrollUnitReleaseReleasedBy")
+  tasksAssignedToMe           Task[]                    @relation("TaskAssignedTo")
+  tasksAssignedByMe           Task[]                    @relation("TaskAssignedBy")
+  taskNotifications           TaskNotification[]
+  advanceScheduleChanges      AdvanceScheduleChange[]
+  backupPackagesGenerated     BackupPackage[]           @relation("BackupPackageGeneratedBy")
+  /// Phase 6 Checkpoint 1 — schema/domain foundation only, see `Correction`/`CorrectionRequest`/
+  /// `CorrectionPayment`'s own comments.
+  correctionRequestsRequested CorrectionRequest[]       @relation("CorrectionRequestRequestedBy")
+  correctionRequestsReviewed  CorrectionRequest[]       @relation("CorrectionRequestReviewedBy")
+  correctionsApproved         Correction[]              @relation("CorrectionApprovedBy")
+  correctionPaymentsPaid      CorrectionPayment[]       @relation("CorrectionPaymentPaidBy")
 
   @@index([roleId])
 }
@@ -162,8 +168,10 @@ model Bank {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 
-  employees      Employee[]
-  payrollEntries PayrollEntry[]
+  employees          Employee[]
+  payrollEntries     PayrollEntry[]
+  /// Phase 6 Checkpoint 1 — schema/domain foundation only.
+  correctionPayments CorrectionPayment[]
 }
 
 /// Project site master data — a pure client/location record (name, address; no banking
@@ -275,9 +283,12 @@ model Employee {
   unit ProjectUnit @relation(fields: [unitId, siteId], references: [id, siteId], onDelete: Restrict)
   bank Bank?       @relation(fields: [bankId], references: [id], onDelete: Restrict)
 
-  transferHistory EmployeeTransferHistory[]
-  payrollEntries  PayrollEntry[]
-  advances        Advance[]
+  transferHistory    EmployeeTransferHistory[]
+  payrollEntries     PayrollEntry[]
+  advances           Advance[]
+  /// Phase 6 Checkpoint 1 — schema/domain foundation only.
+  balanceAdjustments BalanceAdjustment[]
+  correctionPayments CorrectionPayment[]
 
   // Partial unique indexes (WHERE ... IS NOT NULL) and the CNIC numeric-pattern check constraint
   // are not expressible via Prisma's schema DSL — both are added by raw SQL in the migration
@@ -372,6 +383,11 @@ model AdjustmentType {
   label     String   @db.VarChar(120)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  /// Phase 6 Checkpoint 1 — schema/domain foundation only.
+  corrections        Correction[]
+  correctionRequests CorrectionRequest[]
+  balanceAdjustments BalanceAdjustment[]
 }
 
 /// Company name, address, and logo shown on payslips, bank sheets, and the app shell —
@@ -426,16 +442,20 @@ model PayrollCycle {
   /// already-archived cycle — this FK is that direct, queryable answer, additive only.
   archivedWithBackupPackageId String?            @db.Uuid
 
-  sourceCycle               PayrollCycle?            @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
-  derivedCycles             PayrollCycle[]           @relation("PayrollCycleSource")
-  createdByUser             User                     @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  releasedByUser            User?                    @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  archivedByUser            User?                    @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
-  archivedWithBackupPackage BackupPackage?           @relation("PayrollCycleArchivedWithBackupPackage", fields: [archivedWithBackupPackageId], references: [id], onDelete: Restrict)
-  entries                   PayrollEntry[]
-  unitReleases              PayrollUnitRelease[]
-  scheduledPayrollPeriods   ScheduledPayrollPeriod[]
-  backupPackages            BackupPackage[]
+  sourceCycle                  PayrollCycle?                 @relation("PayrollCycleSource", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  derivedCycles                PayrollCycle[]                @relation("PayrollCycleSource")
+  createdByUser                User                          @relation("PayrollCycleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  releasedByUser               User?                         @relation("PayrollCycleReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  archivedByUser               User?                         @relation("PayrollCycleArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  archivedWithBackupPackage    BackupPackage?                @relation("PayrollCycleArchivedWithBackupPackage", fields: [archivedWithBackupPackageId], references: [id], onDelete: Restrict)
+  entries                      PayrollEntry[]
+  unitReleases                 PayrollUnitRelease[]
+  scheduledPayrollPeriods      ScheduledPayrollPeriod[]
+  backupPackages               BackupPackage[]
+  /// Phase 6 Checkpoint 1 — schema/domain foundation only.
+  balanceAdjustmentsSourced    BalanceAdjustment[]           @relation("BalanceAdjustmentSourceCycle")
+  balanceAdjustmentsSettled    BalanceAdjustment[]           @relation("BalanceAdjustmentSettledInCycle")
+  balanceAdjustmentSettlements BalanceAdjustmentSettlement[]
 
   @@unique([year, month])
   @@index([archivedWithBackupPackageId])
@@ -555,6 +575,9 @@ model PayrollEntry {
   advance                Advance?                @relation("PayrollEntryAdvance", fields: [advanceId], references: [id], onDelete: Restrict)
   eidAdvance             Advance?                @relation("PayrollEntryEidAdvance", fields: [eidAdvanceId], references: [id], onDelete: Restrict)
   advanceScheduleChanges AdvanceScheduleChange[]
+  /// Phase 6 Checkpoint 1 — schema/domain foundation only.
+  corrections            Correction[]
+  correctionRequests     CorrectionRequest[]
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
@@ -626,6 +649,297 @@ model PayrollUnitRelease {
   @@unique([cycleId, unitId])
   @@index([cycleId])
   @@index([unitId])
+}
+
+/// Phase 6, Checkpoint 1 (Corrections & Balance Adjustments — domain and schema foundation only).
+/// Everything from here to the `BalanceAdjustmentSettlement` model implements the frozen design in
+/// `docs/architecture/database/corrections.md` (§11, §13, §13a) and `docs/architecture/database/
+/// balance-adjustments.md` (§14, §14a, §14b), refined by the Phase 6 Architecture Review and its
+/// Product Decision Resolution (2026-07-18). This checkpoint is schema/domain only — no calculation
+/// engine, no approval workflow, no settlement logic, no APIs, no frontend. See each model's own
+/// comment for the specific decisions it encodes.
+
+/// Closed, code-coupled set (docs/architecture/database/conventions-and-enums.md §1) — which
+/// `PayrollEntry`-adjacent field a `Correction`/`CorrectionRequest` targets. **`DAYS`/`OT_HOURS`/
+/// `OT_RATE`/`CYCLE_DAYS` are `PayrollEntryWorkLine` fields, not `PayrollEntry` fields** — the
+/// Architecture Review's Decision 1 (Product Decision Resolution, 2026-07-18) restricts these four
+/// to entries with exactly one work line; the application layer (not this schema) rejects a request
+/// against any of them for a multi-work-line entry with a clear validation message, never a guess or
+/// an automatic redistribution across lines. The remaining nine values are always unambiguous
+/// `PayrollEntry` scalars. `hold`/`released` are deliberately excluded — workflow state, not
+/// correctable payroll data (`docs/architecture/database/payroll-entry.md §12`).
+enum CorrectionField {
+  GROSS_PAY
+  DAYS
+  OT_HOURS
+  OT_RATE
+  ALLOWANCE
+  LEAVE_DAYS
+  LEAVE_RATE
+  CYCLE_DAYS
+  EOBI_AMOUNT
+  EOBI_APPLICABLE
+  ADVANCE_DEDUCTION
+  EID_ADVANCE_DEDUCTION
+  FINE
+}
+
+/// Closed, code-coupled set — the one permitted transition a `CorrectionRequest` ever makes:
+/// `PENDING` → `APPROVED` or `PENDING` → `REJECTED`, never edited otherwise once decided
+/// (`docs/architecture/database/corrections.md §13a`).
+enum CorrectionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A proposed change to one field of a released `PayrollEntry` (`PayrollEntry.released = true`,
+/// the single trigger condition — `docs/architecture/workflows/payroll-lifecycle.md §4`), awaiting
+/// Master User review. **The pending half of the workflow — separates *proposing* a correction (any
+/// authorized payroll user) from *deciding* one (Master User only, `corrections:approve` — Product
+/// Decision Resolution Decision 2/Q2, no new permission key).** Bypassed entirely when the Master
+/// User corrects directly — see `Correction`, below, which is created already-approved either way;
+/// this table exists only for the case where someone *other* than the approver initiated it, or the
+/// Master User chooses to formalize their own proposal first (never required).
+///
+/// Immutable with exactly one permitted transition — never edited otherwise once decided
+/// (`PENDING` is the only state that can change, and only once). No DB trigger (matching
+/// `EmployeeTransferHistory`'s own precedent: application-layer-only immutability is this
+/// codebase's established convention for every table except `AuditLog` itself, which alone gets the
+/// stronger DB-trigger guarantee).
+model CorrectionRequest {
+  id                    String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payrollEntryId        String                  @db.Uuid
+  field                 CorrectionField
+  /// The requester's proposed value — a starting point for review, not binding; the eventual
+  /// `Correction.newValue` may differ if the Master User adjusts it during approval.
+  proposedNewValue      String                  @db.VarChar(80)
+  /// The requester's proposed classification, likewise revisable at approval.
+  adjustmentTypeId      String                  @db.Uuid
+  reason                String
+  requestedById         String                  @db.Uuid
+  requestedAt           DateTime                @default(now()) @db.Timestamptz(6)
+  status                CorrectionRequestStatus @default(PENDING)
+  /// The Master User who approved or rejected — null while `PENDING`.
+  reviewedById          String?                 @db.Uuid
+  reviewedAt            DateTime?               @db.Timestamptz(6)
+  /// Mandatory when `status = REJECTED` (mirrors `Correction.reason`'s "reason mandatory"
+  /// convention, applied symmetrically to rejection); always null otherwise.
+  rejectionReason       String?
+  /// Set only on approval, never on rejection — the `Correction` this request produced.
+  resultingCorrectionId String?                 @unique @db.Uuid
+
+  payrollEntry        PayrollEntry   @relation(fields: [payrollEntryId], references: [id], onDelete: Restrict)
+  adjustmentType      AdjustmentType @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
+  requestedBy         User           @relation("CorrectionRequestRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  reviewedBy          User?          @relation("CorrectionRequestReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+  resultingCorrection Correction?    @relation(fields: [resultingCorrectionId], references: [id], onDelete: Restrict)
+
+  @@index([payrollEntryId])
+  @@index([status])
+  @@index([requestedById])
+  @@index([reviewedById])
+}
+
+/// A single approved change to one field of a released `PayrollEntry` — the only permitted
+/// mechanism for changing a locked entry's outcome, never a direct edit
+/// (`docs/architecture/database/payroll-entry.md §12`'s immutability rule; Principle 9). **Always
+/// created already-approved** — whether a Master User corrected directly or approved a
+/// `CorrectionRequest` (above), both paths produce an identical row; nothing downstream
+/// distinguishes which path produced it. Fully immutable from creation, no further states ever
+/// (Product Decision Resolution Decision 5/Q6 — deliberately no `Draft`/`Cancelled`/`Superseded`
+/// lifecycle; a mistaken correction is corrected via a new `Correction`, never by editing this row).
+///
+/// **`employeeId`/`sourceCycleId`/target-cycle/financial-classification are deliberately NOT
+/// duplicated here** — they live on `BalanceAdjustment` (below), the one place this domain's live
+/// financial state is tracked, per "avoid duplicated financial state" (Architecture Review §3). This
+/// row is derivable to its own `PayrollEntry` → `Employee`/cycle via `payrollEntryId` alone.
+model Correction {
+  id                   String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payrollEntryId       String          @db.Uuid
+  field                CorrectionField
+  /// String representation of the field's *current effective* value immediately before this
+  /// correction — reflecting any prior approved correction to this same field, not necessarily the
+  /// original `PayrollEntry` value. See "Baseline Reconstruction" (`docs/architecture/workflows/
+  /// corrections-and-balance-adjustments.md`) — computed and validated by Checkpoint 2, not this one.
+  oldValue             String          @db.VarChar(80)
+  newValue             String          @db.VarChar(80)
+  /// `calcNet` result on the entry's current effective state, before this change.
+  oldNetSalary         Decimal         @db.Decimal(12, 2)
+  /// `calcNet` result after this change — a trial computation, never written back to `PayrollEntry`.
+  newNetSalary         Decimal         @db.Decimal(12, 2)
+  adjustmentTypeId     String          @db.Uuid
+  reason               String
+  /// The Master User who approved this correction — for a direct correction, also its creator (the
+  /// same act, same person, same moment; there is no separate "creator" field, since Correction is
+  /// never created in any state other than already-approved). For a `CorrectionRequest`-originated
+  /// correction, the original proposer is `CorrectionRequest.requestedById`, not this column.
+  approvedById         String          @db.Uuid
+  approvedAt           DateTime        @default(now()) @db.Timestamptz(6)
+  /// **Added Phase 6 Checkpoint 1 (Product Decision Resolution Decision 5/Q6, resolving a conflict
+  /// between Decision 3's Corrections Ledger field list and Q6's original "no linked-record concept
+  /// needed" recommendation).** Nullable self-reference to the prior `Correction` this one reverses.
+  /// A reversal is still an ordinary `Correction` — same table, same always-approved lifecycle, no
+  /// new status or type — this column only makes that relationship structurally queryable for the
+  /// Ledger (Checkpoint 6) instead of relying on parsing free-text `reason`. Null for an ordinary,
+  /// non-reversing correction (the common case).
+  reversesCorrectionId String?         @db.Uuid
+
+  payrollEntry          PayrollEntry       @relation(fields: [payrollEntryId], references: [id], onDelete: Restrict)
+  adjustmentType        AdjustmentType     @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
+  approvedBy            User               @relation("CorrectionApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  reversesCorrection    Correction?        @relation("CorrectionReversal", fields: [reversesCorrectionId], references: [id], onDelete: Restrict)
+  reversedByCorrections Correction[]       @relation("CorrectionReversal")
+  correctionRequest     CorrectionRequest?
+  balanceAdjustment     BalanceAdjustment?
+
+  @@index([payrollEntryId])
+  @@index([payrollEntryId, field, approvedAt(sort: Desc)])
+  @@index([adjustmentTypeId])
+  @@index([approvedAt])
+  @@index([approvedById])
+  @@index([reversesCorrectionId])
+}
+
+/// Closed, code-coupled set — `PAYABLE` (the company owes the employee more), `RECOVERY` (the
+/// employee was overpaid), or `NONE` (zero net difference — still creates a row, for full
+/// traceability, but already `SETTLED` at creation).
+enum BalanceAdjustmentType {
+  PAYABLE
+  RECOVERY
+  NONE
+}
+
+/// Closed, code-coupled set — a `NONE`-type row is created already `SETTLED`; every other row starts
+/// `PENDING` and settles exactly once (`RECOVERY` may take several cycles of installments to reach
+/// `remainingAmount = 0`, but the transition itself, `PENDING` → `SETTLED`, still happens exactly
+/// once, at that final installment).
+enum BalanceAdjustmentStatus {
+  PENDING
+  SETTLED
+}
+
+/// Closed, code-coupled set — meaningful only for `type = PAYABLE`; always `NULL` for
+/// `RECOVERY`/`NONE` (negative balances have no immediate option; `NONE` needs no timing at all).
+enum BalanceAdjustmentPaymentTiming {
+  IMMEDIATE
+  DEFERRED
+}
+
+/// The standalone, traceable balance created by an approved `Correction` — never folded silently
+/// into an ordinary payroll field (`docs/architecture/workflows/corrections-and-balance-adjustments.md`).
+/// Created for **every** approved correction, with no exception, including a zero-net-difference
+/// correction (`type = NONE`). This is the one place this domain's live financial state lives —
+/// `remainingAmount` is the single authoritative "how much is still owed" figure; nothing else in
+/// this schema independently tracks it. **No settlement logic is implemented by this checkpoint** —
+/// `status`/`remainingAmount`/`settledInCycleId`/`settledAt` exist as columns only; the automatic
+/// settlement pipeline (Automatic Settlement Workflow) is Checkpoint 3.
+model BalanceAdjustment {
+  id                        String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  correctionId              String                          @unique @db.Uuid
+  /// Denormalized from `correction → payrollEntry → employee` for fast "pending balances for
+  /// employee X" lookups — always derived server-side from the approving `Correction`, never
+  /// accepted as independent input. The one deliberate denormalization in this domain (unlike
+  /// `Correction`, which stays derivable-only) — justified here by the hot settlement-sweep query
+  /// path Checkpoint 3 will add, which `Correction` itself has no equivalent of.
+  employeeId                String                          @db.Uuid
+  /// The cycle the correction was made against — may be `Released` or `Archived`, or a still-`Draft`
+  /// cycle in which this specific entry was individually released (Late Entry).
+  sourceCycleId             String                          @db.Uuid
+  adjustmentTypeId          String                          @db.Uuid
+  /// Absolute value, the *original total* — `0` only when `type = NONE`. For `RECOVERY`, stays the
+  /// original total even as it's recovered in installments; see `remainingAmount` for the live
+  /// outstanding figure.
+  amount                    Decimal                         @db.Decimal(12, 2)
+  type                      BalanceAdjustmentType
+  status                    BalanceAdjustmentStatus         @default(PENDING)
+  /// Set at approval time; meaningful only for `type = PAYABLE`.
+  paymentTiming             BalanceAdjustmentPaymentTiming?
+  /// The per-cycle amount to recover; `NULL` means "recover the full `remainingAmount` in the next
+  /// cycle." `RECOVERY`-only, staff-editable at any time before `remainingAmount` reaches zero
+  /// (Checkpoint 3+ — not enforced by this checkpoint).
+  recoveryInstallmentAmount Decimal?                        @db.Decimal(12, 2)
+  /// The live outstanding balance still to be recovered/paid — decremented by each
+  /// `BalanceAdjustmentSettlement` application, reaching `0` exactly when `status` flips to
+  /// `SETTLED`. Defaults to `amount` at creation (enforced at the application layer, not a DB
+  /// default expression, since it must always equal whatever `amount` this specific row was created
+  /// with).
+  remainingAmount           Decimal                         @db.Decimal(12, 2)
+  /// Auto-composed display remark shown on the Payslip and Corrections Ledger (Checkpoint 6).
+  remark                    String
+  /// Set only at final settlement; always null for a `NONE`-type row (settled outside any cycle).
+  settledInCycleId          String?                         @db.Uuid
+  settledAt                 DateTime?                       @db.Timestamptz(6)
+  createdAt                 DateTime                        @default(now()) @db.Timestamptz(6)
+
+  correction        Correction                    @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  employee          Employee                      @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  sourceCycle       PayrollCycle                  @relation("BalanceAdjustmentSourceCycle", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  adjustmentType    AdjustmentType                @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
+  settledInCycle    PayrollCycle?                 @relation("BalanceAdjustmentSettledInCycle", fields: [settledInCycleId], references: [id], onDelete: Restrict)
+  correctionPayment CorrectionPayment?
+  settlements       BalanceAdjustmentSettlement[]
+
+  @@index([employeeId, status])
+  @@index([status])
+  @@index([adjustmentTypeId, status])
+  @@index([sourceCycleId])
+  @@index([settledInCycleId])
+}
+
+/// The standalone artifact for an `IMMEDIATE PAYABLE` `BalanceAdjustment` when the employee has no
+/// already-open `PayrollEntry` to fold it into — generates its own one-off Bank Sheet/Cash
+/// Sheet-style document rather than waiting for or modifying any `PayrollEntry`. Immutable,
+/// append-only, same convention as `Correction`/`AuditLog`. **No document generation or settlement
+/// logic is implemented by this checkpoint** — this is the schema only.
+model CorrectionPayment {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  balanceAdjustmentId String   @unique @db.Uuid
+  /// Denormalized, same convention as `BalanceAdjustment.employeeId`.
+  employeeId          String   @db.Uuid
+  /// Always equals the settling `BalanceAdjustment.remainingAmount` at the moment of payment.
+  amount              Decimal  @db.Decimal(12, 2)
+  /// Snapshot copied from `Employee`/`PayrollEntry` at payment time — **copied not linked**, same
+  /// convention as `PayrollEntry`'s own bank fields, so a later `Employee` bank-detail change never
+  /// retroactively alters a historical payment record.
+  bankId              String?  @db.Uuid
+  branchCode          String?  @db.VarChar(20)
+  accountNumber       String?  @db.VarChar(40)
+  iban                String?  @db.VarChar(34)
+  paidAt              DateTime @default(now()) @db.Timestamptz(6)
+  /// The Finance user who executed the payment.
+  paidById            String   @db.Uuid
+
+  balanceAdjustment BalanceAdjustment @relation(fields: [balanceAdjustmentId], references: [id], onDelete: Restrict)
+  employee          Employee          @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  bank              Bank?             @relation(fields: [bankId], references: [id], onDelete: Restrict)
+  paidBy            User              @relation("CorrectionPaymentPaidBy", fields: [paidById], references: [id], onDelete: Restrict)
+
+  @@index([employeeId])
+}
+
+/// Append-only history of each cycle's partial recovery application against an installment-based
+/// `RECOVERY` `BalanceAdjustment` — the business-history counterpart to `AuditLog`, following the
+/// same precedent already established by `EmployeeTransferHistory`. One row per cycle in which an
+/// installment was actually applied, so the Corrections Ledger (Checkpoint 6) can show a clean
+/// per-cycle recovery breakdown without parsing `AuditLog.metadata` JSON. **No settlement logic is
+/// implemented by this checkpoint** — this table exists so Checkpoint 3 has somewhere to write to.
+model BalanceAdjustmentSettlement {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  balanceAdjustmentId String   @db.Uuid
+  /// The cycle whose release applied this installment.
+  cycleId             String   @db.Uuid
+  /// `min(recoveryInstallmentAmount ?? remainingAmount-at-the-time, remainingAmount-at-the-time)` —
+  /// may be less than the standing installment amount if it's the final, smaller-than-usual one.
+  amountApplied       Decimal  @db.Decimal(12, 2)
+  appliedAt           DateTime @default(now()) @db.Timestamptz(6)
+
+  balanceAdjustment BalanceAdjustment @relation(fields: [balanceAdjustmentId], references: [id], onDelete: Restrict)
+  cycle             PayrollCycle      @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+
+  @@unique([balanceAdjustmentId, cycleId])
+  @@index([balanceAdjustmentId])
+  @@index([cycleId])
 }
 
 /// Closed, code-coupled set (docs/architecture/database/conventions-and-enums.md §1) — a lightweight,
