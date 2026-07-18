@@ -19,7 +19,7 @@ import { getPayrollCycle } from '../payroll-processing/payroll-processing.servic
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 50;
 
-type EntryWithWorkLines = PayrollEntry & { workLines: PayrollEntryWorkLine[] };
+export type EntryWithWorkLines = PayrollEntry & { workLines: PayrollEntryWorkLine[] };
 
 /**
  * Adapts stored `PayrollEntry`/`PayrollEntryWorkLine` (Prisma `Decimal` fields) into shared

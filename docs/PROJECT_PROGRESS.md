@@ -4299,6 +4299,90 @@ workflow, no settlement logic, no correction APIs (beyond the plain Zod enum mir
 frontend correction workflow exist yet. Checkpoint 1 established the immutable correction domain
 schema only. Do not begin Checkpoint 2 without its own explicit go-ahead.
 
+### Phase 6 Checkpoint 2 — Baseline Reconstruction & Delta Calculation Engine — COMPLETE, COMMITTED as `<PHASE6_CKPT2_COMMIT>`
+
+Repository preflight confirmed: branch `main`, working tree clean, commit `ac58748`/`6ff5e7f`
+(Checkpoint 1) present, baseline backend **550/550** / frontend **23/23** / E2E **15/15** / 16
+migrations / zero schema drift reconfirmed. **Scope-limited to a pure calculation engine — no
+side effects.** Does not implement correction approval, correction application, balance
+settlement, payroll materialization, bank/cash processing, Draft-cycle updates, API endpoints,
+frontend workflow, or reporting. No schema change, no new migration (16 migrations, unchanged).
+
+**Baseline reconstruction** (`backend/src/modules/corrections/corrections.calculation.ts`,
+`reconstructBaseline`): replays every approved `Correction` against a `PayrollEntry`, never from a
+cache, exactly per `docs/architecture/workflows/corrections-and-balance-adjustments.md`'s
+"Baseline Reconstruction for Sequential Corrections." For each of the 13 `CorrectionField` values,
+the effective value is the most recent approved correction's `newValue`, or the stored
+`PayrollEntry`/`PayrollEntryWorkLine` value if never corrected — with `LEAVE_RATE`/`OT_RATE`
+falling back to `calcNet`'s own derived rate (never re-derived independently) when the stored
+column is null, so the payroll formula is never duplicated. A work-line-scoped field
+(`DAYS`/`OT_HOURS`/`OT_RATE`/`CYCLE_DAYS`) reports `null` for an entry with more than one work
+line — never fabricated, since Product Decision Resolution Q1 makes such a correction impossible
+in the first place. Ordering is deterministic: primary sort by `approvedAt`, with a documented
+`id`-based tiebreak used purely for reproducibility (Principle 5), never as a proxy for creation
+order — in practice unreachable through the normal approval path once the advisory lock (below)
+serializes real approvals for the same entry.
+
+**Delta calculation** (`calculateCorrection`): applies the proposed change on top of the
+reconstructed baseline, calls `calcNet` (reused directly, not reimplemented) on both states, and
+classifies the signed difference as `PAYABLE` (positive) or `RECOVERY` (negative). **A zero delta
+is rejected with a typed `ZERO_DELTA` domain error, per this checkpoint's own explicit
+instruction** — a deliberate divergence from the settlement layer's `BalanceAdjustmentType.NONE`
+path (`docs/architecture/workflows/corrections-and-balance-adjustments.md`), documented in the
+module's own header comment as a scope question for whoever implements Checkpoint 3, not resolved
+here.
+
+**Advisory-lock helper** (`corrections.lock.ts`, `acquirePayrollEntryLock`/
+`withPayrollEntryLock`): `pg_advisory_xact_lock(hashtext(payrollEntryId))`, transaction-scoped,
+implementing Product Decision Resolution Decision 2 exactly. **Not wired into any write path in
+this checkpoint** — this checkpoint has no transactional correction-creation flow to protect
+(Checkpoint 3's own scope); the helper exists standalone, exercised directly by its own tests
+(deterministic key derivation; same-entry serialization; different-entry independence).
+
+**Validation** (`corrections.calculation.ts`): a dedicated `CorrectionValidationError` (not
+`HttpError` — this checkpoint has no HTTP surface) with a typed `code` covering every rule the
+checkpoint specified: `UNSUPPORTED_FIELD`, `IMMUTABLE_FIELD` (a real PayrollEntry column that is
+deliberately never correctable, distinct from a field this schema has never heard of),
+`INVALID_ADJUSTMENT_TYPE` (DB-backed — existence + `isActive`), `SPLIT_WORK_LINE_RESTRICTED`,
+`ZERO_DELTA`, `INVALID_NUMERIC_VALUE` (mirroring `PayrollEntry`/`PayrollEntryWorkLine`'s own CHECK
+constraint bounds), `ENTRY_NOT_RELEASED`, `MALFORMED_ENUM_COMBINATION`, and three reversal-specific
+codes (`REVERSAL_TARGET_NOT_FOUND`, `REVERSAL_TARGET_MISMATCH`, `REVERSAL_SELF_REFERENCE`).
+
+**Shared domain types** (`corrections.types.ts`): `ReconstructedBaseline`, `EffectiveFieldValue`,
+`DeltaPreview`, `CorrectionPreview`, `CorrectionHistoryRecord`, `CorrectionCalculationInput`,
+`CorrectionValidationError`/`CorrectionValidationErrorDetails` — independent of both Prisma's
+generated types and any HTTP concern, so Checkpoint 3 and Checkpoint 5 can consume them without
+redesign.
+
+**Repository layer** (`corrections.repository.ts`): read-only — `getEntryForCorrection`,
+`getApprovedCorrectionsForEntry` (queries only the `Correction` table; a `CorrectionRequest` in any
+status, including `PENDING`/`REJECTED`, is structurally never returned), `getCorrectionById`,
+`assertAdjustmentTypeValid`, and the one orchestration entry point, `previewCorrection` (reads
+only, no writes, no transaction opened, not wired to any route).
+
+**Minimal safe refactor**: `payroll-entry.service.ts`'s existing `EntryWithWorkLines` type was
+exported (previously module-private) so the corrections module could reuse it directly rather than
+duplicating it — no other change to that file, no behavior change.
+
+**Files created:** `backend/src/modules/corrections/` (`corrections.types.ts`,
+`corrections.lock.ts`, `corrections.calculation.ts`, `corrections.repository.ts`);
+`backend/tests/corrections-calculation.test.ts` (38 tests, pure, no database);
+`backend/tests/corrections-repository.test.ts` (21 tests, DB-backed — repository reads,
+`previewCorrection` end to end, and the advisory lock's real-Postgres serialization behavior).
+**Files modified:** `backend/src/modules/payroll-entry/payroll-entry.service.ts` (one type export).
+
+**Verification performed:** `prisma validate`/`migrate status` — 16 migrations, zero drift
+(unchanged, no schema touched); full backend suite **609/609** (550 baseline + 59 new, zero
+regressions); frontend suite **23/23** (unchanged); E2E suite **15/15** (unchanged);
+`typecheck`/`lint` clean across all three workspaces (same 6 pre-existing frontend `react-refresh`
+warnings, zero new); production builds clean for all three workspaces.
+
+**Explicitly confirmed at close of this checkpoint:** no correction approval workflow, no
+correction application, no balance settlement logic, no APIs, and no frontend workflow exist yet.
+Checkpoint 2 implemented only the deterministic, side-effect-free calculation engine — baseline
+reconstruction, delta calculation, and validation — plus the not-yet-wired advisory-lock helper. Do
+not begin Checkpoint 3 without its own explicit go-ahead.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)

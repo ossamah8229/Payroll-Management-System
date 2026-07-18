@@ -2018,10 +2018,14 @@ review-only, no repository changes) refined the design below without contradicti
 "Phase 6 started" entry: the five-table schema (`CorrectionRequest`, `Correction`,
 `BalanceAdjustment`, `CorrectionPayment`, `BalanceAdjustmentSettlement`) and its five enums are
 implemented and migrated, with `Correction.reversesCorrectionId` added per the Product Decision
-Resolution. **No calculation engine, approval workflow, settlement logic, correction APIs, or
-frontend workflow exist yet** — everything below this note remains the forward-looking design for
-Checkpoint 2 onward, not yet built. Do not begin Checkpoint 2 without its own separate, explicit
-go-ahead.
+Resolution. **Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) is also complete**
+— see `docs/PROJECT_PROGRESS.md` §1's own Checkpoint 2 entry: a pure, side-effect-free calculation
+engine (`backend/src/modules/corrections/`) implementing baseline reconstruction, delta
+calculation, the Product Decision Resolution's transaction-scoped advisory lock (not yet wired into
+any write path), and full domain validation — no schema change, no database mutation beyond reads.
+**No approval workflow, settlement logic, correction APIs, or frontend workflow exist yet** —
+everything below this note remains the forward-looking design for Checkpoint 3 onward, not yet
+built. Do not begin Checkpoint 3 without its own separate, explicit go-ahead.
 
 **Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
 `PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,

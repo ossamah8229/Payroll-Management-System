@@ -22,11 +22,13 @@ be enough to resume correctly without re-deriving context from scratch — per
 Resolution (both review-only, no repository changes) are complete, refining the design frozen
 alongside Phase 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record. **Checkpoint 1
 (Corrections Domain & Schema Foundation) is complete** — see `docs/PROJECT_PROGRESS.md` §1's "Phase
-6 started" entry. **No calculation engine, correction approval workflow, settlement logic,
-correction APIs, or frontend correction workflow exist yet** — Checkpoint 1 is schema/domain
-foundation only. Do not begin Checkpoint 2 without its own separate, explicit go-ahead.
+6 started" entry. **Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) is also
+complete** — a pure, side-effect-free calculation engine, no schema change. **No correction
+approval workflow, correction application, settlement logic, correction APIs, or frontend
+correction workflow exist yet.** Do not begin Checkpoint 3 without its own separate, explicit
+go-ahead.
 
-**Latest commits:** `ac58748` (Phase 6 Checkpoint 1 implementation), doc-hash
+**Latest commits:** `<PHASE6_CKPT2_COMMIT>` (Phase 6 Checkpoint 2 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -45,14 +47,18 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 - **Checkpoint 1** (Corrections Domain & Schema Foundation — five new models, five new enums,
   migration `20260718100000_phase6_corrections_domain`, no calculation/approval/settlement/API/
   frontend logic) — `ac58748`.
+- **Checkpoint 2** (Baseline Reconstruction & Delta Calculation Engine — pure functions only, no
+  schema change, no side effects; `backend/src/modules/corrections/`: baseline reconstruction,
+  delta calculation, the not-yet-wired advisory-lock helper, full domain validation) —
+  `<PHASE6_CKPT2_COMMIT>`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
-snapshot, not current): backend **550/550**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
+snapshot, not current): backend **609/609**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
 schema drift.
 
-**Exact next step:** Phase 6 Checkpoint 2 — but only on explicit authorization. Do not begin it
-without that go-ahead; Checkpoint 1's own scope is fully closed.
+**Exact next step:** Phase 6 Checkpoint 3 — but only on explicit authorization. Do not begin it
+without that go-ahead; Checkpoint 2's own scope is fully closed.
 
 **Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
 
