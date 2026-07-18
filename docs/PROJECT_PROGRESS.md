@@ -4575,7 +4575,7 @@ Checkpoint 5 without its own explicit go-ahead.
 
 ---
 
-### Phase 6 Checkpoint 5 — Draft-Cycle Materialization of Outstanding Balance Adjustments — COMPLETE
+### Phase 6 Checkpoint 5 — Draft-Cycle Materialization of Outstanding Balance Adjustments — COMPLETE, COMMITTED as `3bab54a`
 
 Repository preflight confirmed: branch `main`, working tree clean, commit `9f9c88d` (Checkpoint 4
 implementation) present, baseline backend **700/700** / frontend **23/23** / E2E **15/15** / 16
