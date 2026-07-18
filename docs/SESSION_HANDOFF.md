@@ -35,7 +35,7 @@ materialization, `PayrollEntry` deductions, bank-sheet/cash-sheet integration, o
 correction workflow exist yet.** Do not begin Checkpoint 5 without its own separate, explicit
 go-ahead.
 
-**Latest commits:** `<PHASE6_CKPT4_COMMIT>` (Phase 6 Checkpoint 4 implementation), doc-hash
+**Latest commits:** `9f9c88d` (Phase 6 Checkpoint 4 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -68,7 +68,7 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
   `corrections.settlement.ts`/`.service.ts`/`corrections.routes.ts`'s new `balanceAdjustmentsRouter`:
   standalone `CorrectionPayment` + cycle-scoped `BalanceAdjustmentSettlement` recording, partial/
   full settlement, a dedicated `BalanceAdjustment`-scoped advisory lock, the departed-employee
-  `RECOVERY` rule) — `<PHASE6_CKPT4_COMMIT>`.
+  `RECOVERY` rule) — `9f9c88d`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
