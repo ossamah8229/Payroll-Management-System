@@ -5,6 +5,9 @@ import {
   listCorrectionRequestsQuerySchema,
   PERMISSIONS,
   previewCorrectionSchema,
+  previewSettlementSchema,
+  recordBalanceAdjustmentSettlementSchema,
+  recordCorrectionPaymentSchema,
   rejectCorrectionRequestSchema,
 } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
@@ -19,14 +22,24 @@ import {
   previewCorrectionForEntry,
   rejectCorrectionRequest,
 } from './corrections.service';
+import {
+  getBalanceAdjustmentDetail,
+  listSettlementsForAdjustment,
+  previewSettlement,
+  recordBalanceAdjustmentSettlement,
+  recordCorrectionPayment,
+} from './corrections.settlement.service';
 
 /**
  * Phase 6 Checkpoint 3 API surface — exactly the route capabilities this checkpoint's own brief
  * lists (create, list, detail, preview, approve, reject) plus the entry-scoped correction-history
  * route the Architecture Review's own route table specifies. No "direct correction" route (see
- * `corrections.service.ts`'s own module comment — deliberately deferred), no balance-adjustment
- * listing/detail/settlement routes (Checkpoint 3 creates `BalanceAdjustment` rows but does not
- * expose a ledger view over them yet — that's the Corrections Ledger, explicitly out of scope).
+ * `corrections.service.ts`'s own module comment — deliberately deferred).
+ *
+ * Phase 6 Checkpoint 4 adds `balanceAdjustmentsRouter`, below — settlement preview/recording and
+ * outstanding-balance reads. No general "list all BalanceAdjustments" browse route — that is the
+ * Corrections Ledger, explicitly out of this checkpoint's scope; every route here operates on one
+ * already-known `BalanceAdjustment` id.
  */
 
 function requireIdParam(id: string | undefined): string {
@@ -142,6 +155,79 @@ correctionRequestsRouter.post('/:id/reject', async (req, res, next) => {
     const input = rejectCorrectionRequestSchema.parse(req.body);
     const correctionRequest = await rejectCorrectionRequest(req.currentUser!, id, input, requestMetaFrom(req));
     res.status(200).json({ correctionRequest });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// A viewer (Payroll Staff, `payroll:entry`) may check outstanding-balance detail or preview a
+// settlement; only the Master User (`corrections:approve`) may actually record one — mirroring
+// `ENTRY_VIEW_PERMISSIONS`'s own dual-permission convention above ("view" vs. "decide").
+const BALANCE_VIEW_PERMISSIONS = [PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE];
+
+/** Mounted at /api/v1/balance-adjustments (Phase 6 Checkpoint 4) — outstanding-balance reads and
+ * settlement preview/recording, one `BalanceAdjustment` id at a time. No new permission key —
+ * reuses `payroll:entry`/`corrections:approve` exactly as `correctionRequestsRouter` above does. */
+export const balanceAdjustmentsRouter = Router();
+
+balanceAdjustmentsRouter.use(requireAuth);
+
+balanceAdjustmentsRouter.get('/:id', requirePermission(BALANCE_VIEW_PERMISSIONS), async (req, res, next) => {
+  try {
+    const id = requireIdParam(req.params.id);
+    const balanceAdjustment = await getBalanceAdjustmentDetail(req.currentUser!, id);
+    res.status(200).json({ balanceAdjustment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+balanceAdjustmentsRouter.get('/:id/settlements', requirePermission(BALANCE_VIEW_PERMISSIONS), async (req, res, next) => {
+  try {
+    const id = requireIdParam(req.params.id);
+    const settlements = await listSettlementsForAdjustment(req.currentUser!, id);
+    res.status(200).json({ settlements });
+  } catch (error) {
+    next(error);
+  }
+});
+
+balanceAdjustmentsRouter.post(
+  '/:id/settlements/preview',
+  requirePermission(BALANCE_VIEW_PERMISSIONS),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = previewSettlementSchema.parse(req.body);
+      const preview = await previewSettlement(req.currentUser!, id, input);
+      res.status(200).json({ preview });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+balanceAdjustmentsRouter.post(
+  '/:id/settlements',
+  requirePermission(PERMISSIONS.CORRECTIONS_APPROVE),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = recordBalanceAdjustmentSettlementSchema.parse(req.body);
+      const result = await recordBalanceAdjustmentSettlement(req.currentUser!, id, input, requestMetaFrom(req));
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+balanceAdjustmentsRouter.post('/:id/payments', requirePermission(PERMISSIONS.CORRECTIONS_APPROVE), async (req, res, next) => {
+  try {
+    const id = requireIdParam(req.params.id);
+    const input = recordCorrectionPaymentSchema.parse(req.body);
+    const result = await recordCorrectionPayment(req.currentUser!, id, input, requestMetaFrom(req));
+    res.status(201).json(result);
   } catch (error) {
     next(error);
   }

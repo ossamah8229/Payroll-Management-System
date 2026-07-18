@@ -2031,10 +2031,18 @@ is also complete** — the advisory lock is now wired into the first real write 
 `BalanceAdjustmentType.NONE` tension Checkpoint 2A flagged is now resolved (documented in
 `docs/architecture/workflows/corrections-and-balance-adjustments.md`'s own dated amendment): `NONE`
 is not reachable through the ordinary approval workflow, and is retained in the schema only for
-forward compatibility. **No settlement logic, `CorrectionPayment` processing,
-`BalanceAdjustmentSettlement` creation, Draft-cycle materialization, or frontend workflow exist
-yet** — everything below this note remains the forward-looking design for Checkpoint 4 onward, not
-yet built. Do not begin Checkpoint 4 without its own separate, explicit go-ahead.
+forward compatibility. **Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance
+Lifecycle) is also complete** — manual settlement recording for an outstanding `BalanceAdjustment`:
+a standalone `CorrectionPayment` (`PAYABLE` only, always full, out-of-cycle) and a repeatable,
+cycle-scoped `BalanceAdjustmentSettlement` (partial-or-full, either type, caller-supplied
+`cycleId`), both behind a dedicated `BalanceAdjustment`-scoped advisory lock (separate from
+Checkpoint 2/3's `PayrollEntry`-keyed one) plus a conditional-update concurrency backstop. The
+Product Decision Resolution's "Recovery from departed employees remains permanently pending" rule
+is implemented exactly — no settlement path, automatic or manual, exists for a departed employee's
+`RECOVERY` balance. **No automatic Draft-cycle materialization, `PayrollEntry` deductions, bank-
+sheet/cash-sheet integration, or frontend workflow exist yet** — everything below this note remains
+the forward-looking design for Checkpoint 5 onward, not yet built. Do not begin Checkpoint 5
+without its own separate, explicit go-ahead.
 
 **Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
 `PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,

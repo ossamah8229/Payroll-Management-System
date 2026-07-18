@@ -4491,6 +4491,88 @@ Checkpoint 3 implemented only transactional request approval/rejection and
 `Correction`/`BalanceAdjustment` creation. Do not begin Checkpoint 4 without its own explicit
 go-ahead.
 
+### Phase 6 Checkpoint 4 — Settlement, Payment Recording & Outstanding Balance Lifecycle — COMPLETE, COMMITTED as `<PHASE6_CKPT4_COMMIT>`
+
+Repository preflight confirmed: branch `main`, working tree clean, commit `6189ba9` (Checkpoint 3
+implementation) and its doc-hash follow-up `3f986d2`, plus `1aede0a` (Checkpoint 2A) present,
+baseline backend **651/651** / frontend **23/23** / E2E **15/15** / 16 migrations / zero schema
+drift reconfirmed. Implements the manual settlement-recording lifecycle for outstanding
+`BalanceAdjustment` obligations. No schema change, no new migration (16 migrations, unchanged). Does
+not implement automatic Draft-cycle materialization, `PayrollEntry` deductions, bank-sheet/
+cash-sheet integration, or any frontend workflow — all remain later checkpoints.
+
+**Model responsibility (this checkpoint's own required "First task"):** confirmed `CorrectionPayment`
+and `BalanceAdjustmentSettlement` are not duplicates — the schema's own structural constraints
+already enforce a clean split. `CorrectionPayment.balanceAdjustmentId` is `@unique` (at most one
+per adjustment, ever), carries payment-*execution* metadata (bank/branch/account/iban snapshot,
+`paidAt`, `paidById`), has no `cycleId`, and always settles the *entire* remaining balance in one
+shot — the standalone, out-of-cycle path for a `PAYABLE` adjustment with no open entry to fold
+into. `BalanceAdjustmentSettlement` has `@@unique([balanceAdjustmentId, cycleId])` (many rows
+permitted, one per distinct cycle), carries no payment-execution metadata, and is a pure,
+repeatable, partial-or-full ledger entry tied to a specific `PayrollCycle` — used for both
+`RECOVERY` installments and a `DEFERRED PAYABLE`'s eventual settlement. No schema defect found; no
+migration needed.
+
+**Settlement calculation** (`corrections.settlement.ts`, pure, no Prisma/HTTP): `calculateSettlement`
+validates and applies one proposed amount against the current `remainingAmount`/`status` — rejects
+zero, negative, non-numeric, and over-settlement amounts, and any settlement against an
+already-`SETTLED` adjustment, all via `decimal.js` with no hidden tolerance.
+`calculateStandalonePayment` reuses it, forcing the proposed amount to always equal the full
+remaining balance (the schema's own "no partial CorrectionPayment" rule).
+
+**PAYABLE workflow:** `POST /balance-adjustments/:id/payments` (standalone, `CorrectionPayment`,
+always full) and `POST /balance-adjustments/:id/settlements` (cycle-scoped, partial-or-full,
+caller-supplied `cycleId` — no automatic "next Draft cycle" discovery, since Draft-cycle
+materialization is explicitly out of scope). Optional bank/branch/account/iban metadata, mirroring
+`Employee`/`PayrollEntry`'s own "no bankId means cash" convention — no invented required field.
+
+**RECOVERY workflow:** cycle-scoped only (`POST .../settlements`) — no standalone path (bank fields
+have no meaning for money moving the other direction). No `PayrollEntry` deduction, no bank/cash
+export integration; a settlement here is a pure ledger entry recording that a recovery installment
+was applied.
+
+**Departed-employee rule:** implemented exactly per the Product Decision Resolution — "Recovery from
+departed employees remains permanently pending." A `RECOVERY` settlement attempt against a departed
+employee's (`Employee.dateOfLeaving IS NOT NULL`) adjustment is rejected with a typed
+`DEPARTED_EMPLOYEE_RECOVERY_PENDING` error; no automatic or manual path exists (no receivables
+system anywhere in this codebase, the same accepted gap as an uncollectable Advance). `PAYABLE`
+settlement is entirely unaffected by departure status.
+
+**Transaction sequence and advisory lock:** one `prisma.$transaction` per settlement action —
+pre-lock load (to authorize and find the lock key), `acquireBalanceAdjustmentLock` (Checkpoint 4's
+own new lock, `corrections.lock.ts` — deliberately *not* a reuse of Checkpoint 2/3's
+`PayrollEntry`-keyed lock, namespaced with a `'balance-adjustment:'` prefix so the two lock domains
+can never collide in the same 32-bit `hashtext` key space), re-read post-lock, departed-employee/
+adjustment-type validation, pure calculation, `CorrectionPayment`/`BalanceAdjustmentSettlement`
+creation, a conditional `updateMany` (`WHERE status = 'PENDING' AND remainingAmount = <the exact
+value just read>`) as a defense-in-depth backstop returning `STALE_CONCURRENT_WRITE` on zero rows
+affected, one aggregate `balance_adjustment.settled` audit event — all inside the same transaction.
+
+**Files created:** `corrections.settlement.ts`, `corrections.settlement.types.ts`,
+`corrections.settlement.service.ts`; `backend/tests/corrections-settlement.test.ts` (49 tests —
+model responsibility, pure calculation, PAYABLE, RECOVERY, departed employee, real-Postgres
+concurrency, transaction rollback via `jest.spyOn`, immutability, API security).
+**Files modified:** `corrections.repository.ts` (BalanceAdjustment/CorrectionPayment/
+BalanceAdjustmentSettlement read/write primitives), `corrections.lock.ts` (the new
+`acquireBalanceAdjustmentLock`/`withBalanceAdjustmentLock`), `corrections.routes.ts` (the new
+`balanceAdjustmentsRouter`), `app.ts` (router mount), `error-handler.ts` (the new
+`SettlementValidationError` mapping), `shared/src/schemas/correction.ts` + `shared/src/index.ts`
+(payment/settlement/preview Zod schemas).
+
+**Verification performed:** `prisma validate`/`migrate status` — 16 migrations, zero drift
+(unchanged); full backend suite **700/700** (651 baseline + 49 new, zero regressions); frontend
+suite **23/23** (unchanged); E2E suite **15/15** (unchanged, clean run); `typecheck`/`lint` clean
+across all three workspaces; production builds clean for all three workspaces.
+
+**Explicitly confirmed at close of this checkpoint:** original `BalanceAdjustment.amount` values
+remain immutable; source `PayrollEntry` records remain immutable; historical `Correction` rows
+remain immutable; settlement history is append-only (no update/delete route exists for either
+`CorrectionPayment` or `BalanceAdjustmentSettlement`); no Draft-cycle materialization exists; no
+`PayrollEntry` deduction was ever created; no bank-sheet or cash-sheet integration exists; no
+frontend correction workflow exists; no historical Backup Package was regenerated. Checkpoint 4
+implemented only payment/settlement recording and the outstanding-balance lifecycle. Do not begin
+Checkpoint 5 without its own explicit go-ahead.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -4504,7 +4586,7 @@ go-ahead.
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
-| 6 | Corrections & Balance Adjustments (highest-risk logic) | **Started, 2026-07-18.** Architecture Review (review-only, comprehensive) and its Product Decision Resolution (review-only) both complete, refining the 2026-07-05 frozen design. Checkpoint 1 (Corrections Domain & Schema Foundation) CLOSED, committed as `ac58748` — see §1. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, committed as `1002209` — see §1. Checkpoint 2A (review-only verification, no defects, two coverage-gap tests added) CLOSED, committed as `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation — the first checkpoint to write data; request creation/approval/rejection, immutable `Correction` + `BalanceAdjustment` creation, advisory-lock-protected concurrency) CLOSED, committed as `6189ba9` — see §1. No settlement logic, `CorrectionPayment` processing, `BalanceAdjustmentSettlement` creation, Draft-cycle materialization, or frontend workflow exist yet. Checkpoint 4 not started |
+| 6 | Corrections & Balance Adjustments (highest-risk logic) | **Started, 2026-07-18.** Architecture Review (review-only, comprehensive) and its Product Decision Resolution (review-only) both complete, refining the 2026-07-05 frozen design. Checkpoint 1 (Corrections Domain & Schema Foundation) CLOSED, committed as `ac58748` — see §1. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, committed as `1002209` — see §1. Checkpoint 2A (review-only verification, no defects, two coverage-gap tests added) CLOSED, committed as `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation — the first checkpoint to write data; request creation/approval/rejection, immutable `Correction` + `BalanceAdjustment` creation, advisory-lock-protected concurrency) CLOSED, committed as `6189ba9` — see §1. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle — manual `CorrectionPayment`/`BalanceAdjustmentSettlement` recording, partial/full settlement, departed-employee RECOVERY rule, its own `BalanceAdjustment`-scoped advisory lock) CLOSED, committed as `<PHASE6_CKPT4_COMMIT>` — see §1. No automatic Draft-cycle materialization, `PayrollEntry` deductions, bank/cash-sheet integration, or frontend workflow exist yet. Checkpoint 5 not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |

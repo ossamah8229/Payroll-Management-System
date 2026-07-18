@@ -21,17 +21,21 @@ be enough to resume correctly without re-deriving context from scratch — per
 (Corrections & Balance Adjustments) is in progress.** The Architecture Review and its Product
 Decision Resolution (both review-only, no repository changes) are complete, refining the design
 frozen alongside Phase 3 (2026-07-05); see `docs/PROJECT_PROGRESS.md` §3 for that record.
-**Checkpoint 1 (Corrections Domain & Schema Foundation), Checkpoint 2 (Baseline Reconstruction &
-Delta Calculation Engine), Checkpoint 2A (review-only verification, no defects found), and
-Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) are all complete** —
-see `docs/PROJECT_PROGRESS.md` §1's own dated entries for each. Checkpoint 3 is the first to write
-data: `CorrectionRequest` creation/approval/rejection, immutable `Correction` +
-`BalanceAdjustment` creation, all advisory-lock-protected. **No settlement logic,
-`CorrectionPayment` processing, `BalanceAdjustmentSettlement` creation, Draft-cycle materialization,
-or frontend correction workflow exist yet.** Do not begin Checkpoint 4 without its own separate,
-explicit go-ahead.
+**Checkpoints 1 (Corrections Domain & Schema Foundation), 2 (Baseline Reconstruction & Delta
+Calculation Engine), 2A (review-only verification, no defects found), 3 (Transactional Correction
+Approval & Balance Adjustment Creation), and 4 (Settlement, Payment Recording & Outstanding Balance
+Lifecycle) are all complete** — see `docs/PROJECT_PROGRESS.md` §1's own dated entries for each.
+Checkpoint 3 was the first to write data (`CorrectionRequest` creation/approval/rejection,
+immutable `Correction` + `BalanceAdjustment` creation). Checkpoint 4 adds manual settlement
+recording against an outstanding `BalanceAdjustment` — a standalone `CorrectionPayment` (`PAYABLE`,
+always full) and a repeatable cycle-scoped `BalanceAdjustmentSettlement` (partial-or-full, either
+type), both behind their own dedicated advisory lock, plus the departed-employee `RECOVERY` rule
+("remains permanently pending," per the Product Decision Resolution). **No automatic Draft-cycle
+materialization, `PayrollEntry` deductions, bank-sheet/cash-sheet integration, or frontend
+correction workflow exist yet.** Do not begin Checkpoint 5 without its own separate, explicit
+go-ahead.
 
-**Latest commits:** `6189ba9` (Phase 6 Checkpoint 3 implementation), doc-hash
+**Latest commits:** `<PHASE6_CKPT4_COMMIT>` (Phase 6 Checkpoint 4 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -60,14 +64,19 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
   creation/listing/detail, transactional approve/reject, immutable `Correction` +
   `BalanceAdjustment` creation, advisory-lock-protected concurrency, one aggregate audit event per
   approval) — `6189ba9`.
+- **Checkpoint 4** (Settlement, Payment Recording & Outstanding Balance Lifecycle —
+  `corrections.settlement.ts`/`.service.ts`/`corrections.routes.ts`'s new `balanceAdjustmentsRouter`:
+  standalone `CorrectionPayment` + cycle-scoped `BalanceAdjustmentSettlement` recording, partial/
+  full settlement, a dedicated `BalanceAdjustment`-scoped advisory lock, the departed-employee
+  `RECOVERY` rule) — `<PHASE6_CKPT4_COMMIT>`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
-snapshot, not current): backend **651/651**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
+snapshot, not current): backend **700/700**, frontend **23/23**, E2E **15/15**. 16 migrations, zero
 schema drift.
 
-**Exact next step:** Phase 6 Checkpoint 4 — but only on explicit authorization. Do not begin it
-without that go-ahead; Checkpoint 3's own scope is fully closed.
+**Exact next step:** Phase 6 Checkpoint 5 — but only on explicit authorization. Do not begin it
+without that go-ahead; Checkpoint 4's own scope is fully closed.
 
 **Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
 

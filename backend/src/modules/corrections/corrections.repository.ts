@@ -8,6 +8,7 @@ import {
   type CorrectionHistoryRecord,
   type CorrectionPreview,
 } from './corrections.types';
+import { SettlementValidationError } from './corrections.settlement.types';
 
 /**
  * Phase 6 Checkpoints 2 and 3 — data access for the correction domain. Checkpoint 2's own exports
@@ -233,6 +234,104 @@ export async function createBalanceAdjustmentRow(
   client: PrismaTransactionClient = prisma,
 ) {
   return client.balanceAdjustment.create({ data });
+}
+
+// --- Phase 6 Checkpoint 4: BalanceAdjustment settlement ------------------------------------------
+
+const balanceAdjustmentDetailInclude = {
+  employee: { select: { id: true, name: true, siteId: true, dateOfLeaving: true } },
+  correction: { select: { id: true, field: true, payrollEntryId: true } },
+  adjustmentType: true,
+  sourceCycle: { select: { id: true, year: true, month: true } },
+  settledInCycle: { select: { id: true, year: true, month: true } },
+  correctionPayment: true,
+  settlements: { orderBy: { appliedAt: 'desc' } as const },
+} satisfies Prisma.BalanceAdjustmentInclude;
+
+export type BalanceAdjustmentDetail = Prisma.BalanceAdjustmentGetPayload<{
+  include: typeof balanceAdjustmentDetailInclude;
+}>;
+
+export async function getBalanceAdjustmentById(
+  id: string,
+  client: PrismaTransactionClient = prisma,
+): Promise<BalanceAdjustmentDetail | null> {
+  return client.balanceAdjustment.findUnique({ where: { id }, include: balanceAdjustmentDetailInclude });
+}
+
+export async function listBalanceAdjustmentSettlements(
+  balanceAdjustmentId: string,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustmentSettlement.findMany({
+    where: { balanceAdjustmentId },
+    orderBy: { appliedAt: 'desc' },
+    include: { cycle: { select: { id: true, year: true, month: true } } },
+  });
+}
+
+/** Mirrors `assertAdjustmentTypeValid`'s own convention — a clean typed error instead of a raw
+ * FK-violation surfacing at insert time. `isActive` is not required here (unlike AdjustmentType):
+ * a `Bank` snapshot on a payment record is describing where money already went, not offering a
+ * fresh choice from an active list, so a since-deactivated bank a payment already reflects is not
+ * itself invalid — only a genuinely nonexistent one is. */
+export async function assertBankExists(bankId: string, client: PrismaTransactionClient = prisma): Promise<void> {
+  const bank = await client.bank.findUnique({ where: { id: bankId }, select: { id: true } });
+  if (!bank) {
+    throw new SettlementValidationError({ code: 'INVALID_BANK', message: `Bank "${bankId}" does not exist.` });
+  }
+}
+
+export async function assertCycleExists(cycleId: string, client: PrismaTransactionClient = prisma): Promise<void> {
+  const cycle = await client.payrollCycle.findUnique({ where: { id: cycleId }, select: { id: true } });
+  if (!cycle) {
+    throw new SettlementValidationError({ code: 'INVALID_CYCLE', message: `PayrollCycle "${cycleId}" does not exist.` });
+  }
+}
+
+export async function createCorrectionPaymentRow(
+  data: Prisma.CorrectionPaymentUncheckedCreateInput,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.correctionPayment.create({ data });
+}
+
+export async function createBalanceAdjustmentSettlementRow(
+  data: Prisma.BalanceAdjustmentSettlementUncheckedCreateInput,
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustmentSettlement.create({ data });
+}
+
+/**
+ * The settlement-side counterpart to Checkpoint 3's `markCorrectionRequestApproved` — a
+ * conditional `updateMany` guarded by the exact `remainingAmount` this transaction read
+ * post-lock, not a blind `update`. Returns the affected row count; `0` means a concurrent
+ * transaction already changed this `BalanceAdjustment` since the read, surfaced by the caller as
+ * `STALE_CONCURRENT_WRITE` rather than silently overwriting.
+ */
+export async function updateBalanceAdjustmentAfterSettlement(
+  id: string,
+  data: {
+    expectedRemainingAmount: string;
+    newRemainingAmount: string;
+    newStatus: 'PENDING' | 'SETTLED';
+    settledInCycleId: string | null;
+  },
+  client: PrismaTransactionClient = prisma,
+): Promise<number> {
+  const result = await client.balanceAdjustment.updateMany({
+    where: { id, status: 'PENDING', remainingAmount: data.expectedRemainingAmount },
+    data: {
+      remainingAmount: data.newRemainingAmount,
+      status: data.newStatus,
+      ...(data.newStatus === 'SETTLED' && {
+        settledInCycleId: data.settledInCycleId,
+        settledAt: new Date(),
+      }),
+    },
+  });
+  return result.count;
 }
 
 // --- Approved-correction history for one entry (dual-permission GET route) ---------------------

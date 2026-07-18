@@ -5,6 +5,7 @@ import { HttpError } from '../http-error';
 import { logger } from '../../lib/logger';
 import { isProduction } from '../../config/env';
 import { CorrectionValidationError, type CorrectionValidationErrorCode } from '../../modules/corrections/corrections.types';
+import { SettlementValidationError, type SettlementValidationErrorCode } from '../../modules/corrections/corrections.settlement.types';
 
 interface ErrorResponseBody {
   error: {
@@ -42,6 +43,24 @@ const CORRECTION_ERROR_STATUS: Record<CorrectionValidationErrorCode, number> = {
   RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE: 400,
 };
 
+/** Phase 6 Checkpoint 4 — same discipline as `CORRECTION_ERROR_STATUS`, for
+ * `SettlementValidationError` (`modules/corrections/corrections.settlement.types.ts`).
+ * `BALANCE_ADJUSTMENT_NOT_FOUND` -> 404; `ALREADY_SETTLED`/`STALE_CONCURRENT_WRITE` -> 409
+ * (resource-state conflicts, same class as `REQUEST_NOT_PENDING` above); everything else -> 400. */
+const SETTLEMENT_ERROR_STATUS: Record<SettlementValidationErrorCode, number> = {
+  BALANCE_ADJUSTMENT_NOT_FOUND: 404,
+  ALREADY_SETTLED: 409,
+  STALE_CONCURRENT_WRITE: 409,
+  ZERO_SETTLEMENT_AMOUNT: 400,
+  NEGATIVE_SETTLEMENT_AMOUNT: 400,
+  INVALID_SETTLEMENT_AMOUNT: 400,
+  OVER_SETTLEMENT: 400,
+  WRONG_ADJUSTMENT_TYPE_FOR_PAYMENT: 400,
+  DEPARTED_EMPLOYEE_RECOVERY_PENDING: 400,
+  INVALID_BANK: 400,
+  INVALID_CYCLE: 400,
+};
+
 /**
  * Single place every error in the request lifecycle funnels through. Zod validation errors and
  * typed `HttpError`s get a clean, predictable response; anything else is logged with full detail
@@ -74,6 +93,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
       error: { code: err.code, message: err.message },
     };
     res.status(CORRECTION_ERROR_STATUS[err.code]).json(body);
+    return;
+  }
+
+  if (err instanceof SettlementValidationError) {
+    const body: ErrorResponseBody = {
+      error: { code: err.code, message: err.message },
+    };
+    res.status(SETTLEMENT_ERROR_STATUS[err.code]).json(body);
     return;
   }
 

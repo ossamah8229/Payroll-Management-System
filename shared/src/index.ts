@@ -86,6 +86,9 @@ export {
   createCorrectionRequestSchema,
   listCorrectionRequestsQuerySchema,
   previewCorrectionSchema,
+  previewSettlementSchema,
+  recordBalanceAdjustmentSettlementSchema,
+  recordCorrectionPaymentSchema,
   rejectCorrectionRequestSchema,
   WORK_LINE_CORRECTION_FIELDS,
 } from './schemas/correction';
@@ -99,6 +102,9 @@ export type {
   CreateCorrectionRequestInput,
   ListCorrectionRequestsQuery,
   PreviewCorrectionInput,
+  PreviewSettlementInput,
+  RecordBalanceAdjustmentSettlementInput,
+  RecordCorrectionPaymentInput,
   RejectCorrectionRequestInput,
 } from './schemas/correction';
 

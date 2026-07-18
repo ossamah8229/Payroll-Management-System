@@ -31,7 +31,11 @@ import { payslipsRouter } from './modules/payslips/payslips.routes';
 import { advancesRouter } from './modules/advances/advances.routes';
 import { taskNotificationsRouter, tasksRouter } from './modules/tasks/tasks.routes';
 import { backupPackageDetailRouter, backupPackagesRouter } from './modules/backup-packages/backup-packages.routes';
-import { correctionRequestsRouter, payrollEntryCorrectionsRouter } from './modules/corrections/corrections.routes';
+import {
+  balanceAdjustmentsRouter,
+  correctionRequestsRouter,
+  payrollEntryCorrectionsRouter,
+} from './modules/corrections/corrections.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -138,6 +142,8 @@ export function createApp(): Express {
   app.use('/api/v1/work-lines', workLinesRouter);
   // Phase 6 Checkpoint 3 — flat top-level resource, matching Advances' own pattern.
   app.use('/api/v1/correction-requests', correctionRequestsRouter);
+  // Phase 6 Checkpoint 4 — flat top-level resource, same pattern.
+  app.use('/api/v1/balance-adjustments', balanceAdjustmentsRouter);
   // Phase 4 Checkpoint 5 — flat top-level resource, matching Banks' own pattern (Advances relate
   // to Employee, not to a specific Payroll Cycle route).
   app.use('/api/v1/advances', advancesRouter);

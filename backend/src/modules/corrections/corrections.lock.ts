@@ -8,11 +8,11 @@ import type { PrismaTransactionClient } from '../../lib/prisma';
  * `Correction`/`BalanceAdjustment` insert — with existing database constraints and conditional
  * updates retained as a secondary safeguard, not a replacement.
  *
- * **Not wired into any write path yet.** This checkpoint has no transactional correction-creation
- * flow to protect (Checkpoint 3's own scope) — this file exists so that flow has a single,
- * already-reviewed, reusable primitive to call rather than reinventing locking per checkpoint.
- * Exercised directly by this checkpoint's own tests (deterministic key derivation, same-entry
- * serialization) but never invoked by any route or service in this checkpoint's diff.
+ * **Wired into `corrections.service.ts`'s `approveCorrectionRequest`/`rejectCorrectionRequest`
+ * since Phase 6 Checkpoint 3.** `acquireBalanceAdjustmentLock`/`withBalanceAdjustmentLock`, below,
+ * are Checkpoint 4's own separate addition — a distinct lock for a distinct aggregate (a
+ * `BalanceAdjustment`, not a `PayrollEntry`), deliberately not reusing this file's `PayrollEntry`
+ * lock's key space (see that function's own comment for why).
  *
  * `pg_advisory_xact_lock` is session/transaction-scoped: acquired here, automatically released at
  * the enclosing transaction's commit or rollback — no explicit unlock call, no lock-leak risk if
@@ -41,5 +41,34 @@ export async function withPayrollEntryLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   await acquirePayrollEntryLock(payrollEntryId, tx);
+  return fn();
+}
+
+/**
+ * Phase 6 Checkpoint 4 — the transaction-scoped advisory lock for one `BalanceAdjustment`,
+ * protecting settlement recording exactly the way `acquirePayrollEntryLock` protects correction
+ * approval. A **separate** lock, not a reuse of the `PayrollEntry` one above — settlement never
+ * touches `PayrollEntry`/`Correction`/baseline-reconstruction state at all, only a
+ * `BalanceAdjustment` and its own settlement children, so serializing it against an unrelated
+ * `PayrollEntry`-keyed lock would be both meaningless and needlessly blocking.
+ *
+ * The hashed string is namespaced (`'balance-adjustment:' || id`), not the bare UUID
+ * `acquirePayrollEntryLock` hashes — `hashtext` operates on the string itself, so this guarantees
+ * a `BalanceAdjustment` id can never collide with a `PayrollEntry` id in the same 32-bit advisory
+ * lock key space, however astronomically unlikely a bare-UUID collision already would have been.
+ */
+export async function acquireBalanceAdjustmentLock(
+  balanceAdjustmentId: string,
+  tx: PrismaTransactionClient,
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'balance-adjustment:' + balanceAdjustmentId}))`;
+}
+
+export async function withBalanceAdjustmentLock<T>(
+  balanceAdjustmentId: string,
+  tx: PrismaTransactionClient,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await acquireBalanceAdjustmentLock(balanceAdjustmentId, tx);
   return fn();
 }

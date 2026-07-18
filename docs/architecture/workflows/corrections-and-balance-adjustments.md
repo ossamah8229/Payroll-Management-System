@@ -174,6 +174,23 @@ administrator transfers or moves a balance from one cycle to another. **Revised 
 pipeline now branches by `type`, but every branch remains automatic once the one human timing/spread
 decision is made at approval:
 
+**Scope note, Phase 6 Checkpoint 4 (2026-07-18):** the *automatic* pipeline this section
+describes — a cycle's own release process discovering and sweeping every `PENDING` `BalanceAdjustment`
+it owes or can recover, without further human action — is **not yet built**; it requires touching
+`payroll-processing`/`payroll-release` service code (Draft-cycle materialization), explicitly out of
+Checkpoint 4's own scope. What Checkpoint 4 *does* implement is the underlying **recording**
+capability this automatic pipeline will eventually call into: given a specific `BalanceAdjustment`
+and (for the cycle-scoped path) a specific, already-existing `PayrollCycle`, record that a payment
+or settlement amount was applied — creating the immutable `CorrectionPayment`/
+`BalanceAdjustmentSettlement` row and updating `remainingAmount`/`status` accordingly, inside one
+transaction-scoped advisory lock. A Master User can therefore record a settlement manually today
+(`POST /balance-adjustments/:id/payments` or `.../settlements`); a future checkpoint's automatic
+sweep will call the same underlying mechanism rather than reinventing it. **Departed-employee
+`RECOVERY` handling is implemented exactly as this document's own edge-case guidance requires**
+(Product Decision Resolution: "Recovery from departed employees remains permanently pending") — no
+settlement path, automatic or manual, exists for it; no receivables/collections system exists
+anywhere in this codebase, the same accepted gap already tolerated for an uncollectable `Advance`.
+
 ```
 Correction Approved
         ↓

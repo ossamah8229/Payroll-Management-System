@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { emptyToNull } from './common';
+import { decimalString, emptyToNull, optionalTrimmedString, optionalUppercaseString } from './common';
 
 /**
  * Phase 6 Checkpoint 1 (Corrections & Balance Adjustments — domain and schema foundation only).
@@ -133,3 +133,45 @@ export const listCorrectionRequestsQuerySchema = z.object({
   payrollEntryId: z.string().uuid().optional(),
 });
 export type ListCorrectionRequestsQuery = z.infer<typeof listCorrectionRequestsQuerySchema>;
+
+/**
+ * Phase 6 Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle).
+ *
+ * Records a standalone `CorrectionPayment` (`POST /balance-adjustments/:id/payments`,
+ * `corrections:approve`) — the one-shot, out-of-cycle, full-settlement path for a `PAYABLE`
+ * `BalanceAdjustment` with no open `PayrollEntry` to fold into. No `amount` field — a
+ * `CorrectionPayment` always settles the *entire* remaining balance (the schema's own `@unique`
+ * constraint on `balanceAdjustmentId`), never a partial one. Every banking field is optional,
+ * mirroring `Employee`/`PayrollEntry`'s own "no bankId means cash" convention — this checkpoint
+ * does not invent a stricter rule the schema itself doesn't impose.
+ */
+export const recordCorrectionPaymentSchema = z.object({
+  bankId: z.preprocess(emptyToNull, z.string().uuid().nullable().optional()),
+  branchCode: optionalTrimmedString(20),
+  accountNumber: optionalTrimmedString(40),
+  iban: optionalUppercaseString(34),
+});
+export type RecordCorrectionPaymentInput = z.infer<typeof recordCorrectionPaymentSchema>;
+
+/** Records an immutable `BalanceAdjustmentSettlement` — the repeatable, cycle-scoped, partial-or-
+ * full ledger entry (`POST /balance-adjustments/:id/settlements`, `corrections:approve`). Used for
+ * both `RECOVERY` installments and a `DEFERRED PAYABLE`'s eventual settlement. `cycleId` is
+ * mandatory (the schema's own `BalanceAdjustmentSettlement.cycleId` is non-nullable) — Checkpoint
+ * 4 does not auto-discover "the next Draft cycle" (that is Draft-cycle materialization, explicitly
+ * out of this checkpoint's scope); the caller records which cycle the settlement actually applied
+ * against. */
+export const recordBalanceAdjustmentSettlementSchema = z.object({
+  cycleId: z.string().uuid('A PayrollCycle is required'),
+  amount: decimalString,
+});
+export type RecordBalanceAdjustmentSettlementInput = z.infer<typeof recordBalanceAdjustmentSettlementSchema>;
+
+/** Dry-run preview of either settlement path — never persists anything
+ * (`POST /balance-adjustments/:id/settlements/preview`, `payroll:entry` or `corrections:approve`).
+ * `amount` is omitted for a standalone-payment preview (always the full remaining balance,
+ * mirroring `recordCorrectionPaymentSchema`'s own omission), required otherwise. */
+export const previewSettlementSchema = z.object({
+  mode: z.enum(['STANDALONE', 'CYCLE_SCOPED']),
+  amount: z.preprocess(emptyToNull, decimalString.nullable().optional()),
+});
+export type PreviewSettlementInput = z.infer<typeof previewSettlementSchema>;
