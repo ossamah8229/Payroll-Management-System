@@ -28,7 +28,7 @@ approval workflow, correction application, settlement logic, correction APIs, or
 correction workflow exist yet.** Do not begin Checkpoint 3 without its own separate, explicit
 go-ahead.
 
-**Latest commits:** `<PHASE6_CKPT2_COMMIT>` (Phase 6 Checkpoint 2 implementation), doc-hash
+**Latest commits:** `1002209` (Phase 6 Checkpoint 2 implementation), doc-hash
 follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -50,7 +50,7 @@ follow-up commit recorded in `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 - **Checkpoint 2** (Baseline Reconstruction & Delta Calculation Engine — pure functions only, no
   schema change, no side effects; `backend/src/modules/corrections/`: baseline reconstruction,
   delta calculation, the not-yet-wired advisory-lock helper, full domain validation) —
-  `<PHASE6_CKPT2_COMMIT>`.
+  `1002209`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
