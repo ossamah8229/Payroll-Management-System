@@ -94,7 +94,7 @@ selects, a few-pixel misalignment compounding across a row.
 |---|---|---|
 | `--control-height` | `36px` | Default `<Input>`, `<select>`, `MultiSelectFilter` trigger, `<Button size="default">` (the default variant — no `size` prop needed). **Every control sitting inline in a filter row uses this height**, never `size="sm"`, regardless of whether it's an input or a button. |
 | `--control-height-sm` | `32px` | `<Button size="sm">` — reserved for controls *inside* a table row/action cell (e.g. a per-row "Release"/"Edit" button) or a standalone action with no adjacent 36px control to align against (e.g. a `CardHeader` title-row action). Never used for a control that shares an `items-end` filter row with a 36px input/select. |
-| `--table-row-height-standard` | `48px` | Target/typical rendered body-row height for `<Table>`'s default `density="standard"` — management/selection lists: Employees, Users, Project Sites, Project Units, Tasks, Advances, Payslips, Salary Release's Unit-status table. |
+| `--table-row-height-standard` | `48px` | Target/typical rendered body-row height for `<Table>`'s default `density="standard"` — management/selection lists: Employees, Users, Project Sites, Project Units, Tasks, Advances, Payslips, Salary Release's Unit-status table, Corrections' Review Queue/Ledger (Phase 6 Checkpoint 6). |
 | `--table-row-height-compact` | `40px` | Target/typical rendered body-row height for `<Table density="compact">` — document-like/high-density financial views: Bank Sheets, Cash Receiving. (Payroll Entry's own grid is a separate, deliberately custom-virtualized component — content-driven horizontal sizing and sticky headers, not built on the shared `<Table>` — and is exempt from this two-tier system.) |
 | `--table-header-height` | `36px` | Reference value for a table's own `<thead>` row — always shorter than either body-row tier, since a header holds only a short uppercase micro-label, never a full-height control. |
 | `--filter-field-gap` | `6px` | Gap between a filter field's own label and control (`FilterField`, `MultiSelectFilter`). |
@@ -146,7 +146,7 @@ Two-tier grid: a `1.4fr / 1fr` two-column split (primary table + stacked seconda
 ### 2.4 Filter Row
 
 A consistent horizontal pattern across every page with filters (Payroll Entry, Salary Release, Bank
-Sheet, Cash Receiving, Advances, Payslips, Employee Registry): left-aligned label+control groups
+Sheet, Cash Receiving, Advances, Payslips, Employee Registry, Corrections): left-aligned label+control groups
 (`FilterField`, §1.5 — uppercase micro-label above a select/input, one shared shell rather than
 each page hand-rolling its own), primary action buttons pushed to the far right via
 `margin-left: auto`. Never mix filters and actions without this left/right split — it's what keeps

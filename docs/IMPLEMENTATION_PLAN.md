@@ -2064,10 +2064,29 @@ because Finalize Cycle's own transaction takes no advisory lock, only an implici
 conditional `UPDATE`); a genuine cross-checkpoint deadlock this lock order surfaced under real
 concurrent load (materialize racing a Checkpoint 4 settlement for the same adjustment+cycle) is
 resolved by mapping Postgres's own deadlock/serialization-failure codes to a clean 409 in the shared
-error handler, rather than a misleading 500. **No automatic bank-sheet/cash-sheet integration or
-frontend workflow exist yet** — everything below this note remains the forward-looking design for
-Checkpoint 6 onward, not yet built. Do not begin Checkpoint 6 without its own separate, explicit
-go-ahead.
+error handler, rather than a misleading 500.
+
+**Checkpoint 5A (Reservation vs Settlement Consistency Review) is also complete** — a review-first
+checkpoint that found and fixed one genuine correctness defect: settlement recording ignored active
+Draft-cycle reservations, permitting the same obligation to be paid once through payroll release and
+once through independent settlement. Every settlement path now reads the same reservation ledger
+materialization already reads and rejects (`RESERVED_AMOUNT_UNAVAILABLE`) an over-committing
+settlement. No schema change; see `docs/PROJECT_PROGRESS.md` §1's own Checkpoint 5A entry for the
+full analysis.
+
+**Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow) is also
+complete** — the frontend now exists: a Review Queue (`corrections:approve`) and Corrections Ledger
+(`payroll:entry` or `corrections:approve`) under `/corrections`, request creation from an eligible
+Released/Archived Payroll Entry view with live preview, approval/rejection dialogs, BalanceAdjustment/
+materialization/settlement presentation, and reservation-aware standalone settlement recording. Two
+minimal, read-only backend additions were required and added under this checkpoint's own explicit
+"backend changes policy" carve-out: `GET /adjustment-types` (no route existed to list this lookup
+table) and `GET /balance-adjustments` (the Ledger's own list route, explicitly deferred by
+Checkpoint 4's own scope note). No financial calculation was duplicated in React — every action still
+goes through the backend's own fresh transactional check. No `CONSUMED`/`CANCELLED` materialization
+transition, automatic settlement on release, or bank/cash-sheet integration exist yet — see
+`docs/PROJECT_PROGRESS.md` §1's own Checkpoint 6 entry for the full record. Do not begin Checkpoint 7
+or any Phase 6 final close-out without its own separate, explicit go-ahead.
 
 **Revised 2026-07-05 (Phase 3 architecture review):** the request/approval split, immediate/deferred
 `PAYABLE` timing, and installment `RECOVERY` settlement below all supersede the plan text's original,

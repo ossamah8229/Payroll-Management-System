@@ -232,6 +232,24 @@ the ceiling materialization already enforced. The reverse direction (settle firs
 was already safe: materializing a `SETTLED` adjustment is rejected (`FULLY_SETTLED`), and a partial
 settlement's `remainingAmount` decrement is read fresh by any later materialization attempt.
 
+**Scope note, Phase 6 Checkpoint 6 (2026-07-19) — the frontend operational workflow.** Every
+mechanism described above through Checkpoint 5A is now reachable from the UI, under a new
+`/corrections` area: a Review Queue (`corrections:approve`) and a Corrections Ledger (`payroll:entry`
+or `corrections:approve`), request creation from an eligible Released/Archived Payroll Entry with a
+live preview, approve/reject dialogs, and BalanceAdjustment detail (materializations, settlement
+history, and a reservation-aware "Record Settlement" action that mirrors the server's own
+`RESERVED_AMOUNT_UNAVAILABLE` ceiling for display and disables the standalone-payment path outright
+while any amount is actively reserved). No new financial lifecycle, no `CONSUMED`/`CANCELLED`
+materialization transition, and no automatic settlement-on-release were added — the frontend is a
+presentation/orchestration layer only, and every write still goes through the exact backend
+transactions this document already describes. Two minimal, read-only backend additions were required
+and are covered by this checkpoint's own explicit "backend read projection" allowance: `GET
+/adjustment-types` (no route previously listed this lookup table, needed for the request-creation
+form's required foreign key) and `GET /balance-adjustments` (a list route over the existing
+`balanceAdjustmentDetailInclude` shape — the Corrections Ledger's own data source, explicitly
+deferred by Checkpoint 4's own scope note above, "out of this checkpoint's scope"). Neither adds a
+migration, a new permission key, or a new lifecycle state.
+
 ```
 Correction Approved
         ↓
