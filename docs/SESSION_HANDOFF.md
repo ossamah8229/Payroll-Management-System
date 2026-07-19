@@ -68,12 +68,15 @@ already-materialized obligation — documented, not fixed, no proven need). See
 `docs/architecture/workflows/corrections-and-balance-adjustments.md`'s own Checkpoint 7 scope note
 for the full record. **No bank-sheet/cash-sheet integration was added — Bank Sheets/Cash Receiving
 Sheets/Payslips already reflect a materialized correction balance automatically, since all three
-reuse the same shared `computeEntryCalc`.** Do not begin Phase 7 without its own separate, explicit
-go-ahead.
+reuse the same shared `computeEntryCalc`.** **Checkpoint 7A (documentation/UX only, no production
+code changed) then created the Phase 6 living HTML prototype every prior phase already had —
+`docs/prototypes/phase6-corrections-preview.html`, 13 tabs traced to the real implementation, zero
+console errors under a headless-browser pass — restoring parity with Phases 1–5's own prototype
+convention.** Do not begin Phase 7 without its own separate, explicit go-ahead.
 
 **Latest commits:** Phase 6 Checkpoint 6's implementation (`0256ab4`) and doc-hash follow-up
 (`790147c`); Phase 6 Checkpoint 6A's implementation/test commit `9d6a39b`; Phase 6 Checkpoint 7's
-implementation/test commit `4812971`.
+implementation/test commit `4812971`; Phase 6 Checkpoint 7A's prototype commit `039b109`.
 
 **Stabilization checkpoints, all complete:**
 - **Checkpoint 1** (AUD-001–005: backend start-script fix, CSV-formula-injection sanitizer,

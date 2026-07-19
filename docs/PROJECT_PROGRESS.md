@@ -5088,6 +5088,61 @@ outright); no backend financial calculation was duplicated in the frontend; no n
 introduced; no schema migration was added (the fix uses columns Checkpoint 5's own migration already
 created but left unused). **Phase 6 is now complete and closed.** Phase 7 has not been started.
 
+### Phase 6 Checkpoint 7A — Prototype Completion & UX Documentation — COMPLETE, COMMITTED as `039b109` (no production code changed)
+
+**The missing Phase 6 living HTML prototype was created.** `docs/prototypes/phase6-corrections-preview.html`,
+following the exact shell/CSS convention every prior phase's prototype already established (reused
+verbatim from `phase4-advances-preview.html`, not reinvented — same `:root` palette, sidebar/topbar/
+main-content shell, card/filters-row/data-table/badge/modal markup). Thirteen tabs, each traced to
+the real implementation rather than designed fresh: Review Queue and Corrections Ledger (both tabs
+of the real `corrections-page.tsx`, exact table columns, exact filters, exact hint copy), Request
+Correction (`request-correction-modal.tsx`, including its live preview panel and delta-classification
+badge), a dedicated Preview screen with three switchable examples (PAYABLE/RECOVERY/ZERO_DELTA, the
+last showing the exact rejection copy `ZERO_DELTA` produces), Approve (`approve-request-modal.tsx`,
+including the fresh-preview box, PAYABLE-timing vs. RECOVERY-installment switch, reversal-reference
+select, and the immutability warning verbatim), Reject (`reject-request-modal.tsx` verbatim), Balance
+Adjustment Detail (`balance-adjustment-detail-page.tsx` — Outstanding Balance's four figures,
+Materializations table, Settlement History table), a dedicated Materialization History screen and a
+dedicated Settlement History screen (both showing every real status value, including `CANCELLED` as
+an explicitly-labeled disabled placeholder — no code path creates one as of Checkpoint 7, correctly
+not fabricated as a real example), Payroll Entry integration (the real Archived read-only banner,
+`Request Correction` toolbar action, and both outbound links), a UI-states gallery (loading/empty/
+success/validation-error/409-conflict/permission-denied/reservation-blocked/`ZERO_DELTA`, each using
+real copy pulled from the actual component/error-handler source), and a Permissions screen with four
+switchable role examples (Payroll Staff, Reviewer, Master Admin, Unauthorized) matching the real
+`ENTRY_VIEW_PERMISSIONS`/`BALANCE_VIEW_PERMISSIONS`/Checkpoint 6A sidebar-visibility rules exactly.
+
+**Two places where the checkpoint brief's own requested table columns diverged from the live UI**
+(Materialization History's "Payroll Entry"/"Trigger" columns; Settlement History's "Remaining after
+settlement" column) **were resolved in favor of implementation fidelity, per this checkpoint's own
+"represent only implemented functionality, do not invent features" instruction** — the actually-
+implemented columns are shown, with a caption explaining where that data really lives (audit-event
+metadata for the former; the parent `BalanceAdjustment`'s own live aggregate, not a per-row snapshot,
+for the latter) rather than fabricating UI columns that don't exist in the real app.
+
+**A real layout defect was found and fixed during verification, not left in the delivered file:**
+thirteen meta-banner tabs wrapped to two lines at 1280px, breaking the shared prototype shell's
+hard-coded `37px` banner-height assumption (`.sidebar { inset: 37px 0 0 0; }`, `calc(100vh - 37px)`)
+inherited from every prior single-line-banner prototype — the sidebar rendered clipped/overlapping.
+Fixed by making `.meta-tabs` horizontally scrollable (`overflow-x: auto`, `flex-wrap: nowrap`) and
+shortening tab labels, keeping the banner a fixed, verified `37px` at every tab.
+
+**Verified with a headless-browser pass** (Chromium via Playwright, already available for this
+repo's E2E harness) over all 13 meta-tabs and all 9 inner-example toggle buttons (Preview's three
+classifications, Approve's two timing examples, Permissions' four roles): zero console/page errors,
+exactly one `.screen.is-active` at every step, confirmed `37px` banner height. Manually reviewed at
+1280px and 480px viewports — the 480px view keeps the sidebar fixed and lets wide tables scroll
+horizontally within their own `.table-scroll` container, the same responsive fallback every sibling
+prototype already uses (not a mobile-first redesign).
+
+**No production code changed** — this checkpoint touched only `docs/prototypes/` and the two
+documentation files below. No backend file, no frontend file, no schema, no migration.
+
+**Files created:** `docs/prototypes/phase6-corrections-preview.html`.
+**Files modified:** `docs/PROJECT_PROGRESS.md`, `docs/SESSION_HANDOFF.md` (this entry and its
+session-handoff counterpart only — no implementation documentation, e.g. the corrections workflow
+doc or `IMPLEMENTATION_PLAN.md`, was touched, since no implementation changed).
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
