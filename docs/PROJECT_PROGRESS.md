@@ -4842,6 +4842,95 @@ explicit go-ahead.
 
 ---
 
+### Phase 6 Checkpoint 6A — Corrections Navigation Permission Verification & Focused Fix — COMPLETE, COMMITTED as `9d6a39b`
+
+Repository preflight confirmed: branch `main`, working tree clean, commits `0256ab4`/`790147c`
+(Checkpoint 6) present, baseline backend **770/781** (same 11 pre-existing `payslips.test.ts`
+failures reconfirmed — one clean **781/781** run was also observed, confirming the 11 are
+environment-load-sensitive PDF/Chromium flakiness, not deterministic) / frontend **35/35** / 17
+migrations / `prisma validate` clean / migration status clean / zero schema drift.
+
+**Defect confirmed, not imprecise reporting.** `nav-config.ts`'s Corrections sidebar item was gated
+on `requiredPermission: 'payroll:entry'` alone — a single-permission field that could not express
+"OR `corrections:approve`". A user holding only `corrections:approve` (a reviewer, no
+`payroll:entry`) could not see or click the Corrections sidebar item at all, even though the Review
+Queue behind it — and the backend route serving it — is authorized for exactly that permission.
+Every other part of the stack the checkpoint brief asked to verify was already correct: the
+`/corrections` route has no separate frontend guard (`App.tsx`'s `RequireSession` checks
+authentication only); `CorrectionsPage`'s own `canView`/tab-default logic already implemented
+`payroll:entry OR corrections:approve` correctly, including the landing-tab rule (reviewer-only →
+Review Queue, payroll-entry-only → Ledger with Review Queue hidden, neither → its own access-denied
+message, never a hidden/unauthorized default tab); the backend's `ENTRY_VIEW_PERMISSIONS`/
+`BALANCE_VIEW_PERMISSIONS` convention (`corrections.routes.ts`) already matched the brief's required
+contract exactly (Review Queue: `corrections:approve` only; Ledger: `payroll:entry OR
+corrections:approve`; request creation: `payroll:entry` only) — no backend change was needed or made.
+
+**Root cause:** Checkpoint 6's own nav-config comment explicitly (and, at the time, correctly)
+reasoned that `corrections:approve`'s only holder was Master Admin, who already holds `payroll:entry`
+too, so a single-permission gate covered every current holder of either. True the day it was written,
+but it silently assumed that coincidence would keep holding for every future role — the first time a
+non-Master-Admin role could plausibly hold `corrections:approve` alone (this checkpoint's own verification
+step required constructing exactly such a user), the assumption broke.
+
+**Production fix (frontend only, no backend change):** `NavItem.requiredPermission` broadened to
+accept `PermissionKey | PermissionKey[]` (OR semantics on an array); the Corrections nav item now
+declares `['payroll:entry', 'corrections:approve']`. A new `isNavItemVisible` (moved into
+`nav-config.ts`, pure logic, no JSX) evaluates it; `sidebar.tsx` now calls it instead of inlining the
+check. A new `frontend/src/lib/permissions.ts` centralizes the corrections-domain permission rule
+(`hasPermission`, `hasAnyPermission`, `canAccessCorrections`, `canViewCorrectionsLedger`,
+`canReviewCorrectionRequests`, `canRequestCorrection`, `defaultCorrectionsTab`) as the one frontend
+source of truth mirroring the backend's own `ENTRY_VIEW_PERMISSIONS`/`BALANCE_VIEW_PERMISSIONS`
+convention; `corrections-page.tsx`, `correction-request-detail-page.tsx`,
+`balance-adjustment-detail-page.tsx`, and `payroll-entry-page.tsx`'s "Request Correction" gate were
+all switched from ad hoc inline `user.permissions.includes(...)` checks to this shared helper
+(behavior-preserving — every one of those checks was already correct; this only removed duplication,
+per this project's standing "no duplicated utilities" checklist item). No permission key added, no
+schema change, no migration.
+
+**A genuine, previously-untested interaction surfaced during verification, not a defect:**
+`corrections:approve` has only ever been held by Master Admin until this checkpoint's own test user
+construction. `listCorrectionRequestsForUser` (`corrections.service.ts`) site-scopes the Review Queue
+to `currentUser.siteIds` for any non-`MASTER_ADMIN` caller — the same site-scoping every other
+non-Master role (Payroll Staff, Finance) already has, applied uniformly, not something this checkpoint
+introduced or should relax. A reviewer-only test user with no site assignment correctly sees an empty
+Review Queue; the Playwright reviewer and backend test users below were both given an explicit site
+assignment, exactly as existing Payroll-Staff/Finance test-user fixtures already do.
+
+**Frontend tests added:** `frontend/src/lib/permissions.test.ts` (18 tests — `hasPermission`/
+`hasAnyPermission`, and every corrections-domain predicate including all four `defaultCorrectionsTab`
+cases: reviewer-only → queue, payroll-entry-only → ledger, both → queue, neither → null);
+`frontend/src/components/layout/nav-config.test.ts` (8 tests — general `isNavItemVisible` behavior
+plus the four Corrections-sidebar-specific cases: payroll:entry-only/corrections:approve-only/
+both/neither). Both follow this repo's existing pure-logic `.test.ts` convention (no jsdom/React
+Testing Library introduced) — the real rendered behavior is covered by Playwright below.
+
+**Playwright:** `tests/e2e/specs/07-corrections.spec.ts` gained Scenario 6 (reviewer-only navigation)
+plus a new `tests/e2e/helpers/create-scoped-user.ts` (direct-Prisma user creation for a permission
+combination no seeded role — `MASTER_ADMIN`/`PAYROLL_STAFF`/`FINANCE` — can produce via the real
+`POST /api/v1/users` API; login itself still goes through the real form, same as every other spec).
+Also fixed one unrelated pre-existing strict-mode locator ambiguity in Scenario 3 (`getByText('REJECTED')`
+case-insensitively matched both the status badge and the "Correction request rejected" toast) — a
+test-only fix, required for a clean full-suite run, uncovered by but independent of this checkpoint's
+own change.
+
+**Verification:** backend **781/781** (one clean run; **770/781** with the same 11 pre-existing
+`payslips.test.ts` failures on other runs, confirmed environment-load flakiness, not a regression —
+zero backend files were modified this checkpoint); frontend **61/61** (35 baseline + 26 new); **E2E
+21/21** (20 baseline + 1 new Scenario 6, plus the Scenario 3 locator fix); `prisma validate`/`migrate
+status` — still 17 migrations, zero drift; `typecheck`/`lint` clean across all workspaces (`shared`,
+`backend`, `frontend`, E2E); production builds clean for `shared`, `backend`, `frontend`.
+
+**Explicitly confirmed at close of this checkpoint:** reviewer-only users can now discover Corrections
+through the sidebar; reviewer-only users can access the Review Queue (given a site assignment, same
+requirement every other non-Master role has); reviewer-only users cannot request corrections without
+`payroll:entry` (unchanged — gated in `payroll-entry-page.tsx`, never a Corrections-page tab);
+payroll-entry-only users cannot approve or reject (unchanged); unauthorized users (neither permission)
+cannot access Corrections (unchanged — `CorrectionsPage`'s own access-denied state); no new permission
+key was added; no backend financial behavior changed; no schema migration was added. **Checkpoint 6 is
+now fully closed.** Do not begin Phase 6 Checkpoint 7 without its own explicit go-ahead.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -4853,7 +4942,7 @@ explicit go-ahead.
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
-| 6 | Corrections & Balance Adjustments (highest-risk logic) | **In progress, 2026-07-18.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. No `CONSUMED`/`CANCELLED` materialization transition, automatic settlement on release, bank/cash-sheet integration, or Phase 6 final close-out exist yet. Checkpoint 7 not started |
+| 6 | Corrections & Balance Adjustments (highest-risk logic) | **In progress, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. No `CONSUMED`/`CANCELLED` materialization transition, automatic settlement on release, bank/cash-sheet integration, or Phase 6 final close-out exist yet. Checkpoint 7 not started |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
@@ -5184,32 +5273,38 @@ explicit go-ahead.
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-18 — Phase 6 Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational
-Workflow) is CLOSED.** Checkpoints 1–5A (domain/schema, calculation engine, transactional approval,
-settlement/payment recording, Draft-cycle materialization, and the reservation-vs-settlement
-consistency review/fix) were already complete; Checkpoint 6 built the frontend that exposes all of
-it — see §1's Checkpoint 6 entry and §2's Phase 6 row. **Current baseline: backend **770/781** (11
-pre-existing, independently-reproduced `payslips.test.ts` failures, unrelated to corrections),
-frontend **35/35**, E2E **20/20**, 17 migrations, zero schema drift. **Do not begin Phase 6
-Checkpoint 7 or any Phase 6 final close-out without its own separate, explicit go-ahead** — same
-standing per-checkpoint practice as every other phase. The items below (originally written
-2026-07-13, for Phase 4/5) are carried forward for their still-open content only; their own
+**Updated 2026-07-19 — Phase 6 Checkpoint 6A (Corrections Navigation Permission Verification &
+Focused Fix) is CLOSED, Checkpoint 6 is now fully closed.** Checkpoints 1–6 (domain/schema,
+calculation engine, transactional approval, settlement/payment recording, Draft-cycle
+materialization, the reservation-vs-settlement consistency review/fix, and the frontend operational
+workflow) were already complete; Checkpoint 6A found and fixed one real gap Checkpoint 6 left open —
+a `corrections:approve`-only reviewer could not see the Corrections sidebar item at all — with a
+frontend-only fix (no backend/schema change) — see §1's Checkpoint 6A entry and §2's Phase 6 row.
+**Current baseline: backend **781/781** on a clean run (**770/781** with the same 11 pre-existing,
+independently-reproduced `payslips.test.ts` failures on environment-load-affected runs — confirmed
+flaky, not deterministic), frontend **61/61**, E2E **21/21**, 17 migrations, zero schema drift. **Do
+not begin Phase 6 Checkpoint 7 or any Phase 6 final close-out without its own separate, explicit
+go-ahead** — same standing per-checkpoint practice as every other phase. The items below (originally
+written 2026-07-13, for Phase 4/5) are carried forward for their still-open content only; their own
 test-count/database figures are stale — use the baseline above instead.
 
 1. **Re-provision the local database before running DB-backed tests** — it does not survive between
    sessions. Recipe unchanged: `@embedded-postgres/darwin-x64` in the scratchpad, `initdb`, start
    TCP-only, create the `payroll`/`payroll_dev` role/database, `cp backend/.env.example backend/.env`,
    `npx prisma migrate deploy`, seed twice (confirm idempotency), `npm run test --workspace backend`
-   (expect **770/781** as of Phase 6 Checkpoint 6, 11 known pre-existing `payslips.test.ts` failures
-   — run via the `npm run test` script, which sets `NODE_ENV=test` and `--runInBand`; do not run
+   (expect **770-781/781** as of Phase 6 Checkpoint 6A — the up-to-11 `payslips.test.ts` failures are
+   environment-load-sensitive flakiness, not deterministic; a fully clean 781/781 run has been
+   observed — run via the `npm run test` script, which sets `NODE_ENV=test` and `--runInBand`; do not run
    `npx jest` directly with a sourced `.env`, which overrides `NODE_ENV` to `development` and drops
    the login rate limit from 1000/window to 10/window, producing spurious 429s).
-   **The 11 `payslips.test.ts` failures (PDF generation returning 500/400) remain open** — reproduced
-   consistently across Checkpoints 5A and 6, independently confirmed unrelated to the corrections
-   domain (a clean pre-Checkpoint-5A tree shows the same 11), most likely a Puppeteer/Chromium
-   dependency issue specific to this sandboxed environment. Not investigated or repaired by either
-   checkpoint (explicitly out of scope for both) — worth a dedicated pass before Phase 6's own
-   final close-out.
+   **The up-to-11 `payslips.test.ts` failures (PDF generation returning 500/400) remain open, but are
+   now confirmed non-deterministic, not a fixed pre-existing state** — Checkpoint 6A observed both a
+   full 11-failure run and a fully clean 781/781 run (all 11 passing) across consecutive full-suite
+   runs in the same session with no code change between them, tracking this sandbox's system load
+   (see Checkpoint 6A's own §1 entry) rather than a stable defect. Independently confirmed unrelated
+   to the corrections domain regardless. Not investigated or repaired by any checkpoint to date
+   (explicitly out of scope) — worth a dedicated pass before Phase 6's own final close-out, now with
+   "reduce environment-load flakiness" as the framing rather than "fix a deterministic failure."
 2. **Close the one outstanding Phase 4 condition: a real Render (or genuine Linux container)
    deployment smoke test.** Genuinely attempted and genuinely blocked in this sandboxed macOS
    session (no Docker/Podman/Colima, no Render API token, no git remote) — see §4's "Render/

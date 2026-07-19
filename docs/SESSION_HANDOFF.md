@@ -15,10 +15,11 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ---
 
-## 0. Current state (authoritative as of 2026-07-18 — read this section first)
+## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
 **All of Phases 0–5 and all four Post-Phase-5 Stabilization checkpoints are complete. Phase 6
-(Corrections & Balance Adjustments) is in progress — Checkpoints 1 through 6 are complete.** The
+(Corrections & Balance Adjustments) is in progress — Checkpoints 1 through 6A are complete, and
+Checkpoint 6 is now fully closed.** The
 Architecture Review and its Product Decision Resolution (both review-only, no repository changes)
 are complete, refining the design frozen alongside Phase 3 (2026-07-05); see
 `docs/PROJECT_PROGRESS.md` §3 for that record.
@@ -54,8 +55,8 @@ own scope. **No `CONSUMED`/`CANCELLED` materialization transition, automatic set
 or bank-sheet/cash-sheet integration exist yet.** Do not begin Checkpoint 7 or any Phase 6 final
 close-out without its own separate, explicit go-ahead.
 
-**Latest commits:** Phase 6 Checkpoint 5A's implementation (`9d19cbb`) and doc-hash follow-up
-(`b8a3e81`); Phase 6 Checkpoint 6's own implementation and doc-hash follow-up commits recorded in
+**Latest commits:** Phase 6 Checkpoint 6's implementation (`0256ab4`) and doc-hash follow-up
+(`790147c`); Phase 6 Checkpoint 6A's implementation/test commit `9d6a39b` — see
 `docs/PROJECT_PROGRESS.md` §1's own dated entry.
 
 **Stabilization checkpoints, all complete:**
@@ -110,18 +111,28 @@ close-out without its own separate, explicit go-ahead.
   `GET /adjustment-types` (new module) and `GET /balance-adjustments` (list, added to the existing
   router) — both reuse existing repository shapes, no migration, no new permission key) — see
   `docs/PROJECT_PROGRESS.md` §1's own Checkpoint 6 entry for commit hashes.
+- **Checkpoint 6A** (review-only — Corrections Navigation Permission Verification & Focused Fix;
+  found and fixed one real gap: `nav-config.ts`'s Corrections sidebar item was gated on
+  `payroll:entry` alone, so a `corrections:approve`-only reviewer couldn't see it at all, even
+  though the Review Queue and its backend route are authorized for exactly that permission.
+  Frontend-only fix — `NavItem.requiredPermission` now accepts an OR-array, a new
+  `frontend/src/lib/permissions.ts` centralizes the corrections-domain permission rule, four
+  call sites switched from ad hoc inline checks to it. No backend change, no new permission key,
+  no schema change) — `9d6a39b`.
 
 **Current verified test counts** (see `docs/architecture/testing.md` for what each suite covers and
 how its database is provisioned — treat any older count anywhere else in this file as a historical
-snapshot, not current): backend **770/781** (11 pre-existing, independently-reproduced
-`payslips.test.ts` failures, unrelated to corrections — see §4/§5 below), frontend **35/35**,
-E2E **20/20**. 17 migrations, zero schema drift.
+snapshot, not current): backend **781/781** on a clean run (**770/781** with the same up-to-11
+pre-existing `payslips.test.ts` failures on environment-load-affected runs — confirmed
+non-deterministic flakiness, not a fixed defect, unrelated to corrections either way — see §4/§5
+below), frontend **61/61**, E2E **21/21**. 17 migrations, zero schema drift.
 
 **Exact next step:** Phase 6 Checkpoint 7 (or Phase 6 final close-out) — but only on explicit
-authorization. Do not begin it without that go-ahead; Checkpoint 6's own scope is fully closed. The
-11 known `payslips.test.ts` failures (PDF generation returning 500/400, likely a Puppeteer/Chromium
-environment dependency issue in this sandbox) remain open and unrepaired — worth a dedicated
-investigation pass before Phase 6's own final close-out.
+authorization. Do not begin it without that go-ahead; Checkpoint 6 is now fully closed (Checkpoint 6A
+closed its one remaining navigation gap). The up-to-11 `payslips.test.ts` failures (PDF generation
+returning 500/400) remain open and unrepaired, now confirmed environment-load-sensitive rather than
+a stable failure (a fully clean 781/781 run was observed in the same session with no code change) —
+still worth a dedicated investigation pass before Phase 6's own final close-out.
 
 **Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
 
