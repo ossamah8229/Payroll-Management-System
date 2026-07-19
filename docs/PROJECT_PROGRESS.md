@@ -4927,7 +4927,166 @@ requirement every other non-Master role has); reviewer-only users cannot request
 payroll-entry-only users cannot approve or reject (unchanged); unauthorized users (neither permission)
 cannot access Corrections (unchanged — `CorrectionsPage`'s own access-denied state); no new permission
 key was added; no backend financial behavior changed; no schema migration was added. **Checkpoint 6 is
-now fully closed.** Do not begin Phase 6 Checkpoint 7 without its own explicit go-ahead.
+now fully closed.**
+
+### Phase 6 Checkpoint 7 — End-to-End Financial Lifecycle Validation, Audit Hardening & Phase 6 Close-Out — COMPLETE, COMMITTED as `4812971`, Phase 6 CLOSED
+
+Repository preflight confirmed: branch `main`, working tree clean, commit `9d6a39b` (Checkpoint 6A)
+present, baseline backend **781/781** (one clean run observed; the same up-to-11 pre-existing
+`payslips.test.ts` failures on other runs, confirmed environment-load flakiness, not deterministic) /
+frontend **61/61** / E2E **21/21** / 17 migrations / `prisma validate` clean / migration status clean /
+zero schema drift. A validation-first checkpoint, not a feature checkpoint — its purpose was to prove
+every Checkpoint 1–6A lifecycle behaves correctly as one integrated system, not to introduce new
+functionality.
+
+**Lifecycle matrix and Flow A–E review found the audit trail, API/error consistency, permissions,
+reporting, and exports already correct** (see the sub-sections below) — **but found one genuine,
+load-bearing correctness gap that blocked Flow A and Flow B from ever reaching their own documented
+end state.** The `ACTIVE -> CONSUMED` `BalanceAdjustmentMaterialization` transition — explicitly
+deferred by every checkpoint from 4 through 6A as "a later checkpoint's own event" — had never been
+built. Consequence, traced precisely: `corrections.settlement.ts`'s `RESERVED_AMOUNT_UNAVAILABLE`
+ceiling (Checkpoint 5A) correctly computes `availableForSettlement = remainingAmount −
+Σ(ACTIVE reservations)`; once an obligation's entire `remainingAmount` is reserved by materialization
+(the normal case), that ceiling is permanently `0` for *any* cycle, forever — no supported workflow
+could ever mark a materialized `DEFERRED PAYABLE`/`RECOVERY` obligation `SETTLED`. The employee was
+physically paid (or had the recovery deducted) via that cycle's own release — `computeEntryCalc`
+already folds `correctionBalancePayable`/`.correctionBalanceRecovery` into `calcNet`, so Bank
+Sheets/Cash Receiving Sheets/Payslips, all built on the same shared `computeEntryCalc`, already
+correctly reflected the paid amount — but the `BalanceAdjustment`'s own ledger record stayed `PENDING`
+forever, permanently visible as outstanding in the Corrections Ledger. This directly blocked Required
+Playwright Scenarios 1 ("PAYABLE lifecycle **to payroll completion**") and 2 ("RECOVERY lifecycle...
+until outstanding **reaches zero**") from ever completing as specified. Flagged to the user before any
+implementation; the user confirmed this is a genuine Phase 6 correctness gap requiring a fix, not
+deferred Phase 7 work, and specified the exact ownership model below.
+
+**Fix — release-time consumption, not the ordinary settlement endpoints.** An `ACTIVE` materialization
+is committed to a specific Draft cycle; its settlement event is that cycle's own release, not a
+separate administrative action. `payroll-release.service.ts`'s `releaseProjectUnit` — the exact moment
+a `PayrollEntry` transitions `released: false -> true`, the schema's own definition of "the triggering
+PayrollEntry release" a `DEFERRED PAYABLE`/`RECOVERY` settles through (`database/balance-adjustments.md
+§14`) — now:
+1. Acquires `lockPayrollCycleForUpdate` first (new — this transaction previously took no cycle-level
+   lock at all), becoming a third participant in Checkpoint 5's documented "cycle, then adjustment"
+   lock order, alongside Draft-cycle materialization; this also closes a pre-existing, unrelated race
+   for free (a stale pre-transaction `status === 'DRAFT'` check is now re-verified under lock).
+2. Immediately after the existing `toRelease` sweep, calls the new
+   `consumeMaterializationsForReleasedEntries` (`corrections.materialization.service.ts`) — scoped to
+   exactly the `PayrollEntry` ids that just flipped `released: true` in this call, nothing else.
+3. For each `ACTIVE` materialization found (sorted by `balanceAdjustmentId` for deterministic
+   cross-adjustment lock ordering): acquires `acquireBalanceAdjustmentLock` (Checkpoint 4's existing
+   lock, unchanged), re-reads the `BalanceAdjustment` post-lock, and reuses `calculateSettlement`
+   unchanged — passing *other* active reservations (this materialization's own amount excluded) as the
+   ceiling, since this settlement is what fulfills this reservation, not a second independent claim
+   against it.
+4. Creates one `BalanceAdjustmentSettlement` (`amountApplied` = the materialization's own reserved
+   amount, never re-derived), updates `BalanceAdjustment.remainingAmount`/`.status` via the existing
+   conditional, optimistic-concurrency `updateBalanceAdjustmentAfterSettlement`, flips the
+   materialization `ACTIVE -> CONSUMED` with its `settlementId`/`consumedAt` populated (columns
+   `BalanceAdjustmentMaterialization` had carried unused since Checkpoint 5's own schema — **no
+   migration required**), and writes one `balance_adjustment.settled` audit event
+   (`metadata.triggeredBy: 'RELEASE'` distinguishes it from a manually-recorded settlement in the same
+   audit trail).
+5. All inside `releaseProjectUnit`'s own existing transaction — a failed release leaves no settlement,
+   no consumption, and no audit residue, proven by a dedicated rollback test (`jest.spyOn` throwing on
+   the release-time audit call, same precedent `payroll-cycle-rollover.test.ts` established).
+
+**Companion eligibility fix, included at the user's explicit direction — required for the above to be
+race-safe.** `determineMaterialization` never checked whether the target `PayrollEntry` was already
+released — only that it existed. Without a guard, a concurrent manual materialization could still
+target an entry mid-release, writing into a supposedly-immutable released entry's aggregate columns
+and creating a reservation no future release event for that entry could ever consume — the identical
+stuck-forever failure mode being fixed, reached a different way. New skip reason
+`TARGET_ENTRY_ALREADY_RELEASED`; `targetEntryReleased` threaded through
+`corrections.materialization.ts`/`.types.ts`/`.service.ts` and `listEntriesForCycle`/
+`getPayrollEntryForEmployeeInCycle` (`corrections.repository.ts`).
+
+**Explicitly out of scope, by the user's own stated boundary:** the `CANCELLED` materialization
+transition. If an entry is `hold`-marked after its obligation already materialized into that cycle,
+that one reservation stays `ACTIVE` forever (never released, so release-time consumption never fires
+for it) — a narrow, pre-existing edge case, not introduced by this fix, and no rollback/lifecycle
+requirement has yet proven `CANCELLED` necessary to close it. Documented, not built.
+
+**Audit review** (full catalogue traced file:line): every financial write in the corrections domain —
+`CorrectionRequest` creation/approval/rejection, `Correction`/`BalanceAdjustment` creation,
+materialization, standalone payment, cycle-scoped settlement, and the new release-time consumption —
+has exactly one `recordAuditLog` call in the same transaction, none inside a retry loop, none
+double-fireable on a lost optimistic-lock race (every write path's conditional `updateMany`/lock guard
+sits before its audit call). No duplicate audit events, no audited failed transactions, no financial
+write found without a corresponding audit entry.
+
+**API/error consistency review:** `CorrectionValidationError`/`SettlementValidationError`/
+`MaterializationValidationError` all produce the identical `{ error: { code, message } }` shape via
+exhaustive `Record<ErrorCode, number>` status maps (`error-handler.ts`) — no shape divergence. The
+three list endpoints (`GET /correction-requests`, `GET /balance-adjustments`, `GET
+/payroll-entries/:entryId/corrections`) are consistently unpaginated — appropriate, not a defect, given
+every corrections-domain table's own documented row-count expectation ("tens per month," "a subset of
+Correction rows," "single digits") — but their filter surfaces genuinely differ (2 fields / 3 fields /
+0 fields); left as-is, a real but pre-existing and cosmetic inconsistency, not a functional defect
+warranting a change under this checkpoint's own "minimal harmonization only" policy.
+
+**Reporting/export review:** Bank Sheets, Cash Receiving Sheets, and Payslips all reuse the single
+shared `computeEntryCalc` (`payroll-entry.service.ts`), which already folds
+`correctionBalancePayable`/`.correctionBalanceRecovery` into `calcNet` — so every one of them already
+correctly, automatically reflects a materialized-and-now-consumed correction balance with zero
+additional integration work, a positive finding rather than a gap. Historical `PayrollEntry` rows
+remain immutable; `Correction` values never overwrite history; released/archived cycle data is
+untouched by this checkpoint's changes beyond the two new `BalanceAdjustmentMaterialization` columns
+this checkpoint populates. Payslip's own per-line correction breakdown (the workflow doc's
+"Representation... on Payslips" section) and the Statement of Account remain explicitly out of scope —
+unbuilt since before Checkpoint 6, confirmed still Phase 7 work, not silently expanded here.
+
+**Permission review:** no new permission key was introduced; every new/changed code path reuses
+`payroll:entry`/`corrections:approve`/`payroll:release` exactly as already established.
+
+**Performance review:** no N+1 queries found in the Review Queue/Ledger list routes (both use a single
+Prisma `include`, not per-row follow-up fetches); the new release-time consumption loop is bounded by
+one Unit's own headcount's worth of materializations (typically 0–2), the same bound
+`releaseProjectUnit`'s own pre-existing per-entry audit loop already has. No speculative optimization
+performed.
+
+**Files created:** `backend/tests/corrections-release-consumption.test.ts` (9 tests — full PAYABLE
+consumption, multi-cycle RECOVERY installments consumed one release at a time reaching `SETTLED` only
+on the final one, release-failure rollback, repeated/idempotent release, concurrent release, unrelated
+materializations left untouched, the reservation ceiling still rejecting an over-large standalone
+settlement, exactly-once audit, and the companion eligibility guard).
+**Files modified:** `corrections.materialization.service.ts` (the new
+`consumeMaterializationsForReleasedEntries`, `employeeIdToEntry` map threading), `corrections.materialization.ts`
+(`targetEntryReleased` check), `corrections.materialization.types.ts` (new field + skip reason),
+`corrections.repository.ts` (`listActiveMaterializationsForEntries`, `consumeMaterializationRow`,
+`listEntriesForCycle` now selects `released`), `payroll-release.service.ts` (`releaseProjectUnit`'s new
+cycle lock + consumption call, `ReleaseUnitResult.correctionSettlementsConsumed`),
+`tests/e2e/specs/07-corrections.spec.ts` (Scenario 4 extended to release the new Draft cycle and verify
+`SETTLED`/`CONSUMED`/a real settlement row — the first point in this suite's history the full PAYABLE
+lifecycle could ever be observed reaching completion), `backend/tests/corrections-materialization.test.ts`
+(fixture `targetEntryReleased` field + one new eligibility test), `backend/prisma/schema.prisma`
+(comment-only — updated `MaterializationStatus`/`BalanceAdjustmentMaterialization`/
+`BalanceAdjustmentSettlement.materialization` doc comments to record that Checkpoint 7 is the "later
+checkpoint" they referenced; zero schema/migration change),
+`docs/architecture/workflows/corrections-and-balance-adjustments.md` (new dated Checkpoint 7 scope
+note).
+
+**Verification performed:** `prisma validate`/`migrate status` — still 17 migrations, zero drift
+(confirmed after the comment-only schema edits too); full backend suite **791/791** (781 baseline + 9
+new, one query-planner-sensitivity-under-load transient failure in
+`payroll-entry-performance.test.ts` reproduced the project's own already-documented flaky pattern,
+confirmed by a clean isolated re-run, unrelated to this checkpoint's changes); frontend suite **61/61**
+(unchanged); **E2E 21/21** (unchanged count — Scenario 4 extended in place, not added as a new
+scenario); `typecheck`/`lint` clean across all workspaces (`shared`, `backend`, `frontend`, E2E), same
+6 pre-existing frontend `react-refresh` warnings, zero new; production builds clean for `shared`,
+`backend`, `frontend`.
+
+**Explicitly confirmed at close of this checkpoint:** historical payroll remains immutable; every
+correction financial action remains immutable (settlement/consumption is create-only — no
+`BalanceAdjustmentSettlement`/`BalanceAdjustmentMaterialization` row is ever updated or deleted, only
+the materialization's own `status`/`settlementId`/`consumedAt` transition once, `ACTIVE -> CONSUMED`,
+guarded by a conditional `updateMany`); reservation protection is enforced end-to-end (standalone/
+cycle-scoped settlement still rejects any amount exceeding the unreserved balance, proven by a
+dedicated regression test); no duplicate financial processing is possible through any supported
+workflow (idempotent release, concurrent-release-safe, materialize-then-release-then-settle no longer
+possible since consumption happens automatically and settlement of a `SETTLED` adjustment is rejected
+outright); no backend financial calculation was duplicated in the frontend; no new permission key was
+introduced; no schema migration was added (the fix uses columns Checkpoint 5's own migration already
+created but left unused). **Phase 6 is now complete and closed.** Phase 7 has not been started.
 
 ---
 
@@ -4942,7 +5101,7 @@ now fully closed.** Do not begin Phase 6 Checkpoint 7 without its own explicit g
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
-| 6 | Corrections & Balance Adjustments (highest-risk logic) | **In progress, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. No `CONSUMED`/`CANCELLED` materialization transition, automatic settlement on release, bank/cash-sheet integration, or Phase 6 final close-out exist yet. Checkpoint 7 not started |
+| 6 | Corrections & Balance Adjustments (highest-risk logic) | **CLOSED, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. **Checkpoint 7 (End-to-End Financial Lifecycle Validation, Audit Hardening & Phase 6 Close-Out) CLOSED** — full lifecycle/audit/API/permission/reporting validation found one genuine gap (the `ACTIVE -> CONSUMED` materialization transition every prior checkpoint deferred, which blocked a materialized obligation from ever reaching `SETTLED`) and fixed it: `releaseProjectUnit` now consumes every `ACTIVE` reservation the moment its `PayrollEntry` actually releases, using the `settlementId`/`consumedAt` columns Checkpoint 5's own schema already reserved for it — no migration, no new permission key. See §1's own Checkpoint 7 entry for the full record. **Phase 6 is now fully closed. Phase 7 has not been started.** |
 | 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |

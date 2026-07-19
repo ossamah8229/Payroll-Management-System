@@ -250,6 +250,38 @@ form's required foreign key) and `GET /balance-adjustments` (a list route over t
 deferred by Checkpoint 4's own scope note above, "out of this checkpoint's scope"). Neither adds a
 migration, a new permission key, or a new lifecycle state.
 
+**Scope note, Phase 6 Checkpoint 7 (2026-07-19) — the `ACTIVE -> CONSUMED` transition, closing the
+loop every prior checkpoint above deliberately deferred.** Validation for this checkpoint found a
+genuine correctness gap: once a `DEFERRED PAYABLE` or `RECOVERY` obligation materialized into a
+Draft cycle (Checkpoint 5), nothing ever settled it — Checkpoint 5A's own reservation-aware ceiling
+(`RESERVED_AMOUNT_UNAVAILABLE`) correctly blocks a standalone/cycle-scoped settlement from
+double-processing an actively-reserved amount, but no mechanism ever *resolved* that reservation
+either, so a materialized obligation could never reach `SETTLED` through any supported workflow —
+the exact "Materialize → Payroll Release → Outstanding cleared" flow this document's own diagrams
+imply never actually completed. This is now fixed, using the `settlementId`/`consumedAt` columns
+`BalanceAdjustmentMaterialization` has carried, unused, since Checkpoint 5's own schema (no
+migration required): `payroll-release.service.ts`'s `releaseProjectUnit` — the exact moment a
+`PayrollEntry` transitions `released: false -> true`, the schema's own definition of "the
+triggering PayrollEntry release" a `DEFERRED PAYABLE`/`RECOVERY` settles through (§14, above) — now
+also acquires `lockPayrollCycleForUpdate` (becoming a third participant in Checkpoint 5's documented
+"cycle, then adjustment" lock order) and, immediately after sweeping those entries `released`,
+consumes every `ACTIVE` `BalanceAdjustmentMaterialization` reserved against them: one
+`BalanceAdjustmentSettlement` row per materialization (`amountApplied` = the materialization's own
+reserved amount, reusing `calculateSettlement` unchanged), `BalanceAdjustment.remainingAmount`
+decremented, `.status -> SETTLED` only when it reaches zero (a `RECOVERY` installment plan may take
+several releases), and the materialization itself flipped `ACTIVE -> CONSUMED` with its
+`settlementId`/`consumedAt` populated — all inside `releaseProjectUnit`'s own existing transaction,
+so a failed release leaves no settlement, no consumption, and no audit residue. A companion
+eligibility fix closes the race this makes load-bearing: `determineMaterialization` now also
+rejects a target `PayrollEntry` that has already released (`TARGET_ENTRY_ALREADY_RELEASED`) — without
+it, a manual materialization racing a concurrent release could still write into an immutable
+released entry and create a reservation no future release event for that entry could ever consume.
+**`CANCELLED` remains unbuilt** — an entry `hold`-marked after its obligation already materialized
+into that cycle leaves that one reservation permanently `ACTIVE` (a pre-existing, narrow edge case,
+not introduced by this fix); no rollback/lifecycle requirement has yet proven a `CANCELLED` path
+necessary. No schema migration, no new permission key, no new financial lifecycle — this is the
+existing, already-designed-for lifecycle's own final link.
+
 ```
 Correction Approved
         ↓
