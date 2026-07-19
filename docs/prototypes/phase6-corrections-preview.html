@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 6 Visual Preview — Corrections &amp; Balance Adjustments — Payroll Management System</title>
+<style>
+  :root {
+    --color-bg: #f0ede8; --color-surface: #fafaf8; --color-surface-2: #ffffff;
+    --color-border: #d8d4cc; --color-border-strong: #b8b2a8;
+    --color-text: #1a1816; --color-text-muted: #6b6560; --color-text-faint: #6f6b66;
+    --accent: #1b4f72; --accent-light: #ebf2f8; --accent-mid: #2e6ea6;
+    --color-green: #1a6b3a; --color-green-light: #e8f5ee;
+    --color-amber: #8b5e00; --color-amber-light: #fff8e6;
+    --color-red: #8b1a1a; --color-red-light: #fbe8e8;
+    --color-purple: #4a2080; --color-purple-light: #f0ebf8;
+    --radius: 8px; --radius-lg: 12px;
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { height: 100%; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; -webkit-font-smoothing: antialiased; height: 100%; overflow: hidden; }
+  .meta-banner { position: relative; z-index: 100; background: var(--accent); color: rgba(255,255,255,0.92); font-size: 11px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: nowrap; height: 37px; box-sizing: border-box; }
+  .meta-banner strong { color: #fff; }
+  .meta-banner > span:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta-tabs { display: flex; gap: 6px; flex-wrap: nowrap; overflow-x: auto; flex-shrink: 0; max-width: 78vw; scrollbar-width: thin; }
+  .meta-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; flex-shrink: 0; }
+  .meta-tabs button.is-active { background: #fff; color: var(--accent); }
+  .screen { display: none; }
+  .icon { display: inline-block; vertical-align: -2px; flex-shrink: 0; }
+
+  .screen.is-active { display: block; height: calc(100vh - 37px); overflow: hidden; }
+  .notes-screen { height: 100%; overflow-y: auto; padding: 28px; box-sizing: border-box; }
+  .notes-screen .inner { max-width: 900px; margin: 0 auto; font-size: 11px; color: var(--color-text-faint); line-height: 1.6; }
+  .card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: var(--radius); font-weight: 500; font-family: inherit; border: none; cursor: pointer; padding: 0 14px; height: 36px; font-size: 12px; }
+  .btn-sm { padding: 0 10px; height: 32px; font-size: 11px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:disabled { background: var(--color-border-strong); cursor: not-allowed; }
+  .btn-secondary { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+  .app-shell { display: flex; height: calc(100vh - 37px); overflow: hidden; background: var(--color-bg); }
+  .sidebar { position: fixed; inset: 37px 0 0 0; width: 220px; display: flex; flex-direction: column; background: var(--accent); }
+  .sidebar-brand { border-bottom: 1px solid rgba(255,255,255,0.1); padding: 20px 16px 16px; }
+  .sidebar-brand .name { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; }
+  .sidebar-brand .sub { margin-top: 2px; font-size: 11px; color: rgba(255,255,255,0.55); }
+  .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 0; }
+  .nav-section-label { padding: 14px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,255,255,0.65); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: rgba(255,255,255,0.7); text-decoration: none; border-left: 2px solid transparent; }
+  .nav-item.is-active { background: rgba(255,255,255,0.12); border-left-color: rgba(255,255,255,0.7); color: #fff; font-weight: 500; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .avatar-on-accent { background: rgba(255,255,255,0.2); color: #fff; }
+  .avatar-on-surface { background: var(--accent-light); color: var(--accent); }
+  .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-footer .who-name { font-size: 12px; font-weight: 500; color: #fff; }
+  .sidebar-footer .who-role { font-size: 10px; color: rgba(255,255,255,0.5); }
+  .main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { flex-shrink: 0; z-index: 10; height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border); background: var(--color-surface-2); padding: 0 28px; }
+  .topbar .title { font-size: 15px; font-weight: 600; }
+  .topbar .subtitle { font-size: 12px; color: var(--color-text-muted); }
+  .main-content { flex: 1; overflow-y: auto; padding: 28px; }
+  .card-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border); padding: 14px 18px; }
+  .card-header-top { display: flex; align-items: center; gap: 10px; width: 100%; justify-content: space-between; }
+  .card-title { font-size: 13px; font-weight: 600; margin: 0; }
+  .filters-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; width: 100%; margin-top: 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
+  select, input { height: 36px; min-width: 160px; border-radius: var(--radius); border: 1px solid var(--color-border); background: var(--color-surface-2); padding: 6px 10px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+  .badge { display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 600; padding: 2px 8px; }
+  .badge-gray { background: var(--color-bg); color: var(--color-text-muted); }
+  .badge-green { background: var(--color-green-light); color: var(--color-green); }
+  .badge-amber { background: var(--color-amber-light); color: var(--color-amber); }
+  .badge-red { background: var(--color-red-light); color: var(--color-red); }
+  .badge-blue { background: var(--accent-light); color: var(--accent); }
+  .badge-purple { background: var(--color-purple-light); color: var(--color-purple); }
+  .muted { color: var(--color-text-muted); }
+  .table-scroll { overflow-x: auto; }
+  table.data-table { width: 100%; min-width: 1100px; border-collapse: collapse; font-size: 12px; }
+  table.data-table.compact { min-width: 640px; }
+  table.data-table th { text-align: left; padding: 12px 14px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  table.data-table td { padding: 14px; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data-table tr.row-disabled td { color: var(--color-text-faint); }
+  .hint { font-size: 11px; color: var(--color-text-muted); margin: 0; line-height: 1.5; padding: 14px 18px; }
+  footer.note { padding: 14px 28px 28px; font-size: 11px; color: var(--color-text-faint); }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 60; }
+  .modal { width: 520px; max-width: 92vw; background: var(--color-surface-2); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); max-height: 88vh; display: flex; flex-direction: column; }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--color-border); font-size: 13px; font-weight: 600; flex-shrink: 0; }
+  .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; border-top: 1px solid var(--color-border); flex-shrink: 0; }
+  .kv-box { border: 1px solid var(--color-border); background: var(--color-bg); border-radius: var(--radius); padding: 10px 12px; }
+  .kv-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 12px; }
+  .kv-row + .kv-row { border-top: 1px solid var(--color-border); }
+  .kv-row .k { color: var(--color-text-muted); }
+  .kv-row .v { font-weight: 500; color: var(--color-text); }
+  .kv-row.total { border-top: 1px solid var(--color-border); padding-top: 8px; margin-top: 2px; }
+  .kv-row.total .v { font-weight: 700; }
+  .warn-box { border: 1px solid var(--color-amber); background: var(--color-amber-light); color: var(--color-amber); border-radius: var(--radius); padding: 9px 12px; font-size: 11px; line-height: 1.5; }
+  .danger-box { border: 1px solid var(--color-red); background: var(--color-red-light); color: var(--color-red); border-radius: var(--radius); padding: 9px 12px; font-size: 11px; line-height: 1.5; }
+  .info-box { border: 1px solid var(--color-border); background: var(--color-surface); border-radius: var(--radius); padding: 9px 12px; font-size: 11px; line-height: 1.5; color: var(--color-text-muted); }
+  .tab-row { display: flex; gap: 22px; border-bottom: 1px solid var(--color-border); padding: 0 18px; }
+  .tab-btn { border: none; background: none; font: inherit; font-size: 12px; font-weight: 500; color: var(--color-text-muted); padding: 0 0 10px; margin-top: 8px; border-bottom: 2px solid transparent; cursor: pointer; }
+  .tab-btn.is-active { color: var(--color-text); border-bottom-color: var(--accent); }
+  .inner-tabs { display: flex; gap: 6px; padding: 14px 18px 0; }
+  .inner-tabs button { font: inherit; font-size: 11px; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 6px 12px; cursor: pointer; }
+  .inner-tabs button.is-active { background: var(--accent-light); color: var(--accent); border-color: var(--accent-mid); }
+  .inner-example { display: none; }
+  .inner-example.is-active { display: block; }
+  .row-form { display: flex; gap: 12px; }
+  .row-form .field { flex: 1; }
+  .breadcrumb { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-muted); cursor: pointer; margin-bottom: 14px; }
+  .section-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .state-card { padding: 16px 18px; }
+  .state-card h4 { margin: 0 0 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
+  .skeleton { height: 14px; border-radius: 4px; background: linear-gradient(90deg, var(--color-border) 0%, var(--color-bg) 50%, var(--color-border) 100%); background-size: 200% 100%; animation: shimmer 1.4s infinite; margin-bottom: 8px; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .toast { display: inline-flex; align-items: center; gap: 8px; background: var(--color-text); color: #fff; border-radius: var(--radius); padding: 10px 14px; font-size: 12px; }
+  .empty-block { padding: 44px 20px; text-align: center; }
+  .empty-block p.title { font-weight: 600; margin: 0 0 4px; }
+  .empty-block p.sub { margin: 0; color: var(--color-text-muted); }
+</style>
+</head>
+<body>
+
+  <div class="meta-banner">
+    <span><strong>Static visual preview</strong> — reproduces the implemented Corrections &amp; Balance Adjustments UI (Phase 6, Checkpoints 3–7) as plain HTML/CSS. Not the live React app; no build step, server, or database required.</span>
+    <div class="meta-tabs">
+      <button type="button" class="is-active" data-target="screen-queue">Review Queue</button>
+      <button type="button" data-target="screen-ledger">Ledger</button>
+      <button type="button" data-target="screen-request">Request</button>
+      <button type="button" data-target="screen-preview">Preview</button>
+      <button type="button" data-target="screen-approve">Approve</button>
+      <button type="button" data-target="screen-reject">Reject</button>
+      <button type="button" data-target="screen-detail">Balance Detail</button>
+      <button type="button" data-target="screen-materializations">Materializations</button>
+      <button type="button" data-target="screen-settlements">Settlements</button>
+      <button type="button" data-target="screen-payroll-entry">Payroll Entry</button>
+      <button type="button" data-target="screen-states">UI States</button>
+      <button type="button" data-target="screen-permissions">Permissions</button>
+      <button type="button" data-target="screen-notes">Implementation notes</button>
+    </div>
+  </div>
+
+  <!-- shared sidebar markup, reused verbatim across every full-shell screen -->
+
+  <!-- ================= 1. CORRECTIONS LANDING / REVIEW QUEUE ================= -->
+  <section id="screen-queue" class="screen is-active">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="name">Payroll Management<br />System</div>
+          <div class="sub">HR &amp; Payroll</div>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item"><span>▤</span> Payroll Entry</a>
+          <a href="#" class="nav-item"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg></span> Salary Release</a>
+          <a href="#" class="nav-item"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg></span> Bank Sheet</a>
+          <a href="#" class="nav-item"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></svg></span> Cash Receiving</a>
+          <a href="#" class="nav-item"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 15h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 17"/><path d="m7 21 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"/><path d="m2 16 6 6"/><circle cx="16" cy="9" r="2.9"/><circle cx="6" cy="5" r="3"/></svg></span> Advances</a>
+          <a href="#" class="nav-item"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></span> Payslips</a>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg></span> Corrections</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">HK</div>
+          <div><div class="who-name">Hina Karim</div><div class="who-role">Reviewer (corrections:approve)</div></div>
+        </div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar">
+          <div><div class="title">Corrections</div><div class="subtitle">Review Queue and Corrections Ledger</div></div>
+        </header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header" style="border-bottom:none; padding-bottom:0;">
+              <div class="card-header-top"><h3 class="card-title">Corrections</h3></div>
+            </div>
+            <div class="tab-row">
+              <button class="tab-btn is-active" type="button">Review Queue</button>
+              <button class="tab-btn" type="button" onclick="document.querySelector('[data-target=screen-ledger]').click()">Corrections Ledger</button>
+            </div>
+            <div class="filters-row" style="padding:14px 18px 0;">
+              <div class="field"><label>Cycle</label><select><option>All cycles</option><option>July 2026 (Draft)</option><option>June 2026 (Released)</option><option>May 2026 (Archived)</option></select></div>
+              <div class="field"><label>Site</label><select><option>All sites</option><option>HBL Corporate Karachi</option><option>MCB Gulberg Region</option></select></div>
+              <div class="field"><label>Unit</label><select><option>All units</option><option>HBL Corporate Karachi — Security</option></select></div>
+              <div class="field"><label>Status</label><select><option selected>Pending</option><option>Approved</option><option>Rejected</option><option>All statuses</option></select></div>
+              <div class="field"><label>Employee</label><input placeholder="Name or code…" /></div>
+            </div>
+            <div class="table-scroll" style="margin-top:14px;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th><th>Employee ID</th><th>Cycle</th><th>Site</th><th>Unit</th>
+                    <th>Requested Field</th><th>Current Value</th><th>Proposed Value</th>
+                    <th>Submitted By</th><th>Submitted Date</th><th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="row-clickable" onclick="document.querySelector('[data-target=screen-request-detail-pending]')?.click()">
+                    <td>Bilal Ahmed</td><td>EMP-0142</td><td>May 2026</td><td>HBL Corporate Karachi</td><td>Security</td>
+                    <td>Allowance</td><td class="num">3,000.00</td><td class="num">5,000.00</td>
+                    <td>Imran Sheikh</td><td>12/07/2026</td><td><span class="badge badge-amber">PENDING</span></td>
+                  </tr>
+                  <tr>
+                    <td>Sana Tariq</td><td>EMP-0198</td><td>May 2026</td><td>HBL Corporate Karachi</td><td>Security</td>
+                    <td>Fine</td><td class="num">1,000.00</td><td class="num">0.00</td>
+                    <td>Imran Sheikh</td><td>10/07/2026</td>
+                    <td><span class="badge badge-green">APPROVED</span></td>
+                  </tr>
+                  <tr>
+                    <td>Usman Farooq</td><td>EMP-0176</td><td>April 2026</td><td>MCB Gulberg Region</td><td>Facilities</td>
+                    <td>OT Hours</td><td class="num">12.00</td><td class="num">18.00</td>
+                    <td>Farah Naveed</td><td>08/07/2026</td>
+                    <td><span class="badge badge-red">REJECTED</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              Any authorized payroll user may propose a correction; only a Master User (or another
+              holder of <code>corrections:approve</code>) may approve or reject it. The Review Queue
+              itself is gated on <code>corrections:approve</code> — a <code>payroll:entry</code>-only
+              user never sees this tab at all, only the Corrections Ledger below.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. CORRECTIONS LEDGER ================= -->
+  <section id="screen-ledger" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg></span> Corrections</a>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="avatar avatar-on-accent">IS</div>
+          <div><div class="who-name">Imran Sheikh</div><div class="who-role">Payroll Staff</div></div>
+        </div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div><div class="title">Corrections</div><div class="subtitle">Review Queue and Corrections Ledger</div></div></header>
+        <main class="main-content">
+          <div class="card">
+            <div class="card-header" style="border-bottom:none; padding-bottom:0;"><div class="card-header-top"><h3 class="card-title">Corrections</h3></div></div>
+            <div class="tab-row">
+              <button class="tab-btn" type="button" onclick="document.querySelector('[data-target=screen-queue]').click()">Review Queue</button>
+              <button class="tab-btn is-active" type="button">Corrections Ledger</button>
+            </div>
+            <div class="filters-row" style="padding:14px 18px 0;">
+              <div class="field"><label>Status</label><select><option>All statuses</option><option>Pending</option><option>Settled</option></select></div>
+              <div class="field"><label>Type</label><select><option>All types</option><option>Payable</option><option>Recovery</option></select></div>
+              <div class="field"><label>Site</label><select><option>All sites</option></select></div>
+              <div class="field"><label>Employee</label><input placeholder="Name or code…" /></div>
+            </div>
+            <div class="table-scroll" style="margin-top:14px;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th><th>Code</th><th>Adjustment Type</th><th>Type</th>
+                    <th style="text-align:right;">Original Amount</th><th style="text-align:right;">Remaining</th>
+                    <th>Source Cycle</th><th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="row-clickable" onclick="document.querySelector('[data-target=screen-detail]').click()">
+                    <td>Sana Tariq</td><td>EMP-0198</td><td>Fine Adjustment</td>
+                    <td><span class="badge badge-blue">Payable</span></td>
+                    <td class="num">PKR 2,500.00</td><td class="num">PKR 2,500.00</td>
+                    <td>May 2026</td><td><span class="badge badge-amber">PENDING</span></td>
+                  </tr>
+                  <tr>
+                    <td>Usman Farooq</td><td>EMP-0176</td><td>Advance Recovery</td>
+                    <td><span class="badge badge-purple">Recovery</span></td>
+                    <td class="num">PKR 6,000.00</td><td class="num">PKR 2,000.00</td>
+                    <td>April 2026</td><td><span class="badge badge-amber">PENDING</span></td>
+                  </tr>
+                  <tr>
+                    <td>Bilal Ahmed</td><td>EMP-0142</td><td>Attendance Correction</td>
+                    <td><span class="badge badge-blue">Payable</span></td>
+                    <td class="num">PKR 4,000.00</td><td class="num">PKR 0.00</td>
+                    <td>March 2026</td><td><span class="badge badge-green">SETTLED</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              Every approved Correction that carries a nonzero balance appears here exactly once —
+              the standalone, queryable financial record this domain exists to keep distinct from an
+              ordinary payroll field. Visible to <code>payroll:entry</code> or
+              <code>corrections:approve</code> alike.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3. REQUEST CORRECTION DIALOG ================= -->
+  <section id="screen-request" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="modal-overlay" style="position:static; background:none;">
+            <div class="modal">
+              <div class="modal-header">
+                <span>Request Correction</span>
+                <span style="cursor:pointer; color:var(--color-text-muted);"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+              </div>
+              <div class="modal-body">
+                <div class="field"><label>Employee</label><select style="width:100%;"><option>Bilal Ahmed (EMP-0142) — May 2026</option></select></div>
+                <div class="row-form">
+                  <div class="field"><label>Field</label><select style="width:100%;"><option>Allowance</option><option>Gross Pay</option><option>Days</option><option>OT Hours</option><option>OT Rate</option><option>Leave Days</option><option>Leave Rate</option><option>Cycle Days</option><option>EOBI Amount</option><option>EOBI Applicable</option><option>Advance Deduction</option><option>Eid Advance Deduction</option><option>Fine</option></select></div>
+                  <div class="field"><label>Adjustment Type</label><select style="width:100%;"><option>Select…</option><option selected>Attendance Correction</option><option>Overtime Correction</option><option>Salary Revision</option><option>Leave Adjustment</option><option>Fine Adjustment</option><option>Advance Recovery</option><option>Manual Adjustment</option></select></div>
+                </div>
+                <div class="field"><label>Proposed Value</label><input style="width:100%;" value="5000" /></div>
+                <div class="field"><label>Reason</label><input style="width:100%;" value="Attendance miscounted for this cycle" /></div>
+                <div class="kv-box">
+                  <div class="kv-row"><span class="k">Current effective value</span><span class="v">3,000.00</span></div>
+                  <div class="kv-row"><span class="k">Proposed value</span><span class="v">5,000.00</span></div>
+                  <div class="kv-row"><span class="k">Net salary</span><span class="v">PKR 37,000.00 → PKR 39,000.00</span></div>
+                  <div class="kv-row total"><span class="k">Expected adjustment</span><span class="v"><span class="badge badge-blue">Payable</span> PKR 2,000.00</span></div>
+                </div>
+                <p class="hint" style="padding:0;">Submitting creates a PENDING request only — it does not change any figure until a reviewer approves it.</p>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary btn-sm">Cancel</button>
+                <button class="btn btn-primary btn-sm">Submit Request</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. PREVIEW EXAMPLES ================= -->
+  <section id="screen-preview" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="card" style="width:520px; max-width:92vw;">
+            <div class="card-header"><h3 class="card-title">Correction Preview — three classification examples</h3></div>
+            <div class="inner-tabs">
+              <button type="button" class="is-active" data-preview="payable">PAYABLE</button>
+              <button type="button" data-preview="recovery">RECOVERY</button>
+              <button type="button" data-preview="zero">ZERO_DELTA</button>
+            </div>
+            <div style="padding:18px;">
+              <div class="inner-example is-active" data-preview-panel="payable">
+                <div class="kv-box">
+                  <div class="kv-row"><span class="k">Current value</span><span class="v">3,000.00</span></div>
+                  <div class="kv-row"><span class="k">Proposed value</span><span class="v">5,000.00</span></div>
+                  <div class="kv-row"><span class="k">Old net salary</span><span class="v">PKR 37,000.00</span></div>
+                  <div class="kv-row"><span class="k">New net salary</span><span class="v">PKR 39,000.00</span></div>
+                  <div class="kv-row total"><span class="k">Difference</span><span class="v"><span class="badge badge-blue">Payable</span> PKR 2,000.00</span></div>
+                </div>
+                <p class="hint" style="padding:10px 0 0;">Corrected net &gt; released net — the company owes the employee more. Chosen at approval as Immediate or Deferred.</p>
+              </div>
+              <div class="inner-example" data-preview-panel="recovery">
+                <div class="kv-box">
+                  <div class="kv-row"><span class="k">Current value</span><span class="v">18.00</span></div>
+                  <div class="kv-row"><span class="k">Proposed value</span><span class="v">12.00</span></div>
+                  <div class="kv-row"><span class="k">Old net salary</span><span class="v">PKR 41,500.00</span></div>
+                  <div class="kv-row"><span class="k">New net salary</span><span class="v">PKR 38,500.00</span></div>
+                  <div class="kv-row total"><span class="k">Difference</span><span class="v"><span class="badge badge-purple">Recovery</span> PKR 3,000.00</span></div>
+                </div>
+                <p class="hint" style="padding:10px 0 0;">Corrected net &lt; released net — an overpayment recovered over one or more future cycles. Never settled immediately.</p>
+              </div>
+              <div class="inner-example" data-preview-panel="zero">
+                <div class="kv-box">
+                  <div class="kv-row"><span class="k">Current value</span><span class="v">30,000.00</span></div>
+                  <div class="kv-row"><span class="k">Proposed value</span><span class="v">30,000.00</span></div>
+                  <div class="kv-row"><span class="k">Old net salary</span><span class="v">PKR 37,000.00</span></div>
+                  <div class="kv-row"><span class="k">New net salary</span><span class="v">PKR 37,000.00</span></div>
+                  <div class="kv-row total"><span class="k">Difference</span><span class="v"><span class="badge badge-gray">—</span> PKR 0.00</span></div>
+                </div>
+                <div class="danger-box" style="margin-top:10px;">ZERO_DELTA — the proposed value equals the current effective value. Rejected outright at approval time; no Correction or BalanceAdjustment is created.</div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. APPROVAL DIALOG ================= -->
+  <section id="screen-approve" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="modal-overlay" style="position:static; background:none;">
+            <div class="modal">
+              <div class="modal-header">
+                <span>Approve Correction Request — Allowance</span>
+                <span style="cursor:pointer; color:var(--color-text-muted);"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+              </div>
+              <div class="modal-body">
+                <div class="kv-box">
+                  <div class="kv-row"><span class="k">Requested by</span><span class="v">Imran Sheikh</span></div>
+                  <div class="kv-row"><span class="k">Reason</span><span class="v">Attendance miscounted for this cycle</span></div>
+                </div>
+                <div>
+                  <p style="margin:0 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--color-text-muted);">Fresh Preview</p>
+                  <div class="kv-box">
+                    <div class="kv-row"><span class="k">Current effective value</span><span class="v">3,000.00</span></div>
+                    <div class="kv-row"><span class="k">Proposed value</span><span class="v">5,000.00</span></div>
+                    <div class="kv-row"><span class="k">Net salary</span><span class="v">PKR 37,000.00 → PKR 39,000.00</span></div>
+                    <div class="kv-row total"><span class="k">Resulting adjustment</span><span class="v"><span class="badge badge-blue">Payable</span> PKR 2,000.00</span></div>
+                  </div>
+                </div>
+                <div class="inner-tabs" style="padding:0;">
+                  <button type="button" class="is-active" data-approve="payable">PAYABLE example</button>
+                  <button type="button" data-approve="recovery">RECOVERY example</button>
+                </div>
+                <div class="inner-example is-active" data-approve-panel="payable">
+                  <div class="field"><label>Payment Timing</label>
+                    <select style="width:100%;">
+                      <option>Deferred — surfaces in the next Draft cycle</option>
+                      <option>Immediate — settles now</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="inner-example" data-approve-panel="recovery">
+                  <div class="field"><label>Recovery Installment Amount (optional — leave blank to recover the full balance next cycle)</label><input style="width:100%;" placeholder="e.g. 2000" /></div>
+                </div>
+                <div class="field"><label>Reverses a Prior Correction (optional)</label>
+                  <select style="width:100%;"><option>Not a reversal</option><option>3,500.00 — approved 02/06/2026</option></select>
+                </div>
+                <div class="warn-box">Approving creates an immutable Correction and BalanceAdjustment — neither can be edited or deleted afterward.</div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary btn-sm">Cancel</button>
+                <button class="btn btn-primary btn-sm">Approve</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 6. REJECTION DIALOG ================= -->
+  <section id="screen-reject" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="modal-overlay" style="position:static; background:none;">
+            <div class="modal" style="width:460px;">
+              <div class="modal-header">
+                <span>Reject Correction Request — OT Hours</span>
+                <span style="cursor:pointer; color:var(--color-text-muted);"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+              </div>
+              <div class="modal-body">
+                <p class="muted" style="margin:0;">
+                  Rejecting this request is final — it creates neither a Correction nor a
+                  BalanceAdjustment, and cannot be reopened. The requester will see this reason on
+                  the request.
+                </p>
+                <div class="field"><label>Rejection Reason</label><input style="width:100%;" value="OT hours already correctly recorded for this employee" /></div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary btn-sm">Cancel</button>
+                <button class="btn btn-secondary btn-sm">Reject Request</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 7. BALANCE ADJUSTMENT DETAIL ================= -->
+  <section id="screen-detail" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg></span> Corrections</a>
+        </nav>
+        <div class="sidebar-footer"><div class="avatar avatar-on-accent">IS</div><div><div class="who-name">Imran Sheikh</div><div class="who-role">Payroll Staff</div></div></div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar"><div><div class="title">Balance Adjustment</div><div class="subtitle">Reservation, materialization, and settlement state</div></div></header>
+        <main class="main-content">
+          <div style="max-width:720px; margin:0 auto; display:flex; flex-direction:column; gap:14px;">
+            <span class="breadcrumb" onclick="document.querySelector('[data-target=screen-ledger]').click()">← Back to Corrections</span>
+
+            <div class="card">
+              <div class="card-header" style="align-items:center;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                  <h3 class="card-title" style="font-size:14px;">Sana Tariq</h3>
+                  <span class="badge badge-blue">Payable</span>
+                  <span class="badge badge-amber">PENDING</span>
+                </div>
+                <button class="btn btn-primary btn-sm">Record Settlement</button>
+              </div>
+              <div style="padding:6px 18px 14px;">
+                <div class="kv-row"><span class="k">Employee Code</span><span class="v">EMP-0198</span></div>
+                <div class="kv-row"><span class="k">Adjustment Type</span><span class="v">Fine Adjustment</span></div>
+                <div class="kv-row"><span class="k">Source Cycle</span><span class="v">May 2026</span></div>
+                <div class="kv-row"><span class="k">Payment Timing</span><span class="v">Deferred</span></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">Outstanding Balance</h3></div>
+              <div style="padding:14px 18px; display:grid; grid-template-columns:1fr 1fr; gap:4px 20px;">
+                <div class="kv-row"><span class="k">Original adjustment</span><span class="v">PKR 2,500.00</span></div>
+                <div class="kv-row"><span class="k">Remaining obligation</span><span class="v">PKR 2,500.00</span></div>
+                <div class="kv-row"><span class="k">Reserved in payroll</span><span class="v">PKR 2,500.00</span></div>
+                <div class="kv-row"><span class="k">Available outside payroll</span><span class="v">PKR 0.00</span></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">Materializations (Draft-Cycle Reservations)</h3></div>
+              <div class="table-scroll">
+                <table class="data-table compact">
+                  <thead><tr><th>Cycle</th><th style="text-align:right;">Amount</th><th>Status</th><th>Created</th></tr></thead>
+                  <tbody>
+                    <tr><td>July 2026</td><td class="num">PKR 2,500.00</td><td><span class="badge badge-amber">ACTIVE</span></td><td>15/07/2026</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">Settlement History</h3></div>
+              <div class="empty-block"><p class="sub" style="margin:0;">No settlement recorded yet</p></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 8. MATERIALIZATION HISTORY ================= -->
+  <section id="screen-materializations" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="card" style="width:640px; max-width:92vw;">
+            <div class="card-header"><h3 class="card-title">Materialization History — Usman Farooq, Advance Recovery</h3></div>
+            <div class="table-scroll">
+              <table class="data-table compact">
+                <thead><tr><th>Cycle</th><th style="text-align:right;">Amount</th><th>Status</th><th>Created</th></tr></thead>
+                <tbody>
+                  <tr><td>April 2026 (source)</td><td class="num">—</td><td class="muted">n/a — Correction approved here</td><td>—</td></tr>
+                  <tr><td>May 2026</td><td class="num">PKR 2,000.00</td><td><span class="badge badge-green">CONSUMED</span></td><td>02/05/2026</td></tr>
+                  <tr><td>June 2026</td><td class="num">PKR 2,000.00</td><td><span class="badge badge-green">CONSUMED</span></td><td>01/06/2026</td></tr>
+                  <tr><td>July 2026</td><td class="num">PKR 2,000.00</td><td><span class="badge badge-amber">ACTIVE</span></td><td>01/07/2026</td></tr>
+                  <tr class="row-disabled"><td>—</td><td class="num">—</td><td><span class="badge badge-gray">CANCELLED</span></td><td>—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              <code>CANCELLED</code> is shown here only as the closed-set enum's third value — no code
+              path creates a <code>CANCELLED</code> row as of Phase 6 Checkpoint 7; this row is a
+              disabled placeholder, not a real example. <code>Payroll Entry</code> and
+              <code>Trigger</code> (manual vs. automatic) are not their own columns in the implemented
+              table — they live only in this row's own <code>balance_adjustment.materialized</code>
+              audit event metadata, not surfaced as separate UI columns.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 9. SETTLEMENT HISTORY ================= -->
+  <section id="screen-settlements" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content" style="display:flex; align-items:center; justify-content:center;">
+          <div class="card" style="width:640px; max-width:92vw;">
+            <div class="card-header"><h3 class="card-title">Settlement History — Usman Farooq, Advance Recovery</h3></div>
+            <div class="table-scroll">
+              <table class="data-table compact">
+                <thead><tr><th>Kind</th><th>Cycle</th><th style="text-align:right;">Amount</th><th>Date</th></tr></thead>
+                <tbody>
+                  <tr><td>Cycle-Scoped Settlement</td><td>May 2026</td><td class="num">PKR 2,000.00</td><td>02/05/2026</td></tr>
+                  <tr><td>Cycle-Scoped Settlement</td><td>June 2026</td><td class="num">PKR 2,000.00</td><td>01/06/2026</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint">
+              A standalone <code>CorrectionPayment</code> row (Kind: "Standalone Payment", Cycle: "—")
+              appears the same way for an <code>IMMEDIATE PAYABLE</code> settled with no open entry to
+              fold into. "Remaining after settlement" is not stored per historical row in the
+              implemented schema — the live remaining balance is the parent Balance Adjustment's own
+              single current figure (shown once on its detail page), not decomposed retroactively
+              across past settlement rows.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 10. PAYROLL ENTRY INTEGRATION ================= -->
+  <section id="screen-payroll-entry" class="screen">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><div class="name">Payroll Management<br />System</div><div class="sub">HR &amp; Payroll</div></div>
+        <nav class="sidebar-nav">
+          <div class="nav-section-label">Payroll</div>
+          <a href="#" class="nav-item is-active"><span>▤</span> Payroll Entry</a>
+        </nav>
+        <div class="sidebar-footer"><div class="avatar avatar-on-accent">IS</div><div><div class="who-name">Imran Sheikh</div><div class="who-role">Payroll Staff</div></div></div>
+      </aside>
+      <div class="main-area">
+        <header class="topbar">
+          <div><div class="title">Payroll Entry</div><div class="subtitle">May 2026 — Archived</div></div>
+          <button class="btn btn-primary btn-sm" onclick="document.querySelector('[data-target=screen-request]').click()">Request Correction</button>
+        </header>
+        <main class="main-content">
+          <div class="danger-box" style="margin-bottom:14px;">
+            This cycle is Archived and permanently read-only — editing, holds, work-line changes, and
+            bulk actions are all disabled. A Correction is the only way to change a released figure
+            from here on.
+          </div>
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">Bilal Ahmed — EMP-0142</h3></div>
+            <div style="padding:14px 18px; display:flex; flex-direction:column; gap:8px;">
+              <div class="kv-row"><span class="k">Released Net Salary</span><span class="v">PKR 37,000.00</span></div>
+              <a href="#" onclick="document.querySelector('[data-target=screen-queue]').click(); return false;" style="font-size:11px; font-weight:600; color:var(--accent-mid);">View correction history for this entry →</a>
+              <a href="#" onclick="document.querySelector('[data-target=screen-ledger]').click(); return false;" style="font-size:11px; font-weight:600; color:var(--accent-mid);">View resulting Balance Adjustment in the Ledger →</a>
+            </div>
+          </div>
+          <p class="hint">
+            "Request Correction" appears only on a Released or Archived entry the current user is
+            authorized to correct (<code>payroll:entry</code>) — a Draft entry is instead simply
+            edited directly, no correction workflow involved.
+          </p>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 11. UI STATES ================= -->
+  <section id="screen-states" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content">
+          <div class="section-grid" style="max-width:920px; margin:0 auto;">
+
+            <div class="card state-card">
+              <h4>Loading</h4>
+              <div class="skeleton" style="width:100%;"></div>
+              <div class="skeleton" style="width:100%;"></div>
+              <div class="skeleton" style="width:70%;"></div>
+            </div>
+
+            <div class="card state-card">
+              <h4>Empty</h4>
+              <div class="empty-block" style="padding:20px 0;">
+                <p class="title">No correction requests match this filter</p>
+                <p class="sub">Adjust the filters, or check back once a request is submitted.</p>
+              </div>
+            </div>
+
+            <div class="card state-card">
+              <h4>Success</h4>
+              <span class="toast">✓ Approved — Payable balance of PKR 2,000.00 recorded</span>
+            </div>
+
+            <div class="card state-card">
+              <h4>Validation Error</h4>
+              <div class="danger-box">Every field is required</div>
+            </div>
+
+            <div class="card state-card">
+              <h4>Conflict (409)</h4>
+              <div class="danger-box">This BalanceAdjustment was changed by a concurrent request. Reload and try again.</div>
+            </div>
+
+            <div class="card state-card">
+              <h4>Permission Denied</h4>
+              <div class="empty-block" style="padding:20px 0;">
+                <p class="title">You do not have access to Corrections</p>
+                <p class="sub">Ask a Master User for the corrections:approve or payroll:entry permission.</p>
+              </div>
+            </div>
+
+            <div class="card state-card">
+              <h4>Reservation Blocked</h4>
+              <div class="warn-box">
+                The full remaining balance is currently reserved in an active Draft-cycle
+                materialization — a standalone payment is unavailable until that reservation is
+                resolved.
+              </div>
+            </div>
+
+            <div class="card state-card">
+              <h4>ZERO_DELTA</h4>
+              <div class="danger-box">
+                This value equals the current effective value — there is nothing to correct.
+              </div>
+            </div>
+
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 12. PERMISSIONS ================= -->
+  <section id="screen-permissions" class="screen">
+    <div class="app-shell">
+      <div class="main-area" style="margin-left:0;">
+        <main class="main-content">
+          <div style="max-width:760px; margin:0 auto;">
+            <div class="inner-tabs" style="padding:0 0 14px;">
+              <button type="button" class="is-active" data-perm="staff">Payroll Staff</button>
+              <button type="button" data-perm="reviewer">Reviewer</button>
+              <button type="button" data-perm="master">Master Admin</button>
+              <button type="button" data-perm="unauthorized">Unauthorized</button>
+            </div>
+
+            <div class="inner-example is-active card" data-perm-panel="staff" style="padding:18px;">
+              <p style="margin:0 0 8px; font-weight:600;">Payroll Staff — <code>payroll:entry</code> only</p>
+              <ul style="margin:0; padding-left:18px; font-size:12px; line-height:1.9;">
+                <li>Sees the Corrections sidebar item and the Corrections Ledger tab</li>
+                <li>Does <strong>not</strong> see the Review Queue tab at all</li>
+                <li>Can submit a Correction Request from a Released/Archived Payroll Entry</li>
+                <li>Cannot approve, reject, or record a settlement</li>
+              </ul>
+            </div>
+
+            <div class="inner-example card" data-perm-panel="reviewer" style="padding:18px;">
+              <p style="margin:0 0 8px; font-weight:600;">Reviewer — <code>corrections:approve</code> only, no <code>payroll:entry</code></p>
+              <ul style="margin:0; padding-left:18px; font-size:12px; line-height:1.9;">
+                <li>Sees the Corrections sidebar item (Phase 6 Checkpoint 6A fix — an OR-permission check, not <code>payroll:entry</code> alone)</li>
+                <li>Lands on the Review Queue tab by default; the Ledger tab is also visible</li>
+                <li>Can approve or reject any request within their assigned sites</li>
+                <li>Cannot open "Request Correction" from a Payroll Entry — that action stays gated on <code>payroll:entry</code></li>
+              </ul>
+            </div>
+
+            <div class="inner-example card" data-perm-panel="master" style="padding:18px;">
+              <p style="margin:0 0 8px; font-weight:600;">Master Admin — every permission, unrestricted site scope</p>
+              <ul style="margin:0; padding-left:18px; font-size:12px; line-height:1.9;">
+                <li>Full access to both tabs, every action, every site</li>
+                <li>May also correct a released entry directly, bypassing the request/approval split entirely, since they are already the approver</li>
+              </ul>
+            </div>
+
+            <div class="inner-example card" data-perm-panel="unauthorized" style="padding:18px;">
+              <p style="margin:0 0 8px; font-weight:600;">Unauthorized — neither permission</p>
+              <div class="empty-block" style="padding:20px 0;">
+                <p class="title">You do not have access to Corrections</p>
+                <p class="sub">Ask a Master User for the corrections:approve or payroll:entry permission.</p>
+              </div>
+              <p style="margin:8px 0 0; font-size:11px; color:var(--color-text-muted);">No sidebar item, no direct-URL access, and every backend route rejects the same session with 403 independently of the UI.</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <section id="screen-notes" class="screen">
+    <div class="notes-screen"><div class="inner">
+    Generated 2026-07-19 for Phase 6 Checkpoint 7A (Prototype Completion &amp; UX Documentation) from
+    <code>frontend/src/routes/corrections-page.tsx</code>,
+    <code>correction-request-detail-page.tsx</code>, <code>balance-adjustment-detail-page.tsx</code>,
+    <code>frontend/src/components/corrections/*</code> (four modals + <code>correction-labels.ts</code>),
+    and <code>backend/src/modules/corrections/</code> — reflecting the fully implemented, closed Phase 6
+    (Checkpoints 1 through 7).
+    <br /><br />
+    <strong>This is a documentation/UX checkpoint only — no production code changed.</strong> Every
+    screen above reproduces an already-implemented view; nothing here was designed fresh. Where the
+    checkpoint brief's own requested table columns diverged from what the live UI actually renders
+    (Materialization History's "Payroll Entry"/"Trigger" columns; Settlement History's "Remaining
+    after settlement" column), the implemented columns were used instead, with a caption explaining
+    where that data actually lives (audit metadata, or the parent record's own live aggregate) —
+    consistent with this checkpoint's own "represent only implemented functionality, do not invent
+    features" instruction.
+    <br /><br />
+    <strong>Real behavior this preview deliberately does not reproduce:</strong> live preview
+    debouncing (400ms, race-safe supersession of stale requests), the reservation-aware
+    <code>availableForStandaloneSettlement</code> ceiling recomputed from two live-fetched figures,
+    real permission-gated data fetching (TanStack Query), and the backend's own fresh transactional
+    validation on every write — this file has no backend, no API, and no persistence, by design.
+    <br /><br />
+    <strong>Status semantics reproduced exactly</strong> (<code>correction-labels.ts</code>):
+    <code>CorrectionRequestStatus</code> PENDING=amber, APPROVED=green, REJECTED=red;
+    <code>BalanceAdjustmentStatus</code> PENDING=amber, SETTLED=green;
+    <code>BalanceAdjustmentType</code> PAYABLE=blue, RECOVERY=purple, NONE=gray (NONE is unreachable
+    through the ordinary approval workflow — <code>ZERO_DELTA</code> rejects it outright before any
+    row is created, shown in the Preview screen above);
+    <code>MaterializationStatus</code> ACTIVE=amber, CONSUMED=green, CANCELLED=gray (CANCELLED has no
+    real example — no code path creates one as of Checkpoint 7, shown here only as a disabled
+    placeholder row for completeness of the closed enum).
+    <br /><br />
+    <strong>Phase 6 Checkpoint 7's own contribution</strong> — the <code>ACTIVE -&gt; CONSUMED</code>
+    materialization transition, wired into <code>releaseProjectUnit</code> — has no dedicated new UI
+    surface of its own; it is visible here exactly as it is in the live app, as a
+    <code>CONSUMED</code> row in Materializations (screen 8) and a corresponding
+    <code>Cycle-Scoped Settlement</code> row in Settlement History (screen 9), once the reserving
+    cycle actually releases.
+  </div></div>
+  </section>
+
+  <style>
+    .row-clickable { cursor: pointer; }
+    .row-clickable:hover { background: var(--color-bg); }
+  </style>
+
+  <script>
+    document.querySelectorAll('.meta-tabs button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.meta-tabs button').forEach(function (b) { b.classList.remove('is-active'); });
+        document.querySelectorAll('.screen').forEach(function (s) { s.classList.remove('is-active'); });
+        btn.classList.add('is-active');
+        document.getElementById(btn.dataset.target).classList.add('is-active');
+      });
+    });
+
+    function wireInnerTabs(buttonSelector, dataAttr, panelAttr) {
+      document.querySelectorAll(buttonSelector).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var group = btn.closest('.card, .main-content');
+          group.querySelectorAll(buttonSelector).forEach(function (b) { b.classList.remove('is-active'); });
+          group.querySelectorAll('[' + panelAttr + ']').forEach(function (p) { p.classList.remove('is-active'); });
+          btn.classList.add('is-active');
+          var target = group.querySelector('[' + panelAttr + '="' + btn.dataset[dataAttr] + '"]');
+          if (target) target.classList.add('is-active');
+        });
+      });
+    }
+    wireInnerTabs('[data-preview]', 'preview', 'data-preview-panel');
+    wireInnerTabs('[data-approve]', 'approve', 'data-approve-panel');
+    wireInnerTabs('[data-perm]', 'perm', 'data-perm-panel');
+
+    // Keyboard: Escape returns every modal-style screen to the Review Queue landing tab.
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        var modalScreens = ['screen-request', 'screen-approve', 'screen-reject'];
+        var active = document.querySelector('.screen.is-active');
+        if (active && modalScreens.includes(active.id)) {
+          document.querySelector('[data-target=screen-queue]').click();
+        }
+      }
+    });
+  </script>
+</body>
+</html>
