@@ -476,12 +476,52 @@ export async function lockPayrollCycleForUpdate(
   return rows[0] ?? null;
 }
 
-/** Every `PayrollEntry` in a cycle, reduced to just its own id + `employeeId` — the
+/** Every `PayrollEntry` in a cycle, reduced to just its own id + `employeeId` + `released` — the
  * `employeeIdToEntryId` shape `materializeScheduledAdvanceDeductions` (Advances) already
  * established as the Materialization Hook convention, built here for the manual/batch route;
- * the archive-and-create-next orchestrator already has its own copy to pass in directly. */
+ * the archive-and-create-next orchestrator already has its own copy to pass in directly (always
+ * `released: false` there — brand-new entries in a cycle just created within the same
+ * transaction). `released` added Phase 6 Checkpoint 7, for the `targetEntryReleased` eligibility
+ * guard (`corrections.materialization.ts`). */
 export async function listEntriesForCycle(cycleId: string, client: PrismaTransactionClient = prisma) {
-  return client.payrollEntry.findMany({ where: { cycleId }, select: { id: true, employeeId: true } });
+  return client.payrollEntry.findMany({ where: { cycleId }, select: { id: true, employeeId: true, released: true } });
+}
+
+// --- Phase 6 Checkpoint 7: release-time materialization consumption ------------------------------
+
+/** Every `ACTIVE` `BalanceAdjustmentMaterialization` reserved against any of the given
+ * `PayrollEntry` ids — the exact set `releaseProjectUnit` needs to consume the moment those
+ * entries flip `released: true`. Ordered by `balanceAdjustmentId` so the caller can acquire
+ * `acquireBalanceAdjustmentLock` in a deterministic order across the whole batch (the same
+ * "cycle, then adjustment" protocol Checkpoint 5 established, extended here to also order
+ * multiple adjustments against each other within one release). */
+export async function listActiveMaterializationsForEntries(
+  entryIds: string[],
+  client: PrismaTransactionClient = prisma,
+) {
+  return client.balanceAdjustmentMaterialization.findMany({
+    where: { payrollEntryId: { in: entryIds }, status: 'ACTIVE' },
+    orderBy: { balanceAdjustmentId: 'asc' },
+  });
+}
+
+/** Flips one `BalanceAdjustmentMaterialization` `ACTIVE -> CONSUMED`, linking the
+ * `BalanceAdjustmentSettlement` row that realized it. Conditional on `status: 'ACTIVE'` — the
+ * same defense-in-depth `updateBalanceAdjustmentAfterSettlement` already applies to its own
+ * parent `BalanceAdjustment` row, guarded here too even though the adjustment's own advisory lock
+ * already makes a concurrent double-consumption structurally impossible in practice. Returns the
+ * affected row count; `0` means this materialization was somehow no longer `ACTIVE` (should never
+ * happen given the lock, surfaced by the caller as a hard failure rather than silently ignored). */
+export async function consumeMaterializationRow(
+  id: string,
+  data: { settlementId: string },
+  client: PrismaTransactionClient = prisma,
+): Promise<number> {
+  const result = await client.balanceAdjustmentMaterialization.updateMany({
+    where: { id, status: 'ACTIVE' },
+    data: { status: 'CONSUMED', settlementId: data.settlementId, consumedAt: new Date() },
+  });
+  return result.count;
 }
 
 /** Every `PENDING` `BalanceAdjustment` eligible in principle for cycle materialization

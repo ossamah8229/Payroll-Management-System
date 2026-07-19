@@ -4,6 +4,8 @@ import { badRequest, conflict, notFound } from '../../common/http-error';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess } from '../employees/employees.service';
+import { consumeMaterializationsForReleasedEntries } from '../corrections/corrections.materialization.service';
+import { lockPayrollCycleForUpdate } from '../corrections/corrections.repository';
 
 /**
  * Salary Release foundation (Phase 4 Checkpoint 2, docs/architecture/database/release.md §12b) —
@@ -11,6 +13,18 @@ import { assertSiteAccess } from '../employees/employees.service';
  * that derives `PayrollEntry.released` from it. `PayrollUnitReadiness` ("Ready for Release") and
  * the Late Entry one-off release path are both explicitly deferred past this checkpoint — see
  * docs/PROJECT_PROGRESS.md's Phase 4 Checkpoint 2 entry for the scope decision.
+ *
+ * **Phase 6 Checkpoint 7 addition:** `releaseProjectUnit` is the exact moment `PayrollEntry.released`
+ * flips true — the schema's own definition of "the triggering PayrollEntry release" a `DEFERRED
+ * PAYABLE`/`RECOVERY` `BalanceAdjustment` settles through
+ * (`docs/architecture/database/balance-adjustments.md §14`). It now also acquires
+ * `lockPayrollCycleForUpdate` (`corrections.repository.ts`) as the *first* lock in its own
+ * transaction — becoming a third participant in Checkpoint 5's documented "cycle, then adjustment"
+ * lock order, alongside Draft-cycle materialization — and, immediately after the `toRelease` sweep,
+ * calls `consumeMaterializationsForReleasedEntries` to flip every `ACTIVE`
+ * `BalanceAdjustmentMaterialization` reserved against those entries to `CONSUMED`, inside this same
+ * transaction. See that function's own doc comment (`corrections.materialization.service.ts`) for
+ * the full settlement mechanics.
  */
 
 export interface UnitReleaseStatus {
@@ -98,6 +112,11 @@ export async function getUnitReleaseStatus(
 export interface ReleaseUnitResult {
   release: { id: string; cycleId: string; unitId: string; releasedAt: string; releasedById: string };
   releasedEntryCount: number;
+  /** Phase 6 Checkpoint 7 — how many `ACTIVE` `BalanceAdjustmentMaterialization` reservations this
+   * release consumed (flipped to `CONSUMED`, realized as a `BalanceAdjustmentSettlement`). `0` on
+   * every release before Checkpoint 5's materialization existed, or when none of the entries this
+   * Unit just released happened to carry an active reservation. */
+  correctionSettlementsConsumed: number;
 }
 
 /**
@@ -143,6 +162,17 @@ export async function releaseProjectUnit(
 
   return prisma.$transaction(
     async (tx) => {
+      // Phase 6 Checkpoint 7 — first in the documented "cycle, then adjustment" lock order
+      // (`corrections.materialization.service.ts`), making this transaction a third participant
+      // alongside Draft-cycle materialization and Finalize Cycle's own implicit row lock. Also
+      // closes a pre-existing, unrelated race for free: re-confirms `status = 'DRAFT'` under lock,
+      // since the earlier pre-transaction check could otherwise be stale against a concurrent
+      // Finalize Cycle call.
+      const lockedCycle = await lockPayrollCycleForUpdate(cycleId, tx);
+      if (!lockedCycle || lockedCycle.status !== 'DRAFT') {
+        throw conflict('This payroll cycle is no longer Draft');
+      }
+
       const release = await tx.payrollUnitRelease.create({
         data: { cycleId, unitId, releasedById: currentUser.id },
       });
@@ -166,6 +196,7 @@ export async function releaseProjectUnit(
       });
 
       let releasedEntryCount = 0;
+      let releasedEntryIds: string[] = [];
 
       if (candidates.length > 0) {
         const otherTouchedUnitIds = new Set<string>();
@@ -213,8 +244,23 @@ export async function releaseProjectUnit(
           }
 
           releasedEntryCount = toRelease.length;
+          releasedEntryIds = toRelease.map((entry) => entry.id);
         }
       }
+
+      // Phase 6 Checkpoint 7 — second in the lock order, per adjustment, acquired inside
+      // `consumeMaterializationsForReleasedEntries` itself. Scoped to exactly the entries that
+      // just flipped `released: true` in this call — an entry already released before this Unit's
+      // sweep ran keeps whatever happened at its own release event, never revisited here.
+      const consumption = await consumeMaterializationsForReleasedEntries(
+        {
+          entryIds: releasedEntryIds,
+          releasingCycleId: cycleId,
+          actorUserId: currentUser.id,
+          requestMeta,
+        },
+        tx,
+      );
 
       return {
         release: {
@@ -225,6 +271,7 @@ export async function releaseProjectUnit(
           releasedById: release.releasedById,
         },
         releasedEntryCount,
+        correctionSettlementsConsumed: consumption.consumedCount,
       };
     },
     { timeout: 30_000 },

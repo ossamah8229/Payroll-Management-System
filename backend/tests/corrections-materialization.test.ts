@@ -211,6 +211,7 @@ describe('Phase 6 Checkpoint 5 — Draft-cycle materialization of outstanding Ba
       targetCycleStatus: 'DRAFT' as const,
       alreadyMaterializedForTargetCycle: false,
       targetEntryExists: true,
+      targetEntryReleased: false,
     };
 
     it('PAYABLE (DEFERRED) outstanding is eligible for the full available amount', () => {
@@ -282,6 +283,11 @@ describe('Phase 6 Checkpoint 5 — Draft-cycle materialization of outstanding Ba
       const decision = determineMaterialization({ ...BASE, activeReservedAmount: '5000.00' });
       expect(decision).toEqual({ eligible: false, reason: 'NO_AVAILABLE_AMOUNT' });
     });
+
+    it('an already-released target PayrollEntry is skipped (TARGET_ENTRY_ALREADY_RELEASED) — Phase 6 Checkpoint 7', () => {
+      const decision = determineMaterialization({ ...BASE, targetEntryReleased: true });
+      expect(decision).toEqual({ eligible: false, reason: 'TARGET_ENTRY_ALREADY_RELEASED' });
+    });
   });
 
   // --- Amount selection (pure) -------------------------------------------------------------------
@@ -295,6 +301,7 @@ describe('Phase 6 Checkpoint 5 — Draft-cycle materialization of outstanding Ba
       targetCycleStatus: 'DRAFT' as const,
       alreadyMaterializedForTargetCycle: false,
       targetEntryExists: true,
+      targetEntryReleased: false,
     };
 
     it('PAYABLE materializes the full available amount, ignoring any installment field', () => {

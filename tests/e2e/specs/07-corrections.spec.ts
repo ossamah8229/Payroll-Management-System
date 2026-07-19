@@ -15,6 +15,14 @@ import { createScopedUser } from '../helpers/create-scoped-user';
  * use Corrections through normal sidebar navigation, not just direct URL access. It runs against
  * its own dedicated user (`createScopedUser`) in a second browser context, independent of the
  * Master-Admin `authenticatedPage` fixture every other scenario in this file uses.
+ *
+ * Scenario 4 (Phase 6 Checkpoint 7) now continues past the reservation/blocked-standalone-payment
+ * assertion to release the new Draft cycle's own Unit — the exact moment
+ * `releaseProjectUnit`'s new release-time consumption realizes the reservation as a genuine
+ * `BalanceAdjustmentSettlement` and flips the `BalanceAdjustmentMaterialization` `ACTIVE ->
+ * CONSUMED`. This is the first point in this suite's history the full PAYABLE lifecycle can reach
+ * `SETTLED` at all — no prior checkpoint's frontend had any way to observe it, since nothing ever
+ * consumed a Draft-cycle reservation before this checkpoint.
  */
 
 interface PayrollCycleRow {
@@ -178,6 +186,31 @@ test.describe('Corrections workflow', () => {
     await expect(
       page.getByText('a standalone payment is unavailable until that reservation is resolved'),
     ).toBeVisible();
+    const balanceAdjustmentUrl = page.url();
+
+    // --- Phase 6 Checkpoint 7: PAYABLE lifecycle to payroll completion ---
+    // Releasing the same site's Unit in this new Draft cycle is the exact moment
+    // `releaseProjectUnit` consumes the ACTIVE reservation above — the loop this checkpoint closes.
+    // No prior checkpoint's frontend could ever reach this state (nothing settled a materialized
+    // obligation), so this is the first time the full lifecycle is provably observable end to end.
+    const cyclesAfterRollover = await apiGet<{ cycles: PayrollCycleRow[] }>(context, '/api/v1/payroll-cycles');
+    const newDraft = cyclesAfterRollover.body.cycles?.find((c) => c.status === 'DRAFT');
+    test.skip(!newDraft, 'No new Draft cycle from rollover — run the full suite, not this file alone.');
+    if (!newDraft) return;
+
+    await page.goto(`/payroll-cycles/${newDraft.id}/release`);
+    await page.locator('#salary-release-site').selectOption({ label: target.siteName });
+    await page.getByRole('button', { name: 'Release', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Release Unit' }).click();
+    await expect(page.getByText('Released', { exact: true })).toBeVisible();
+
+    // Back on the same BalanceAdjustment detail page: SETTLED, no more Record Settlement action,
+    // the reservation realized as a genuine settlement row.
+    await page.goto(balanceAdjustmentUrl);
+    await expect(page.getByText('SETTLED', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Record Settlement' })).toHaveCount(0);
+    await expect(page.getByText('Settlement History')).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Cycle-Scoped Settlement' })).toBeVisible();
   });
 
   test('Scenario 3 — reject a request: no Correction or BalanceAdjustment is created', async ({

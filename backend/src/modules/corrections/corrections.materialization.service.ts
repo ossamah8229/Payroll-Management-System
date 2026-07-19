@@ -12,17 +12,23 @@ import {
   type MaterializationDecision,
   type MaterializationResult,
 } from './corrections.materialization.types';
+import { calculateSettlement } from './corrections.settlement';
+import { SettlementValidationError } from './corrections.settlement.types';
 import {
+  consumeMaterializationRow,
+  createBalanceAdjustmentSettlementRow,
   createMaterializationRow,
   getActiveReservedAmount,
   getBalanceAdjustmentById,
   getCurrentDraftCycle,
   getMaterializationForCycle,
   getPayrollEntryForEmployeeInCycle,
+  listActiveMaterializationsForEntries,
   listEntriesForCycle,
   listMaterializableAdjustments,
   listMaterializationsForEntry,
   lockPayrollCycleForUpdate,
+  updateBalanceAdjustmentAfterSettlement,
   updatePayrollEntryCorrectionAggregates,
   type BalanceAdjustmentDetail,
 } from './corrections.repository';
@@ -47,7 +53,18 @@ import {
  * **Materialization never creates a `BalanceAdjustmentSettlement`, never touches
  * `BalanceAdjustment.remainingAmount`/`.status`.** It only ever inserts an `ACTIVE`
  * `BalanceAdjustmentMaterialization` row and recomputes the target `PayrollEntry`'s own aggregate
- * columns. The `ACTIVE -> CONSUMED` transition remains a later checkpoint's own event.
+ * columns.
+ *
+ * **Phase 6 Checkpoint 7 — the `ACTIVE -> CONSUMED` transition, below
+ * (`consumeMaterializationsForReleasedEntries`).** Deferred by every checkpoint through 6A as "a
+ * later checkpoint's own event" — this is that checkpoint. It does not live here as a manual,
+ * HTTP-triggered action alongside `materializeBalanceAdjustment` above; it is called from exactly
+ * one place, `payroll-release.service.ts`'s `releaseProjectUnit`, at the exact moment a
+ * `PayrollEntry` actually releases — because that is the moment the reserved
+ * `correctionBalancePayable`/`.correctionBalanceRecovery` amount is genuinely paid or deducted
+ * through that entry's own net salary, not before. Reuses the *same* `lockPayrollCycleForUpdate` +
+ * `acquireBalanceAdjustmentLock` lock order this file already established — `releaseProjectUnit`
+ * now acquires the cycle lock too, making release a third participant in that protocol.
  */
 
 async function recomputeAndPersistEntryAggregates(payrollEntryId: string, tx: PrismaTransactionClient): Promise<void> {
@@ -79,7 +96,7 @@ async function materializeOneAdjustmentLocked(
   balanceAdjustmentId: string,
   targetCycleId: string,
   targetCycleStatus: string,
-  employeeIdToEntryId: Map<string, string>,
+  employeeIdToEntry: Map<string, { id: string; released: boolean }>,
   tx: PrismaTransactionClient,
   actorUserId: string | null,
   requestMeta: RequestMeta,
@@ -97,7 +114,8 @@ async function materializeOneAdjustmentLocked(
     getActiveReservedAmount(balanceAdjustmentId, tx),
   ]);
 
-  const targetEntryId = employeeIdToEntryId.get(adjustment.employeeId);
+  const targetEntry = employeeIdToEntry.get(adjustment.employeeId);
+  const targetEntryId = targetEntry?.id;
 
   const decision: MaterializationDecision = determineMaterialization({
     adjustmentType: adjustment.type,
@@ -109,7 +127,8 @@ async function materializeOneAdjustmentLocked(
     employeeDeparted: adjustment.employee.dateOfLeaving !== null,
     targetCycleStatus: targetCycleStatus as 'DRAFT' | 'RELEASED' | 'ARCHIVED',
     alreadyMaterializedForTargetCycle: existingMaterialization !== null,
-    targetEntryExists: targetEntryId !== undefined,
+    targetEntryExists: targetEntry !== undefined,
+    targetEntryReleased: targetEntry?.released ?? false,
   });
 
   if (!decision.eligible) {
@@ -191,6 +210,7 @@ export async function previewMaterialization(
     targetCycleStatus: targetCycle.status as 'DRAFT' | 'RELEASED' | 'ARCHIVED',
     alreadyMaterializedForTargetCycle: existingMaterialization !== null,
     targetEntryExists: targetEntry !== null,
+    targetEntryReleased: targetEntry?.released ?? false,
   });
 }
 
@@ -221,13 +241,13 @@ export async function materializeBalanceAdjustment(
     }
 
     const entries = await listEntriesForCycle(resolvedTargetCycleId, tx);
-    const employeeIdToEntryId = new Map(entries.map((e) => [e.employeeId, e.id]));
+    const employeeIdToEntry = new Map(entries.map((e) => [e.employeeId, { id: e.id, released: e.released }]));
 
     return materializeOneAdjustmentLocked(
       balanceAdjustmentId,
       lockedCycle.id,
       lockedCycle.status,
-      employeeIdToEntryId,
+      employeeIdToEntry,
       tx,
       currentUser.id,
       requestMeta,
@@ -251,8 +271,8 @@ export async function materializeEligibleAdjustmentsForCycle(
   }
 
   const entries = await listEntriesForCycle(resolvedTargetCycleId);
-  const employeeIdToEntryId = new Map(entries.map((e) => [e.employeeId, e.id]));
-  const employeeIds = [...employeeIdToEntryId.keys()];
+  const employeeIdToEntry = new Map(entries.map((e) => [e.employeeId, { id: e.id, released: e.released }]));
+  const employeeIds = [...employeeIdToEntry.keys()];
 
   const candidates = await listMaterializableAdjustments(employeeIds);
   for (const candidate of candidates) {
@@ -270,7 +290,7 @@ export async function materializeEligibleAdjustmentsForCycle(
         candidate.id,
         lockedCycle.id,
         lockedCycle.status,
-        employeeIdToEntryId,
+        employeeIdToEntry,
         tx,
         currentUser.id,
         requestMeta,
@@ -305,6 +325,12 @@ export interface MaterializeCorrectionObligationsParams {
  * brand-new Draft just created within this same transaction, so `lockPayrollCycleForUpdate` here is
  * a harmless no-op (nothing else can possibly be contending for a row not yet visible outside this
  * transaction) — called anyway, for one uniform code path with the manual routes above.
+ *
+ * `params.employeeIdToEntryId` stays the plain `Map<string, string>` shape shared with Advances'
+ * own `materializeScheduledAdvanceDeductions` (the same map, passed to both hooks unchanged) —
+ * every entry it names was just bootstrapped in this exact transaction, so `released` is always
+ * `false`; converted to the richer `{ id, released }` shape `materializeOneAdjustmentLocked` now
+ * expects, below.
  */
 export async function materializeCorrectionObligationsForNewCycle(
   params: MaterializeCorrectionObligationsParams,
@@ -315,7 +341,10 @@ export async function materializeCorrectionObligationsForNewCycle(
     return 0;
   }
 
-  const employeeIds = [...params.employeeIdToEntryId.keys()];
+  const employeeIdToEntry = new Map(
+    [...params.employeeIdToEntryId.entries()].map(([employeeId, entryId]) => [employeeId, { id: entryId, released: false }]),
+  );
+  const employeeIds = [...employeeIdToEntry.keys()];
   const candidates = await listMaterializableAdjustments(employeeIds, tx);
 
   let materializedCount = 0;
@@ -324,7 +353,7 @@ export async function materializeCorrectionObligationsForNewCycle(
       candidate.id,
       lockedCycle.id,
       lockedCycle.status,
-      params.employeeIdToEntryId,
+      employeeIdToEntry,
       tx,
       params.actorUserId,
       params.requestMeta,
@@ -336,6 +365,150 @@ export async function materializeCorrectionObligationsForNewCycle(
   }
 
   return materializedCount;
+}
+
+// --- Phase 6 Checkpoint 7: release-time ACTIVE -> CONSUMED --------------------------------------
+
+export interface ReleaseTimeConsumptionResult {
+  consumedCount: number;
+  settledCount: number;
+}
+
+/**
+ * Consumes every `ACTIVE` `BalanceAdjustmentMaterialization` reserved against the given
+ * `PayrollEntry` ids, the moment those entries actually release. Called by exactly one place —
+ * `payroll-release.service.ts`'s `releaseProjectUnit`, from inside its own already-open
+ * transaction, immediately after the `toRelease` sweep flips those entries' `released` flag —
+ * never opens its own transaction, never acquires the cycle lock itself (the caller already holds
+ * it, first in the documented lock order, before calling this).
+ *
+ * For each materialization found (already ordered by `balanceAdjustmentId` —
+ * `listActiveMaterializationsForEntries`):
+ * 1. `acquireBalanceAdjustmentLock` — same lock every other write path for this `BalanceAdjustment`
+ *    already takes, second in the lock order, visited in a deterministic (sorted) sequence so two
+ *    concurrent releases naming overlapping adjustments can never deadlock against each other.
+ * 2. Re-read the `BalanceAdjustment` fresh, post-lock.
+ * 3. Reuse `calculateSettlement` unchanged — the exact settlement math every other settlement path
+ *    already uses — passing the *other* active reservations (this materialization's own amount
+ *    excluded) as the ceiling, since this settlement is what fulfills this reservation, not a
+ *    second, independent claim against it.
+ * 4. Create the `BalanceAdjustmentSettlement` row (`cycleId` = the cycle that just released,
+ *    `amountApplied` = the materialization's own reserved amount, never re-derived), update the
+ *    `BalanceAdjustment` (`remainingAmount`/`.status`/`.settledInCycleId`, the same conditional,
+ *    optimistic-concurrency `updateBalanceAdjustmentAfterSettlement` every settlement path uses),
+ *    flip the materialization `ACTIVE -> CONSUMED` with its new `settlementId`/`consumedAt`, and
+ *    write one `balance_adjustment.settled` audit event (`triggeredBy: 'RELEASE'` distinguishes it
+ *    from a manually-recorded settlement in the same audit trail).
+ *
+ * Everything above happens inside the caller's transaction — if `releaseProjectUnit` fails or
+ * rolls back for any reason, every settlement, consumption, balance change, and audit row created
+ * here rolls back with it, by construction.
+ */
+export async function consumeMaterializationsForReleasedEntries(
+  params: {
+    entryIds: string[];
+    releasingCycleId: string;
+    actorUserId: string;
+    requestMeta: RequestMeta;
+  },
+  tx: PrismaTransactionClient,
+): Promise<ReleaseTimeConsumptionResult> {
+  if (params.entryIds.length === 0) {
+    return { consumedCount: 0, settledCount: 0 };
+  }
+
+  const materializations = await listActiveMaterializationsForEntries(params.entryIds, tx);
+
+  let consumedCount = 0;
+  let settledCount = 0;
+
+  for (const materialization of materializations) {
+    await acquireBalanceAdjustmentLock(materialization.balanceAdjustmentId, tx);
+
+    const adjustment = await getBalanceAdjustmentById(materialization.balanceAdjustmentId, tx);
+    if (!adjustment) {
+      // Structurally unreachable (the materialization's own FK RESTRICTs this), kept as a defensive
+      // guard rather than a silent `!` assertion, matching this module's own established style.
+      continue;
+    }
+
+    const activeReservedAmount = await getActiveReservedAmount(materialization.balanceAdjustmentId, tx);
+    const otherActiveReservedAmount = new Decimal(activeReservedAmount).minus(materialization.amount.toString()).toFixed(2);
+
+    const result = calculateSettlement({
+      remainingAmount: adjustment.remainingAmount.toString(),
+      status: adjustment.status,
+      proposedAmount: materialization.amount.toString(),
+      activeReservedAmount: otherActiveReservedAmount,
+    });
+
+    const settlement = await createBalanceAdjustmentSettlementRow(
+      {
+        balanceAdjustmentId: materialization.balanceAdjustmentId,
+        cycleId: params.releasingCycleId,
+        amountApplied: result.acceptedAmount,
+      },
+      tx,
+    );
+
+    const affected = await updateBalanceAdjustmentAfterSettlement(
+      materialization.balanceAdjustmentId,
+      {
+        expectedRemainingAmount: adjustment.remainingAmount.toString(),
+        newRemainingAmount: result.newRemainingAmount,
+        newStatus: result.newStatus,
+        settledInCycleId: result.fullySettled ? params.releasingCycleId : null,
+      },
+      tx,
+    );
+    if (affected === 0) {
+      throw new SettlementValidationError({
+        code: 'STALE_CONCURRENT_WRITE',
+        message: `BalanceAdjustment "${materialization.balanceAdjustmentId}" changed concurrently during release-time settlement. Reload and try again.`,
+      });
+    }
+
+    const consumedRows = await consumeMaterializationRow(materialization.id, { settlementId: settlement.id }, tx);
+    if (consumedRows === 0) {
+      throw new SettlementValidationError({
+        code: 'STALE_CONCURRENT_WRITE',
+        message: `BalanceAdjustmentMaterialization "${materialization.id}" was no longer ACTIVE at release-time consumption.`,
+      });
+    }
+
+    await recordAuditLog(
+      {
+        actorUserId: params.actorUserId,
+        action: 'balance_adjustment.settled',
+        entityType: 'BalanceAdjustment',
+        entityId: materialization.balanceAdjustmentId,
+        metadata: {
+          correctionId: adjustment.correctionId,
+          adjustmentType: adjustment.type,
+          settlementAmount: result.acceptedAmount,
+          previousRemainingAmount: adjustment.remainingAmount.toString(),
+          newRemainingAmount: result.newRemainingAmount,
+          previousStatus: adjustment.status,
+          newStatus: result.newStatus,
+          settlementId: settlement.id,
+          materializationId: materialization.id,
+          payrollEntryId: materialization.payrollEntryId,
+          releasingCycleId: params.releasingCycleId,
+          triggeredBy: 'RELEASE',
+        },
+        ipAddress: params.requestMeta.ipAddress,
+        userAgent: params.requestMeta.userAgent,
+      },
+      tx,
+    );
+
+    consumedCount += 1;
+    if (result.fullySettled) {
+      settledCount += 1;
+    }
+  }
+
+  return { consumedCount, settledCount };
 }
 
 // --- Reads -----------------------------------------------------------------------------------

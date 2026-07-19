@@ -20,7 +20,8 @@ export type MaterializationSkipReason =
   | 'TARGET_NOT_DRAFT'
   | 'DEPARTED_EMPLOYEE_RECOVERY'
   | 'EMPLOYEE_NOT_ELIGIBLE'
-  | 'UNSUPPORTED_ADJUSTMENT_TYPE';
+  | 'UNSUPPORTED_ADJUSTMENT_TYPE'
+  | 'TARGET_ENTRY_ALREADY_RELEASED';
 
 /** Orchestration-level failure — no specific `BalanceAdjustment` to evaluate against yet. */
 export type MaterializationOrchestrationErrorCode = 'NO_CURRENT_DRAFT' | 'TARGET_NOT_DRAFT' | 'BALANCE_ADJUSTMENT_NOT_FOUND';
@@ -62,6 +63,15 @@ export interface MaterializationEligibilityInput {
   alreadyMaterializedForTargetCycle: boolean;
   /** Whether the employee has a `PayrollEntry` in the target cycle at all. */
   targetEntryExists: boolean;
+  /** Phase 6 Checkpoint 7 — whether that `PayrollEntry` has already released
+   * (`PayrollEntry.released`). A materialization writes into
+   * `PayrollEntry.correctionBalancePayable`/`.correctionBalanceRecovery`, both live inputs to that
+   * entry's own `calcNet` — writing into an already-released entry would both silently mutate a
+   * supposedly-immutable released record (Principle 9) and create a reservation no future release
+   * event for that entry could ever consume (release-time consumption, below, only fires for
+   * entries transitioning `released: false -> true` in that exact call). Irrelevant/`false` when
+   * `targetEntryExists` is `false`. */
+  targetEntryReleased: boolean;
 }
 
 export type MaterializationDecision =

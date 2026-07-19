@@ -15,9 +15,11 @@ import type { MaterializationDecision, MaterializationEligibilityInput } from '.
  *    `SETTLED` at creation) and `IMMEDIATE PAYABLE` has its own standalone `CorrectionPayment`
  *    path (Checkpoint 4), never a cycle materialization concept.
  * 5. The employee must have a `PayrollEntry` in the target cycle at all.
- * 6. `RECOVERY` against a departed employee is permanently pending — no materialization.
- * 7. `remainingAmount` must be positive.
- * 8. `availableToMaterialize` (`remainingAmount - activeReservedAmount`, the reservation ledger —
+ * 6. That `PayrollEntry` must not already be released (Checkpoint 7 — see `.types.ts`'s own
+ *    `targetEntryReleased` comment for why).
+ * 7. `RECOVERY` against a departed employee is permanently pending — no materialization.
+ * 8. `remainingAmount` must be positive.
+ * 9. `availableToMaterialize` (`remainingAmount - activeReservedAmount`, the reservation ledger —
  *    see this module's sibling `.types.ts` file) must be positive.
  */
 export function determineMaterialization(input: MaterializationEligibilityInput): MaterializationDecision {
@@ -38,6 +40,9 @@ export function determineMaterialization(input: MaterializationEligibilityInput)
   }
   if (!input.targetEntryExists) {
     return { eligible: false, reason: 'EMPLOYEE_NOT_ELIGIBLE' };
+  }
+  if (input.targetEntryReleased) {
+    return { eligible: false, reason: 'TARGET_ENTRY_ALREADY_RELEASED' };
   }
   if (input.adjustmentType === 'RECOVERY' && input.employeeDeparted) {
     return { eligible: false, reason: 'DEPARTED_EMPLOYEE_RECOVERY' };
