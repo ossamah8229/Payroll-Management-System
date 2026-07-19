@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { formatMoney, PERMISSIONS, type SessionUser } from '@payroll/shared';
+import { formatMoney, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import { canReviewCorrectionRequests } from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -39,7 +40,7 @@ export function CorrectionRequestDetailPage({ user }: { user: SessionUser }) {
   const request = useCorrectionRequest(id);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
-  const canApprove = user.permissions.includes(PERMISSIONS.CORRECTIONS_APPROVE);
+  const canApprove = canReviewCorrectionRequests(user);
 
   return (
     <AppShell user={user} title="Correction Request" subtitle="Request detail, review, and outcome">

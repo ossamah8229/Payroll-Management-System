@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/cn';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { navSections } from './nav-config';
+import { isNavItemVisible, navSections } from './nav-config';
 import type { SessionUser } from '@payroll/shared';
 
 /**
@@ -31,9 +31,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
 
       <nav className="flex-1 overflow-y-auto py-3">
         {navSections.map((section) => {
-          const visibleItems = section.items.filter(
-            (item) => !item.requiredPermission || user.permissions.includes(item.requiredPermission),
-          );
+          const visibleItems = section.items.filter((item) => isNavItemVisible(item, user));
 
           if (visibleItems.length === 0) return null;
 

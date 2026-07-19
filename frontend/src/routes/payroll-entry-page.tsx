@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
+import { canRequestCorrection } from '@/lib/permissions';
 import { useBanks } from '@/hooks/use-banks';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
@@ -228,7 +229,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export Excel
                   </Button>
-                  {isCorrectable && user.permissions.includes(PERMISSIONS.PAYROLL_ENTRY) && (
+                  {isCorrectable && canRequestCorrection(user) && (
                     <Button variant="secondary" onClick={() => setRequestCorrectionOpen(true)}>
                       <FileEdit className="h-3.5 w-3.5" aria-hidden />
                       Request Correction

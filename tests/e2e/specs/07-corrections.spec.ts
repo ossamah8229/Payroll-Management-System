@@ -1,5 +1,6 @@
-import { test, expect } from '../fixtures/auth';
-import { apiGet } from '../helpers/api';
+import { test, expect, login } from '../fixtures/auth';
+import { apiGet, apiPost } from '../helpers/api';
+import { createScopedUser } from '../helpers/create-scoped-user';
 
 /**
  * Phase 6 Checkpoint 6 — the Corrections frontend workflow, driven through the real UI against the
@@ -8,6 +9,12 @@ import { apiGet } from '../helpers/api';
  * earlier specs' created data when possible," `tests/e2e/README.md`) rather than re-bootstrapping a
  * second `PayrollCycle` from scratch, which only ever succeeds once system-wide. Skips gracefully
  * if run in isolation against a database with no such cycle yet.
+ *
+ * Scenario 6 (Phase 6 Checkpoint 6A) adds the one real-browser gap that checkpoint closed: a
+ * reviewer holding only `corrections:approve` (no `payroll:entry`) must be able to discover and
+ * use Corrections through normal sidebar navigation, not just direct URL access. It runs against
+ * its own dedicated user (`createScopedUser`) in a second browser context, independent of the
+ * Master-Admin `authenticatedPage` fixture every other scenario in this file uses.
  */
 
 interface PayrollCycleRow {
@@ -37,7 +44,7 @@ async function findCorrectableEntry(context: import('@playwright/test').BrowserC
   const entry = entries.body.entries?.[0];
   if (!entry) return null;
 
-  return { cycleId: archived.id, entryId: entry.id, siteName: entry.site.name };
+  return { cycleId: archived.id, entryId: entry.id, siteId: entry.siteId, siteName: entry.site.name };
 }
 
 test.describe('Corrections workflow', () => {
@@ -198,7 +205,10 @@ test.describe('Corrections workflow', () => {
     await rejectModal.locator('#reject-reason').fill('E2E: rejecting for test coverage');
     await rejectModal.getByRole('button', { name: 'Reject Request' }).click();
 
-    await expect(page.getByText('REJECTED')).toBeVisible();
+    // Exact match — a case-insensitive substring match on 'REJECTED' also matches the transient
+    // "Correction request rejected" success toast, a strict-mode ambiguity independent of this
+    // checkpoint's own permission-navigation fix.
+    await expect(page.getByText('REJECTED', { exact: true })).toBeVisible();
     await expect(page.getByText('Resulting Correction')).toHaveCount(0);
   });
 
@@ -221,5 +231,86 @@ test.describe('Corrections workflow', () => {
     await expect(page.getByText('Outstanding Balance')).toBeVisible();
     await page.getByRole('button', { name: 'Back to Corrections' }).click();
     await expect(page.getByRole('heading', { name: 'Corrections' })).toBeVisible();
+  });
+
+  test('Scenario 6 — reviewer-only navigation: corrections:approve without payroll:entry (Phase 6 Checkpoint 6A)', async ({
+    browser,
+    authenticatedPage: adminPage,
+  }) => {
+    const adminContext = adminPage.context();
+    const target = await findCorrectableEntry(adminContext);
+    test.skip(!target, 'No Archived cycle with an entry exists yet — run the full suite, not this file alone.');
+    if (!target) return;
+
+    // A fresh PENDING correction request for the reviewer to act on — created here (as Master
+    // Admin, who holds payroll:entry) rather than reused from an earlier scenario, since every
+    // earlier scenario in this file already resolves its own request to APPROVED or REJECTED.
+    const adjustmentTypes = await apiGet<{ adjustmentTypes: { id: string }[] }>(adminContext, '/api/v1/adjustment-types');
+    const adjustmentTypeId = adjustmentTypes.body.adjustmentTypes[0]!.id;
+    await apiPost(adminContext, `/api/v1/payroll-entries/${target.entryId}/correction-requests`, {
+      field: 'ALLOWANCE',
+      proposedNewValue: '750',
+      adjustmentTypeId,
+      reason: 'E2E: Checkpoint 6A reviewer-only navigation coverage',
+    });
+
+    // A user holding only corrections:approve — no payroll:entry — has no seeded role
+    // (MASTER_ADMIN/PAYROLL_STAFF/FINANCE) that matches, so this is created directly against the
+    // database rather than through POST /api/v1/users (see create-scoped-user.ts's own comment).
+    // Login itself still goes through the real form below, same as every other spec. Site-scoped
+    // like every non-Master-Admin role (`corrections.service.ts`'s `listCorrectionRequestsForUser`
+    // filters by `currentUser.siteIds` for anyone but Master Admin) — assigned to the target
+    // entry's own site so the Review Queue it should be authorized to see isn't empty simply for
+    // lack of a site assignment, the same requirement a Payroll Staff/Finance test user has.
+    const email = `e2e-corrections-reviewer-${Date.now()}@example.test`;
+    const password = 'ReviewerOnlyPassword1!';
+    await createScopedUser({
+      email,
+      password,
+      roleCode: 'E2E_CORRECTIONS_REVIEWER',
+      permissionKeys: ['corrections:approve'],
+      siteIds: [target.siteId],
+      name: 'E2E Corrections Reviewer',
+    });
+
+    const reviewerContext = await browser.newContext();
+    const reviewerPage = await reviewerContext.newPage();
+    await login(reviewerPage, email, password);
+
+    // 1-2. The Corrections sidebar item is visible and links to /corrections.
+    const correctionsLink = reviewerPage.getByRole('link', { name: 'Corrections' });
+    await expect(correctionsLink).toBeVisible();
+    await correctionsLink.click();
+    await expect(reviewerPage).toHaveURL('/corrections');
+
+    // 3. The Corrections route is not rejected by the frontend guard.
+    await expect(reviewerPage.getByRole('heading', { name: 'Corrections' })).toBeVisible();
+    await expect(reviewerPage.getByText('You do not have access to Corrections')).toHaveCount(0);
+
+    // 4. The Review Queue tab is visible and is the landing tab, showing the request just created.
+    await expect(reviewerPage.getByRole('button', { name: 'Review Queue' })).toBeVisible();
+    const queueRow = reviewerPage.locator('table tbody tr').first();
+    await expect(queueRow).toBeVisible({ timeout: 5000 });
+
+    // 5-6. The reviewer can open the pending request and approve/reject actions are available.
+    await queueRow.click();
+    await expect(reviewerPage.getByRole('button', { name: 'Approve' })).toBeVisible();
+    await expect(reviewerPage.getByRole('button', { name: 'Reject' })).toBeVisible();
+
+    // 8. Request Correction is absent from this reviewer-only session anywhere in Corrections.
+    await expect(reviewerPage.getByRole('button', { name: 'Request Correction' })).toHaveCount(0);
+
+    // 9. Payroll Entry editing remains unavailable — no sidebar link, and the route itself
+    // reflects the same access-denied state Payroll Entry's own page renders for an unauthorized
+    // permission set (Payroll Entry has no dedicated guard message; absence of the grid + presence
+    // of the sidebar gate together are this app's existing unauthorized experience).
+    await expect(reviewerPage.getByRole('link', { name: 'Payroll Entry' })).toHaveCount(0);
+
+    // 10. Direct navigation behaves the same as sidebar navigation.
+    await reviewerPage.goto('/corrections');
+    await expect(reviewerPage.getByRole('heading', { name: 'Corrections' })).toBeVisible();
+    await expect(reviewerPage.getByRole('button', { name: 'Review Queue' })).toBeVisible();
+
+    await reviewerContext.close();
   });
 });

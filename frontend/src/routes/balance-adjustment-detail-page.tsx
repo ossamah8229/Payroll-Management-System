@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { Decimal } from 'decimal.js';
-import { formatMoney, PERMISSIONS, type SessionUser } from '@payroll/shared';
+import { formatMoney, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import { canReviewCorrectionRequests } from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -48,7 +49,7 @@ export function BalanceAdjustmentDetailPage({ user }: { user: SessionUser }) {
   const materializations = useBalanceAdjustmentMaterializations(id);
   const settlements = useBalanceAdjustmentSettlements(id);
   const [recordingSettlement, setRecordingSettlement] = useState(false);
-  const canRecordSettlement = user.permissions.includes(PERMISSIONS.CORRECTIONS_APPROVE);
+  const canRecordSettlement = canReviewCorrectionRequests(user);
 
   const activeReservedAmount = useMemo(() => {
     const active = (materializations.data ?? []).filter((m) => m.status === 'ACTIVE');

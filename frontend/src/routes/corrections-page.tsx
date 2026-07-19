@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatMoney, PERMISSIONS, type SessionUser } from '@payroll/shared';
+import { formatMoney, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import { canAccessCorrections, canReviewCorrectionRequests, defaultCorrectionsTab } from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -324,9 +325,9 @@ function CorrectionsLedgerTab() {
  * Entry view instead, per the brief's own information architecture.
  */
 export function CorrectionsPage({ user }: { user: SessionUser }) {
-  const canApprove = user.permissions.includes(PERMISSIONS.CORRECTIONS_APPROVE);
-  const canView = canApprove || user.permissions.includes(PERMISSIONS.PAYROLL_ENTRY);
-  const [tab, setTab] = useState<'queue' | 'ledger'>(canApprove ? 'queue' : 'ledger');
+  const canApprove = canReviewCorrectionRequests(user);
+  const canView = canAccessCorrections(user);
+  const [tab, setTab] = useState<'queue' | 'ledger'>(defaultCorrectionsTab(user) ?? 'ledger');
 
   if (!canView) {
     return (

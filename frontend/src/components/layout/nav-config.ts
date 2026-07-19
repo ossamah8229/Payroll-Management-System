@@ -12,19 +12,32 @@ import {
   Users,
   Wallet,
 } from 'lucide-react';
-import type { PermissionKey } from '@payroll/shared';
+import type { PermissionKey, SessionUser } from '@payroll/shared';
+import { hasAnyPermission } from '@/lib/permissions';
 
 export interface NavItem {
   label: string;
   to: string;
   icon: LucideIcon;
-  /** Hidden from the sidebar (and, separately, still enforced server-side) unless present. */
-  requiredPermission?: PermissionKey;
+  /** Hidden from the sidebar (and, separately, still enforced server-side) unless the user holds
+   * this permission — or, given an array, at least one of them (OR semantics; e.g. Corrections:
+   * payroll:entry OR corrections:approve, Phase 6 Checkpoint 6A). */
+  requiredPermission?: PermissionKey | PermissionKey[];
 }
 
 export interface NavSection {
   label: string;
   items: NavItem[];
+}
+
+/** True if `item` should be shown to `user` — no `requiredPermission` means always visible;
+ * otherwise the user must hold it, or (given an array) at least one of them (OR semantics). Purely
+ * a UX convenience, per `NavItem.requiredPermission`'s own doc comment above — never the actual
+ * access control, which every route enforces independently server-side. */
+export function isNavItemVisible(item: NavItem, user: SessionUser): boolean {
+  if (!item.requiredPermission) return true;
+  const required = Array.isArray(item.requiredPermission) ? item.requiredPermission : [item.requiredPermission];
+  return hasAnyPermission(user, required);
 }
 
 /**
@@ -75,13 +88,16 @@ export const navSections: NavSection[] = [
         label: 'Corrections',
         to: '/corrections',
         icon: ScrollText,
-        // Phase 6 Checkpoint 6 — gated on payroll:entry (Payroll Staff's own request/preview/view
-        // permission, per the backend's own ENTRY_VIEW_PERMISSIONS/BALANCE_VIEW_PERMISSIONS
-        // convention). corrections:approve is Master Admin only today, and Master Admin already
-        // holds every permission including payroll:entry, so this single key covers every current
-        // holder of either; the page itself still branches its own in-page UI (Review Queue tab
+        // Phase 6 Checkpoint 6A — corrected from a single payroll:entry check (Checkpoint 6's
+        // original gating). That gate assumed corrections:approve's only holder was Master Admin,
+        // who already holds payroll:entry too — true today, but it left a reviewer holding
+        // corrections:approve without payroll:entry unable to discover Corrections through the
+        // sidebar at all, even though the Review Queue itself (and the backend route behind it)
+        // is authorized for exactly that permission. Matches the backend's own
+        // ENTRY_VIEW_PERMISSIONS/BALANCE_VIEW_PERMISSIONS convention: payroll:entry OR
+        // corrections:approve. The page itself still branches its own in-page UI (Review Queue tab
         // hidden without corrections:approve) rather than relying on nav visibility alone.
-        requiredPermission: 'payroll:entry',
+        requiredPermission: ['payroll:entry', 'corrections:approve'],
       },
     ],
   },
