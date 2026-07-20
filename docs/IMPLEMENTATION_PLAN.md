@@ -2012,7 +2012,14 @@ trusted first, and now are.
 
 ### Phase 6 — Corrections & Balance Adjustments (highest-risk logic)
 
-**Started 2026-07-18.** The Architecture Review and its Product Decision Resolution (both
+**Started 2026-07-18, COMPLETE AND CLOSED 2026-07-19** (all checkpoints through 7A, including the
+Phase 6 Corrections living HTML prototype — see `docs/PROJECT_PROGRESS.md` §1/§2 and
+`docs/SESSION_HANDOFF.md` §0 for the full dated record; `README.md` and `docs/release/` for the
+Version 1.0 / RC1 status this phase's closure feeds into). The remainder of this section is left as
+originally written (a snapshot of the design at Checkpoint 1) rather than rewritten checkpoint by
+checkpoint — it was not contradicted by later checkpoints, only built out further.
+
+The Architecture Review and its Product Decision Resolution (both
 review-only, no repository changes) refined the design below without contradicting it. **Checkpoint
 1 (Corrections Domain & Schema Foundation) is complete** — see `docs/PROJECT_PROGRESS.md` §1's
 "Phase 6 started" entry: the five-table schema (`CorrectionRequest`, `Correction`,

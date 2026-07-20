@@ -3,25 +3,22 @@
 A commercial web application for managing employee payroll: salaries, deductions, tax
 calculations, payslips, and related HR/finance workflows.
 
-> **Status (2026-07-18):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full database-backed
-> evidence**. **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances, Payslips) is
-> code-complete and committed — all six checkpoints implemented and tested — but
-> is not yet marked fully closed**: one condition, a real Render/Linux-container deployment smoke
-> test, was genuinely attempted and could not be completed in the sandboxed development environment
-> used so far (no Docker/Podman/Colima, no Render API access). **Phase 5 (Cycle Finalization,
-> Archiving, and Backups) is COMPLETE AND CLOSED**: all five checkpoints — Checkpoint 0
-> (`StorageProvider` foundation), Checkpoint 1 (Finalize Cycle), Checkpoint 2 (Backup Packages
-> reusable domain/generator), Checkpoint 3 (cycle archiving, automatic backup generation, and
-> new-cycle rollover), and Checkpoint 4 (Historical Payroll Cycle Selector) — are implemented,
-> tested, and committed, and a final real-browser (Playwright/Chromium) verification pass closed
-> the one remaining gap with zero defects found. **All four Post-Phase-5 Stabilization checkpoints
-> are now also complete**: authentication/audit-log hardening and UI consistency fixes (Checkpoints
-> 1–2), session revocation on password change and Backup Package crash recovery (Checkpoint 3), and
-> route-level frontend code splitting plus a permanent Playwright E2E harness (Checkpoint 4,
-> `tests/e2e/`) — see `docs/architecture/testing.md` for the current testing story. Phase 6 requires
-> its own separate, explicit authorization before any work begins. See "Current Status" below,
-> `docs/PROJECT_PROGRESS.md` (§1 for full history, §2 for the phase-by-phase status table), and
-> `docs/SESSION_HANDOFF.md` §0 for the current authoritative summary.
+> **Status (2026-07-20, `v1.0.0-rc1`):** Phases 1, 2, 2.5, 3, and 3.5 are all **closed, with full
+> database-backed evidence**. **Phase 4 (Release, Bank Sheets, Cash Receiving Sheets, Advances,
+> Payslips) is code-complete and committed — all six checkpoints implemented and tested.** **Phase 5
+> (Cycle Finalization, Archiving, and Backups) is COMPLETE AND CLOSED.** **Phase 6 (Corrections &
+> Balance Adjustments) is COMPLETE AND CLOSED**, 2026-07-19 — the full Correction Request workflow
+> (propose/decide separation), Review Queue, positive/negative balance settlement
+> (`BalanceAdjustmentSettlement`), materialization into a Draft cycle, and consumption on release, all
+> implemented, tested, and verified with a real-browser (Playwright) pass across six corrections
+> scenarios; a living HTML prototype was added the same session (Checkpoint 7A). **This repository is
+> now at Release Candidate 1 (`v1.0.0-rc1`) — Version 1.0 covers Phases 0–6; Phases 7–9 (Statements/
+> Reports/Dashboard, Audit Log viewer UI, Render production deployment) are explicitly out of this
+> release's scope.** See `docs/release/` for the full RC1 record: scope freeze, configuration
+> reference, security review, backup/restore validation, data-volume sanity results, known issues,
+> and the UAT package. See "Current Status" below, `docs/PROJECT_PROGRESS.md` (§1 for full history,
+> §2 for the phase-by-phase status table), and `docs/SESSION_HANDOFF.md` §0 for the prior
+> authoritative development-history summary.
 
 ## Getting Started
 
@@ -132,13 +129,11 @@ npx playwright install chromium && npm run test:e2e   # provisions/tears down it
 - **Current git checkpoint:** see `docs/PROJECT_PROGRESS.md`'s header for the exact latest commit
   hash and full lineage — kept there rather than duplicated here to avoid drift between two copies
   of the same fact.
-- Static, framework-free visual previews of the current UI are available under `docs/prototypes/`
-  (`phase1-preview.html`; `phase2-project-sites-preview.html`;
-  `phase2-employee-registry-preview.html`; `phase2-settings-users-preview.html`) — open any of them
-  directly in a browser. **Reviewed 2026-07-05 against the Phase 3 architecture freeze: none depict
-  Payroll Entry, Release, or Corrections screens, so none were factually contradicted; left
-  unchanged** — the full UI/UX prototype pass for those screens is deferred until the corresponding
-  functional phases are built.
+- Static, framework-free visual previews of the current UI are available under `docs/prototypes/` —
+  one HTML file per phase (Phase 1 through Phase 6, including Payroll Entry, Salary Release, Bank
+  Sheets, Cash Receiving, Payslips, Advances, the Payroll Lifecycle, and Corrections) — open any of
+  them directly in a browser. Kept current through Phase 6's close-out (`phase6-corrections-preview.html`,
+  added Checkpoint 7A).
 
 ## Project Structure
 
@@ -193,14 +188,12 @@ npx playwright install chromium && npm run test:e2e   # provisions/tears down it
 
 ## Next Steps
 
-Phase 4 is code-complete and committed but not yet fully closed — the one outstanding condition is a
-real Render (or genuine Linux container) deployment smoke test, which this development environment
-has not yet had the access to perform. **Phase 5 (Cycle Finalization, Archiving, and Backups) is
-COMPLETE AND CLOSED**, and **all four Post-Phase-5 Stabilization checkpoints are now also complete**
-— session revocation (AUD-009), Backup Package crash recovery (AUD-011), route-level frontend code
-splitting (AUD-012), and a permanent Playwright E2E harness (AUD-013) close out the last of the
-audit-approved findings. **Phase 6 requires its own separate, explicit authorization before any work
-begins**, per this project's standing per-checkpoint/per-phase practice — there is no further
-stabilization work queued. See `docs/SESSION_HANDOFF.md` §0 for the current authoritative summary
-(latest commits, test counts, essential commands) and `docs/PROJECT_PROGRESS.md` §1 for the full
-dated history.
+Phases 0–6 are implemented, tested, and closed. This repository is at Release Candidate 1
+(`v1.0.0-rc1`) — see `docs/release/RC1_VALIDATION_REPORT.md` for the full clean-environment
+validation, verification-suite results, security review, backup/restore validation, and known
+issues, and `docs/release/UAT_PACKAGE_v1.0.md` for the User Acceptance Testing package. Phases 7–9
+(Statements/Reports/Dashboard, Audit Log viewer UI, Render production deployment, and a further
+dedicated hardening pass) are explicitly out of Version 1.0's scope — see
+`docs/release/RELEASE_SCOPE_v1.0.md`. See `docs/SESSION_HANDOFF.md` §0 for the prior development
+history's authoritative summary (latest commits, test counts, essential commands) and
+`docs/PROJECT_PROGRESS.md` §1 for the full dated history.
