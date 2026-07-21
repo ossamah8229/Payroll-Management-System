@@ -29,42 +29,50 @@ export function PayrollEntryTotalsRow({
     return MONEY_COLUMNS.has(key) ? formatMoney(value) : formatNumber(value);
   }
 
+  // Every cell is `whitespace-nowrap` only — never `truncate` — so a summed total (which can be
+  // legitimately wider than the widest individual row, since column widths are measured from
+  // per-row values, not the sum) is never silently clipped with an ellipsis. This prevents the
+  // original wrapping bug (a cell's text breaking onto a second line, e.g. "1,502 employees") the
+  // same way `truncate` would, without `truncate`'s downside of hiding real digits of a financial
+  // total. A too-wide total instead overflows visibly into the row's own horizontal scroll
+  // container, matching `ReadOnlyCell`'s own `overflow-visible whitespace-nowrap` option and this
+  // codebase's established rule that business-critical/financial values are never truncated.
   return (
     <div
       role="row"
       style={{ gridTemplateColumns }}
-      className="grid items-center overflow-hidden whitespace-nowrap border-t-2 border-border-strong bg-surface text-xs font-semibold"
+      className="grid items-center whitespace-nowrap border-t-2 border-border-strong bg-surface text-xs font-semibold"
     >
-      <div role="cell" className="truncate px-1.5 py-2 text-center text-text-muted">
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-center text-text-muted">
         Σ
       </div>
-      <div role="cell" className="truncate px-1.5 py-2 text-text-muted" />
-      <div role="cell" className="truncate px-1.5 py-2 text-text">
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-text-muted" />
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-text">
         {store.rowCount} {store.rowCount === 1 ? 'employee' : 'employees'}
       </div>
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('grossPay')}</div>
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('days')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('otHours')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('otRate')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('cycleDays')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('leaveDays')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('leaveRate')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('allowance')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('eobiAmount')}</div>
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-danger">{cell('advanceDeduction')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-danger">{cell('eidAdvanceDeduction')}</div>
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-danger">{cell('fine')}</div>
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2" />
-      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-success">
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('grossPay')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('days')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('otHours')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('otRate')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('cycleDays')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('leaveDays')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('leaveRate')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('allowance')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums">{cell('eobiAmount')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums text-danger">{cell('advanceDeduction')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums text-danger">{cell('eidAdvanceDeduction')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums text-danger">{cell('fine')}</div>
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2" />
+      <div role="cell" className="overflow-visible px-1.5 py-2 text-right tabular-nums text-success">
         {cell('netSalary')}
       </div>
     </div>
