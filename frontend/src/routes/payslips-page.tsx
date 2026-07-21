@@ -174,11 +174,11 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Payslips" subtitle="Generate and download employee Payslips">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2.5">
-            <CardTitle>Payslips</CardTitle>
-            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2.5">
+              <CardTitle>Payslips</CardTitle>
+              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
+            </div>
             {hasAnyCycle && (
               <PayrollCycleSelectField
                 id="payslips-cycle"
@@ -226,6 +226,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
               )}
               {!batchGenerating ? (
                 <Button
+                  size="sm"
                   onClick={handleBatchDownload}
                   disabled={selectedCount === 0 || overBatchLimit}
                 >
@@ -238,7 +239,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                     <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
                     Generating {selectedCount} Payslip{selectedCount === 1 ? '' : 's'}…
                   </span>
-                  <Button variant="secondary" onClick={handleCancelBatch}>
+                  <Button size="sm" variant="secondary" onClick={handleCancelBatch}>
                     <X className="h-3.5 w-3.5" aria-hidden />
                     Cancel
                   </Button>

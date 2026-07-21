@@ -90,11 +90,11 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Cash Receiving Sheet" subtitle="Generate and export released Cash payroll">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2.5">
-            <CardTitle>Cash Receiving Sheet</CardTitle>
-            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2.5">
+              <CardTitle>Cash Receiving Sheet</CardTitle>
+              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
+            </div>
             {hasAnyCycle && (
               <PayrollCycleSelectField
                 id="cash-receiving-cycle"

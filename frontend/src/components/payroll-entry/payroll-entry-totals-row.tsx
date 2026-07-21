@@ -33,38 +33,38 @@ export function PayrollEntryTotalsRow({
     <div
       role="row"
       style={{ gridTemplateColumns }}
-      className="grid items-center border-t-2 border-border-strong bg-surface text-xs font-semibold"
+      className="grid items-center overflow-hidden whitespace-nowrap border-t-2 border-border-strong bg-surface text-xs font-semibold"
     >
-      <div role="cell" className="px-1.5 py-2 text-center text-text-muted">
+      <div role="cell" className="truncate px-1.5 py-2 text-center text-text-muted">
         Σ
       </div>
-      <div role="cell" className="px-1.5 py-2 text-text-muted" />
-      <div role="cell" className="px-1.5 py-2 text-text">
+      <div role="cell" className="truncate px-1.5 py-2 text-text-muted" />
+      <div role="cell" className="truncate px-1.5 py-2 text-text">
         {store.rowCount} {store.rowCount === 1 ? 'employee' : 'employees'}
       </div>
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('grossPay')}</div>
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('days')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('otHours')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('otRate')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('cycleDays')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('leaveDays')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('leaveRate')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('allowance')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums">{cell('eobiAmount')}</div>
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums text-danger">{cell('advanceDeduction')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums text-danger">{cell('eidAdvanceDeduction')}</div>
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums text-danger">{cell('fine')}</div>
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2" />
-      <div role="cell" className="px-1.5 py-2 text-right tabular-nums text-success">
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('grossPay')}</div>
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('days')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('otHours')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('otRate')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('cycleDays')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('leaveDays')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('leaveRate')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('allowance')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums">{cell('eobiAmount')}</div>
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-danger">{cell('advanceDeduction')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-danger">{cell('eidAdvanceDeduction')}</div>
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-danger">{cell('fine')}</div>
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2" />
+      <div role="cell" className="truncate px-1.5 py-2 text-right tabular-nums text-success">
         {cell('netSalary')}
       </div>
     </div>

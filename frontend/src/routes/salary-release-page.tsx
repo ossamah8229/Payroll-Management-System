@@ -296,48 +296,50 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Salary Release" subtitle="Release payroll by Project Unit">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2.5">
               <CardTitle>Salary Release</CardTitle>
               {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
             </div>
-            {cycle && canFinalize && cycle.status === 'DRAFT' && (
-              <Button size="sm" variant="secondary" onClick={() => setConfirmingFinalize(true)}>
-                Finalize Cycle
-              </Button>
-            )}
-            {cycle && canFinalize && cycle.status === 'RELEASED' && (
-              <Button size="sm" variant="secondary" onClick={() => setConfirmingRollover(true)}>
-                Start New Payroll Cycle
-              </Button>
-            )}
-          </div>
-          {hasAnyCycle && (
-            <div className="flex flex-wrap items-end gap-3">
+            {hasAnyCycle && (
               <PayrollCycleSelectField
                 id="salary-release-cycle"
                 cycles={cycles}
                 selectedCycleId={cycleId}
                 onSelect={selectCycle}
               />
-              {(sites.data ?? []).length > 0 && (
-                <FilterField id="salary-release-site" label="Site">
-                  <select
-                    id="salary-release-site"
-                    className={selectClassName}
-                    value={siteId ?? ''}
-                    onChange={(e) => setSiteId(e.target.value)}
-                  >
-                    {(sites.data ?? []).map((site) => (
-                      <option key={site.id} value={site.id}>
-                        {site.name}
-                      </option>
-                    ))}
-                  </select>
-                </FilterField>
-              )}
-            </div>
-          )}
+            )}
+            {hasAnyCycle && (sites.data ?? []).length > 0 && (
+              <FilterField id="salary-release-site" label="Site">
+                <select
+                  id="salary-release-site"
+                  className={selectClassName}
+                  value={siteId ?? ''}
+                  onChange={(e) => setSiteId(e.target.value)}
+                >
+                  {(sites.data ?? []).map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                    </option>
+                  ))}
+                </select>
+              </FilterField>
+            )}
+            {cycle && canFinalize && (cycle.status === 'DRAFT' || cycle.status === 'RELEASED') && (
+              <div className="ml-auto flex gap-2">
+                {cycle.status === 'DRAFT' && (
+                  <Button size="sm" variant="secondary" onClick={() => setConfirmingFinalize(true)}>
+                    Finalize Cycle
+                  </Button>
+                )}
+                {cycle.status === 'RELEASED' && (
+                  <Button size="sm" variant="secondary" onClick={() => setConfirmingRollover(true)}>
+                    Start New Payroll Cycle
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {cycleError && (

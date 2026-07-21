@@ -207,57 +207,57 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Payroll Entry" subtitle="This cycle's editable payroll figures">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2.5">
-            <CardTitle>Payroll Entry</CardTitle>
-            {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
-          </div>
-          {hasAnyCycle && (
-            <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2.5">
+              <CardTitle>Payroll Entry</CardTitle>
+              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
+            </div>
+            {hasAnyCycle && (
               <PayrollCycleSelectField
                 id="payroll-entry-cycle"
                 cycles={cycles}
                 selectedCycleId={cycleId}
                 onSelect={selectCycle}
               />
-              {cycleId && (
-                <div className="ml-auto flex gap-2">
-                  <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
-                    <Download className="h-3.5 w-3.5" aria-hidden />
-                    Export CSV
+            )}
+            {hasAnyCycle && cycleId && (
+              <div className="ml-auto flex gap-2">
+                <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  Export CSV
+                </Button>
+                <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'xlsx', selectedSiteIds)}>
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  Export Excel
+                </Button>
+                {isCorrectable && canRequestCorrection(user) && (
+                  <Button variant="secondary" onClick={() => setRequestCorrectionOpen(true)}>
+                    <FileEdit className="h-3.5 w-3.5" aria-hidden />
+                    Request Correction
                   </Button>
-                  <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'xlsx', selectedSiteIds)}>
-                    <Download className="h-3.5 w-3.5" aria-hidden />
-                    Export Excel
-                  </Button>
-                  {isCorrectable && canRequestCorrection(user) && (
-                    <Button variant="secondary" onClick={() => setRequestCorrectionOpen(true)}>
-                      <FileEdit className="h-3.5 w-3.5" aria-hidden />
-                      Request Correction
+                )}
+                {!isArchived && (
+                  <>
+                    <Button
+                      variant="secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={importPayrollEntries.isPending}
+                    >
+                      <Upload className="h-3.5 w-3.5" aria-hidden />
+                      {importPayrollEntries.isPending ? 'Importing…' : 'Import'}
                     </Button>
-                  )}
-                  {!isArchived && (
-                    <>
-                      <Button
-                        variant="secondary"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={importPayrollEntries.isPending}
-                      >
-                        <Upload className="h-3.5 w-3.5" aria-hidden />
-                        {importPayrollEntries.isPending ? 'Importing…' : 'Import'}
-                      </Button>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".csv,.xlsx"
-                        className="hidden"
-                        onChange={handleImportFileSelected}
-                      />
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".csv,.xlsx"
+                      className="hidden"
+                      onChange={handleImportFileSelected}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {cycleError && <GridErrorState message={cycleError.message} />}

@@ -622,7 +622,7 @@ function ThemeTab({ user }: { user: SessionUser }) {
           type="color"
           value={selected}
           onChange={(e) => applyColor(e.target.value)}
-          className="h-8 w-12 cursor-pointer rounded border border-border bg-transparent"
+          className="h-8 w-8 cursor-pointer appearance-none overflow-hidden rounded-full border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded-full [&::-moz-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch-wrapper]:rounded-full [&::-webkit-color-swatch-wrapper]:p-0"
         />
         <span className="text-xs text-text-muted">{selected}</span>
       </div>
