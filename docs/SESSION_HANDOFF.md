@@ -166,6 +166,17 @@ up-to-11 `payslips.test.ts` failures (PDF generation returning 500/400) remain o
 confirmed environment-load-sensitive rather than a stable failure — still worth a dedicated
 investigation pass, independent of any phase's own close-out.
 
+**Render production deployment update (added after this section's 2026-07-19 authoritative
+snapshot):** the backend is now live on Render, and the Puppeteer/Chrome runtime-provisioning
+defect that blocked production Payslip PDF generation (`Could not find Chrome (ver.
+150.0.7871.24)`) is resolved — full incident record, root cause, and the verified dashboard
+Build/Start commands are in `docs/RENDER_PRODUCTION_DEPLOYMENT.md`. Production login and one
+individual Payslip PDF (open + download) were manually verified against the live deployment; this
+closes the production PDF deployment blocker specifically. **Batch Payslip generation and broader
+production verification (font rendering, memory stability under a real batch, graceful shutdown)
+remain separate, not-yet-performed work — do not treat them as verified on the strength of the one
+individual PDF above.**
+
 **Essential commands** (see `docs/architecture/testing.md` for the full breakdown):
 
 ```bash

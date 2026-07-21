@@ -5519,14 +5519,16 @@ test-count/database figures are stale — use the baseline above instead.
    to the corrections domain regardless. Not investigated or repaired by any checkpoint to date
    (explicitly out of scope) — worth a dedicated pass before Phase 6's own final close-out, now with
    "reduce environment-load flakiness" as the framing rather than "fix a deterministic failure."
-2. **Close the one outstanding Phase 4 condition: a real Render (or genuine Linux container)
-   deployment smoke test.** Genuinely attempted and genuinely blocked in this sandboxed macOS
-   session (no Docker/Podman/Colima, no Render API token, no git remote) — see §4's "Render/
-   Linux-container deployment verification" entry and Checkpoint 6.3's own note in §1. Once real
-   deploy access exists, confirm: production build, Chromium launch under `--no-sandbox`/
-   `--disable-setuid-sandbox`, PDF generation (individual and a representative batch), font
-   rendering (Times New Roman or its documented fallback), memory stability under a real batch,
-   graceful shutdown. Only after this passes should Phase 4 be marked fully closed in §2.
+2. **Render production deployment is now live, and the Puppeteer/Chrome runtime-provisioning
+   defect that blocked Payslip PDF generation there is resolved** — see
+   `docs/RENDER_PRODUCTION_DEPLOYMENT.md` for the full incident record (root cause, troubleshooting
+   timeline, final verified dashboard Build/Start commands). Production login and one individual
+   Payslip PDF (open + download) were manually verified against the live deployment. **This closes
+   the production PDF deployment blocker specifically** — it does **not** by itself close this
+   Phase 4 condition in full: batch Payslip generation, font rendering under the real Linux
+   container, memory stability under a real batch, and graceful shutdown against the live deploy
+   remain separate, not-yet-performed verification work. Do not mark Phase 4 fully closed in §2
+   until those remaining checks are also done.
 3. **Phase 5 (Cycle Finalization, Archiving, and Backups) is COMPLETE AND CLOSED, 2026-07-16** — the
    architecture review, Checkpoint 0 (`StorageProvider` foundation, committed `d87b9b0`),
    Checkpoint 1 (Finalize Cycle, committed `cad93bc`), and Checkpoint 2 (Backup Packages reusable
