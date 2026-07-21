@@ -47,6 +47,7 @@
     "esbuild@0.28.1": true,
     "esbuild@0.21.5": true,
     "prisma@5.22.0": true,
-    "fsevents@2.3.3": true
+    "fsevents@2.3.3": true,
+    "puppeteer@25.3.0": true
   }
 }

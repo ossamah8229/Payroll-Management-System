@@ -18,7 +18,27 @@ services:
     runtime: node
     plan: starter
     rootDir: backend
-    buildCommand: npm install --workspaces=false && npm run build --prefix .. --workspace shared && npm install && npm run build
+    # `rootDir: backend` means this whole command starts with `backend/` as cwd, so it opens with
+    # `cd ..` to reach the real workspace root before doing anything workspace-wide — see
+    # docs/architecture/deployment.md's "Backend Build Command (Render)" section for why each step
+    # here is necessary (this replaced an earlier version that looked reasonable but silently
+    # failed from a clean checkout in three separate ways, none of them Puppeteer-related):
+    #   1. `npm ci` (not `npm install --workspaces=false`) — a real workspace-aware install run
+    #      from the actual repo root. `--workspaces=false` cannot resolve `@payroll/shared`, an
+    #      unpublished workspace-only package with no existence on the npm registry.
+    #   2. `npm run build:shared` — `@payroll/shared`'s compiled `dist/` must exist before `tsc`
+    #      compiles `backend`, which imports it by package name through the workspace symlink.
+    #   3. `npm run prisma:generate` — `@prisma/client`'s own postinstall (which already ran as
+    #      part of step 1) cannot reliably locate `backend/prisma/schema.prisma` from its hoisted
+    #      install location and silently generates a placeholder client with no real models. This
+    #      step regenerates the real one, explicitly, from the correct schema.
+    #   4. `npm run build:backend` — compiles the backend, now that both of its build-time
+    #      dependencies (steps 2 and 3) are actually correct.
+    #   5. `cd backend && npx puppeteer browsers install chrome` — the Puppeteer fix itself,
+    #      unchanged: provisions the pinned Chrome build into the project-local cache directory
+    #      `backend/.puppeteerrc.cjs` points at. Needs `backend/` as its own cwd (not just as an
+    #      ancestor reached via `--prefix`) for that file to be discovered — see its own comment.
+    buildCommand: cd .. && npm ci && npm run build:shared && npm run prisma:generate && npm run build:backend && cd backend && npx puppeteer browsers install chrome
     startCommand: npm run start
     healthCheckPath: /health
     envVars:

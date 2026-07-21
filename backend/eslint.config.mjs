@@ -2,6 +2,7 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettierConfig from 'eslint-config-prettier';
+import globals from 'globals';
 
 export default tseslint.config(
   js.configs.recommended,
@@ -23,8 +24,29 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+  {
+    // Puppeteer's own config-file convention (`lilconfig`'s `searchPlaces`) requires plain
+    // CommonJS, not ESM — this can't be a `.ts`/`.mjs` file.
+    files: ['.puppeteerrc.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: globals.node,
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
   prettierConfig,
   {
-    ignores: ['dist/', 'node_modules/', 'coverage/', 'jest.config.js', 'eslint.config.mjs'],
+    ignores: [
+      'dist/',
+      'node_modules/',
+      'coverage/',
+      'jest.config.js',
+      'eslint.config.mjs',
+      // Puppeteer's downloaded Chrome binary (backend/.puppeteerrc.cjs's project-local
+      // cacheDirectory) — not source code, ships its own bundled/minified browser JS resources.
+      '.cache/',
+    ],
   },
 );

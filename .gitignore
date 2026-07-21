@@ -26,6 +26,12 @@ npm-debug.log*
 
 # Local storage (StorageProvider local filesystem implementation)
 backend/storage/
+
+# Puppeteer's downloaded Chrome/chrome-headless-shell binaries, installed here (instead of the
+# default ~/.cache/puppeteer) by `npx puppeteer browsers install chrome` per backend/.puppeteerrc.cjs
+# — see that file's comment. Never committed — every environment (local dev, CI, each Render
+# build) downloads its own binary.
+backend/.cache/
 # Test-only storage root (backend/tests/env.setup.ts's STORAGE_ROOT fallback) — created the moment
 # any test file imports src/app.ts, since Phase 5 Checkpoint 2 wires the StorageProvider singleton
 # up as a real dependency of backup-packages.routes.ts. backup-packages.test.ts removes its own
