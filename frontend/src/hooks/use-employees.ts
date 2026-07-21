@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreateEmployeeInput, MarkEmployeeLeftInput, UpdateEmployeeInput } from '@payroll/shared';
-import { apiRequest, ApiError, readCookie } from '@/lib/api-client';
+import { apiRequest, ApiError, API_BASE_URL, getCsrfToken } from '@/lib/api-client';
 import type { ProjectSite } from '@/hooks/use-project-sites';
 import type { ProjectUnit } from '@/hooks/use-project-units';
 import type { Bank } from '@/hooks/use-banks';
@@ -118,7 +118,7 @@ export function useReactivateEmployee() {
 /** Triggers a browser download of the export file — bypasses apiRequest since the response is a
  * file, not JSON, and reads the CSRF cookie the same way apiRequest does for consistency. */
 export async function downloadEmployeeExport(format: 'csv' | 'xlsx'): Promise<void> {
-  const response = await fetch(`/api/v1/employees/export?format=${format}`, { credentials: 'include' });
+  const response = await fetch(`${API_BASE_URL}/api/v1/employees/export?format=${format}`, { credentials: 'include' });
   if (!response.ok) {
     throw new ApiError(response.status, 'EXPORT_FAILED', 'Failed to export employees');
   }
@@ -143,9 +143,9 @@ export function useImportEmployees() {
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
-      const csrfToken = readCookie('csrf_token');
+      const csrfToken = getCsrfToken();
 
-      const response = await fetch('/api/v1/employees/import', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/employees/import`, {
         method: 'POST',
         credentials: 'include',
         headers: csrfToken ? { 'x-csrf-token': csrfToken } : undefined,

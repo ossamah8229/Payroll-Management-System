@@ -12,6 +12,11 @@ import { useLogin, useSession } from '@/hooks/use-session';
 import { ApiError } from '@/lib/api-client';
 
 export function LoginPage() {
+  // `isSessionLoading` also gates the submit button below: this query's GET /api/v1/auth/me is
+  // what captures the CSRF token into api-client.ts's module memory (frontend and backend are
+  // separate origins in production, so it can't be read via document.cookie — see
+  // docs/architecture/authentication.md). Submitting before it settles would POST /auth/login
+  // with no token to attach and fail CSRF validation.
   const { data: sessionUser, isLoading: isSessionLoading } = useSession();
   const login = useLogin();
 
@@ -73,7 +78,7 @@ export function LoginPage() {
               )}
             </div>
 
-            <Button type="submit" className="mt-1.5 w-full" disabled={login.isPending}>
+            <Button type="submit" className="mt-1.5 w-full" disabled={login.isPending || isSessionLoading}>
               {login.isPending ? 'Signing in…' : 'Sign in'}
             </Button>
           </form>

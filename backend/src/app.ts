@@ -60,6 +60,12 @@ export function createApp(): Express {
     cors({
       origin: env.CORS_ORIGIN,
       credentials: true,
+      // Frontend and backend are separate origins in production (docs/architecture/deployment.md);
+      // without this, the browser's Fetch API silently hides the `x-csrf-token` response header
+      // from JS on a cross-origin response even though CORS otherwise allows reading the body
+      // (only a small built-in set of headers is exposed by default) — see
+      // common/middleware/csrf.ts and frontend/src/lib/api-client.ts.
+      exposedHeaders: ['x-csrf-token'],
     }),
   );
   app.use(
@@ -89,7 +95,14 @@ export function createApp(): Express {
       cookie: {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'lax',
+        // 'none' in production: frontend and backend are cross-site *.onrender.com subdomains
+        // (docs/release/KNOWN_ISSUES_v1.0.md KI-2), and a 'lax' cookie is never attached to a
+        // cross-site fetch/XHR request — only 'none' (paired with 'secure', already true above)
+        // actually rides along on the API calls the SPA makes. 'lax' in development, where the
+        // Vite proxy (vite.config.ts) makes the two look same-origin and 'none' would require
+        // 'secure' over plain HTTP, which browsers refuse. Same reasoning as the CSRF cookie
+        // (common/middleware/csrf.ts).
+        sameSite: isProduction ? 'none' : 'lax',
         maxAge: 1000 * 60 * 60 * 8, // 8 hours idle timeout, rolling
       },
     }),

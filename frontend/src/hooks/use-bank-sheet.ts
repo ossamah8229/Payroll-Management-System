@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { apiRequest, ApiError } from '@/lib/api-client';
+import { apiRequest, ApiError, API_BASE_URL } from '@/lib/api-client';
 import { formatCyclePeriodSlug, type PayrollCycle } from '@/hooks/use-payroll-cycles';
 
 /** The sentinel bank-filter value for employees with no bank account on file (`bankId IS NULL`)
@@ -75,9 +75,10 @@ export async function downloadBankSheetExport(
   const params = new URLSearchParams({ bankId: bankFilter, format });
   if (siteIds?.length) params.set('siteIds', siteIds.join(','));
 
-  const response = await fetch(`/api/v1/payroll-cycles/${cycle.id}/bank-sheet/export?${params.toString()}`, {
-    credentials: 'include',
-  });
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/payroll-cycles/${cycle.id}/bank-sheet/export?${params.toString()}`,
+    { credentials: 'include' },
+  );
   if (!response.ok) {
     throw new ApiError(response.status, 'EXPORT_FAILED', 'Failed to export the Bank Sheet');
   }

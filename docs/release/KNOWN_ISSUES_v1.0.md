@@ -72,6 +72,17 @@ during RC1 preparation (2026-07-19/20), not assumed.
   production go-live (this closes the same access gap already on record for Phase 4's Render smoke
   test condition). If confirmed broken, fix via a shared custom domain, a fronting reverse proxy, or
   `SameSite=None; Secure` cookies for the cross-site case.
+- **Status: RESOLVED (2026-07-21).** Confirmed broken exactly as analytically predicted (real
+  symptom: login failed with "Missing or invalid CSRF token" — the CSRF cookie was never attached
+  to the cross-site `POST /auth/login` request in the first place). Fixed via the flagged
+  `SameSite=None; Secure` option for both the session and CSRF cookies in production
+  (`backend/src/app.ts`, `backend/src/common/middleware/csrf.ts`); development keeps `SameSite=Lax`
+  behind the Vite proxy. This also required a companion fix to how the frontend learns the CSRF
+  token in the first place — it can never read the `csrf_token` cookie via `document.cookie` since
+  it belongs to the backend's own origin, so the backend now also echoes the token in an
+  `x-csrf-token` response header (CORS-exposed via `exposedHeaders`), which the frontend captures
+  into module memory (`frontend/src/lib/api-client.ts`) instead. See
+  `docs/architecture/authentication.md` for the full current design.
 
 ---
 

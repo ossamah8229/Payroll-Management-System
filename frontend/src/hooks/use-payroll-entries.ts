@@ -7,7 +7,7 @@ import type {
   UpdatePayrollEntryInput,
   UpdateWorkLineInput,
 } from '@payroll/shared';
-import { apiRequest, ApiError, readCookie } from '@/lib/api-client';
+import { apiRequest, ApiError, API_BASE_URL, getCsrfToken } from '@/lib/api-client';
 import type { Employee } from '@/hooks/use-employees';
 import type { ProjectSite } from '@/hooks/use-project-sites';
 
@@ -295,7 +295,7 @@ export async function downloadPayrollEntryExport(
   const params = new URLSearchParams({ format });
   if (siteIds?.length) params.set('siteIds', siteIds.join(','));
 
-  const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/entries/export?${params.toString()}`, {
+  const response = await fetch(`${API_BASE_URL}/api/v1/payroll-cycles/${cycleId}/entries/export?${params.toString()}`, {
     credentials: 'include',
   });
   if (!response.ok) {
@@ -328,9 +328,9 @@ export function useImportPayrollEntries(cycleId: string) {
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
-      const csrfToken = readCookie('csrf_token');
+      const csrfToken = getCsrfToken();
 
-      const response = await fetch(`/api/v1/payroll-cycles/${cycleId}/entries/import`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/payroll-cycles/${cycleId}/entries/import`, {
         method: 'POST',
         credentials: 'include',
         headers: csrfToken ? { 'x-csrf-token': csrfToken } : undefined,

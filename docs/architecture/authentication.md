@@ -27,7 +27,15 @@ parts.
 **Session cookie configuration:**
 - `httpOnly` — not accessible to client-side JavaScript, mitigating XSS-based session theft.
 - `secure` — sent only over HTTPS (enforced in all non-local environments).
-- `sameSite: lax` (or `strict` where it doesn't break legitimate cross-site navigation into the app).
+- `sameSite: 'none'` in production, `'lax'` in development. The deployed frontend and backend are
+  two independent `*.onrender.com` Render services, which browsers treat as cross-*site* (not
+  merely cross-origin) because `onrender.com` is registered on the Public Suffix List — a `Lax`
+  cookie is never attached to a cross-site `fetch`/`XHR` request (only to top-level navigations),
+  so `None` (paired with the already-`true` `secure` flag, which browsers require for `None`) is
+  what actually makes the cookie reach the backend on API calls. `'lax'` in development, where the
+  Vite dev-server proxy (`frontend/vite.config.ts`) makes the two look same-origin and `'none'`
+  would require `secure` over plain HTTP, which browsers refuse. Resolves
+  `docs/release/KNOWN_ISSUES_v1.0.md` KI-2.
 - Rolling expiration — session lifetime extends on activity, so an actively-working user isn't
   logged out mid-task, but an idle session still expires.
 
@@ -210,8 +218,25 @@ Cookie-based sessions (as opposed to bearer tokens sent in an `Authorization` he
 CSRF exposure: a malicious page could otherwise cause a logged-in user's browser to submit a
 state-changing request unintentionally. Mitigation: a synchronizer/double-submit CSRF token is
 required on all state-changing (`POST`/`PUT`/`PATCH`/`DELETE`) requests, issued to the client on
-login and validated server-side on each such request. This is a direct, necessary consequence of
-choosing sessions over stateless tokens and must not be treated as optional.
+first contact and validated server-side on each such request. This is a direct, necessary
+consequence of choosing sessions over stateless tokens and must not be treated as optional.
+
+**How the frontend learns the token, given separate origins:** the token still lives in a
+`csrf_token` cookie (`backend/src/common/middleware/csrf.ts`), but the frontend does **not** read
+that cookie via `document.cookie` — in production, frontend and backend are different Render
+services on different origins (`docs/architecture/deployment.md`), and a document can never read a
+cookie belonging to another origin; that's the browser's same-origin policy working as intended,
+not a bug to route around. Instead, the backend echoes the same token in an `x-csrf-token`
+*response* header on every safe (`GET`/`HEAD`/`OPTIONS`) request, and CORS explicitly exposes that
+header to the frontend's JS (`exposedHeaders` in `backend/src/app.ts`). `frontend/src/lib/
+api-client.ts` captures it from every response and holds it only in module memory (never
+`localStorage`/`sessionStorage`, which would be readable by any injected script and would survive
+a page reload in a way in-memory state deliberately doesn't) — the session-bootstrap `GET
+/api/v1/auth/me` call every page load already makes (`use-session.ts`) is enough to learn the token
+before the user submits anything, including the login form itself. `apiRequest` then attaches it as
+the `x-csrf-token` request header on every `POST`/`PUT`/`PATCH`/`DELETE`; the handful of callers
+that bypass `apiRequest` for file upload/download (`use-employees.ts`, `use-payroll-entries.ts`,
+`use-payslips.ts`) call the same `getCsrfToken()` accessor rather than re-reading a cookie.
 
 ## Session Expiration
 

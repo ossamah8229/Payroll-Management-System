@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { MAX_BATCH_PAYSLIPS_PER_REQUEST } from '@payroll/shared';
-import { apiRequest, ApiError, readCookie } from '@/lib/api-client';
+import { apiRequest, ApiError, API_BASE_URL, getCsrfToken } from '@/lib/api-client';
 import { formatCyclePeriodSlug, type PayrollCycle } from '@/hooks/use-payroll-cycles';
 
 export { MAX_BATCH_PAYSLIPS_PER_REQUEST };
@@ -66,10 +66,13 @@ export function usePayslips(cycleId: string | undefined, filters: PayslipListFil
 
 /** The single-PDF endpoint's own URL — `inline` for the browser's native PDF viewer (preview,
  * opened in a new tab, never a second HTML template — Checkpoint 6.2's own architecture
- * decision), `attachment` to force a save dialog. Same bytes either way. */
+ * decision), `attachment` to force a save dialog. Same bytes either way. Absolute (via
+ * `API_BASE_URL`) since this is used directly as a navigation target (`window.open` in
+ * `payslips-page.tsx`), not only as a `fetch` path — a relative URL there would resolve against
+ * the frontend's own origin in production instead of the backend's. */
 export function payslipPdfUrl(cycleId: string, employeeId: string, disposition: 'inline' | 'attachment'): string {
   const params = new URLSearchParams({ disposition });
-  return `/api/v1/payroll-cycles/${cycleId}/payslips/${employeeId}/pdf?${params.toString()}`;
+  return `${API_BASE_URL}/api/v1/payroll-cycles/${cycleId}/payslips/${employeeId}/pdf?${params.toString()}`;
 }
 
 function triggerBlobDownload(blob: Blob, filename: string): void {
@@ -111,8 +114,8 @@ export async function downloadPayslipsBatch(
   employeeIds: string[],
   signal: AbortSignal,
 ): Promise<void> {
-  const csrfToken = readCookie('csrf_token');
-  const response = await fetch(`/api/v1/payroll-cycles/${cycle.id}/payslips/batch`, {
+  const csrfToken = getCsrfToken();
+  const response = await fetch(`${API_BASE_URL}/api/v1/payroll-cycles/${cycle.id}/payslips/batch`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
