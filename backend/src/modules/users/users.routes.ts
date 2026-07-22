@@ -43,7 +43,7 @@ usersRouter.post('/', async (req, res, next) => {
       action: 'user.created',
       entityType: 'User',
       entityId: user.id,
-      metadata: { email: user.email, roleCode: input.roleCode },
+      metadata: { email: user.email, roleId: input.roleId, roleName: user.role.name },
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });
@@ -58,17 +58,42 @@ usersRouter.patch('/:id', async (req, res, next) => {
   try {
     const id = requireIdParam(req.params.id);
     const input = updateUserSchema.parse(req.body);
-    const user = await updateUser(req.currentUser!.id, id, input);
+    const requestMeta = { ipAddress: req.ip ?? null, userAgent: req.get('user-agent') ?? null };
+    const user = await updateUser(req.currentUser!.id, id, input, requestMeta);
 
-    await recordAuditLog({
-      actorUserId: req.currentUser!.id,
-      action: 'user.updated',
-      entityType: 'User',
-      entityId: user.id,
-      metadata: { changes: input },
-      ipAddress: req.ip ?? null,
-      userAgent: req.get('user-agent') ?? null,
-    });
+    // One audit entry per distinct semantic change present in this request, rather than a single
+    // generic "user.updated" blob — `updateUser` (users.service.ts) already writes its own
+    // `user.role_changed` entry (with a before/after role snapshot) when `roleId` changes, so this
+    // route only covers the fields it alone is responsible for.
+    if (input.isActive !== undefined) {
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: input.isActive ? 'user.activated' : 'user.deactivated',
+        entityType: 'User',
+        entityId: user.id,
+        ...requestMeta,
+      });
+    }
+    if (input.siteIds !== undefined) {
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: 'user.sites_changed',
+        entityType: 'User',
+        entityId: user.id,
+        metadata: { siteIds: input.siteIds },
+        ...requestMeta,
+      });
+    }
+    if (input.name !== undefined) {
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: 'user.updated',
+        entityType: 'User',
+        entityId: user.id,
+        metadata: { field: 'name' },
+        ...requestMeta,
+      });
+    }
 
     res.status(200).json({ user });
   } catch (error) {

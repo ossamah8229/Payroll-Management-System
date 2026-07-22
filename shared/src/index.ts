@@ -3,7 +3,7 @@
 // (used by the frontend's Vite build) cannot see through, causing named imports to silently
 // fail to resolve. Named re-exports compile to statically analyzable per-export bindings instead.
 
-export { PERMISSIONS, ROLE_CODES, ROLE_PERMISSIONS } from './constants/permissions';
+export { CRITICAL_ADMIN_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS, ROLE_CODES, ROLE_PERMISSIONS } from './constants/permissions';
 export type { PermissionKey, RoleCode } from './constants/permissions';
 
 export { CASH_BANK_CODE } from './constants/bank';
@@ -36,6 +36,9 @@ export type { UpdateCompanySettingsInput } from './schemas/company-settings';
 
 export { createUserSchema, resetUserPasswordSchema, updateUserSchema } from './schemas/user';
 export type { CreateUserInput, ResetUserPasswordInput, UpdateUserInput } from './schemas/user';
+
+export { createRoleSchema, duplicateRoleSchema, updateRoleSchema } from './schemas/role';
+export type { CreateRoleInput, DuplicateRoleInput, UpdateRoleInput } from './schemas/role';
 
 export { createPayrollCycleSchema } from './schemas/payroll-cycle';
 export type { CreatePayrollCycleInput } from './schemas/payroll-cycle';

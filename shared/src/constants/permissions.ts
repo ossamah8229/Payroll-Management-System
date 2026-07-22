@@ -103,3 +103,60 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionKey[]> = {
     PERMISSIONS.PAYSLIPS_VIEW,
   ],
 };
+
+/**
+ * Administration & Security Management Phase 1 — presentational grouping/labeling for the
+ * permission-matrix UI (`GET /api/v1/roles/permissions`, `role-management` frontend). Purely
+ * cosmetic: authorization never reads `group`/`label`/`action`, only the permission `key` itself
+ * (`requirePermission`, `hasPermission`). Shared between backend (enriches each real `Permission`
+ * DB row before returning it) and frontend (renders the same grouping) so the two can never drift
+ * — this is what "the frontend must not hardcode the permission matrix as the *sole* source of
+ * truth" means in practice: the matrix's *membership* (which keys exist) is DB-driven; its
+ * *grouping* is this one shared, presentational lookup, not a frontend-only invention.
+ *
+ * A permission key with no entry here still round-trips through the catalog API (falls back to an
+ * "Other" group in the backend catalog service) — this table is deliberately not treated as a
+ * second source of truth for *which permissions exist*, only how to display the ones that do.
+ */
+export const PERMISSION_GROUPS: Record<PermissionKey, { group: string; label: string }> = {
+  [PERMISSIONS.EMPLOYEES_VIEW]: { group: 'Employees', label: 'View employees' },
+  [PERMISSIONS.EMPLOYEES_EDIT]: { group: 'Employees', label: 'Edit employees' },
+  [PERMISSIONS.EMPLOYEES_CREATE]: { group: 'Employees', label: 'Create employees (incl. import)' },
+  [PERMISSIONS.SITES_MANAGE]: { group: 'Sites and Units', label: 'Manage project sites & units' },
+  [PERMISSIONS.BANKS_MANAGE]: { group: 'Settings', label: 'Manage bank registry' },
+  [PERMISSIONS.PAYROLL_ENTRY]: { group: 'Payroll Entry', label: 'Edit payroll entries' },
+  [PERMISSIONS.PAYROLL_CYCLE_MANAGE]: {
+    group: 'Payroll Lifecycle',
+    label: 'Create, finalize, and archive payroll cycles',
+  },
+  [PERMISSIONS.PAYROLL_VIEW]: { group: 'Salary Release', label: 'View payroll & salary release' },
+  [PERMISSIONS.PAYROLL_RELEASE]: { group: 'Salary Release', label: 'Release payroll by unit' },
+  [PERMISSIONS.BANK_SHEETS_VIEW]: {
+    group: 'Bank Sheets',
+    label: 'View & export bank sheets (also gates Cash Receiving)',
+  },
+  [PERMISSIONS.CORRECTIONS_APPROVE]: { group: 'Corrections', label: 'Approve or reject corrections' },
+  [PERMISSIONS.ADVANCES_MANAGE]: { group: 'Advances', label: 'Manage advances' },
+  [PERMISSIONS.REPORTS_VIEW]: { group: 'Reports', label: 'View reports' },
+  [PERMISSIONS.USERS_MANAGE]: { group: 'Users', label: 'Manage users and roles' },
+  [PERMISSIONS.SETTINGS_MANAGE]: { group: 'Settings', label: 'Manage company settings' },
+  [PERMISSIONS.AUDIT_LOG_VIEW]: { group: 'Audit Log', label: 'View audit log' },
+  [PERMISSIONS.TASKS_MANAGE]: { group: 'Tasks', label: 'Manage tasks' },
+  [PERMISSIONS.PAYSLIPS_VIEW]: { group: 'Payslips', label: 'View & download payslips' },
+};
+
+/**
+ * The critical permission set the "final active administrator" safeguard requires
+ * (Administration & Security Management Phase 1 — `roles.service.ts`'s `assertFinalAdminSafe`).
+ * "Full administrative capability" is defined as an *active* user whose *active* role grants every
+ * one of these — deliberately not `payroll-cycle:manage`: this safeguard exists to guarantee the
+ * *system itself* (users, roles, sites, settings, the audit trail) always remains administrable,
+ * not to guarantee someone can always run payroll, which is an operational capability, not an
+ * administrative one. See docs/architecture/authentication.md for the full rationale.
+ */
+export const CRITICAL_ADMIN_PERMISSIONS: PermissionKey[] = [
+  PERMISSIONS.USERS_MANAGE,
+  PERMISSIONS.SETTINGS_MANAGE,
+  PERMISSIONS.SITES_MANAGE,
+  PERMISSIONS.AUDIT_LOG_VIEW,
+];

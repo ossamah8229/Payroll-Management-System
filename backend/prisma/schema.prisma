@@ -74,16 +74,37 @@ enum PayType {
   MONTHLY
 }
 
-/// Role → Permission RBAC (docs/architecture/authentication.md). A named bundle of permissions;
-/// Master Admin, Payroll Staff, and Finance (added Phase 4 Checkpoint 2) today, extensible to
-/// future roles (e.g. an ESS "Employee" role) as a data change, never a code change.
+/// Role → Permission RBAC (docs/architecture/authentication.md). A named bundle of permissions —
+/// Master Admin, Payroll Staff, and Finance are the three seeded (`isSystemRole = true`) roles;
+/// Administration & Security Management Phase 1 adds administrator-created custom roles as
+/// ordinary data rows (`isSystemRole = false`), never a code change. `Role.name` is an
+/// administrator-editable display label with no authorization meaning of its own — `Role.id` (via
+/// `User.roleId`) is the one true, immutable identity; `Role.code` is a stable, system-generated
+/// internal identifier for a custom role (derived from `name` at creation time, never changed by a
+/// rename) that authorization code must never depend on either — the one exception is the small,
+/// explicitly-documented set of legacy `roleCode === ROLE_CODES.MASTER_ADMIN` bypass checks
+/// pre-dating this phase (docs/architecture/authentication.md's "Post-Phase-5 Stabilization
+/// Checkpoint 4B" section), deliberately left in place rather than migrated in this phase.
 model Role {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code        String   @unique @db.VarChar(40)
   name        String   @db.VarChar(80)
   description String?
-  createdAt   DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+  /// Gates *new* assignment only (create-user, reassign-role) — matches this schema's own
+  /// existing `Bank.isActive`/`ProjectSite.isActive` convention of "blocks new links, never
+  /// severs an existing one" — **except** that here it also strips a currently-assigned user's
+  /// effective access (`auth.service.ts`'s `loadSessionUser` treats `!role.isActive` exactly like
+  /// `!user.isActive`), a deliberate, documented deviation from that convention: an inactive Role
+  /// must be able to immediately end a security-sensitive grant, not just stop new sign-ups to it.
+  isActive Boolean @default(true)
+  /// True only for the three seeded roles (Master Admin, Payroll Staff, Finance) — the sole
+  /// authoritative signal for "this role cannot be deleted, and its name cannot be reused by (or
+  /// renamed away from being recognized as) a protected role." Never inferred from `name` or
+  /// `code` — an administrator renaming a custom role to "Master Admin" gains no special status,
+  /// and this column is never set outside `prisma/seed.ts`.
+  isSystemRole Boolean  @default(false)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
 
   users           User[]
   rolePermissions RolePermission[]

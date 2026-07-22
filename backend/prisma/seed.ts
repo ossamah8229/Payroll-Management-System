@@ -36,10 +36,12 @@ const ADJUSTMENT_TYPES = [
 ];
 
 /**
- * Idempotent — safe to re-run against an environment that already has seed data (upserts
- * throughout, never blind inserts). Seeds the permission registry, every role with its grants,
- * one Master Admin account, the Bank/AdjustmentType lookup tables, and the singleton
- * CompanySettings row. Later phases extend this file additively rather than replacing it.
+ * Idempotent — safe to re-run against an environment that already has seed data. Seeds the
+ * permission registry, the three system roles with their bootstrap-default grants (Administration
+ * & Security Management Phase 1: first-creation only, never a recurring reconciliation — see the
+ * role-seeding loop's own comment below), one Master Admin account, the Bank/AdjustmentType lookup
+ * tables, and the singleton CompanySettings row. Later phases extend this file additively rather
+ * than replacing it.
  */
 async function main() {
   console.log('Seeding permissions...');
@@ -51,14 +53,27 @@ async function main() {
     });
   }
 
+  // Administration & Security Management Phase 1 — `ROLE_PERMISSIONS` is a **bootstrap default
+  // only**, applied exactly once per role at first-creation time, never a recurring authoritative
+  // overwrite. Once a seeded role exists, its permissions become administrator-editable at
+  // runtime (POST/PATCH /api/v1/roles) — the database is the runtime source of truth
+  // (docs/architecture/authentication.md), and re-running this seed script (idempotent by design,
+  // safe to run against an environment that already has data) must never reconcile an
+  // administrator's later edits back to this file's own defaults. An existing role is therefore
+  // left completely untouched here, permissions included — only a role that does not exist yet
+  // is created, with its documented default grants applied at that single moment.
   console.log('Seeding roles and role-permission grants...');
   for (const roleCode of Object.values(ROLE_CODES)) {
-    const role = await prisma.role.upsert({
-      where: { code: roleCode },
-      update: {},
-      create: {
+    const existingRole = await prisma.role.findUnique({ where: { code: roleCode } });
+    if (existingRole) {
+      continue;
+    }
+
+    const role = await prisma.role.create({
+      data: {
         code: roleCode,
         name: ROLE_DISPLAY_NAMES[roleCode] ?? roleCode,
+        isSystemRole: true,
       },
     });
 
@@ -67,13 +82,9 @@ async function main() {
       where: { key: { in: grantedKeys } },
     });
 
-    for (const permission of permissions) {
-      await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
-        update: {},
-        create: { roleId: role.id, permissionId: permission.id },
-      });
-    }
+    await prisma.rolePermission.createMany({
+      data: permissions.map((permission) => ({ roleId: role.id, permissionId: permission.id })),
+    });
   }
 
   console.log('Seeding Master Admin account...');

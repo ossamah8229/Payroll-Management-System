@@ -1,5 +1,5 @@
 import argon2 from 'argon2';
-import type { ChangePasswordInput, PermissionKey, RoleCode, SessionUser, UpdateProfileInput } from '@payroll/shared';
+import type { ChangePasswordInput, PermissionKey, SessionUser, UpdateProfileInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { invalidateAllSessionsForUser } from '../../lib/session-store';
 import { badRequest } from '../../common/http-error';
@@ -8,11 +8,16 @@ import { badRequest } from '../../common/http-error';
  * Verifies email/password against the stored Argon2 hash. Returns the matching active user's ID,
  * or `null` for any failure reason — a wrong email and a wrong password are indistinguishable to
  * the caller, so a login-enumeration attack can't tell which one was wrong.
+ *
+ * Administration & Security Management Phase 1: also rejects a user whose *role* is inactive, the
+ * same as an inactive user — a deactivated Role immediately ends its holders' access, it doesn't
+ * just stop new assignment (see `Role.isActive`'s own schema.prisma comment for why this is a
+ * deliberate deviation from this schema's usual "isActive blocks new links only" convention).
  */
 export async function verifyCredentials(email: string, password: string): Promise<string | null> {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email }, include: { role: { select: { isActive: true } } } });
 
-  if (!user || !user.isActive) {
+  if (!user || !user.isActive || !user.role.isActive) {
     // Run a hash comparison anyway against a dummy hash so this path takes roughly the same
     // time as the "user exists" path — a basic mitigation against email-enumeration via timing.
     await argon2.hash(password).catch(() => undefined);
@@ -28,8 +33,10 @@ export async function verifyCredentials(email: string, password: string): Promis
  * site assignments. This is the function `attachUser` middleware calls on every request; there
  * is no caching layer here on purpose (see src/types/express.d.ts for why).
  *
- * Returns `null` if the user doesn't exist or has been deactivated, so an already-issued session
- * cookie for a deactivated user stops working on its very next request.
+ * Returns `null` if the user doesn't exist, has been deactivated, or their *role* has been
+ * deactivated (Administration & Security Management Phase 1 — same immediate-effect guarantee as
+ * user deactivation, see `verifyCredentials`'s own comment above), so an already-issued session
+ * cookie stops working on its very next request either way.
  */
 export async function loadSessionUser(userId: string): Promise<SessionUser | null> {
   const user = await prisma.user.findUnique({
@@ -44,7 +51,7 @@ export async function loadSessionUser(userId: string): Promise<SessionUser | nul
     },
   });
 
-  if (!user || !user.isActive) {
+  if (!user || !user.isActive || !user.role.isActive) {
     return null;
   }
 
@@ -52,7 +59,8 @@ export async function loadSessionUser(userId: string): Promise<SessionUser | nul
     id: user.id,
     name: user.name,
     email: user.email,
-    roleCode: user.role.code as RoleCode,
+    roleId: user.role.id,
+    roleCode: user.role.code,
     roleName: user.role.name,
     permissions: user.role.rolePermissions.map(
       (rolePermission) => rolePermission.permission.key as PermissionKey,
