@@ -115,6 +115,14 @@ export async function cleanTestData(): Promise<void> {
   await prisma.user.deleteMany({ where: { email: { endsWith: '@test.local' } } });
   await prisma.rolePermission.deleteMany({ where: { role: { code: { startsWith: 'TEST_' } } } });
   await prisma.role.deleteMany({ where: { code: { startsWith: 'TEST_' } } });
+  // Administration & Security Management Phase 1 (roles.test.ts) — a role created through the
+  // real `POST /api/v1/roles` API gets an auto-generated `code` derived from its `name`
+  // (roles.service.ts's `generateRoleCode`), which only starts with `TEST_` if the name itself
+  // does. Test roles created through that API are named with a leading "Test " instead (same
+  // convention as `Test Site `, below), so they're cleaned up by name rather than by the
+  // `TEST_`-code convention the direct-DB `createTestUser` helper's own fixture roles use.
+  await prisma.rolePermission.deleteMany({ where: { role: { name: { startsWith: 'Test ' } } } });
+  await prisma.role.deleteMany({ where: { name: { startsWith: 'Test ' }, isSystemRole: false } });
   await prisma.permission.deleteMany({ where: { key: { startsWith: 'test:' } } });
   await prisma.projectUnit.deleteMany({ where: { site: { name: { startsWith: 'Test Site ' } } } });
   await prisma.projectSite.deleteMany({ where: { name: { startsWith: 'Test Site ' } } });

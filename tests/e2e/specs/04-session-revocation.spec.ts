@@ -1,6 +1,5 @@
-import { ROLE_CODES } from '@payroll/shared';
 import { test, expect, loginAsMasterAdmin, login } from '../fixtures/auth';
-import { apiPost, isAuthenticated } from '../helpers/api';
+import { apiGet, apiPost, isAuthenticated } from '../helpers/api';
 
 /**
  * Real-stack coverage for AUD-009 (Post-Phase-5 Stabilization Checkpoint 3) — password change
@@ -20,11 +19,15 @@ test.describe('Session revocation on password change', () => {
     const originalPassword = 'OriginalPassword1!';
     const newPassword = 'BrandNewPassword1!';
 
+    const rolesRes = await apiGet<{ roles: { id: string; name: string }[] }>(adminPage.context(), '/api/v1/roles');
+    const payrollStaffRole = rolesRes.body.roles.find((r) => r.name === 'Payroll Staff');
+    if (!payrollStaffRole) throw new Error('Seeded "Payroll Staff" role not found');
+
     await apiPost(adminPage.context(), '/api/v1/users', {
       name: 'E2E Session Revocation Target',
       email,
       password: originalPassword,
-      roleCode: ROLE_CODES.PAYROLL_STAFF,
+      roleId: payrollStaffRole.id,
     });
 
     // Two independent "browser sessions" — separate contexts, separate cookie jars, exactly like

@@ -9,6 +9,7 @@ function fakeUser(overrides: Partial<SessionUser> = {}): SessionUser {
     id: 'user-1',
     name: 'Test',
     email: 'test@test.local',
+    roleId: 'role-1',
     roleCode: 'PAYROLL_STAFF',
     roleName: 'Payroll Staff',
     permissions: [],

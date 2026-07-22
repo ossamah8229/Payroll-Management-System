@@ -31,6 +31,15 @@ describe('User Management', () => {
     return prisma.projectSite.create({ data: { name } });
   }
 
+  /** Administration & Security Management Phase 1 — `POST/PATCH /api/v1/users` now take a real
+   * `roleId`, not a `roleCode` enum value. Every seeded role's id is looked up once per call
+   * rather than cached across tests, since `cleanTestData` never touches real seeded roles
+   * (they're not `TEST_`-prefixed) but this keeps each test's own intent self-contained. */
+  async function payrollStaffRoleId(): Promise<string> {
+    const role = await prisma.role.findUniqueOrThrow({ where: { code: ROLE_CODES.PAYROLL_STAFF } });
+    return role.id;
+  }
+
   it('lets Master Admin create a Payroll Staff account with site assignments', async () => {
     const site = await makeSite('Test Site Users Create');
     const { agent, csrfToken } = await masterAdminAgent('users-create-admin@test.local');
@@ -42,7 +51,7 @@ describe('User Management', () => {
         name: 'New Payroll Staffer',
         email: 'new-staffer@test.local',
         password: 'AnotherPassword1!',
-        roleCode: ROLE_CODES.PAYROLL_STAFF,
+        roleId: await payrollStaffRoleId(),
         siteIds: [site.id],
       });
 
@@ -69,7 +78,7 @@ describe('User Management', () => {
     const createRes = await agent
       .post('/api/v1/users')
       .set('x-csrf-token', csrfToken)
-      .send({ name: 'X', email: 'x@test.local', password: 'SomePassword1!', roleCode: ROLE_CODES.PAYROLL_STAFF });
+      .send({ name: 'X', email: 'x@test.local', password: 'SomePassword1!', roleId: await payrollStaffRoleId() });
     expect(createRes.status).toBe(403);
   });
 
@@ -85,7 +94,7 @@ describe('User Management', () => {
         name: 'Reassign Target',
         email: 'reassign-target@test.local',
         password: 'AnotherPassword1!',
-        roleCode: ROLE_CODES.PAYROLL_STAFF,
+        roleId: await payrollStaffRoleId(),
         siteIds: [siteA.id],
       });
 
@@ -146,7 +155,7 @@ describe('User Management', () => {
         name: 'Reset Target',
         email: 'reset-target@test.local',
         password: 'OriginalPassword1!',
-        roleCode: ROLE_CODES.PAYROLL_STAFF,
+        roleId: await payrollStaffRoleId(),
       });
 
     const resetRes = await agent
@@ -188,7 +197,7 @@ describe('User Management', () => {
             name: 'Reset Sessions Target',
             email: 'reset-sessions-target@test.local',
             password: 'OriginalPassword1!',
-            roleCode: ROLE_CODES.PAYROLL_STAFF,
+            roleId: await payrollStaffRoleId(),
           });
         expect(createRes.status).toBe(201);
         const targetId = createRes.body.user.id;
@@ -267,7 +276,7 @@ describe('User Management', () => {
           name: 'Security Check User',
           email: 'security-check-create@test.local',
           password: 'AnotherPassword1!',
-          roleCode: ROLE_CODES.PAYROLL_STAFF,
+          roleId: await payrollStaffRoleId(),
           siteIds: [site.id],
         });
 
@@ -277,7 +286,11 @@ describe('User Management', () => {
       // checkpoint fixed impossible to silently regress even if the generic helper's key list ever
       // changes.
       expect(res.body.user.passwordHash).toBeUndefined();
-      expect(res.body.user.role).toEqual({ code: ROLE_CODES.PAYROLL_STAFF, name: expect.any(String) });
+      expect(res.body.user.role).toEqual({
+        id: expect.any(String),
+        code: ROLE_CODES.PAYROLL_STAFF,
+        name: expect.any(String),
+      });
     });
 
     it('never includes passwordHash in the list or single-user detail response', async () => {
@@ -289,7 +302,7 @@ describe('User Management', () => {
           name: 'Security List Target',
           email: 'security-check-list@test.local',
           password: 'AnotherPassword1!',
-          roleCode: ROLE_CODES.PAYROLL_STAFF,
+          roleId: await payrollStaffRoleId(),
         });
 
       const listRes = await agent.get('/api/v1/users');
@@ -314,7 +327,7 @@ describe('User Management', () => {
           name: 'Security Update Target',
           email: 'security-check-update@test.local',
           password: 'AnotherPassword1!',
-          roleCode: ROLE_CODES.PAYROLL_STAFF,
+          roleId: await payrollStaffRoleId(),
         });
 
       const updateRes = await agent
@@ -335,7 +348,7 @@ describe('User Management', () => {
           name: 'DB Check Target',
           email: 'security-check-dbcheck@test.local',
           password: 'AnotherPassword1!',
-          roleCode: ROLE_CODES.PAYROLL_STAFF,
+          roleId: await payrollStaffRoleId(),
         });
 
       const stored = await prisma.user.findUniqueOrThrow({ where: { id: createRes.body.user.id } });

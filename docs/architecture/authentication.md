@@ -64,11 +64,18 @@ invalidates it too, handled the same way.
 
 ## Role-Based Access Control (RBAC)
 
-**Three roles as of 2026-07-05 (Phase 3 architecture review)** — **Master User** (renamed from
-"Master Admin," same role, no functional change), **Payroll Staff**, and the new **Finance** role —
+**Three roles seeded as of 2026-07-05 (Phase 3 architecture review)** — **Master User** (renamed
+from "Master Admin," same role, no functional change), **Payroll Staff**, and **Finance** —
 modeled as **Role → Permission[]** rather than hardcoded `if (role === 'admin')` checks throughout the
 codebase. A permission is checked per route (e.g. `payroll:release`, `sites:manage`, `users:manage`,
 `corrections:approve`), and a role is just a named bundle of permissions.
+
+**As of Administration & Security Management Phase 1, these three are no longer the only roles that
+can exist** — a Master User can create, edit, rename, duplicate, and (de)activate additional roles
+at runtime, with no source-code or redeployment step; see that phase's own dedicated section below
+for the full design. Everything in this section remains true of *every* role, seeded or
+administrator-created — the model was already "Role → Permission[]," not fixed `if` statements,
+before that phase; it makes that model fully self-service, not built again from scratch.
 
 **Why Finance was added, not folded into an existing role:** the new per-Project-Unit release model
 (`docs/architecture/workflows/payroll-lifecycle.md` §4) introduced a distinct capability — executing a Unit's
@@ -305,6 +312,167 @@ timing) is **not** addressed by this checkpoint and must not be read as fixed by
 Fix 1 through Fix 5 here touch authorization (permissions, roles, requester/reviewer separation),
 not the CSRF double-submit flow itself. That issue remains the next, separate stabilization
 investigation.
+
+## Administration & Security Management Phase 1 — Dynamic Roles, Permission Matrix, User Assignment
+
+Removes the operational blocker that previously prevented structured team testing: a Master User can
+now create business-specific roles, assign permissions to them from the real permission catalog,
+assign those roles to users, and manage user site access — all at runtime, with no source-code
+change or redeployment. A dedicated, separate investigation (Post-Phase-5 Stabilization Checkpoint
+4C) root-caused the intermittent CSRF login failure beforehand; **this phase does not touch CSRF at
+all** — that fix remains its own, still-separate implementation effort.
+
+### 1. Database-driven roles
+
+`Role`/`Permission`/`RolePermission` were already real, relational tables (Phase 1) — this phase
+adds two columns to `Role` (`isActive`, `isSystemRole`) and exposes full CRUD over HTTP
+(`/api/v1/roles`), rather than changing the underlying model. A role is administrator-visible data,
+not application code, for both the three original seeded roles and any new one.
+
+- **`Role.id`** is the one true, immutable identity — `User.roleId` references it, `AuditLog`
+  entries reference role ids (never a denormalized name snapshot), and nothing in this system
+  depends on a role's `name` staying constant.
+- **`Role.name`** is a free-text, administrator-editable display label. Uniqueness is enforced
+  case-insensitively, trimmed, at the service layer (`roles.service.ts`'s `assertNameNotTaken`) —
+  never in the database schema directly (a DB round trip is required regardless, to also exclude
+  the role being renamed itself).
+- **`Role.code`** is a stable, system-generated internal identifier, derived once from `name` at
+  creation time (`generateRoleCode`) and never changed by a later rename. It exists only because
+  `Role.code` was already a `@unique NOT NULL` column before this phase — a pre-existing constraint
+  this phase keeps rather than migrates away from — and it is **never read by authorization logic**
+  for a custom role. The one exception, unchanged by this phase, is the small set of legacy
+  `roleCode === ROLE_CODES.MASTER_ADMIN` bypass checks documented below.
+- **`Role.isSystemRole`** is `true` only for the three seeded roles (set exclusively by
+  `prisma/seed.ts`, never by any administration endpoint) — the one authoritative signal that a
+  role cannot be deleted. Never inferred from `name` or `code`: renaming a custom role to "Master
+  Admin" grants it no special status whatsoever.
+- **`Role.isActive`** gates *new* assignment (create-user, reassign-role reject an inactive role)
+  and, deliberately unlike this schema's usual `Bank.isActive`/`ProjectSite.isActive` convention of
+  "blocks new links, never severs an existing one," also **immediately strips every current
+  holder's effective access** — `auth.service.ts`'s `loadSessionUser`/`verifyCredentials` treat
+  `!role.isActive` exactly like `!user.isActive`. This is a deliberate deviation, not an oversight:
+  a role is a security-sensitive grant, and deactivating it needs to behave like deactivating every
+  user who holds it, immediately, not just close the door to new sign-ups.
+
+### 2. One role per user, no per-user overrides, no multi-role system
+
+Unchanged, and explicitly not extended by this phase: `User.roleId` is a single foreign key, never
+a join table; there is no per-user permission grant or denial anywhere in the schema or middleware.
+If a real, distinct permission combination is needed for one person, the answer is a new role —
+never a one-off exception layered onto an existing one. This keeps "what can this person do"
+answerable by looking at one role, always, with no per-user asterisk to also check.
+
+### 3. Permission keys drive authorization; role names/labels never do
+
+`requirePermission` and `hasPermission` (frontend) compare permission **keys** only
+(`payroll:entry`, `users:manage`, etc.) — never a role name or code. Renaming "Payroll Staff" to
+"Salary Team," or "Reviewer" to "Internal Audit," changes zero behavior anywhere in the system,
+proven directly by `roles.test.ts`'s "renaming a role does not change its holder's authorization at
+all" test. The permission catalog itself (`GET /api/v1/roles/permissions`) is the real `Permission`
+table enriched with a shared, purely presentational grouping/label lookup
+(`PERMISSION_GROUPS`, `shared/src/constants/permissions.ts`) — grouping is for display only; a
+permission with no entry in that lookup still round-trips through the catalog (falls back to an
+"Other" group), so the *membership* of the matrix is always database-driven, never a frontend-only
+list.
+
+### 4. Seed defaults are bootstrap-only, not runtime authority
+
+`prisma/seed.ts`'s `ROLE_PERMISSIONS` constant is applied **exactly once**, at the moment a seeded
+role is first created — re-running seed against a database where that role already exists changes
+nothing about its current permissions, name, or description, no matter how far an administrator has
+since edited it. The database is the runtime source of truth; the seed script is a bootstrap
+convenience, never a reconciliation pass. (Before this phase, the seed script's `upsert`-based
+permission grants were additive-only already, but re-running it could still *re-add* a permission an
+administrator had deliberately removed from a seeded role — that gap is what this phase closes.)
+
+### 5. Role-change session behavior
+
+Reassigning a user's role, or changing a role's own permissions, **takes effect on that user's very
+next request regardless** — permissions are loaded fresh from the database on every request
+(`attachUser`/`loadSessionUser`), with no session-side cache to go stale. On top of that
+already-immediate effect, **reassigning a user's role also revokes every one of their existing
+sessions** (`invalidateAllSessionsForUser`, the same mechanism password reset/change already uses),
+requiring an explicit re-login. This was a deliberate choice, not merely "the database reload was
+already enough": a role change is security-sensitive enough that a silent same-session permission
+swap is the wrong default, even though it would have worked. Editing a role's *permissions* (without
+reassigning any user) does **not** revoke sessions — only whose role a user holds is treated as
+sensitive enough to force re-authentication; what a role itself grants updates silently and
+immediately, matching the checkpoint's own explicit test ("removing a permission from a custom role
+takes effect on the very next request, same session").
+
+### 6. The final-active-administrator safeguard
+
+**"Full administrative capability"** is defined as: an *active* user whose *active* role grants
+every one of `users:manage`, `settings:manage`, `sites:manage`, and `audit-log:view`
+(`CRITICAL_ADMIN_PERMISSIONS`, `shared/src/constants/permissions.ts`). `payroll-cycle:manage` is
+deliberately excluded — this safeguard exists to guarantee the *system itself* (users, roles, sites,
+settings, the audit trail) always remains administrable, not to guarantee someone can always run
+payroll, which is an operational capability, not an administrative one.
+
+The system guarantees at least one such user always exists. The safeguard
+(`roles.service.ts`'s `assertUserChangeKeepsAnAdministrator`/`assertRoleChangeKeepsAnAdministrator`)
+is applied, transactionally (so a concurrent race can't slip through between check and mutation), to:
+
+- deactivating a user
+- reassigning a user's role
+- deactivating a role
+- replacing a role's permissions (when the replacement would drop a critical permission)
+
+Each check is scoped to *only* block a change when it would actually remove the last qualifier —
+deactivating/reassigning a user who isn't a full administrator, or editing a role that never granted
+full administrative capability, is never blocked by this safeguard. An administrator cannot lock
+themselves or anyone else out of administering the system entirely; they can still freely restructure
+everything else.
+
+### 7. Protected system-role behavior
+
+`isSystemRole` roles (Master Admin, Payroll Staff, Finance) may be renamed, have their description
+edited, have their permissions changed, and be activated/deactivated exactly like any custom role —
+**the only restriction unique to a system role is that it can never be deleted.** There is
+deliberately no broader "system roles are read-only" rule: Step 9's own design goal is "do not make
+the entire role permanently uneditable unless there is a clear security reason," and deletion is the
+one case with a clear reason (losing the seeded role identity entirely, and the `User.roleId`
+`onDelete: Restrict` FK already backstops "can't delete a role with assigned users" at the database
+level regardless of role type).
+
+### 8. Known, deliberately deferred role-code dependencies
+
+A handful of pre-existing `roleCode === ROLE_CODES.MASTER_ADMIN` checks were **not** migrated in this
+phase, since none of them block custom-role creation, assignment, permission enforcement, user
+administration, site assignment, route visibility, or permission-aware controls — the actual
+functionality this phase delivers:
+
+- `require-site-access.ts` / `employees.service.ts`'s `isMasterAdmin` — Master Admin's site-scope
+  bypass (implicit, unrestricted access). A custom role, however permissive, is always site-scoped
+  like Payroll Staff/Finance unless it happens to literally be the seeded Master Admin role — this is
+  correct, secure behavior for a custom role, not a gap.
+- `users.service.ts` — `createUser`/`updateUser` skip site-assignment specifically for the Master
+  Admin role code.
+- `tasks-panel.tsx`'s `isMasterUser` (frontend) mirrors `tasks.service.ts`'s own backend
+  `isMasterAdmin`-based task-visibility scoping — fixing the frontend alone, without also
+  redesigning the Tasks module's backend query-scoping logic (out of this phase's stated scope, and
+  its own dedicated RBAC design for Tasks specifically), would only create a new inconsistency, not
+  close the gap. **This is safe as-is**: a custom role without Tasks access simply never sees the
+  "Create Task"/assignee-filter UI or any tasks beyond its own assignments, exactly as intended.
+
+Every one of these remains a role-**code** dependency, never a role-**name** one — renaming any
+seeded role's display label still changes nothing, since `code` (not `name`) is what these checks
+compare.
+
+### 9. Team-testing role matrix (initial recommendation)
+
+| Role | Purpose | Key permissions | Must remain forbidden |
+|---|---|---|---|
+| Employee Registry Tester | Employee create/edit/import/export testing | `employees:view`, `employees:create`, `employees:edit` | Payroll, sites, users, settings |
+| Payroll Entry Tester | Payroll entry, bulk actions, holds | `payroll:entry` | Release, bank sheets, corrections approval, user admin |
+| Finance Release Tester | Salary release, bank sheets, cash receiving, payslips | `payroll:view`, `payroll:release`, `bank-sheets:view`, `payslips:view` | Payroll entry edits, employee edits, user admin |
+| Corrections Reviewer | Review another user's correction requests | `corrections:approve` | Self-approval (enforced server-side regardless of role), payroll entry edits |
+| Reports Viewer | Reports validation, no mutation | `reports:view` | Any create/edit/delete anywhere |
+| Read-Only Auditor | Audit and permitted read-only verification | `audit-log:view` | Any mutation anywhere |
+
+Site scope for each should match the real sites/units the tester actually needs to exercise — never
+assigned broader than the test responsibility requires, and never "all sites" unless the role is
+genuinely meant to be system-wide.
 
 ## CSRF Protection
 
