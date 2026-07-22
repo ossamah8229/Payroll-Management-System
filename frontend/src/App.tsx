@@ -39,6 +39,7 @@ const AdvancesPage = lazy(() => import('@/routes/advances-page').then((m) => ({ 
 const PayslipsPage = lazy(() => import('@/routes/payslips-page').then((m) => ({ default: m.PayslipsPage })));
 const SettingsPage = lazy(() => import('@/routes/settings-page').then((m) => ({ default: m.SettingsPage })));
 const UsersPage = lazy(() => import('@/routes/users-page').then((m) => ({ default: m.UsersPage })));
+const RolesPage = lazy(() => import('@/routes/roles-page').then((m) => ({ default: m.RolesPage })));
 const CorrectionsPage = lazy(() =>
   import('@/routes/corrections-page').then((m) => ({ default: m.CorrectionsPage })),
 );
@@ -307,6 +308,18 @@ export function App() {
                 {(user) => (
                   <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
                     <UsersPage user={user} />
+                  </RequirePermission>
+                )}
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/roles"
+            element={
+              <RequireSession>
+                {(user) => (
+                  <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
+                    <RolesPage user={user} />
                   </RequirePermission>
                 )}
               </RequireSession>

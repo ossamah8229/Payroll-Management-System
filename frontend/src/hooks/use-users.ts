@@ -9,7 +9,7 @@ export interface ManagedUser {
   email: string;
   isActive: boolean;
   lastLoginAt: string | null;
-  role: { code: string; name: string };
+  role: { id: string; code: string; name: string };
   siteAssignments: { siteId: string; site: ProjectSite }[];
 }
 

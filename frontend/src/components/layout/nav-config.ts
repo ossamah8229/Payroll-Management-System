@@ -8,6 +8,7 @@ import {
   Landmark,
   LayoutDashboard,
   ScrollText,
+  ShieldCheck,
   UserCog,
   Users,
   Wallet,
@@ -112,6 +113,10 @@ export const navSections: NavSection[] = [
     items: [
       { label: 'Project Sites', to: '/sites', icon: Building2, requiredPermission: 'sites:manage' },
       { label: 'Users', to: '/users', icon: UserCog, requiredPermission: 'users:manage' },
+      // Administration & Security Management Phase 1 — role administration reuses users:manage
+      // (roles.routes.ts's own documented decision: "who may administer users" and "who may
+      // administer the roles those users hold" are the same governance responsibility here).
+      { label: 'Roles & Permissions', to: '/roles', icon: ShieldCheck, requiredPermission: 'users:manage' },
     ],
   },
 ];

@@ -22,6 +22,21 @@ import {
 import { ApiError } from '@/lib/api-client';
 import { useProjectSites } from '@/hooks/use-project-sites';
 import { useCreateUser, useResetUserPassword, useUpdateUser, useUsers, type ManagedUser } from '@/hooks/use-users';
+import { useRoles } from '@/hooks/use-roles';
+
+/** Active, assignable roles for a role selector — loaded from `GET /api/v1/roles`
+ * (Administration & Security Management Phase 1), never a hardcoded
+ * MASTER_ADMIN/PAYROLL_STAFF/FINANCE list. An inactive role is never offered here; the backend
+ * would reject selecting one anyway (`getAssignableRole`, roles.service.ts), but hiding it is
+ * this codebase's usual "backend remains authoritative, frontend hiding is a usability layer"
+ * convention (docs/architecture/authentication.md). */
+function useAssignableRoles() {
+  const roles = useRoles();
+  return {
+    ...roles,
+    data: roles.data?.filter((role) => role.isActive),
+  };
+}
 
 const selectClassName =
   'flex h-9 w-full rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
@@ -54,23 +69,30 @@ function SiteCheckboxList({
 
 function CreateUserModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const createUser = useCreateUser();
+  const roles = useAssignableRoles();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [roleCode, setRoleCode] = useState<'MASTER_ADMIN' | 'PAYROLL_STAFF' | 'FINANCE'>(
-    ROLE_CODES.PAYROLL_STAFF,
-  );
+  const [roleId, setRoleId] = useState('');
   const [siteIds, setSiteIds] = useState<string[]>([]);
+
+  const selectedRole = roles.data?.find((role) => role.id === roleId);
+  // Master Admin's site assignment is ignored server-side regardless (implicit, unrestricted
+  // access — createUser, users.service.ts) — hiding the picker for it here is a usability
+  // convenience, not the actual enforcement. This is the one place a role *code* comparison
+  // remains, a deliberately deferred legacy exception (docs/architecture/authentication.md).
+  const isMasterAdminRole = selectedRole?.code === ROLE_CODES.MASTER_ADMIN;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     try {
-      await createUser.mutateAsync({ name, email, password, roleCode, siteIds });
+      await createUser.mutateAsync({ name, email, password, roleId, siteIds });
       toast.success('User created');
       onOpenChange(false);
       setName('');
       setEmail('');
       setPassword('');
+      setRoleId('');
       setSiteIds([]);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Something went wrong');
@@ -105,15 +127,24 @@ function CreateUserModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
             <select
               id="user-role"
               className={selectClassName}
-              value={roleCode}
-              onChange={(e) => setRoleCode(e.target.value as typeof roleCode)}
+              required
+              value={roleId}
+              onChange={(e) => setRoleId(e.target.value)}
             >
-              <option value={ROLE_CODES.PAYROLL_STAFF}>Payroll Staff</option>
-              <option value={ROLE_CODES.FINANCE}>Finance</option>
-              <option value={ROLE_CODES.MASTER_ADMIN}>Master Admin</option>
+              <option value="" disabled>
+                Select a role…
+              </option>
+              {(roles.data ?? []).map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
             </select>
+            {selectedRole?.description && (
+              <p className="text-[11px] text-text-muted">{selectedRole.description}</p>
+            )}
           </div>
-          {roleCode !== ROLE_CODES.MASTER_ADMIN && (
+          {roleId && !isMasterAdminRole && (
             <div className="flex flex-col gap-1.5">
               <Label>Assigned sites</Label>
               <SiteCheckboxList selected={siteIds} onChange={setSiteIds} />
@@ -123,7 +154,7 @@ function CreateUserModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={createUser.isPending}>
               Cancel
             </Button>
-            <Button type="submit" disabled={createUser.isPending}>
+            <Button type="submit" disabled={createUser.isPending || !roleId}>
               Create user
             </Button>
           </ModalFooter>
@@ -145,17 +176,22 @@ function EditUserModal({
   isSelf: boolean;
 }) {
   const updateUser = useUpdateUser();
+  const roles = useAssignableRoles();
   const [name, setName] = useState(user.name);
   const [isActive, setIsActive] = useState(user.isActive);
+  const [roleId, setRoleId] = useState(user.role.id);
   const [siteIds, setSiteIds] = useState(user.siteAssignments.map((a) => a.siteId));
-  const isMasterAdmin = user.role.code === ROLE_CODES.MASTER_ADMIN;
+
+  const selectedRole = roles.data?.find((role) => role.id === roleId);
+  const isMasterAdmin = (selectedRole?.code ?? user.role.code) === ROLE_CODES.MASTER_ADMIN;
+  const roleWillChange = roleId !== user.role.id;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     try {
       await updateUser.mutateAsync({
         id: user.id,
-        input: { name, isActive, ...(isMasterAdmin ? {} : { siteIds }) },
+        input: { name, isActive, roleId, ...(isMasterAdmin ? {} : { siteIds }) },
       });
       toast.success('User updated');
       onOpenChange(false);
@@ -180,6 +216,34 @@ function EditUserModal({
             />
             Active {isSelf && <span className="text-text-faint">(cannot deactivate your own account)</span>}
           </label>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="edit-user-role">Role</Label>
+            <select
+              id="edit-user-role"
+              className={selectClassName}
+              disabled={isSelf}
+              value={roleId}
+              onChange={(e) => setRoleId(e.target.value)}
+            >
+              {/* The user's current role is always offered even if since deactivated, so the
+               * select never silently jumps to a different value out from under the admin. */}
+              {!roles.data?.some((role) => role.id === user.role.id) && (
+                <option value={user.role.id}>{user.role.name} (current)</option>
+              )}
+              {(roles.data ?? []).map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+            {isSelf && <p className="text-[11px] text-text-faint">You cannot change your own role.</p>}
+            {!isSelf && roleWillChange && (
+              <p className="text-[11px] text-warning">
+                Changing this user&apos;s role will sign them out of every active session — they
+                will need to log in again.
+              </p>
+            )}
+          </div>
           {!isMasterAdmin && (
             <div className="flex flex-col gap-1.5">
               <Label>Assigned sites</Label>
@@ -263,7 +327,7 @@ export function UsersPage({ user }: { user: SessionUser }) {
   const [resettingUser, setResettingUser] = useState<ManagedUser | undefined>(undefined);
 
   return (
-    <AppShell user={user} title="User Management" subtitle="Master Admin, Payroll Staff, and Finance accounts">
+    <AppShell user={user} title="User Management" subtitle="Manage user accounts, role assignment, and site access">
       <Card>
         <CardHeader>
           <CardTitle>All Users</CardTitle>
