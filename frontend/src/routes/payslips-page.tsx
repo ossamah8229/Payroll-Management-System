@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -174,79 +175,79 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Payslips" subtitle="Generate and download employee Payslips">
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2.5">
-              <CardTitle>Payslips</CardTitle>
-              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
-            </div>
-            {hasAnyCycle && (
-              <PayrollCycleSelectField
-                id="payslips-cycle"
-                cycles={cycles}
-                selectedCycleId={cycleId}
-                onSelect={selectCycle}
-              />
-            )}
-            <MultiSelectFilter
-              id="payslips-site-filter"
-              label="Site"
-              options={siteOptions}
-              selectedIds={selectedSiteIds}
-              onChange={(ids) => {
-                setSelectedSiteIds(ids);
-                setSelectedUnitIds([]); // the unit list itself changes with the site selection
-              }}
-            />
-            <MultiSelectFilter
-              id="payslips-unit-filter"
-              label="Unit"
-              options={unitOptions}
-              selectedIds={selectedUnitIds}
-              onChange={setSelectedUnitIds}
-              disabled={!singleSelectedSiteId}
-              disabledReason="Select one Site to filter by Unit"
-            />
-            <FilterField id="payslips-search" label="Search">
-              <Input
-                id="payslips-search"
-                className="w-48"
-                placeholder="Name, code, or CNIC"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </FilterField>
-            <div className="ml-auto flex items-center gap-3">
-              {selectedCount > 0 && (
-                <span className="text-xs text-text-muted">
-                  {selectedCount} selected
-                  {overBatchLimit && (
-                    <span className="text-danger"> — exceeds the {MAX_BATCH_PAYSLIPS_PER_REQUEST} limit, deselect some</span>
-                  )}
-                </span>
-              )}
-              {!batchGenerating ? (
-                <Button
-                  size="sm"
-                  onClick={handleBatchDownload}
-                  disabled={selectedCount === 0 || overBatchLimit}
-                >
-                  <Download className="h-3.5 w-3.5" aria-hidden />
-                  Download selected Payslips
-                </Button>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1.5 text-xs text-text-muted">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                    Generating {selectedCount} Payslip{selectedCount === 1 ? '' : 's'}…
+          <PayrollPageToolbar
+            title="Payslips"
+            badge={cycle && <PayrollCycleStatusBadge cycle={cycle} />}
+            filters={
+              <>
+                {hasAnyCycle && (
+                  <PayrollCycleSelectField
+                    id="payslips-cycle"
+                    cycles={cycles}
+                    selectedCycleId={cycleId}
+                    onSelect={selectCycle}
+                  />
+                )}
+                <MultiSelectFilter
+                  id="payslips-site-filter"
+                  label="Site"
+                  options={siteOptions}
+                  selectedIds={selectedSiteIds}
+                  onChange={(ids) => {
+                    setSelectedSiteIds(ids);
+                    setSelectedUnitIds([]); // the unit list itself changes with the site selection
+                  }}
+                />
+                <MultiSelectFilter
+                  id="payslips-unit-filter"
+                  label="Unit"
+                  options={unitOptions}
+                  selectedIds={selectedUnitIds}
+                  onChange={setSelectedUnitIds}
+                  disabled={!singleSelectedSiteId}
+                  disabledReason="Select one Site to filter by Unit"
+                />
+                <FilterField id="payslips-search" label="Search">
+                  <Input
+                    id="payslips-search"
+                    className="w-48"
+                    placeholder="Name, code, or CNIC"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </FilterField>
+              </>
+            }
+            actions={
+              <>
+                {selectedCount > 0 && (
+                  <span className="text-xs text-text-muted">
+                    {selectedCount} selected
+                    {overBatchLimit && (
+                      <span className="text-danger"> — exceeds the {MAX_BATCH_PAYSLIPS_PER_REQUEST} limit, deselect some</span>
+                    )}
                   </span>
-                  <Button size="sm" variant="secondary" onClick={handleCancelBatch}>
-                    <X className="h-3.5 w-3.5" aria-hidden />
-                    Cancel
+                )}
+                {!batchGenerating ? (
+                  <Button onClick={handleBatchDownload} disabled={selectedCount === 0 || overBatchLimit}>
+                    <Download className="h-3.5 w-3.5" aria-hidden />
+                    Download Selected Payslips
                   </Button>
-                </div>
-              )}
-            </div>
-          </div>
+                ) : (
+                  <>
+                    <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      Generating {selectedCount} Payslip{selectedCount === 1 ? '' : 's'}…
+                    </span>
+                    <Button variant="secondary" onClick={handleCancelBatch}>
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </>
+            }
+          />
         </CardHeader>
         <CardContent className="p-0">
           {isLoading && (

@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
@@ -296,50 +297,56 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Salary Release" subtitle="Release payroll by Project Unit">
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2.5">
-              <CardTitle>Salary Release</CardTitle>
-              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
-            </div>
-            {hasAnyCycle && (
-              <PayrollCycleSelectField
-                id="salary-release-cycle"
-                cycles={cycles}
-                selectedCycleId={cycleId}
-                onSelect={selectCycle}
-              />
-            )}
-            {hasAnyCycle && (sites.data ?? []).length > 0 && (
-              <FilterField id="salary-release-site" label="Site">
-                <select
-                  id="salary-release-site"
-                  className={selectClassName}
-                  value={siteId ?? ''}
-                  onChange={(e) => setSiteId(e.target.value)}
-                >
-                  {(sites.data ?? []).map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.name}
-                    </option>
-                  ))}
-                </select>
-              </FilterField>
-            )}
-            {cycle && canFinalize && (cycle.status === 'DRAFT' || cycle.status === 'RELEASED') && (
-              <div className="ml-auto flex gap-2">
-                {cycle.status === 'DRAFT' && (
-                  <Button size="sm" variant="secondary" onClick={() => setConfirmingFinalize(true)}>
-                    Finalize Cycle
-                  </Button>
+          <PayrollPageToolbar
+            title="Salary Release"
+            badge={cycle && <PayrollCycleStatusBadge cycle={cycle} />}
+            filters={
+              <>
+                {hasAnyCycle && (
+                  <PayrollCycleSelectField
+                    id="salary-release-cycle"
+                    cycles={cycles}
+                    selectedCycleId={cycleId}
+                    onSelect={selectCycle}
+                  />
                 )}
-                {cycle.status === 'RELEASED' && (
-                  <Button size="sm" variant="secondary" onClick={() => setConfirmingRollover(true)}>
-                    Start New Payroll Cycle
-                  </Button>
+                {hasAnyCycle && (sites.data ?? []).length > 0 && (
+                  <FilterField id="salary-release-site" label="Site">
+                    <select
+                      id="salary-release-site"
+                      className={selectClassName}
+                      value={siteId ?? ''}
+                      onChange={(e) => setSiteId(e.target.value)}
+                    >
+                      {(sites.data ?? []).map((site) => (
+                        <option key={site.id} value={site.id}>
+                          {site.name}
+                        </option>
+                      ))}
+                    </select>
+                  </FilterField>
                 )}
-              </div>
-            )}
-          </div>
+              </>
+            }
+            actions={
+              cycle &&
+              canFinalize &&
+              (cycle.status === 'DRAFT' || cycle.status === 'RELEASED') && (
+                <>
+                  {cycle.status === 'DRAFT' && (
+                    <Button variant="secondary" onClick={() => setConfirmingFinalize(true)}>
+                      Finalize Cycle
+                    </Button>
+                  )}
+                  {cycle.status === 'RELEASED' && (
+                    <Button variant="secondary" onClick={() => setConfirmingRollover(true)}>
+                      Start New Payroll Cycle
+                    </Button>
+                  )}
+                </>
+              )
+            }
+          />
         </CardHeader>
         <CardContent className="p-0">
           {cycleError && (

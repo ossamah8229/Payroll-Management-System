@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { formatMoney } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -68,60 +69,64 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Bank Sheet" subtitle="Generate and export released payroll by bank">
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2.5">
-              <CardTitle>Bank Sheet</CardTitle>
-              {cycle && <PayrollCycleStatusBadge cycle={cycle} />}
-            </div>
-            {hasAnyCycle && (
-              <PayrollCycleSelectField
-                id="bank-sheet-cycle"
-                cycles={cycles}
-                selectedCycleId={cycleId}
-                onSelect={selectCycle}
-              />
-            )}
-            <FilterField id="bank-sheet-bank" label="Bank">
-              <select
-                id="bank-sheet-bank"
-                className={selectClassName}
-                value={bankFilter ?? ''}
-                onChange={(e) => setBankFilter(e.target.value)}
-              >
-                {(banks.data ?? []).map((bank) => (
-                  <option key={bank.id} value={bank.id}>
-                    {bank.name}
-                  </option>
-                ))}
-                <option value={CASH_BANK_FILTER}>Cash</option>
-              </select>
-            </FilterField>
-            <MultiSelectFilter
-              id="bank-sheet-site-filter"
-              label="Site"
-              options={siteOptions}
-              selectedIds={selectedSiteIds}
-              onChange={setSelectedSiteIds}
-            />
-            <div className="ml-auto flex gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => handleExport('csv')}
-                disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
-              >
-                <Download className="h-3.5 w-3.5" aria-hidden />
-                Export CSV
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => handleExport('xlsx')}
-                disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
-              >
-                <Download className="h-3.5 w-3.5" aria-hidden />
-                Export Excel
-              </Button>
-            </div>
-          </div>
+          <PayrollPageToolbar
+            title="Bank Sheet"
+            badge={cycle && <PayrollCycleStatusBadge cycle={cycle} />}
+            filters={
+              <>
+                {hasAnyCycle && (
+                  <PayrollCycleSelectField
+                    id="bank-sheet-cycle"
+                    cycles={cycles}
+                    selectedCycleId={cycleId}
+                    onSelect={selectCycle}
+                  />
+                )}
+                <FilterField id="bank-sheet-bank" label="Bank">
+                  <select
+                    id="bank-sheet-bank"
+                    className={selectClassName}
+                    value={bankFilter ?? ''}
+                    onChange={(e) => setBankFilter(e.target.value)}
+                  >
+                    {(banks.data ?? []).map((bank) => (
+                      <option key={bank.id} value={bank.id}>
+                        {bank.name}
+                      </option>
+                    ))}
+                    <option value={CASH_BANK_FILTER}>Cash</option>
+                  </select>
+                </FilterField>
+                <MultiSelectFilter
+                  id="bank-sheet-site-filter"
+                  label="Site"
+                  options={siteOptions}
+                  selectedIds={selectedSiteIds}
+                  onChange={setSelectedSiteIds}
+                />
+              </>
+            }
+            actions={
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => handleExport('csv')}
+                  disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  Export CSV
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => handleExport('xlsx')}
+                  disabled={isExporting || !bankSheet.data || bankSheet.data.rows.length === 0}
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  Export Excel
+                </Button>
+              </>
+            }
+          />
         </CardHeader>
         <CardContent className="p-0">
           {isLoading && (
