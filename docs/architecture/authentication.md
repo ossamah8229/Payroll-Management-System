@@ -212,6 +212,100 @@ and is called out explicitly so it is never mistaken for a variant of the site-s
 - **No new role was introduced, and none is needed** — this fits inside the existing Master User /
   Payroll Staff / Finance model without adding a fourth.
 
+## Post-Phase-5 Stabilization Checkpoint 4B — Authorization Remediation
+
+A validation checkpoint (4B) exercised the RBAC model above across every seeded role plus a
+synthetic reviewer, both through the UI and by calling the API directly. This section records the
+fixes that followed and the decisions behind each.
+
+### Corrections requester/reviewer separation
+
+`assertNotSelfReview` (`backend/src/modules/corrections/corrections.service.ts`) rejects (403,
+`SELF_REVIEW_NOT_ALLOWED`) any attempt to approve or reject a `CorrectionRequest` where
+`currentUser.id === request.requestedById`, checked before any mutation in both
+`approveCorrectionRequest` and `rejectCorrectionRequest` (and re-checked after the per-entry
+advisory lock, the same defense-in-depth double-check this module already applies to
+`REQUEST_NOT_PENDING`). The check is a plain id comparison — never a role name, role code, or
+permission combination. Today this can only ever fire for Master User, the only seeded role holding
+both `payroll:entry` and `corrections:approve`; it exists so that a future administrator-defined
+role combining the two doesn't silently inherit a self-approval path nobody designed. The frontend
+(`correction-request-detail-page.tsx`'s `isOwnRequest`) hides Approve/Reject for the requester and
+explains why, as a usability layer only — the backend guard above is what's actually authoritative.
+
+### Frontend page-level authorization
+
+Every authenticated route in `App.tsx` is now wrapped in `RequirePermission`
+(`frontend/src/components/layout/require-permission.tsx`) in addition to the existing
+`RequireSession`, so a route's own permission requirement is checked before its page component ever
+mounts — not left to the page's own data fetch to fail after the fact. `RequirePermission` accepts
+either a single permission or a list (any-of, the same semantics and shape as `nav-config.ts`'s own
+`NavItem.requiredPermission`) or an explicit `allOf` list, and renders the shared `AccessDeniedPage`
+in place of the page when the check fails. The actual decision is the plain, unit-tested
+`isAuthorizedFor` function (`lib/permissions.ts`) — this codebase's established testing convention
+is logic-only tests, never component rendering (`frontend/vitest.config.ts`), so the guard's
+correctness is verified by testing that function directly. **This remains a usability and clarity
+layer only** — every permission it checks is already, independently enforced by the backend's own
+`requirePermission` middleware and, where applicable, site-scope middleware; removing
+`RequirePermission` would make the UI less helpful, never less secure.
+
+Route-to-permission mapping is derived directly from each route's own backend enforcement and from
+`nav-config.ts`'s existing sidebar-visibility mapping, so the two can't drift apart. `/settings`
+deliberately carries no route-level permission requirement — `GET /settings/company` is
+intentionally open to any authenticated user (`settings.routes.ts`'s own documented decision), and
+`SettingsPage` already gates its own edit controls per-section (`canManage`/`canManageBanks`).
+
+### Project-sites read authorization
+
+`GET /api/v1/sites` and `GET /api/v1/sites/:id` previously carried no permission gate at all — any
+authenticated user, regardless of role, could reach the Project Sites admin page directly and
+receive whatever `listProjectSites` returned for them. That service function already scope-filtered
+correctly (Master User sees every site; everyone else only their own `UserSiteAssignment` rows) —
+the missing piece was purely the permission check in front of it.
+
+The fix is an any-of `requirePermission` gate (`SITE_LOOKUP_PERMISSIONS`,
+`project-sites.routes.ts`), deliberately **not** `sites:manage` alone: this endpoint is the shared
+site lookup nearly every operational page depends on for a dropdown or filter (Employee Registry,
+Payroll Entry, Salary Release, Bank Sheet, Cash Receiving, Advances, Payslips, Corrections, User
+site-assignment). The permission list was built from a grep-verified inventory of every real
+frontend consumer of `useProjectSites()` — `sites:manage`, `employees:view/create/edit`,
+`payroll:entry`, `payroll:view`, `payroll:release`, `bank-sheets:view`, `corrections:approve`,
+`advances:manage`, `payslips:view`, `users:manage`. A permission with no current site-data consumer
+(`banks:manage`, `settings:manage`, `audit-log:view`, `tasks:manage`) is deliberately excluded
+rather than added speculatively. The Project Sites *administration* page itself
+(`project-sites-page.tsx`) still requires `sites:manage` specifically, at the route-guard layer
+described above — this endpoint's broader gate is about the shared *lookup*, not the admin page.
+
+### Role names remain unsuitable for business authorization
+
+Checkpoint 4B's discovery phase found role **codes** (never role display names) hardcoded in a
+handful of places as an explicit "Master User is unrestricted" bypass
+(`require-site-access.ts`, `project-sites.service.ts`, `users.service.ts`, `employees.service.ts`'s
+`isMasterAdmin`, `tasks-panel.tsx`'s `isMasterUser`) and one hardcoded three-value `roleCode` enum
+(`shared/src/schemas/user.ts`'s `createUserSchema`) that is the actual reason no role beyond the
+three seeded ones can be created today. None of these were redesigned in this remediation — doing
+so is dynamic-role-administration work (see below), out of this checkpoint's scope. They remain
+recorded here as the concrete blockers a future administrator-defined-role system needs to remove:
+every one of those role-code comparisons would need to become "does this user hold every
+permission" (or a dedicated system-administrator flag) before role names/codes stop being a fixed
+assumption anywhere in this codebase.
+
+### Dynamic custom-role administration remains future work
+
+No role CRUD, no permission-matrix UI, no ability to rename a role or change a user's role after
+creation, and no multiple-roles-per-user or per-user permission overrides were implemented in this
+checkpoint, matching its explicit scope boundary. The schema is already shaped for this (`Role`/
+`Permission`/`RolePermission` are real, relational tables, not an enum), so the remaining work is
+entirely at the application layer — new `/roles` endpoints, removing the hardcoded `roleCode` enum,
+and a role-administration UI — not a schema migration.
+
+### CSRF: known intermittent-login issue is a separate, still-open investigation
+
+A previously logged intermittent "Missing or invalid CSRF token" login failure (cross-site cookie
+timing) is **not** addressed by this checkpoint and must not be read as fixed by anything above —
+Fix 1 through Fix 5 here touch authorization (permissions, roles, requester/reviewer separation),
+not the CSRF double-submit flow itself. That issue remains the next, separate stabilization
+investigation.
+
 ## CSRF Protection
 
 Cookie-based sessions (as opposed to bearer tokens sent in an `Authorization` header) reintroduce

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Download, MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import { normalizeCnic, toIsoDateOnly, type SessionUser } from '@payroll/shared';
+import { normalizeCnic, PERMISSIONS, toIsoDateOnly, type SessionUser } from '@payroll/shared';
+import { hasPermission } from '@/lib/permissions';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -699,6 +700,11 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
   const [siteFilter, setSiteFilter] = useState('');
   const [search, setSearch] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
+  // Action-control gating (Post-Phase-5 Stabilization Checkpoint 4B remediation) — a usability
+  // layer only; the backend's own employees.routes.ts independently enforces every one of these
+  // (employees:create for New Employee/Import, employees:edit for Edit/Mark as left/Reactivate).
+  const canCreate = hasPermission(user, PERMISSIONS.EMPLOYEES_CREATE);
+  const canEdit = hasPermission(user, PERMISSIONS.EMPLOYEES_EDIT);
 
   const { data: employees, isLoading } = useEmployees({
     siteIds: siteFilter ? [siteFilter] : undefined,
@@ -741,26 +747,30 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
               <Download className="h-3.5 w-3.5" aria-hidden />
               Export Excel
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importEmployees.isPending}
-            >
-              <Upload className="h-3.5 w-3.5" aria-hidden />
-              {importEmployees.isPending ? 'Importing…' : 'Import'}
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,.xlsx"
-              className="hidden"
-              onChange={handleFileSelected}
-            />
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3.5 w-3.5" aria-hidden />
-              New Employee
-            </Button>
+            {canCreate && (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importEmployees.isPending}
+                >
+                  <Upload className="h-3.5 w-3.5" aria-hidden />
+                  {importEmployees.isPending ? 'Importing…' : 'Import'}
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.xlsx"
+                  className="hidden"
+                  onChange={handleFileSelected}
+                />
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-3.5 w-3.5" aria-hidden />
+                  New Employee
+                </Button>
+              </>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -846,29 +856,31 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
-                              aria-label={`Actions for ${employee.name}`}
-                            >
-                              <MoreHorizontal className="h-4 w-4" aria-hidden />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onSelect={() => setEditingEmployee(employee)}>Edit</DropdownMenuItem>
-                            {!employee.dateOfLeaving && (
-                              <DropdownMenuItem onSelect={() => setLeavingEmployee(employee)}>
-                                Mark as left
-                              </DropdownMenuItem>
-                            )}
-                            {employee.dateOfLeaving && (
-                              <DropdownMenuItem onSelect={() => setReactivatingEmployeeId(employee.id)}>
-                                Reactivate
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        {canEdit && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+                                aria-label={`Actions for ${employee.name}`}
+                              >
+                                <MoreHorizontal className="h-4 w-4" aria-hidden />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onSelect={() => setEditingEmployee(employee)}>Edit</DropdownMenuItem>
+                              {!employee.dateOfLeaving && (
+                                <DropdownMenuItem onSelect={() => setLeavingEmployee(employee)}>
+                                  Mark as left
+                                </DropdownMenuItem>
+                              )}
+                              {employee.dateOfLeaving && (
+                                <DropdownMenuItem onSelect={() => setReactivatingEmployeeId(employee.id)}>
+                                  Reactivate
+                                </DropdownMenuItem>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

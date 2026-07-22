@@ -29,6 +29,9 @@ const CORRECTION_ERROR_STATUS: Record<CorrectionValidationErrorCode, number> = {
   REQUEST_NOT_FOUND: 404,
   REVERSAL_TARGET_NOT_FOUND: 404,
   REQUEST_NOT_PENDING: 409,
+  // Post-Phase-5 Stabilization Checkpoint 4B remediation — an authorization failure (mirrors
+  // this codebase's existing forbidden() 403 convention), not a validation/resource-state one.
+  SELF_REVIEW_NOT_ALLOWED: 403,
   UNSUPPORTED_FIELD: 400,
   IMMUTABLE_FIELD: 400,
   INVALID_ADJUSTMENT_TYPE: 400,

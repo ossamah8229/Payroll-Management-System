@@ -63,6 +63,27 @@ function assertReasonNonBlank(reason: string, field: 'reason' | 'rejectionReason
   }
 }
 
+/**
+ * Post-Phase-5 Stabilization Checkpoint 4B remediation — requester/reviewer separation
+ * (docs/architecture/authentication.md). Whoever submitted a `CorrectionRequest` may never be the
+ * one who approves or rejects it, checked purely by comparing user ids — never a role name, role
+ * code, or permission combination. Today this can only ever fire for Master Admin (the only seeded
+ * role holding both `payroll:entry` and `corrections:approve`); it exists so a future
+ * administrator-defined role combining the two doesn't silently inherit a self-approval path
+ * nobody designed. Called both before and after the per-entry advisory lock is acquired
+ * (`approveCorrectionRequest`/`rejectCorrectionRequest`, below) — the same defense-in-depth
+ * double-check this module already applies to `REQUEST_NOT_PENDING` — so the guard is the very
+ * first thing evaluated both times, before any read that could feed a mutation.
+ */
+function assertNotSelfReview(currentUser: SessionUser, request: { requestedById: string }): void {
+  if (request.requestedById === currentUser.id) {
+    throw new CorrectionValidationError({
+      code: 'SELF_REVIEW_NOT_ALLOWED',
+      message: 'You cannot approve or reject your own correction request.',
+    });
+  }
+}
+
 /** Composes `BalanceAdjustment.remark` — the auto-generated, human-readable explanation shown on
  * the Payslip and Corrections Ledger (`docs/architecture/workflows/
  * corrections-and-balance-adjustments.md` §6's example text). Not byte-identical to that example,
@@ -248,6 +269,7 @@ export async function approveCorrectionRequest(
     if (!preLockRequest) {
       throw new CorrectionValidationError({ code: 'REQUEST_NOT_FOUND', message: `CorrectionRequest "${requestId}" does not exist.` });
     }
+    assertNotSelfReview(currentUser, preLockRequest);
     assertSiteAccess(currentUser, preLockRequest.payrollEntry.siteId);
 
     await acquirePayrollEntryLock(preLockRequest.payrollEntryId, tx);
@@ -256,6 +278,7 @@ export async function approveCorrectionRequest(
     if (!request) {
       throw new CorrectionValidationError({ code: 'REQUEST_NOT_FOUND', message: `CorrectionRequest "${requestId}" does not exist.` });
     }
+    assertNotSelfReview(currentUser, request);
     if (request.status !== 'PENDING') {
       throw new CorrectionValidationError({
         code: 'REQUEST_NOT_PENDING',
@@ -427,6 +450,7 @@ export async function rejectCorrectionRequest(
     if (!preLockRequest) {
       throw new CorrectionValidationError({ code: 'REQUEST_NOT_FOUND', message: `CorrectionRequest "${requestId}" does not exist.` });
     }
+    assertNotSelfReview(currentUser, preLockRequest);
     assertSiteAccess(currentUser, preLockRequest.payrollEntry.siteId);
 
     await acquirePayrollEntryLock(preLockRequest.payrollEntryId, tx);
@@ -438,6 +462,7 @@ export async function rejectCorrectionRequest(
         message: `CorrectionRequest "${requestId}" has already been decided and cannot be rejected.`,
       });
     }
+    assertNotSelfReview(currentUser, request);
 
     const affected = await markCorrectionRequestRejected(
       requestId,

@@ -631,6 +631,116 @@ describe('Phase 6 Checkpoint 3 — Correction request/approval/rejection workflo
     });
   });
 
+  // --- Requester/reviewer separation (Post-Phase-5 Stabilization Checkpoint 4B remediation) --------
+
+  /**
+   * `assertNotSelfReview` (corrections.service.ts) — whoever submitted a `CorrectionRequest` may
+   * never be the one who approves or rejects it, checked purely by comparing `requestedById` to
+   * `currentUser.id`. `masterAdminAgent` is the only fixture in this file holding both
+   * `payroll:entry` and `corrections:approve` simultaneously, so it doubles here as both the
+   * requester and (in the "different reviewer" cases) a second, independent admin agent stands in
+   * for a different reviewer — the exact scenario this guard exists for.
+   */
+  describe('Requester/reviewer separation', () => {
+    it('a requester holding corrections:approve cannot approve their own PAYABLE request', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('self-approve-payable');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '35000'));
+
+      const res = await approveRequest(admin, created.body.correctionRequest.id, { paymentTiming: 'DEFERRED' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('SELF_REVIEW_NOT_ALLOWED');
+    });
+
+    it('a requester holding corrections:approve cannot reject their own PAYABLE request', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('self-reject-payable');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '35000'));
+
+      const res = await rejectRequest(admin, created.body.correctionRequest.id, {
+        rejectionReason: 'Trying to reject my own request',
+      });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('SELF_REVIEW_NOT_ALLOWED');
+    });
+
+    it('a requester holding corrections:approve cannot approve their own RECOVERY request', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('self-approve-recovery');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '25000'));
+
+      const res = await approveRequest(admin, created.body.correctionRequest.id);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('SELF_REVIEW_NOT_ALLOWED');
+    });
+
+    it('a requester holding corrections:approve cannot reject their own RECOVERY request', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('self-reject-recovery');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '25000'));
+
+      const res = await rejectRequest(admin, created.body.correctionRequest.id, {
+        rejectionReason: 'Trying to reject my own request',
+      });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('SELF_REVIEW_NOT_ALLOWED');
+    });
+
+    it('a different authorized reviewer can still approve the request', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('other-reviewer-approve');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '35000'));
+      const otherReviewer = await masterAdminAgent('cp3-other-reviewer-approve-admin2@test.local');
+
+      const res = await approveRequest(otherReviewer, created.body.correctionRequest.id, { paymentTiming: 'DEFERRED' });
+      expect(res.status).toBe(200);
+      expect(res.body.correctionRequest.status).toBe('APPROVED');
+      expect(res.body.correction.approvedById).toBe(otherReviewer.userId);
+    });
+
+    it('a different authorized reviewer can still reject the request', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('other-reviewer-reject');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '35000'));
+      const otherReviewer = await masterAdminAgent('cp3-other-reviewer-reject-admin2@test.local');
+
+      const res = await rejectRequest(otherReviewer, created.body.correctionRequest.id, {
+        rejectionReason: 'Reviewed by someone else',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.correctionRequest.status).toBe('REJECTED');
+    });
+
+    it('a blocked self-approval attempt leaves the request, Correction, and BalanceAdjustment counts unchanged', async () => {
+      const { entry, admin, adjustmentType } = await makeFixtures('self-block-no-side-effects');
+      const created = await createRequest(admin, entry.id, GROSS_PAY_BODY(adjustmentType.id, '35000'));
+
+      const res = await approveRequest(admin, created.body.correctionRequest.id, { paymentTiming: 'DEFERRED' });
+      expect(res.status).toBe(403);
+
+      const stillPending = await prisma.correctionRequest.findUniqueOrThrow({
+        where: { id: created.body.correctionRequest.id },
+      });
+      expect(stillPending.status).toBe('PENDING');
+      expect(stillPending.reviewedById).toBeNull();
+      expect(stillPending.resultingCorrectionId).toBeNull();
+
+      const correctionCount = await prisma.correction.count({ where: { payrollEntryId: entry.id } });
+      expect(correctionCount).toBe(0);
+      const balanceAdjustmentCount = await prisma.balanceAdjustment.count({
+        where: { correction: { payrollEntryId: entry.id } },
+      });
+      expect(balanceAdjustmentCount).toBe(0);
+    });
+
+    it('a non-requester without corrections:approve is still blocked by the ordinary permission check, not the self-review guard', async () => {
+      const { site, entry, adjustmentType } = await makeFixtures('non-requester-no-permission');
+      const staff = await payrollStaffAgent('cp3-non-requester-no-permission-staff@test.local', [site.id]);
+      const otherStaff = await payrollStaffAgent('cp3-non-requester-no-permission-staff2@test.local', [site.id]);
+      const created = await createRequest(staff, entry.id, GROSS_PAY_BODY(adjustmentType.id));
+
+      // otherStaff never submitted this request, but still holds no corrections:approve at all —
+      // requirePermission's own middleware rejects this before assertNotSelfReview is ever reached.
+      const res = await approveRequest(otherStaff, created.body.correctionRequest.id, { paymentTiming: 'DEFERRED' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+  });
+
   // --- Reversal ------------------------------------------------------------------------------------
 
   describe('Reversal', () => {

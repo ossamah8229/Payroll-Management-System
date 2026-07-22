@@ -21,7 +21,39 @@ export const projectSitesRouter = Router();
 
 projectSitesRouter.use(requireAuth);
 
-projectSitesRouter.get('/', async (req, res, next) => {
+/**
+ * Post-Phase-5 Stabilization Checkpoint 4B remediation — `GET /sites`/`GET /sites/:id` previously
+ * carried no permission gate at all (any authenticated user, any role), which let a direct URL to
+ * the Project Sites admin page render for a role the sidebar hides it from (Checkpoint 4B
+ * validation finding). `listProjectSites` (project-sites.service.ts) already scope-filters its
+ * results correctly (Master Admin sees every site; everyone else only their own
+ * `UserSiteAssignment` rows) — the only thing missing was a permission check before reaching it.
+ *
+ * This is deliberately an any-of list, not `sites:manage` alone: this endpoint is the shared site
+ * lookup nearly every operational page in the app depends on for a dropdown/filter (Employee
+ * Registry, Payroll Entry, Salary Release, Bank Sheet, Cash Receiving, Advances, Payslips,
+ * Corrections, User site-assignment) — gating it to `sites:manage` alone would have broken every
+ * one of those legitimate payroll/employee workflows. Every permission below corresponds to a real,
+ * grep-verified frontend consumer of `useProjectSites()`; a permission with no current site-data
+ * consumer (`banks:manage`, `settings:manage`, `audit-log:view`, `tasks:manage`) is deliberately
+ * excluded rather than added speculatively.
+ */
+const SITE_LOOKUP_PERMISSIONS = [
+  PERMISSIONS.SITES_MANAGE,
+  PERMISSIONS.EMPLOYEES_VIEW,
+  PERMISSIONS.EMPLOYEES_CREATE,
+  PERMISSIONS.EMPLOYEES_EDIT,
+  PERMISSIONS.PAYROLL_ENTRY,
+  PERMISSIONS.PAYROLL_VIEW,
+  PERMISSIONS.PAYROLL_RELEASE,
+  PERMISSIONS.BANK_SHEETS_VIEW,
+  PERMISSIONS.CORRECTIONS_APPROVE,
+  PERMISSIONS.ADVANCES_MANAGE,
+  PERMISSIONS.PAYSLIPS_VIEW,
+  PERMISSIONS.USERS_MANAGE,
+];
+
+projectSitesRouter.get('/', requirePermission(SITE_LOOKUP_PERMISSIONS), async (req, res, next) => {
   try {
     const sites = await listProjectSites(req.currentUser!);
     res.status(200).json({ sites });
@@ -30,7 +62,7 @@ projectSitesRouter.get('/', async (req, res, next) => {
   }
 });
 
-projectSitesRouter.get('/:id', async (req, res, next) => {
+projectSitesRouter.get('/:id', requirePermission(SITE_LOOKUP_PERMISSIONS), async (req, res, next) => {
   try {
     const site = await getProjectSite(requireIdParam(req.params.id));
     res.status(200).json({ site });

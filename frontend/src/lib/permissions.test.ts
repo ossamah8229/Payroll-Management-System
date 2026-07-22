@@ -6,8 +6,10 @@ import {
   canReviewCorrectionRequests,
   canViewCorrectionsLedger,
   defaultCorrectionsTab,
+  hasAllPermissions,
   hasAnyPermission,
   hasPermission,
+  isAuthorizedFor,
 } from './permissions';
 
 function fakeUser(permissions: SessionUser['permissions']): SessionUser {
@@ -40,6 +42,64 @@ describe('hasAnyPermission', () => {
 
   it('is false when the user holds none of the listed permissions', () => {
     expect(hasAnyPermission(fakeUser(['payslips:view']), ['payroll:entry', 'corrections:approve'])).toBe(false);
+  });
+});
+
+describe('hasAllPermissions', () => {
+  it('is true when the user holds every listed permission', () => {
+    expect(hasAllPermissions(fakeUser(['payroll:entry', 'corrections:approve']), ['payroll:entry', 'corrections:approve'])).toBe(
+      true,
+    );
+  });
+
+  it('is false when the user is missing even one of the listed permissions', () => {
+    expect(hasAllPermissions(fakeUser(['payroll:entry']), ['payroll:entry', 'corrections:approve'])).toBe(false);
+  });
+});
+
+// --- RequirePermission's own authorization decision (Post-Phase-5 Stabilization Checkpoint 4B
+// remediation) — this codebase's established convention is unit-testing the plain decision
+// function, never rendering the guard component itself (vitest.config.ts: logic tests only).
+
+describe('isAuthorizedFor', () => {
+  it('is true when no requirement is given (session alone is enough), matching isNavItemVisible\'s own convention', () => {
+    expect(isAuthorizedFor(fakeUser([]), {})).toBe(true);
+  });
+
+  it('is true when the user holds the single required permission', () => {
+    expect(isAuthorizedFor(fakeUser(['sites:manage']), { permission: 'sites:manage' })).toBe(true);
+  });
+
+  it('is false when the user lacks the single required permission', () => {
+    expect(isAuthorizedFor(fakeUser(['payroll:entry']), { permission: 'sites:manage' })).toBe(false);
+  });
+
+  it('any-of: is true when the user holds at least one permission in the array', () => {
+    expect(
+      isAuthorizedFor(fakeUser(['corrections:approve']), { permission: ['payroll:entry', 'corrections:approve'] }),
+    ).toBe(true);
+  });
+
+  it('any-of: is false when the user holds none of the permissions in the array', () => {
+    expect(isAuthorizedFor(fakeUser(['payslips:view']), { permission: ['payroll:entry', 'corrections:approve'] })).toBe(
+      false,
+    );
+  });
+
+  it('all-of: is true only when the user holds every permission in allOf', () => {
+    expect(isAuthorizedFor(fakeUser(['payroll:entry', 'sites:manage']), { allOf: ['payroll:entry', 'sites:manage'] })).toBe(
+      true,
+    );
+  });
+
+  it('all-of: is false when the user is missing even one permission in allOf', () => {
+    expect(isAuthorizedFor(fakeUser(['payroll:entry']), { allOf: ['payroll:entry', 'sites:manage'] })).toBe(false);
+  });
+
+  it('prefers allOf over permission when both are somehow provided', () => {
+    expect(
+      isAuthorizedFor(fakeUser(['payroll:entry']), { permission: 'payroll:entry', allOf: ['payroll:entry', 'sites:manage'] }),
+    ).toBe(false);
   });
 });
 

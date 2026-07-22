@@ -12,6 +12,37 @@ export function hasAnyPermission(user: SessionUser, permissions: PermissionKey[]
   return permissions.some((permission) => hasPermission(user, permission));
 }
 
+/** True if `user` holds every one of `permissions` (AND semantics) — the counterpart to
+ * `hasAnyPermission`, for the rarer case where a page/action genuinely needs more than one
+ * permission at once rather than any-of-several (Post-Phase-5 Stabilization Checkpoint 4B
+ * remediation, `RequirePermission`'s own `allOf` mode). No current route needs this yet — every
+ * existing multi-permission gate in this app (`nav-config.ts`, backend `requirePermission` calls)
+ * is any-of — but the guard supports both explicitly rather than assuming any-of is the only shape
+ * a permission check will ever take. */
+export function hasAllPermissions(user: SessionUser, permissions: PermissionKey[]): boolean {
+  return permissions.every((permission) => hasPermission(user, permission));
+}
+
+/** `RequirePermission`'s (components/layout/require-permission.tsx) own prop shape, reused here so
+ * the actual authorization decision is a plain, deterministic function — this codebase's own
+ * established testing convention (vitest.config.ts: logic tests only, no component/DOM rendering)
+ * means the guard's behavior is verified by unit-testing this function directly, never by
+ * rendering the component. `allOf` takes precedence when both are somehow provided; omitting both
+ * means "no requirement beyond an authenticated session," matching `nav-config.ts`'s own
+ * `isNavItemVisible` convention for an absent `requiredPermission`. */
+export interface PermissionRequirement {
+  permission?: PermissionKey | PermissionKey[];
+  allOf?: PermissionKey[];
+}
+
+export function isAuthorizedFor(user: SessionUser, requirement: PermissionRequirement): boolean {
+  if (requirement.allOf) return hasAllPermissions(user, requirement.allOf);
+  if (requirement.permission) {
+    return hasAnyPermission(user, Array.isArray(requirement.permission) ? requirement.permission : [requirement.permission]);
+  }
+  return true;
+}
+
 // --- Corrections domain (Phase 6 Checkpoint 6A) -----------------------------------------------
 // Mirrors the backend's own ENTRY_VIEW_PERMISSIONS/BALANCE_VIEW_PERMISSIONS convention
 // (backend/src/modules/corrections/corrections.routes.ts) as a single frontend source of truth

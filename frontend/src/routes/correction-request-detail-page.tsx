@@ -41,6 +41,10 @@ export function CorrectionRequestDetailPage({ user }: { user: SessionUser }) {
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const canApprove = canReviewCorrectionRequests(user);
+  // Usability layer only — the backend (`assertNotSelfReview`, corrections.service.ts) is what
+  // actually enforces requester/reviewer separation; this just avoids showing a reviewer a button
+  // that would 403 the moment they clicked it, on their own submitted request.
+  const isOwnRequest = request.data?.requestedBy.id === user.id;
 
   return (
     <AppShell user={user} title="Correction Request" subtitle="Request detail, review, and outcome">
@@ -83,7 +87,7 @@ export function CorrectionRequestDetailPage({ user }: { user: SessionUser }) {
                   <CardTitle>{correctionFieldLabel(request.data.field)}</CardTitle>
                   <Badge tone={correctionRequestStatusTone(request.data.status)}>{request.data.status}</Badge>
                 </div>
-                {request.data.status === 'PENDING' && canApprove && (
+                {request.data.status === 'PENDING' && canApprove && !isOwnRequest && (
                   <div className="flex gap-2">
                     <Button variant="secondary" size="sm" onClick={() => setRejecting(true)}>
                       Reject
@@ -92,6 +96,11 @@ export function CorrectionRequestDetailPage({ user }: { user: SessionUser }) {
                       Approve
                     </Button>
                   </div>
+                )}
+                {request.data.status === 'PENDING' && canApprove && isOwnRequest && (
+                  <p className="text-xs text-text-muted">
+                    You submitted this request — another reviewer must approve or reject it.
+                  </p>
                 )}
               </CardHeader>
               <CardContent className="flex flex-col">

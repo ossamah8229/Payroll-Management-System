@@ -30,7 +30,14 @@ export type CorrectionValidationErrorCode =
   | 'REQUEST_NOT_PENDING'
   | 'PAYMENT_TIMING_REQUIRED'
   | 'PAYMENT_TIMING_NOT_APPLICABLE'
-  | 'RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE';
+  | 'RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE'
+  /** Post-Phase-5 Stabilization Checkpoint 4B remediation — requester/reviewer separation.
+   * `currentUser.id === request.requestedById`: whoever submitted a `CorrectionRequest` may never
+   * be the one who approves or rejects it, regardless of which permission(s) they hold (today this
+   * can only happen for Master Admin, who holds both `payroll:entry` and `corrections:approve`;
+   * a future administrator-defined role combining the two would inherit the same exposure without
+   * this guard — see docs/architecture/authentication.md). */
+  | 'SELF_REVIEW_NOT_ALLOWED';
 
 /** The typed shape every `CorrectionValidationError` carries — exported separately from the error
  * class itself so a caller can build/inspect this shape (e.g. for a future API error response)

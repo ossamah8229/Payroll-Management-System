@@ -1,3 +1,4 @@
+import type { Browser, Page } from '@playwright/test';
 import { test, expect, login } from '../fixtures/auth';
 import { apiGet, apiPost } from '../helpers/api';
 import { createScopedUser } from '../helpers/create-scoped-user';
@@ -23,7 +24,40 @@ import { createScopedUser } from '../helpers/create-scoped-user';
  * CONSUMED`. This is the first point in this suite's history the full PAYABLE lifecycle can reach
  * `SETTLED` at all — no prior checkpoint's frontend had any way to observe it, since nothing ever
  * consumed a Draft-cycle reservation before this checkpoint.
+ *
+ * Post-Phase-5 Stabilization Checkpoint 4B remediation — `assertNotSelfReview`
+ * (corrections.service.ts) now rejects a requester approving/rejecting their own
+ * `CorrectionRequest`, so a scenario can no longer submit and then approve/reject the same request
+ * from the single Master-Admin `authenticatedPage` session it used to. Every scenario below still
+ * *submits* its request as the Master Admin (`payroll:entry`), then hands off to
+ * `reviewerSessionFor` for the approve/reject step — a second, independent logged-in session for a
+ * dedicated reviewer holding only `corrections:approve`, mirroring Scenario 6's own
+ * already-established second-context pattern rather than inventing a new one.
  */
+
+/** A second, independent logged-in session holding only `corrections:approve` (site-scoped to
+ * `siteId`) — for the approve/reject step of a scenario whose request was submitted by a different
+ * user (`assertNotSelfReview`'s whole point). One dedicated user per call (unique email) rather
+ * than a single shared reviewer reused across scenarios, so no scenario's own state depends on
+ * another's use of the same account. */
+async function reviewerSessionFor(browser: Browser, siteId: string): Promise<{ page: Page; close: () => Promise<void> }> {
+  const email = `e2e-corrections-second-reviewer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
+  const password = 'SecondReviewerPassword1!';
+  await createScopedUser({
+    email,
+    password,
+    roleCode: 'E2E_CORRECTIONS_SECOND_REVIEWER',
+    permissionKeys: ['corrections:approve'],
+    siteIds: [siteId],
+    name: 'E2E Second Reviewer',
+  });
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page, email, password);
+
+  return { page, close: () => context.close() };
+}
 
 interface PayrollCycleRow {
   id: string;
@@ -57,6 +91,7 @@ async function findCorrectableEntry(context: import('@playwright/test').BrowserC
 
 test.describe('Corrections workflow', () => {
   test('Scenario 1 — request and approve a PAYABLE correction, source payroll stays read-only', async ({
+    browser,
     authenticatedPage: page,
   }) => {
     const context = page.context();
@@ -64,7 +99,7 @@ test.describe('Corrections workflow', () => {
     test.skip(!target, 'No Archived cycle with an entry exists yet — run the full suite, not this file alone.');
     if (!target) return;
 
-    // --- 1. Open the Archived Payroll Entry view and request a correction ---
+    // --- 1. Open the Archived Payroll Entry view and request a correction (as Master Admin) ---
     await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
     await expect(page.getByText('This cycle is Archived and permanently read-only')).toBeVisible();
 
@@ -86,25 +121,60 @@ test.describe('Corrections workflow', () => {
 
     await requestModal.getByRole('button', { name: 'Submit Request' }).click();
     await page.waitForURL(/\/corrections\/requests\//);
+    const requestUrl = page.url();
 
-    // --- 2. Approve it from the request detail page ---
-    await expect(page.getByRole('button', { name: 'Approve' })).toBeVisible();
-    await page.getByRole('button', { name: 'Approve' }).click();
-    const approveModal = page.getByRole('dialog');
+    // --- 2. Approve it from the request detail page — a *different* reviewer session
+    // (assertNotSelfReview, Post-Phase-5 Stabilization Checkpoint 4B remediation: the requester
+    // above may never be the one who approves/rejects their own request). ---
+    const reviewer = await reviewerSessionFor(browser, target.siteId);
+    await reviewer.page.goto(requestUrl);
+    await expect(reviewer.page.getByRole('button', { name: 'Approve' })).toBeVisible();
+    await reviewer.page.getByRole('button', { name: 'Approve' }).click();
+    const approveModal = reviewer.page.getByRole('dialog');
     await expect(approveModal.getByText('Fresh Preview')).toBeVisible();
     await approveModal.locator('#approve-payment-timing').selectOption('DEFERRED');
     await approveModal.getByRole('button', { name: 'Approve', exact: true }).click();
 
     // --- 3. Verify the immutable Correction now shows on the request detail page ---
-    await expect(page.getByText('Resulting Correction')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await expect(reviewer.page.getByText('Resulting Correction')).toBeVisible();
+    await expect(reviewer.page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await reviewer.close();
 
     // --- 4. Source payroll remains read-only — Archived banner still present, unchanged ---
     await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
     await expect(page.getByText('This cycle is Archived and permanently read-only')).toBeVisible();
   });
 
+  test('Scenario 1B — the requester cannot approve or reject their own request (Post-Phase-5 Stabilization Checkpoint 4B remediation)', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const target = await findCorrectableEntry(context);
+    test.skip(!target, 'No Archived cycle with an entry exists yet — run the full suite, not this file alone.');
+    if (!target) return;
+
+    await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
+    await page.getByRole('button', { name: 'Request Correction' }).click();
+    const requestModal = page.getByRole('dialog');
+    await requestModal.locator('#correction-entry').selectOption({ index: 1 });
+    await requestModal.locator('#correction-field').selectOption('ALLOWANCE');
+    await requestModal.locator('#correction-adjustment-type').selectOption({ index: 1 });
+    await requestModal.locator('#correction-proposed-value').fill('1000');
+    await requestModal.locator('#correction-reason').fill('E2E: self-review guard coverage');
+    await expect(requestModal.getByTestId('delta-classification')).toBeVisible({ timeout: 5000 });
+    await requestModal.getByRole('button', { name: 'Submit Request' }).click();
+    await page.waitForURL(/\/corrections\/requests\//);
+
+    // The frontend's own usability-layer hint (correction-request-detail-page.tsx's `isOwnRequest`)
+    // hides Approve/Reject entirely for the requester and explains why, rather than showing buttons
+    // that would only 403 when clicked.
+    await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Reject' })).toHaveCount(0);
+    await expect(page.getByText('You submitted this request — another reviewer must approve or reject it.')).toBeVisible();
+  });
+
   test('Scenario 2 — request and approve a RECOVERY correction, no immediate PayrollEntry mutation', async ({
+    browser,
     authenticatedPage: page,
   }) => {
     const context = page.context();
@@ -126,24 +196,29 @@ test.describe('Corrections workflow', () => {
     await expect(requestModal.getByTestId('delta-classification')).toHaveText('Recovery', { timeout: 5000 });
     await requestModal.getByRole('button', { name: 'Submit Request' }).click();
     await page.waitForURL(/\/corrections\/requests\//);
+    const requestUrl = page.url();
 
-    await page.getByRole('button', { name: 'Approve' }).click();
-    const approveModal = page.getByRole('dialog');
+    // A different reviewer session approves — see Scenario 1's own comment (assertNotSelfReview).
+    const reviewer = await reviewerSessionFor(browser, target.siteId);
+    await reviewer.page.goto(requestUrl);
+    await reviewer.page.getByRole('button', { name: 'Approve' }).click();
+    const approveModal = reviewer.page.getByRole('dialog');
     await expect(approveModal.getByText('Fresh Preview')).toBeVisible();
     // No payment-timing field for RECOVERY — the installment field is optional and left blank
     // (full recovery next cycle, the documented default).
     await expect(approveModal.locator('#approve-payment-timing')).toHaveCount(0);
     await approveModal.getByRole('button', { name: 'Approve', exact: true }).click();
-    await expect(page.getByText('Resulting Correction')).toBeVisible();
+    await expect(reviewer.page.getByText('Resulting Correction')).toBeVisible();
 
     // Follow the Ledger link this approval produced through to the BalanceAdjustment detail page
     // and confirm nothing has been materialized/settled yet — approval alone never touches any
     // PayrollEntry (Checkpoint 5's own "reservation, not settlement" invariant).
-    await page.goto('/corrections');
-    await page.getByRole('button', { name: 'Corrections Ledger' }).click();
-    await page.getByRole('cell', { name: 'Recovery', exact: true }).first().click();
-    await expect(page.getByText('No Draft-cycle reservations yet')).toBeVisible();
-    await expect(page.getByText('No settlement recorded yet')).toBeVisible();
+    await reviewer.page.goto('/corrections');
+    await reviewer.page.getByRole('button', { name: 'Corrections Ledger' }).click();
+    await reviewer.page.getByRole('cell', { name: 'Recovery', exact: true }).first().click();
+    await expect(reviewer.page.getByText('No Draft-cycle reservations yet')).toBeVisible();
+    await expect(reviewer.page.getByText('No settlement recorded yet')).toBeVisible();
+    await reviewer.close();
   });
 
   test('Scenario 4 — rollover materializes a reservation; standalone payment is then blocked', async ({
@@ -214,6 +289,7 @@ test.describe('Corrections workflow', () => {
   });
 
   test('Scenario 3 — reject a request: no Correction or BalanceAdjustment is created', async ({
+    browser,
     authenticatedPage: page,
   }) => {
     const context = page.context();
@@ -232,17 +308,22 @@ test.describe('Corrections workflow', () => {
     await expect(requestModal.getByTestId('delta-classification')).toBeVisible({ timeout: 5000 });
     await requestModal.getByRole('button', { name: 'Submit Request' }).click();
     await page.waitForURL(/\/corrections\/requests\//);
+    const requestUrl = page.url();
 
-    await page.getByRole('button', { name: 'Reject' }).click();
-    const rejectModal = page.getByRole('dialog');
+    // A different reviewer session rejects — see Scenario 1's own comment (assertNotSelfReview).
+    const reviewer = await reviewerSessionFor(browser, target.siteId);
+    await reviewer.page.goto(requestUrl);
+    await reviewer.page.getByRole('button', { name: 'Reject' }).click();
+    const rejectModal = reviewer.page.getByRole('dialog');
     await rejectModal.locator('#reject-reason').fill('E2E: rejecting for test coverage');
     await rejectModal.getByRole('button', { name: 'Reject Request' }).click();
 
     // Exact match — a case-insensitive substring match on 'REJECTED' also matches the transient
     // "Correction request rejected" success toast, a strict-mode ambiguity independent of this
     // checkpoint's own permission-navigation fix.
-    await expect(page.getByText('REJECTED', { exact: true })).toBeVisible();
-    await expect(page.getByText('Resulting Correction')).toHaveCount(0);
+    await expect(reviewer.page.getByText('REJECTED', { exact: true })).toBeVisible();
+    await expect(reviewer.page.getByText('Resulting Correction')).toHaveCount(0);
+    await reviewer.close();
   });
 
   test('Scenario 5 — historical navigation from the Corrections Ledger back to source payroll', async ({
