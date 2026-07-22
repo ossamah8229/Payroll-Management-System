@@ -5145,6 +5145,82 @@ doc or `IMPLEMENTATION_PLAN.md`, was touched, since no implementation changed).
 
 ---
 
+### Post-Phase-5 Stabilization Checkpoint 5 — Administration & Security Management Phase 1 (Dynamic Roles, Permission Matrix, User Role Assignment) — COMPLETE, COMMITTED as `bf1a749`/`5983232`/`2e4c81f`, NOT PUSHED
+
+**Removes the operational blocker preventing structured team testing**: a Master User
+(`users:manage`) can now create business-specific roles at runtime — name, optional description,
+and a permission-matrix selection from the full catalog — rename, duplicate, activate/deactivate,
+and delete them, and reassign a user's single role, all without a source-code change or
+redeployment. Follows on from this same session's Post-Phase-5 Stabilization Checkpoints 4A
+(payroll-state validation), 4B (role/permission validation, remediated and committed as `abb68a3`),
+and 4C (CSRF race investigation, root-caused but explicitly deferred, not fixed here).
+
+**Schema**: `Role` gains `isActive` (deactivating a role immediately strips its *existing* holders'
+effective access — `auth.service.ts` treats `!role.isActive` exactly like `!user.isActive` — a
+deliberate, documented deviation from this schema's usual `Bank`/`ProjectSite` "isActive blocks new
+links only" convention) and `isSystemRole` (the sole, name-independent signal that Master
+Admin/Payroll Staff/Finance can never be deleted; never inferred from `name` or `code`).
+Migration `20260722145122_role_admin_fields`.
+
+**Backend**: new `/api/v1/roles` module (list/detail/create/update/duplicate/delete/assigned-users),
+all gated on `users:manage`. A permission-based "final active administrator" safeguard
+(`CRITICAL_ADMIN_PERMISSIONS`: `users:manage`, `settings:manage`, `sites:manage`, `audit-log:view` —
+deliberately excluding `payroll-cycle:manage`, see `docs/architecture/authentication.md`'s new
+section for the rationale) blocks deactivating a role, or reassigning/deactivating a user, whenever
+it would leave zero qualifying administrators — defined entirely by capability, never by role name
+or code. User creation/update now take `roleId` (not the old `roleCode` enum); reassigning a user's
+role validates the destination role, applies the same safeguard, writes a dedicated
+`user.role_changed` audit entry, and revokes every existing session for that user
+(`invalidateAllSessionsForUser`) so the change requires a fresh login. `prisma/seed.ts` is now
+bootstrap-only — it grants each system role's permissions only the first time a role code is seen,
+never overwriting an administrator's later edits on routine re-seed (verified live: stripping a
+permission from Payroll Staff and re-running seed left it stripped).
+
+**Frontend**: a new "Roles & Permissions" page (role list with permission/assigned-user counts and
+active/system badges; Create/Edit/Duplicate modals sharing one reusable grouped permission-matrix
+component, `components/roles/permission-matrix.tsx`) alongside the existing Users page. Every role
+selector (Create/Edit User) now loads roles from the API — no compile-time `MASTER_ADMIN`/
+`PAYROLL_STAFF`/`FINANCE` enum anywhere in this new code — and the Edit User form now warns that
+changing a user's role signs them out of every active session.
+
+**Explicitly retained, not touched**: one role per user, the relational `Permission`/`RolePermission`
+tables, `User.roleId`, the existing permission middleware and site-scope enforcement, and
+session-reloading of permissions from the database on every request. **Explicitly not added**:
+multiple roles per user, per-user permission overrides/denials, permission inheritance, role
+hierarchy, or any role-name-based authorization check in new code (the small set of pre-existing
+`roleCode === ROLE_CODES.MASTER_ADMIN` legacy bypasses — site-scope, `users.service.ts`'s
+site-assignment skip, `tasks-panel.tsx`'s `isMasterUser` — were reviewed and deliberately left in
+place; none of them block this phase's own functionality, since custom roles work correctly
+precisely by *not* being recognized as Master Admin). **The Checkpoint 4C CSRF race remains a
+separate, still-open, unfixed issue** — no CSRF file was touched this checkpoint.
+
+**Verification**: backend 44 suites / 851 tests, frontend 9 files / 80 tests, both typecheck/lint/
+build clean, `prisma validate` and `prisma migrate status` both clean (19 migrations, schema up to
+date). Full E2E suite (Playwright/Chromium, disposable Postgres, production frontend build)
+**27/27 passing**, including a new `08-role-administration.spec.ts` covering: six named
+team-testing roles created (plus one duplicated role, confirming the original is left unchanged);
+one user per role with site assignment created through the real UI; logins as the Employee
+Registry, Corrections Reviewer, and Reports Viewer testers confirming nav/route/API/site-scope
+enforcement and that a real CSRF-attached mutation is still rejected by permission, not just by
+missing CSRF; a role rename leaving its user's access unaffected; a permission removal taking
+effect on the very next request from an already-logged-in session; a user's role reassignment
+producing an audit entry, session revocation, and updated permissions on re-login; and rejection of
+an assigned-role deletion, a final-administrator-stripping role deactivation, and assignment of an
+inactive role. Three defects were found and fixed in the *test spec itself* during this
+verification (not the application): a heading assertion targeting the topbar's non-semantic title
+div instead of the page's real `CardTitle`; several raw `context.request` calls using a relative
+path that silently hit the frontend's static preview server instead of the backend (no `baseURL`
+proxy exists in production-build mode); and a `.first()` site-checkbox selection that could pick
+the wrong site once other specs' fixture sites already existed in the same disposable database. All
+9 required screenshots captured to `test-results/role-administration-screenshots/` (gitignored, not
+committed). The pre-existing `04-session-revocation.spec.ts` was also fixed — the `roleCode` →
+`roleId` schema change had broken its own user-creation call — with no weakening of its assertions.
+
+**Not pushed, not deployed**, per this checkpoint's explicit instruction — three commits ahead of
+`origin/main` (`bf1a749`, `5983232`, `2e4c81f`) awaiting the user's own decision to push.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -5486,6 +5562,18 @@ doc or `IMPLEMENTATION_PLAN.md`, was touched, since no implementation changed).
 ---
 
 ## 5. Exact next action for the next development session
+
+**Updated 2026-07-22 — Post-Phase-5 Stabilization Checkpoint 5 (Administration & Security
+Management Phase 1 — Dynamic Roles, Permission Matrix, User Role Assignment) is COMPLETE,
+committed as `bf1a749`/`5983232`/`2e4c81f`, NOT pushed.** See §1's own entry for the full record.
+Master Users can now create/edit/duplicate/deactivate/delete roles and reassign a user's role
+entirely at runtime, with a permission-based final-administrator safeguard and immediate session
+revocation on role change. Backend **851/851**, frontend **80/80**, E2E **27/27** (new
+`08-role-administration.spec.ts` plus every pre-existing regression spec). The Checkpoint 4C CSRF
+race remains open and unfixed, deliberately out of this checkpoint's scope. **Do not push or
+deploy these three commits without the user's own separate go-ahead.** The paragraph below
+(originally written 2026-07-19, for Phase 6 Checkpoint 6A) is carried forward for its still-open
+content only.
 
 **Updated 2026-07-19 — Phase 6 Checkpoint 6A (Corrections Navigation Permission Verification &
 Focused Fix) is CLOSED, Checkpoint 6 is now fully closed.** Checkpoints 1–6 (domain/schema,

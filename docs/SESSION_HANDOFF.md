@@ -17,6 +17,16 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-07-22 — Post-Phase-5 Stabilization Checkpoint 5 (Administration & Security
+> Management Phase 1) is COMPLETE**, committed as `bf1a749`/`5983232`/`2e4c81f`, **not pushed**. A
+> Master User can now create/rename/duplicate/deactivate/delete roles and their permission matrix,
+> and reassign a user's role, entirely at runtime — no source-code change or redeployment. One role
+> per user, per-user permission overrides, and multi-role assignment remain explicitly out of
+> scope; the Checkpoint 4C CSRF race remains open and unfixed. Full record:
+> `docs/PROJECT_PROGRESS.md` §1's own dated entry (same section, following Phase 6 Checkpoint 7A).
+> Everything below this notice describes state as of Phase 6's close and is otherwise still
+> accurate.
+
 **All of Phases 0–5, all four Post-Phase-5 Stabilization checkpoints, and all of Phase 6
 (Corrections & Balance Adjustments) are complete. Phase 6 is CLOSED.** The
 Architecture Review and its Product Decision Resolution (both review-only, no repository changes)
@@ -74,9 +84,12 @@ code changed) then created the Phase 6 living HTML prototype every prior phase a
 console errors under a headless-browser pass — restoring parity with Phases 1–5's own prototype
 convention.** Do not begin Phase 7 without its own separate, explicit go-ahead.
 
-**Latest commits:** Phase 6 Checkpoint 6's implementation (`0256ab4`) and doc-hash follow-up
-(`790147c`); Phase 6 Checkpoint 6A's implementation/test commit `9d6a39b`; Phase 6 Checkpoint 7's
-implementation/test commit `4812971`; Phase 6 Checkpoint 7A's prototype commit `039b109`.
+**Latest commits:** Post-Phase-5 Stabilization Checkpoint 5's three commits — database/backend role
+administration `bf1a749`, frontend role/user administration `5983232`, tests and documentation
+`2e4c81f` — **not pushed**. Before that: Phase 6 Checkpoint 6's implementation (`0256ab4`) and
+doc-hash follow-up (`790147c`); Phase 6 Checkpoint 6A's implementation/test commit `9d6a39b`; Phase
+6 Checkpoint 7's implementation/test commit `4812971`; Phase 6 Checkpoint 7A's prototype commit
+`039b109`.
 
 **Stabilization checkpoints, all complete:**
 - **Checkpoint 1** (AUD-001–005: backend start-script fix, CSV-formula-injection sanitizer,
@@ -89,6 +102,10 @@ implementation/test commit `4812971`; Phase 6 Checkpoint 7A's prototype commit `
 - **Checkpoint 4** (AUD-012 route-level frontend code splitting; AUD-013 the permanent Playwright
   E2E harness, `tests/e2e/`, plus the documentation reconciliation it identified as needed) —
   `4764afb`.
+- **Checkpoint 5** (Administration & Security Management Phase 1 — dynamic roles, permission
+  matrix, and runtime user role assignment; the final-active-administrator safeguard; session
+  revocation on role change) — `bf1a749`/`5983232`/`2e4c81f`, **not pushed**. See
+  `docs/PROJECT_PROGRESS.md` §1 for the full record.
 
 **Phase 6, in progress:**
 - **Checkpoint 1** (Corrections Domain & Schema Foundation — five new models, five new enums,
