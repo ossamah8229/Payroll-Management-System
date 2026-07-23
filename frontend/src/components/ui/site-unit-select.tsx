@@ -1,4 +1,5 @@
-import { useProjectSites } from '@/hooks/use-project-sites';
+import type { SessionUser } from '@payroll/shared';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useProjectUnits } from '@/hooks/use-project-units';
 import { Label } from '@/components/ui/label';
 
@@ -21,6 +22,7 @@ export function SiteUnitSelect({
   disabled,
   siteRequired = true,
   unitRequired = true,
+  user,
 }: {
   siteId: string;
   unitId: string;
@@ -29,8 +31,12 @@ export function SiteUnitSelect({
   disabled?: boolean;
   siteRequired?: boolean;
   unitRequired?: boolean;
+  /** Scopes the Site options to this user's own accessible sites (`useAccessibleProjectSites`) —
+   * required, not optional, so a caller can't accidentally fall back to the unrestricted
+   * `sites:manage`-aware list for what is always an operational, site-scoped selector. */
+  user: SessionUser;
 }) {
-  const sites = useProjectSites();
+  const sites = useAccessibleProjectSites(user);
   const units = useProjectUnits(siteId || undefined);
   const selectedSite = sites.data?.find((site) => site.id === siteId);
   const unitLabel = selectedSite?.unitLabel ?? 'Unit';

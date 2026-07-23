@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Download, MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import { normalizeCnic, PERMISSIONS, toIsoDateOnly, type SessionUser } from '@payroll/shared';
+import { normalizeCnic, PERMISSIONS, ROLE_CODES, toIsoDateOnly, type SessionUser } from '@payroll/shared';
 import { hasPermission } from '@/lib/permissions';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { SiteUnitSelect } from '@/components/ui/site-unit-select';
 import {
   checkCnicAvailability,
@@ -77,12 +77,14 @@ function EmployeeFormModal({
   employee,
   defaultSiteId,
   onReactivateRequested,
+  user,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   employee?: Employee;
   defaultSiteId?: string;
   onReactivateRequested?: (employeeId: string) => void;
+  user: SessionUser;
 }) {
   const banks = useBanks();
   const createEmployee = useCreateEmployee();
@@ -302,6 +304,7 @@ function EmployeeFormModal({
                 unitId={form.unitId}
                 onSiteChange={(siteId) => setField('siteId', siteId)}
                 onUnitChange={(unitId) => setField('unitId', unitId)}
+                user={user}
               />
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="emp-doj">Date of joining</Label>
@@ -324,7 +327,7 @@ function EmployeeFormModal({
                 </select>
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="emp-gross-pay">Gross pay (template)</Label>
+                <Label htmlFor="emp-gross-pay">Default Gross Pay</Label>
                 <Input
                   id="emp-gross-pay"
                   required
@@ -332,6 +335,9 @@ function EmployeeFormModal({
                   onChange={(e) => setField('grossPay', e.target.value)}
                   placeholder="0.00"
                 />
+                <p className="text-xs text-text-muted">
+                  Used as the starting gross pay in new payroll cycles.
+                </p>
               </div>
             </div>
           </section>
@@ -476,10 +482,12 @@ function ReactivateEmployeeModal({
   open,
   onOpenChange,
   employeeId,
+  user,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   employeeId: string;
+  user: SessionUser;
 }) {
   const { data: employee, isLoading } = useEmployee(employeeId);
   const banks = useBanks();
@@ -575,6 +583,7 @@ function ReactivateEmployeeModal({
                 unitId={form.unitId}
                 onSiteChange={(siteId) => setField('siteId', siteId)}
                 onUnitChange={(unitId) => setField('unitId', unitId)}
+                user={user}
               />
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="reactivate-pay-type">Pay type</Label>
@@ -696,7 +705,12 @@ function ImportResultModal({
 }
 
 export function EmployeesPage({ user }: { user: SessionUser }) {
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) — never
+  // the raw, `sites:manage`-aware unrestricted `useProjectSites()` list. Employees stays a strictly
+  // site-scoped operational domain (docs/architecture/authentication.md's permission/scope matrix):
+  // holding `sites:manage` widens Project Site/Unit administration, never Employee visibility, so
+  // this filter must never offer a site the Employee Registry itself would return zero records for.
+  const sites = useAccessibleProjectSites(user);
   const [siteFilter, setSiteFilter] = useState('');
   const [search, setSearch] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
@@ -705,6 +719,12 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
   // (employees:create for New Employee/Import, employees:edit for Edit/Mark as left/Reactivate).
   const canCreate = hasPermission(user, PERMISSIONS.EMPLOYEES_CREATE);
   const canEdit = hasPermission(user, PERMISSIONS.EMPLOYEES_EDIT);
+  // Distinguishes "genuinely zero employees at your accessible sites" from "you have no accessible
+  // sites at all" (System-Wide RBAC Consistency remediation) — the latter previously rendered as
+  // the same generic "No employees found" empty state, indistinguishable from an actual empty
+  // registry, even though the underlying cause (no `UserSiteAssignment` rows) is a scope/setup
+  // problem an administrator needs to fix, not a filter the employee should "try adjusting."
+  const hasNoAssignedSites = user.roleCode !== ROLE_CODES.MASTER_ADMIN && user.siteIds.length === 0;
 
   const { data: employees, isLoading } = useEmployees({
     siteIds: siteFilter ? [siteFilter] : undefined,
@@ -817,7 +837,16 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!isLoading && employees && employees.length === 0 && (
+          {!isLoading && employees && employees.length === 0 && hasNoAssignedSites && (
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-text">You have no assigned project sites</p>
+              <p className="text-xs text-text-muted">
+                Contact an administrator to get site access — this is not the same as an empty registry.
+              </p>
+            </div>
+          )}
+
+          {!isLoading && employees && employees.length === 0 && !hasNoAssignedSites && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-text">No employees found</p>
               <p className="text-xs text-text-muted">Try adjusting the filters, or add the first employee.</p>
@@ -896,6 +925,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
         onOpenChange={setCreateOpen}
         defaultSiteId={siteFilter || undefined}
         onReactivateRequested={setReactivatingEmployeeId}
+        user={user}
       />
 
       {editingEmployee && (
@@ -903,6 +933,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
           open={Boolean(editingEmployee)}
           onOpenChange={(open) => !open && setEditingEmployee(undefined)}
           employee={editingEmployee}
+          user={user}
         />
       )}
 
@@ -919,6 +950,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
           open={Boolean(reactivatingEmployeeId)}
           onOpenChange={(open) => !open && setReactivatingEmployeeId(undefined)}
           employeeId={reactivatingEmployeeId}
+          user={user}
         />
       )}
 

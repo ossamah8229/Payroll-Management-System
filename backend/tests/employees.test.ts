@@ -209,6 +209,97 @@ describe('Employee Registry', () => {
     expect(ids).not.toContain(insideEmployee.id); // requested filter (outside site) yields nothing
   });
 
+  // System-Wide RBAC Consistency remediation — the reported production UAT defect (Employee
+  // Registry visibility) and the explicit permission/scope architecture decision behind its fix:
+  // Employees is a site-scoped operational domain with no global-administration permission of its
+  // own (docs/architecture/authentication.md's permission/scope matrix). Holding `sites:manage`
+  // (Project Sites/Units' own global permission) is deliberately *not* equivalent to being assigned
+  // to a site for Employee purposes — a "Payroll Manager" custom role that can list every Project
+  // Site via `sites:manage` still sees zero employees until actually assigned a site, exactly like
+  // any other site-scoped permission. This is the correct, least-privilege behavior, not the bug —
+  // the bug (fixed alongside this) was that the *frontend*'s site pickers previously offered every
+  // site `sites:manage` unlocked, not just this user's real Employee-accessible ones (see
+  // `frontend/src/hooks/use-project-sites.ts`'s `useAccessibleProjectSites`).
+  it('a custom role holding sites:manage AND employees:view, but no site assignment, sees zero employees — sites:manage does not widen Employee scope', async () => {
+    const site = await makeSite('Test Site Employees No Assignment');
+    await prisma.employee.create({
+      data: {
+        name: 'Unreachable Employee',
+        designation: 'Clerk',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '20000',
+      },
+    });
+
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'emp-sites-manage-no-assignment@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_PAYROLL_MANAGER',
+      permissionKeys: [...EMPLOYEE_PERMISSIONS, PERMISSIONS.SITES_MANAGE],
+      // Deliberately no siteIds — mirrors the reported production persona exactly.
+    });
+
+    // The same role can list every Project Site (sites:manage is global for that domain)...
+    const sitesRes = await agent.get('/api/v1/sites');
+    expect(sitesRes.status).toBe(200);
+    expect(sitesRes.body.sites.some((s: { id: string }) => s.id === site.id)).toBe(true);
+
+    // ...but the Employee Registry stays correctly empty, not an error — a 200 with zero rows,
+    // never a role-name-driven crash or an accidental global grant.
+    const employeesRes = await agent.get('/api/v1/employees');
+    expect(employeesRes.status).toBe(200);
+    expect(employeesRes.body.employees).toEqual([]);
+  });
+
+  it('once the same role is actually assigned the site, it sees that site\'s employees — proving the fix is assignment, not a permanent block', async () => {
+    const site = await makeSite('Test Site Employees Now Assigned');
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Now Reachable Employee',
+        designation: 'Clerk',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '20000',
+      },
+    });
+
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'emp-sites-manage-assigned@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_PAYROLL_MANAGER_ASSIGNED',
+      permissionKeys: [...EMPLOYEE_PERMISSIONS, PERMISSIONS.SITES_MANAGE],
+      siteIds: [site.id],
+    });
+
+    const res = await agent.get('/api/v1/employees');
+    expect(res.status).toBe(200);
+    expect(res.body.employees.some((e: { id: string }) => e.id === employee.id)).toBe(true);
+  });
+
+  it('a custom role with a Master-Admin-mimicking code but no permissions gets no employee access at all', async () => {
+    const site = await makeSite('Test Site Employees Misleading Role');
+    await prisma.employee.create({
+      data: {
+        name: 'Protected Employee',
+        designation: 'Clerk',
+        siteId: site.id,
+        unitId: await unitIdForSite(site.id),
+        grossPay: '20000',
+      },
+    });
+
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'emp-misleading-role@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_MASTER_ADMIN_NAME_ONLY',
+      permissionKeys: [],
+    });
+
+    const res = await agent.get('/api/v1/employees');
+    expect(res.status).toBe(403);
+  });
+
   it('rejects a duplicate CNIC with 409 but allows multiple employees with no CNIC', async () => {
     const site = await makeSite('Test Site Employees CNIC');
     const unitId = await unitIdForSite(site.id);
