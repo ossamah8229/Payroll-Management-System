@@ -257,5 +257,11 @@ export async function createAuthenticatedAgent(
     throw new Error(`Test login failed with status ${loginRes.status}: ${JSON.stringify(loginRes.body)}`);
   }
 
-  return { agent, csrfToken, userId: user.id };
+  // Checkpoint 4D: a successful login rotates the CSRF token (`rotateCsrfCookie`,
+  // `backend/src/common/middleware/csrf.ts`), so every subsequent authenticated request in the
+  // caller's test must use the *rotated* token from this response, not the pre-login one above.
+  const rotatedCsrfToken = extractCookie(loginRes, 'csrf_token');
+  if (!rotatedCsrfToken) throw new Error('Expected a successful login to rotate the csrf_token cookie');
+
+  return { agent, csrfToken: rotatedCsrfToken, userId: user.id };
 }

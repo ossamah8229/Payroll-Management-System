@@ -100,12 +100,15 @@ describe('Authentication', () => {
     const agent = request.agent(app);
     const csrfToken = await primeCsrf(agent);
 
-    await agent
+    const loginRes = await agent
       .post('/api/v1/auth/login')
       .set('x-csrf-token', csrfToken)
       .send({ email: 'logout@test.local', password: PASSWORD });
 
-    const logoutRes = await agent.post('/api/v1/auth/logout').set('x-csrf-token', csrfToken);
+    // Checkpoint 4D: login rotates the CSRF token, so logout must send the rotated value back,
+    // not the pre-login one primeCsrf captured above.
+    const rotatedCsrfToken = extractCookie(loginRes, 'csrf_token')!;
+    const logoutRes = await agent.post('/api/v1/auth/logout').set('x-csrf-token', rotatedCsrfToken);
     expect(logoutRes.status).toBe(204);
 
     const meRes = await agent.get('/api/v1/auth/me');
@@ -150,7 +153,10 @@ describe('Authentication', () => {
       if (res.status !== 200) {
         throw new Error(`Test login failed with status ${res.status}: ${JSON.stringify(res.body)}`);
       }
-      return { agent, csrfToken };
+      // Checkpoint 4D: login rotates the CSRF token — callers making further authenticated
+      // requests with this agent must use the rotated value, not the pre-login one.
+      const rotatedCsrfToken = extractCookie(res, 'csrf_token')!;
+      return { agent, csrfToken: rotatedCsrfToken };
     }
 
     it(
