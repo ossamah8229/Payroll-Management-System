@@ -305,13 +305,15 @@ checkpoint, matching its explicit scope boundary. The schema is already shaped f
 entirely at the application layer — new `/roles` endpoints, removing the hardcoded `roleCode` enum,
 and a role-administration UI — not a schema migration.
 
-### CSRF: known intermittent-login issue is a separate, still-open investigation
+### CSRF: known intermittent-login issue — root-caused here, fixed in Checkpoint 4D
 
 A previously logged intermittent "Missing or invalid CSRF token" login failure (cross-site cookie
 timing) is **not** addressed by this checkpoint and must not be read as fixed by anything above —
 Fix 1 through Fix 5 here touch authorization (permissions, roles, requester/reviewer separation),
-not the CSRF double-submit flow itself. That issue remains the next, separate stabilization
-investigation.
+not the CSRF double-submit flow itself. Post-Phase-5 Stabilization Checkpoint 4C root-caused it (a
+*different*, concurrent-first-request race, not this checkpoint's cross-site cookie fix — see the
+`## CSRF Protection` section below); Checkpoint 4D implemented the fix, in
+`backend/src/common/middleware/csrf.ts`.
 
 ## Administration & Security Management Phase 1 — Dynamic Roles, Permission Matrix, User Assignment
 
@@ -320,7 +322,8 @@ now create business-specific roles, assign permissions to them from the real per
 assign those roles to users, and manage user site access — all at runtime, with no source-code
 change or redeployment. A dedicated, separate investigation (Post-Phase-5 Stabilization Checkpoint
 4C) root-caused the intermittent CSRF login failure beforehand; **this phase does not touch CSRF at
-all** — that fix remains its own, still-separate implementation effort.
+all** — that fix was implemented afterward, as its own separate Checkpoint 4D (see `## CSRF
+Protection` below).
 
 ### 1. Database-driven roles
 
@@ -499,6 +502,45 @@ before the user submits anything, including the login form itself. `apiRequest` 
 the `x-csrf-token` request header on every `POST`/`PUT`/`PATCH`/`DELETE`; the handful of callers
 that bypass `apiRequest` for file upload/download (`use-employees.ts`, `use-payroll-entries.ts`,
 `use-payslips.ts`) call the same `getCsrfToken()` accessor rather than re-reading a cookie.
+
+### Checkpoint 4C/4D — the concurrent first-contact race, root cause and fix
+
+**Root cause (4C):** `issueCsrfCookie` used to mint a fresh random token any time a request arrived
+with no `csrf_token` cookie yet. Two requests that both arrive before either has round-tripped its
+`Set-Cookie` back to the browser — two tabs opened together, or several parallel first-load
+requests from one tab (the `session` middleware ahead of it does an async Postgres lookup, enough
+of an event-loop yield for Node to genuinely interleave two such requests even within a single tab)
+— each independently minted a *different* token. Each tab's own `api-client.ts` module memory then
+held a different value, but the browser's one shared cookie jar could only end up holding whichever
+`Set-Cookie` it applied last. The tab whose in-memory token lost that race sent a header that no
+longer matched the cookie on its next mutation and was rejected with a 403 "Missing or invalid CSRF
+token" — intermittent by nature, since it depended on request/response timing, not on anything a
+user did wrong.
+
+**Fix (4D):** `issueCsrfCookie` now mints a "first contact" token through `firstContactToken`, a
+short-lived (3s), in-memory, per-process map keyed by `req.ip` — concurrent cookie-less requests
+from the same client converge on the identical token instead of each minting their own, so whichever
+`Set-Cookie` the browser ultimately keeps always matches every tab's own in-memory copy. This closes
+the race entirely on the issuing side: the double-submit-cookie model itself, its cookie attributes,
+and its timing-safe comparison (`csrfProtection`/`tokensMatch`) are all unchanged. No frontend change
+was needed or made — `api-client.ts` already just reads whatever the response header says.
+
+**Token rotation, added alongside the fix:** `rotateCsrfCookie` issues a brand-new token and echoes
+it in the response header of that same request — including on state-changing responses, which
+normally never carry the header — called after every event that already rotates or destroys the
+session: successful login (alongside the existing `req.session.regenerate`), logout, self-service
+`POST /auth/change-password`, and an admin's `POST /users/:id/reset-password` when resetting *their
+own* account (not when resetting someone else's — the acting admin's own session/token is untouched
+in that case). A token learned before authentication is therefore never still valid afterward, the
+same rationale as session-fixation protection already gets from regenerating the session ID itself.
+Because `api-client.ts`'s `captureCsrfToken` already reads the `x-csrf-token` header off *every*
+response (not just safe ones), the frontend picks up a rotated token with no separate round trip and
+no code change.
+
+Regression coverage: `backend/tests/csrf-concurrency.test.ts` (concurrent first-contact requests,
+multi-tab simulation, rotation on login/logout/password-change/self-reset, CSRF-mismatch-still-403,
+unauthenticated-requests-still-401) and `tests/e2e/specs/09-csrf-concurrency.spec.ts` (the same
+scenarios through a real Chromium browser with a real shared cookie jar across multiple tabs).
 
 ## Session Expiration
 

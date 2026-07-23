@@ -17,12 +17,27 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-07-23 — Post-Phase-5 Stabilization Checkpoint 4D (CSRF Concurrent First-Request
+> Race — Implementation) is COMPLETE, NOT pushed.** Fixes the race Checkpoint 4C (below) root-caused
+> but deliberately deferred: concurrent "no cookie yet" requests from the same client (two tabs
+> opened together, a rapid refresh, several parallel first-load calls) used to each mint a different
+> CSRF token, and the browser's one shared cookie jar could only keep one of them, producing an
+> intermittent 403 "Missing or invalid CSRF token." Fixed entirely on the backend
+> (`backend/src/common/middleware/csrf.ts`'s `firstContactToken`, a short-lived per-client
+> coalescing map) with **no frontend change** — the double-submit-cookie model, its cookie
+> attributes, and its timing-safe comparison are all unchanged, and middleware ordering is
+> unchanged. CSRF token rotation was added alongside it, on login/logout/self-service password
+> change/admin self-password-reset (`rotateCsrfCookie`). Full record:
+> `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section and `docs/PROJECT_PROGRESS.md`
+> §1's own dated entry (following the Checkpoint 5 entry below). **The CSRF race is no longer an
+> open item — do not re-open or re-fix it without a new, genuinely reproduced defect.**
+
 > **Update, 2026-07-22 — Post-Phase-5 Stabilization Checkpoint 5 (Administration & Security
 > Management Phase 1) is COMPLETE**, committed as `bf1a749`/`5983232`/`2e4c81f`, **not pushed**. A
 > Master User can now create/rename/duplicate/deactivate/delete roles and their permission matrix,
 > and reassign a user's role, entirely at runtime — no source-code change or redeployment. One role
 > per user, per-user permission overrides, and multi-role assignment remain explicitly out of
-> scope; the Checkpoint 4C CSRF race remains open and unfixed. Full record:
+> scope. Full record:
 > `docs/PROJECT_PROGRESS.md` §1's own dated entry (same section, following Phase 6 Checkpoint 7A).
 > Everything below this notice describes state as of Phase 6's close and is otherwise still
 > accurate.

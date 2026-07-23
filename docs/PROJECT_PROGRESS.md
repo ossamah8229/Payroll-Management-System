@@ -5221,6 +5221,101 @@ committed). The pre-existing `04-session-revocation.spec.ts` was also fixed — 
 
 ---
 
+### Post-Phase-5 Stabilization Checkpoint 4D — CSRF Concurrent First-Request Race, fixed
+
+**Implements the fix for the race Checkpoint 4C root-caused but explicitly deferred** (see that
+entry, and the entry directly above): two requests arriving before either had round-tripped its
+`Set-Cookie` back to the browser — two tabs opened together, or several parallel first-load
+requests from one tab — each minted a *different* CSRF token, and the browser's one shared cookie
+jar could only end up holding one of them, producing an intermittent 403 "Missing or invalid CSRF
+token" for whichever tab's in-memory copy lost that race.
+
+**Fix — backend-owned, no redesign**: `issueCsrfCookie` (`backend/src/common/middleware/csrf.ts`)
+now mints a "first contact" token through `firstContactToken`, a short-lived (3s), in-memory,
+per-process map keyed by `req.ip` — concurrent cookie-less requests from the same client converge
+on one identical token instead of each minting its own. The double-submit-cookie model itself, its
+cookie attributes (`SameSite`/`Secure`/`httpOnly`), and its timing-safe comparison
+(`csrfProtection`/`tokensMatch`) are all completely unchanged — this only changes *what value* gets
+minted when two requests race, never the verification logic. Middleware ordering
+(`session` → `issueCsrfCookie` → `csrfProtection` → `attachUser`) is unchanged. **No frontend change
+was required or made** — `frontend/src/lib/api-client.ts` already just reads whatever the response
+header says; the fix is entirely a backend issuance-time change.
+
+**Token rotation, added alongside the fix**: a new `rotateCsrfCookie` issues a brand-new token and
+echoes it in the response header of that same request (including on state-changing responses, which
+normally never carry the header), called after every event that already rotates or destroys the
+session — successful login (`backend/src/modules/auth/auth.routes.ts`, alongside the existing
+`req.session.regenerate`), logout, self-service `POST /auth/change-password`, and an admin's
+`POST /users/:id/reset-password` (`backend/src/modules/users/users.routes.ts`) specifically when
+resetting *their own* account (not when resetting someone else's, which leaves the acting admin's
+own token untouched). A token learned before authentication is never still valid afterward, matching
+the same rationale session-fixation protection already gets from regenerating the session ID.
+Because `api-client.ts`'s `captureCsrfToken` already reads the header off *every* response, not just
+safe ones, the frontend picks up a rotated token automatically, no code change needed there either.
+
+**A necessary test-helper fix, caught by the existing suite**: rotating the token on login meant
+`backend/tests/helpers.ts`'s `createAuthenticatedAgent` — used by the large majority of the backend
+integration suite to log in once and then make several further authenticated calls — had to start
+returning the token from the *login response* rather than the pre-login priming request, or every
+caller's subsequent mutation would 403 against the now-rotated cookie. Two hand-rolled equivalents
+in `backend/tests/auth.test.ts` (a direct `/logout` call and a local `loginAgent` helper feeding
+`/change-password`) needed the same fix. Caught by simply running the existing suite after adding
+rotation — no test assertions were weakened, only the token each already-passing test uses to keep
+authenticating was corrected to match the new (deliberate) rotation behavior.
+
+**Regression coverage**: `backend/tests/csrf-concurrency.test.ts` — 17 new tests: single fresh
+request; genuinely concurrent first requests (`Promise.all`, exploiting the same
+session-middleware-Postgres-lookup event-loop yield that made the original race possible, so the
+test reliably exercises real interleaving rather than hoping for timing luck) converging on one
+token, including an 8-way burst; token stability across repeated GETs; two independent cookie-jar
+"tabs" converging on one token and each independently completing a real login; rotation on
+login/logout/self-change-password/admin-self-reset-password, with the pre-rotation token confirmed
+rejected afterward; admin-resets-someone-else's-password confirmed to *not* rotate the admin's own
+token; CSRF mismatch still 403; unauthenticated requests still behave correctly (still issued a
+token, still 403 without one, CSRF-before-auth ordering unchanged — a valid CSRF pair with no
+session still 401s, not 403s). **Verified meaningful, not just green**: temporarily reverted the
+coalescing fix and re-ran this file — the 4 concurrency/multi-tab tests failed exactly as expected
+(the rest, being rotation/mismatch/unauthenticated tests unrelated to the race itself, correctly
+kept passing), then the fix was restored and confirmed identical to the pre-experiment file via
+`diff`.
+
+`tests/e2e/specs/09-csrf-concurrency.spec.ts` adds the same scenarios through a real Chromium
+browser and the real production frontend build — the one thing no `supertest`-driven backend test
+can stand in for, since the original bug's defining characteristic was a *browser's shared cookie
+jar* diverging from *per-tab JS module memory*: fresh-browser login; rapid reload before login;
+five iterations of two real tabs (one `BrowserContext`, two `Page`s — genuinely shared cookies) both
+navigating to `/login` concurrently and both independently completing login, with a live check that
+no console error mentioning "csrf" appears in either tab; logout-then-login-again with the CSRF
+cookie value asserted to actually change at each rotation point; and a dedicated non-Master-Admin
+user's self-service password change through the real Settings UI, followed by a fresh login with
+the new password, again asserting no CSRF console error anywhere in that flow.
+
+**Verification**: backend **45 suites / 868 tests** (851 baseline + 17 new), typecheck/lint/build
+all clean. Frontend **80/80** unchanged (no frontend file was touched), typecheck/lint/build clean.
+Full E2E suite (Playwright/Chromium, disposable Postgres, production frontend build) **32/32
+passing** — the 8 pre-existing spec files plus the new `09-csrf-concurrency.spec.ts`'s 5 scenarios.
+One intermediate run hit 2 unrelated failures in `07-corrections.spec.ts`/
+`08-role-administration.spec.ts` (a `SETTLED`-text visibility timeout and a permission-takes-effect
+race) — neither file was touched by this checkpoint; re-running the affected spec in isolation and
+then the full suite again both came back clean, consistent with this project's own
+already-documented pattern of timing-sensitive E2E flakiness under sandbox system load
+(`docs/PROJECT_PROGRESS.md`'s own `payslips.test.ts` precedent), not a regression from this
+checkpoint's changes. The new spec's own "two tabs" scenario needed one fix during this same
+verification pass: it originally used the shared `login()` fixture (which unconditionally
+re-navigates to `/login`) for a second, sequential login attempt on an already-authenticated shared
+cookie jar — the frontend's own already-authenticated redirect meant the login form never rendered
+a second time, and separately, submitting sequentially rather than concurrently would have
+legitimately collided with this checkpoint's own login-rotation feature (the first tab's login
+correctly rotates the shared cookie, so a *second, sequential* login attempt on the same jar using a
+now-stale captured token is supposed to fail — that's correct rotation behavior, not the race being
+tested). Fixed by submitting both tabs' login forms concurrently via a local `submitLoginForm`
+helper that doesn't re-navigate, matching the real "two tabs opened simultaneously" scenario more
+precisely in the process.
+
+**Not pushed, not deployed**, per this checkpoint's explicit instruction.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -5563,14 +5658,26 @@ committed). The pre-existing `04-session-revocation.spec.ts` was also fixed — 
 
 ## 5. Exact next action for the next development session
 
+**Updated 2026-07-23 — Post-Phase-5 Stabilization Checkpoint 4D (CSRF Concurrent First-Request
+Race — Implementation) is COMPLETE, NOT pushed.** See §1's own entry for the full record. Fixes the
+race Checkpoint 4C root-caused but explicitly deferred, entirely on the backend
+(`backend/src/common/middleware/csrf.ts`'s `firstContactToken` coalescing map), with no frontend
+change and no change to the double-submit-cookie model, cookie attributes, timing-safe comparison,
+or middleware ordering; adds CSRF token rotation on login/logout/self-service password
+change/admin self-password-reset. Backend **868/868** (45 suites), frontend **80/80** (unchanged —
+no frontend file touched), E2E **32/32**, new `09-csrf-concurrency.spec.ts` (5 scenarios) plus
+every pre-existing regression spec. **The Checkpoint 4C CSRF
+race is resolved — do not re-open or re-fix without a new, genuinely reproduced defect.** **Do not
+push or deploy without the user's own separate go-ahead.** The paragraphs below are carried forward
+for their still-open content only.
+
 **Updated 2026-07-22 — Post-Phase-5 Stabilization Checkpoint 5 (Administration & Security
 Management Phase 1 — Dynamic Roles, Permission Matrix, User Role Assignment) is COMPLETE,
 committed as `bf1a749`/`5983232`/`2e4c81f`, NOT pushed.** See §1's own entry for the full record.
 Master Users can now create/edit/duplicate/deactivate/delete roles and reassign a user's role
 entirely at runtime, with a permission-based final-administrator safeguard and immediate session
 revocation on role change. Backend **851/851**, frontend **80/80**, E2E **27/27** (new
-`08-role-administration.spec.ts` plus every pre-existing regression spec). The Checkpoint 4C CSRF
-race remains open and unfixed, deliberately out of this checkpoint's scope. **Do not push or
+`08-role-administration.spec.ts` plus every pre-existing regression spec). **Do not push or
 deploy these three commits without the user's own separate go-ahead.** The paragraph below
 (originally written 2026-07-19, for Phase 6 Checkpoint 6A) is carried forward for its still-open
 content only.

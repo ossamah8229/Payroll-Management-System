@@ -164,6 +164,41 @@ during RC1 preparation (2026-07-19/20), not assumed.
 
 ---
 
+## KI-7 — Concurrent first-contact CSRF race (intermittent login "Missing or invalid CSRF token")
+
+- **Description**: `issueCsrfCookie` (`backend/src/common/middleware/csrf.ts`) minted a fresh
+  random CSRF token any time a request arrived with no `csrf_token` cookie yet. Two requests that
+  both arrived before either had round-tripped its `Set-Cookie` back to the browser — two tabs
+  opened together, or several parallel first-load requests from one tab — each independently minted
+  a *different* token; each tab's own in-memory copy (`frontend/src/lib/api-client.ts`) could then
+  diverge from whichever `Set-Cookie` the browser's one shared cookie jar ultimately kept.
+- **Impact**: A tab whose in-memory token lost that race sent a header that no longer matched the
+  cookie on its next state-changing request (most visibly, login itself) and was rejected with a 403
+  "Missing or invalid CSRF token" — intermittent, since it depended on request/response timing, not
+  on anything a user did wrong. Distinct from KI-2 (the cross-site `SameSite` cookie-attribute
+  defect, already resolved above): this is a race in *which token value* the client and server agree
+  on, not whether the cookie is attached to the request at all.
+- **Trigger**: Opening two browser tabs at nearly the same moment (or a rapid page refresh, or
+  several parallel first-load API calls from one tab) before any request from that browser has
+  completed a full round trip.
+- **Workaround (while open)**: None reliable from the frontend — a single tab/session working alone
+  was unaffected; retrying the failed action after the race resolved (the browser's cookie jar
+  settles after the first completed round trip) typically succeeded.
+- **Release-blocking status**: Root-caused (not fixed) as Post-Phase-5 Stabilization Checkpoint 4C,
+  deliberately deferred to its own separate implementation checkpoint.
+- **Status: RESOLVED (2026-07-23, Post-Phase-5 Stabilization Checkpoint 4D).** Fixed by making
+  concurrent "no cookie yet" requests from the same client converge on one identical token (a
+  short-lived, in-memory, per-process coalescing map keyed by `req.ip` —
+  `firstContactToken`/`backend/src/common/middleware/csrf.ts`) instead of each minting its own —
+  the double-submit-cookie model, its cookie attributes, and its timing-safe comparison are all
+  unchanged. CSRF token rotation was added alongside it (login/logout/self-service password
+  change/admin self-password-reset). No frontend change was required. See
+  `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section for the full design, and
+  `backend/tests/csrf-concurrency.test.ts` / `tests/e2e/specs/09-csrf-concurrency.spec.ts` for
+  regression coverage.
+
+---
+
 ## Summary
 
 | ID | Issue | Blocking? |
@@ -174,6 +209,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-4 | 6 pre-existing cosmetic lint warnings | No |
 | KI-5 | One timing-dependent test flake (confirmed non-deterministic) | No |
 | KI-6 | Puppeteer/embedded-Postgres manual install step in script-restricted environments | No (now documented) |
+| KI-7 | Concurrent first-contact CSRF race — intermittent login failure | No — **RESOLVED** 2026-07-23 |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table
