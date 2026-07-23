@@ -109,7 +109,7 @@ function RecordAdvanceModal({
 
   return (
     <Modal open={open} onOpenChange={(next) => !createAdvance.isPending && onOpenChange(next)}>
-      <ModalContent title="Record Advance" widthClassName="max-w-[560px] max-h-[85vh] overflow-y-auto">
+      <ModalContent title="Record Advance" widthClassName="max-w-[560px]">
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="advance-employee">Employee</Label>

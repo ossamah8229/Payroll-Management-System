@@ -83,7 +83,7 @@ export function ApproveRequestModal({
   return (
     <Modal open={Boolean(request)} onOpenChange={(next) => !approve.isPending && onOpenChange(next)}>
       {request && (
-        <ModalContent title={`Approve Correction Request — ${correctionFieldLabel(request.field)}`} widthClassName="max-w-[560px] max-h-[85vh] overflow-y-auto">
+        <ModalContent title={`Approve Correction Request — ${correctionFieldLabel(request.field)}`} widthClassName="max-w-[560px]">
           <div className="flex flex-col gap-3.5">
             <div className="rounded border border-border bg-bg px-3 py-2.5 text-xs">
               <div className="flex justify-between">

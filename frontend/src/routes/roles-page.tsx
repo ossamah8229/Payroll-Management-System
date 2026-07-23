@@ -62,7 +62,7 @@ function CreateRoleModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
 
   return (
     <Modal open={open} onOpenChange={(next) => !createRole.isPending && onOpenChange(next)}>
-      <ModalContent title="New Role" widthClassName="max-w-[640px] max-h-[85vh] overflow-y-auto">
+      <ModalContent title="New Role" widthClassName="max-w-[640px]">
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="role-name">Role name</Label>
@@ -146,7 +146,7 @@ function EditRoleModal({
 
   return (
     <Modal open={open} onOpenChange={(next) => !updateRole.isPending && onOpenChange(next)}>
-      <ModalContent title="Edit Role" widthClassName="max-w-[640px] max-h-[85vh] overflow-y-auto">
+      <ModalContent title="Edit Role" widthClassName="max-w-[640px]">
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           {role.isSystemRole && (
             <div className="rounded border border-border bg-bg px-3 py-2 text-[11px] text-text-muted">

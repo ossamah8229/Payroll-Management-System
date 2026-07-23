@@ -197,7 +197,7 @@ function EmployeeFormModal({
     <Modal open={open} onOpenChange={(next) => !isPending && onOpenChange(next)}>
       <ModalContent
         title={isEdit ? 'Edit Employee' : 'New Employee'}
-        widthClassName="max-w-[620px] max-h-[85vh] overflow-y-auto"
+        widthClassName="max-w-[620px]"
       >
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
           <section className="flex flex-col gap-3">
@@ -546,7 +546,7 @@ function ReactivateEmployeeModal({
 
   return (
     <Modal open={open} onOpenChange={(next) => !reactivateEmployee.isPending && onOpenChange(next)}>
-      <ModalContent title="Reactivate Employee" widthClassName="max-w-[520px] max-h-[85vh] overflow-y-auto">
+      <ModalContent title="Reactivate Employee" widthClassName="max-w-[520px]">
         {isLoading || !employee ? (
           <div className="flex flex-col gap-2">
             <Skeleton className="h-8 w-full" />
@@ -669,7 +669,7 @@ function ImportResultModal({
 }) {
   return (
     <Modal open={open} onOpenChange={onOpenChange}>
-      <ModalContent title="Import Results" widthClassName="max-w-[520px] max-h-[75vh] overflow-y-auto">
+      <ModalContent title="Import Results" widthClassName="max-w-[520px] max-h-[75vh]">
         <div className="flex flex-col gap-3 text-xs">
           <div className="flex gap-4">
             <Badge tone="green">{result.created} created</Badge>

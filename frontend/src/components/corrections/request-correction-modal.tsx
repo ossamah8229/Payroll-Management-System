@@ -108,7 +108,7 @@ export function RequestCorrectionModal({
 
   return (
     <Modal open={open} onOpenChange={(next) => !createRequest.isPending && onOpenChange(next)}>
-      <ModalContent title="Request Correction" widthClassName="max-w-[560px] max-h-[85vh] overflow-y-auto">
+      <ModalContent title="Request Correction" widthClassName="max-w-[560px]">
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="correction-entry">Employee</Label>

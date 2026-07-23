@@ -111,7 +111,7 @@ function ImportResultModal({
 }) {
   return (
     <Modal open={open} onOpenChange={onOpenChange}>
-      <ModalContent title="Import Results" widthClassName="max-w-[520px] max-h-[75vh] overflow-y-auto">
+      <ModalContent title="Import Results" widthClassName="max-w-[520px] max-h-[75vh]">
         <div className="flex flex-col gap-3 text-xs">
           <div className="flex gap-4">
             <Badge tone="blue">{result.updated} updated</Badge>

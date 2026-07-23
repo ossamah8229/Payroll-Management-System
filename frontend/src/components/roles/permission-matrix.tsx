@@ -50,7 +50,12 @@ export function PermissionMatrix({
       <p className="text-[11px] text-text-muted" aria-live="polite">
         {selected.size} permission{selected.size === 1 ? '' : 's'} selected
       </p>
-      <div className="flex max-h-[420px] flex-col gap-4 overflow-y-auto pr-1">
+      {/* UAT Defect 2 correction — this used to be its own independently max-height-capped,
+          independently scrolling region nested inside ModalContent's own scroll region
+          (components/ui/modal.tsx), which is what produced the reported double-scrollbar/
+          "excessive empty scrolling" bug. ModalContent now provides exactly one scroll region for
+          the whole dialog body; this is a plain, unconstrained block within it. */}
+      <div className="flex flex-col gap-4 pr-1">
         {groups.map(([group, entries]) => {
           const groupKeys = entries.map((e) => e.key);
           const selectedInGroup = groupKeys.filter((k) => selected.has(k)).length;
