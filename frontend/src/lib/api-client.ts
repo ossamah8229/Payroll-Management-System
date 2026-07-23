@@ -49,12 +49,68 @@ export function getCsrfToken(): string | undefined {
   return csrfToken;
 }
 
+/**
+ * Checkpoint 4D correction — deterministic CSRF mismatch recovery.
+ *
+ * A prior implementation tried to prevent the concurrent-first-contact CSRF race entirely on the
+ * backend, via an in-memory map keyed by the request's IP address. That was rejected on review:
+ * `req.ip` is not a stable browser identity (unrelated users behind one NAT/corporate egress share
+ * an IP; Render's own proxy layer can also affect what the backend sees as the client IP), and
+ * correctness depended on every racing request landing on the *same* Node process within a fixed
+ * TTL window — neither holds once this backend runs as more than one instance/process, which a
+ * real deployment must be free to do. A map that "usually" converges concurrent requests on the
+ * same token is not a fix for a security-relevant race condition.
+ *
+ * The corrected design keeps the backend simple and stateless (mint a token when none exists,
+ * exactly like before Checkpoint 4C/4D) and instead makes the *client* recover deterministically
+ * from a genuine mismatch:
+ *
+ * 1. `apiRequest` sends a state-changing request with whatever token it currently holds in memory.
+ * 2. If the backend rejects it with the specific `CSRF_TOKEN_MISMATCH` code (never any other 4xx/
+ *    5xx — a real permission denial, validation error, or server fault must never be retried, since
+ *    retrying could never fix those and would only mask them) and this is the *first* attempt for
+ *    this call, `refreshCsrfToken` below fetches the token bound to whatever `csrf_token` cookie
+ *    the browser actually currently holds, from a dependency-free safe endpoint
+ *    (`GET /api/v1/csrf-token`) that behaves exactly like `issueCsrfCookie` already does for any
+ *    safe method: echo the cookie's existing token if present, mint one if not.
+ * 3. The original request is retried exactly once with the refreshed token. A second mismatch is
+ *    never retried again — it surfaces to the caller as a normal `ApiError`.
+ *
+ * This cannot loop: the recovery call is itself a plain safe `fetch` outside `apiRequest`, never
+ * routed back through this retry logic, and a retried request is marked so it can never trigger a
+ * second recovery. Concurrent requests that all hit a mismatch around the same moment share one
+ * in-flight recovery call (`pendingCsrfRefresh`) rather than each firing their own — no refresh
+ * storm. The double-submit comparison itself (`backend/src/common/middleware/csrf.ts`) is
+ * completely unchanged and still strict; this only adds a client-side "learn the real current
+ * token and try once more" step for the one error code that means exactly that.
+ */
+const CSRF_TOKEN_MISMATCH_CODE = 'CSRF_TOKEN_MISMATCH';
+
+let pendingCsrfRefresh: Promise<void> | null = null;
+
+async function refreshCsrfToken(): Promise<void> {
+  if (!pendingCsrfRefresh) {
+    pendingCsrfRefresh = fetch(`${API_BASE_URL}/api/v1/csrf-token`, { credentials: 'include' })
+      .then((response) => {
+        captureCsrfToken(response);
+      })
+      .finally(() => {
+        pendingCsrfRefresh = null;
+      });
+  }
+  return pendingCsrfRefresh;
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
 }
 
-export async function apiRequest<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
+export async function apiRequest<TResponse>(
+  path: string,
+  options: RequestOptions = {},
+  _isCsrfRetry = false,
+): Promise<TResponse> {
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = {};
 
@@ -83,6 +139,12 @@ export async function apiRequest<TResponse>(path: string, options: RequestOption
 
   if (!response.ok) {
     const code = payload?.error?.code ?? 'UNKNOWN_ERROR';
+
+    if (!_isCsrfRetry && code === CSRF_TOKEN_MISMATCH_CODE) {
+      await refreshCsrfToken();
+      return apiRequest<TResponse>(path, options, true);
+    }
+
     const message = payload?.error?.message ?? `Request failed with status ${response.status}`;
     throw new ApiError(response.status, code, message);
   }

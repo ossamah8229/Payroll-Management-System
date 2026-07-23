@@ -19,6 +19,14 @@ export const unauthorized = (message = 'Authentication required') =>
 export const forbidden = (message = 'You do not have permission to perform this action') =>
   new HttpError(403, message, 'FORBIDDEN');
 
+/** Deliberately a distinct code from `forbidden()`'s generic `FORBIDDEN`, both 403 — the frontend
+ * (`frontend/src/lib/api-client.ts`) matches on this exact code to trigger its one-shot CSRF
+ * recovery retry, and must never do that for an ordinary permission-denied response (a real
+ * `requirePermission`/`requireSiteAccess` rejection, which retrying could never fix and would only
+ * mask). See `common/middleware/csrf.ts`'s `csrfProtection`. */
+export const csrfMismatch = (message = 'Missing or invalid CSRF token') =>
+  new HttpError(403, message, 'CSRF_TOKEN_MISMATCH');
+
 export const notFound = (message = 'Resource not found') => new HttpError(404, message, 'NOT_FOUND');
 
 export const badRequest = (message: string) => new HttpError(400, message, 'BAD_REQUEST');

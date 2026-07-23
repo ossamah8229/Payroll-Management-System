@@ -119,6 +119,17 @@ export function createApp(): Express {
     res.status(200).json({ status: 'ok' });
   });
 
+  // Checkpoint 4D correction — the safe endpoint `frontend/src/lib/api-client.ts`'s CSRF mismatch
+  // recovery calls. It does nothing beyond what `issueCsrfCookie` above already did for this
+  // request (echo the token bound to whatever `csrf_token` cookie the browser sent, or mint one if
+  // it sent none) — deliberately not `/health` (a liveness probe, semantically unrelated) and not
+  // `/api/v1/auth/me` (requires authentication, and carries session-bootstrap React Query side
+  // effects a plain, framework-agnostic recovery call has no business triggering). No body needed —
+  // the token travels in the `x-csrf-token` response header exactly like every other safe request.
+  app.get('/api/v1/csrf-token', (_req, res) => {
+    res.status(204).send();
+  });
+
   app.use('/api/v1/auth', authRouter);
   // Mounted before projectSitesRouter: its routes (/sites/:siteId/units, /units/:id) are more
   // specific than anything projectSitesRouter matches, so there's no ambiguity either way, but

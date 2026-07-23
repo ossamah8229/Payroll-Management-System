@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { forbidden } from '../http-error';
+import { csrfMismatch } from '../http-error';
 import { isProduction } from '../../config/env';
 
 /**
@@ -41,57 +41,45 @@ import { isProduction } from '../../config/env';
  * (`vite.config.ts`) makes frontend and backend look same-origin locally, where `Lax` already works
  * and is the more conservative default.
  *
- * **Checkpoint 4D — concurrent first-contact race:** two requests that both arrive before either
- * has round-tripped a `Set-Cookie` back to the browser (two tabs opened together, or several
- * parallel first-load requests from one tab — `session` middleware above does an async Postgres
- * lookup, which is enough of an event-loop yield for Node to interleave two such requests even
- * within a single tab) each used to see `req.cookies[CSRF_COOKIE_NAME]` as empty and mint its own
- * random token independently. Each browser tab/request then holds a *different* token in memory,
- * but the shared cookie jar can only hold one value — whichever `Set-Cookie` the browser applies
- * last — so the other tab's next mutation sends a header that no longer matches the cookie and is
- * rejected with a 403. The frontend cannot resolve this itself: it never has visibility into a
- * *different* tab's in-memory token or into which of several `Set-Cookie` responses the browser
- * ultimately kept, so this has to be closed on the issuing side. `firstContactToken` below makes
- * concurrent "no cookie yet" requests **from the same client** converge on the identical token
- * (rather than changing the double-submit comparison itself), via a short-lived, in-memory,
- * per-process coalescing map keyed by `req.ip`. This preserves the exact double-submit-cookie
- * model and its timing-safe comparison — it only fixes what value gets minted when. It cannot,
- * and does not need to, key off session identity: unauthenticated first contact has no session
- * cookie yet either (`saveUninitialized: false`), and reusing one freshly-minted, unpredictable
- * token across two near-simultaneous requests from the same IP weakens nothing — the token was
- * never a secret tied to a specific request, only a value an attacker page must be unable to read,
- * which remains true regardless of how many of the *legitimate* client's own concurrent requests
- * shared it.
+ * **Checkpoint 4C — concurrent first-contact race, and why an IP-keyed fix was rejected:** two
+ * requests that both arrive before either has round-tripped a `Set-Cookie` back to the browser (two
+ * tabs opened together, or several parallel first-load requests from one tab — `session` middleware
+ * above does an async Postgres lookup, enough of an event-loop yield for Node to interleave two such
+ * requests even within a single tab) each used to see `req.cookies[CSRF_COOKIE_NAME]` as empty and
+ * mint its own random token independently. Each browser tab/request then holds a *different* token
+ * in memory, but the shared cookie jar can only hold one value — whichever `Set-Cookie` the browser
+ * applies last — so the other tab's next mutation sends a header that no longer matches the cookie
+ * and is rejected with a 403.
+ *
+ * A first attempt at fixing this (Checkpoint 4D, since reverted) made concurrent "no cookie yet"
+ * requests converge on one token via a short-lived, in-memory, per-process map keyed by `req.ip`.
+ * Rejected on review, correctly: `req.ip` is not a browser identity — it identifies a network path,
+ * not a tab, a user, or even reliably a single physical client (unrelated users behind one NAT/
+ * corporate egress, or behind Render's own proxy layer, can share an IP; the two are not the same
+ * thing this fix needed them to be). Worse, an in-memory `Map` is process-local: correctness
+ * depended on every racing request landing on the *same* Node process within a fixed TTL window,
+ * which silently stops holding the moment this backend runs more than one instance (the ordinary
+ * case for any real deployment, and something this module must never assume against) or restarts
+ * mid－window. A mitigation whose correctness depends on single-process, single-request-path
+ * accidents of a dev/test environment is not a fix for a security-relevant race condition.
+ *
+ * **The corrected design (this file) does not try to prevent the race server-side at all.**
+ * `issueCsrfCookie` is back to the simplest possible stateless rule: mint a token if the request has
+ * none, echo it on safe methods, full stop — a first-contact race may still briefly mint two
+ * different tokens, exactly as it could before Checkpoint 4C. What changed is that this is no longer
+ * a problem the *server* needs to solve: `csrfProtection` below rejects a mismatch with a specific,
+ * distinguishable error code (`CSRF_TOKEN_MISMATCH`, `common/http-error.ts`'s `csrfMismatch`), and
+ * `frontend/src/lib/api-client.ts` performs one controlled recovery — refetch the token bound to
+ * whichever cookie the browser actually currently holds (`GET /api/v1/csrf-token` in `app.ts`, a
+ * dependency-free safe endpoint with exactly the same "echo if present, mint if not" behavior this
+ * middleware already gives every safe request), then retry the original mutation exactly once. This
+ * keeps the double-submit-cookie model and its timing-safe comparison completely unweakened — every
+ * comparison is still a strict, real equality check — and needs no shared state, no assumption about
+ * process topology, and no identity signal (IP or otherwise) at all.
  */
 const CSRF_COOKIE_NAME = 'csrf_token';
 const CSRF_HEADER_NAME = 'x-csrf-token';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-
-/**
- * How long a freshly-minted "first contact" token stays eligible for reuse by another concurrent
- * request from the same client. Long enough to comfortably cover a real concurrent burst (which
- * resolves in milliseconds, even accounting for the session store's DB round trip); short enough
- * that it never matters for traffic that isn't actually racing — once any request from a client
- * completes its round trip, every later request already carries the cookie and skips this path
- * entirely (see the `if (!token)` guard below).
- */
-const FIRST_CONTACT_COALESCE_WINDOW_MS = 3000;
-
-const pendingFirstContactTokens = new Map<string, { token: string; expiresAt: number }>();
-
-function firstContactToken(clientKey: string): string {
-  const now = Date.now();
-  for (const [key, entry] of pendingFirstContactTokens) {
-    if (entry.expiresAt <= now) pendingFirstContactTokens.delete(key);
-  }
-
-  const pending = pendingFirstContactTokens.get(clientKey);
-  if (pending) return pending.token;
-
-  const token = randomBytes(32).toString('hex');
-  pendingFirstContactTokens.set(clientKey, { token, expiresAt: now + FIRST_CONTACT_COALESCE_WINDOW_MS });
-  return token;
-}
 
 function csrfCookieOptions(): { httpOnly: boolean; secure: boolean; sameSite: 'none' | 'lax'; path: string } {
   return {
@@ -105,7 +93,7 @@ function csrfCookieOptions(): { httpOnly: boolean; secure: boolean; sameSite: 'n
 export function issueCsrfCookie(req: Request, res: Response, next: NextFunction): void {
   let token = req.cookies?.[CSRF_COOKIE_NAME];
   if (!token) {
-    token = firstContactToken(req.ip ?? 'unknown');
+    token = randomBytes(32).toString('hex');
     res.cookie(CSRF_COOKIE_NAME, token, csrfCookieOptions());
   }
   if (SAFE_METHODS.has(req.method)) {
@@ -121,10 +109,14 @@ export function issueCsrfCookie(req: Request, res: Response, next: NextFunction)
  * existing `captureCsrfToken` (`frontend/src/lib/api-client.ts`, which reads the header off every
  * response, not just safe ones) picks up the new value with no separate round trip and no frontend
  * change required. Called after every privilege-boundary event that already rotates or destroys
- * the session (login, logout, self-service password change, admin-triggered self password reset —
- * `docs/architecture/authentication.md`), so a pre-authentication token is never still valid after
- * that boundary, matching the same rationale as the existing session-regenerate-on-login/
- * destroy-on-logout behavior this sits alongside.
+ * *the acting request's own* session (login, logout, self-service password change, and an
+ * administrator resetting *their own* password) — `docs/architecture/authentication.md` — so a
+ * pre-authentication token is never still valid after that boundary, matching the same rationale as
+ * the existing session-regenerate-on-login/destroy-on-logout behavior this sits alongside. Never
+ * called when an administrator resets *someone else's* password
+ * (`backend/src/modules/users/users.routes.ts`): that only destroys the *target* user's sessions,
+ * an entirely different browser/cookie jar this response has no access to and no reason to touch —
+ * the acting administrator's own token is correctly left exactly as it was.
  */
 export function rotateCsrfCookie(res: Response): void {
   const token = randomBytes(32).toString('hex');
@@ -142,7 +134,7 @@ export function csrfProtection(req: Request, _res: Response, next: NextFunction)
   const headerToken = req.get(CSRF_HEADER_NAME);
 
   if (!cookieToken || !headerToken || !tokensMatch(cookieToken, headerToken)) {
-    next(forbidden('Missing or invalid CSRF token'));
+    next(csrfMismatch());
     return;
   }
 
