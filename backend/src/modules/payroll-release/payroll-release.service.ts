@@ -3,7 +3,7 @@ import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../common/http-error';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess } from '../employees/employees.service';
+import { assertSiteAccess } from '../../common/authz-policy';
 import { consumeMaterializationsForReleasedEntries } from '../corrections/corrections.materialization.service';
 import { lockPayrollCycleForUpdate } from '../corrections/corrections.repository';
 

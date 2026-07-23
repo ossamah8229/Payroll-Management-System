@@ -3,7 +3,7 @@ import type { SessionUser } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess } from '../employees/employees.service';
+import { assertSiteAccess } from '../../common/authz-policy';
 import { acquireBalanceAdjustmentLock } from './corrections.lock';
 import { determineMaterialization } from './corrections.materialization';
 import {

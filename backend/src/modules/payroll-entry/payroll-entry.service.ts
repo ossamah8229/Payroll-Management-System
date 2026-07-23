@@ -13,7 +13,8 @@ import { badRequest, conflict, notFound } from '../../common/http-error';
 import { diffFields } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess, assertUnitBelongsToSite, isMasterAdmin } from '../employees/employees.service';
+import { assertUnitBelongsToSite } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 
 const MAX_PAGE_SIZE = 200;

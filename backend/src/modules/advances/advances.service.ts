@@ -12,7 +12,7 @@ import { badRequest, conflict, notFound } from '../../common/http-error';
 import { diffFields } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { assertEntryEditable } from '../payroll-entry/payroll-entry.service';
 import { findOrCreateScheduledPayrollPeriod } from '../payroll-processing/payroll-processing.service';
 

@@ -5,28 +5,27 @@ import type {
   SessionUser,
   UpdateEmployeeInput,
 } from '@payroll/shared';
-import { ROLE_CODES, isoDateToUtcDate, normalizeCnic, toIsoDateOnly } from '@payroll/shared';
+import { isoDateToUtcDate, normalizeCnic, toIsoDateOnly } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
-import { badRequest, forbidden, notFound } from '../../common/http-error';
+import { badRequest, notFound } from '../../common/http-error';
 import { diffFields, omitKeys, type JsonPrimitive } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 
 export type { RequestMeta };
 
-export const isMasterAdmin = (user: SessionUser) => user.roleCode === ROLE_CODES.MASTER_ADMIN;
-
 /**
- * C11 decision (docs/architecture/authentication.md): Payroll Staff are fully site-scoped, with
- * no exceptions, on view/edit/create. Master Admin bypasses this entirely. Called on every read
- * and write path below — never trust a client-supplied siteId without this check.
+ * Re-exported for this module's own many existing consumers (`grep -rn "from '\.\./employees/employees.service'"`)
+ * — the real definitions now live in `common/authz-policy.ts` (System-Wide RBAC Consistency
+ * remediation), the single shared policy module every site-scoped service imports from directly.
+ * `employees.service.ts` itself is one such consumer, not the source of truth, despite the
+ * historical import path. C11 decision (docs/architecture/authentication.md): Employees is a
+ * site-scoped operational domain with no global-administration permission of its own — only
+ * Master Admin bypasses it; holding `sites:manage` (Project Sites/Units' own global permission)
+ * does not.
  */
-export function assertSiteAccess(user: SessionUser, siteId: string): void {
-  if (isMasterAdmin(user)) return;
-  if (!user.siteIds.includes(siteId)) {
-    throw forbidden('You do not have access to this project site');
-  }
-}
+export { assertSiteAccess, isMasterAdmin };
 
 /**
  * Application-layer half of the composite-FK guarantee (docs/architecture/database/employee.md §9):

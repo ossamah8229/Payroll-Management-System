@@ -5,7 +5,6 @@ import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
 import { parseTableFromFile, stringifyCsvSafe, type ImportRowError } from '../../common/import-export';
 import {
-  assertSiteAccess,
   assertUnitBelongsToSite,
   findEmployeeByCnic,
   listEmployees,
@@ -13,6 +12,7 @@ import {
   recordEmployeeTransfer,
   type RequestMeta,
 } from './employees.service';
+import { assertSiteAccess } from '../../common/authz-policy';
 
 /**
  * The official Employee Registry template header set, in column order, extracted verbatim from

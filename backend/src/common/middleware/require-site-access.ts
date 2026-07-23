@@ -1,43 +1,45 @@
 import type { NextFunction, Request, Response } from 'express';
-import { ROLE_CODES } from '@payroll/shared';
+import type { PermissionKey } from '@payroll/shared';
+import { assertSiteAccess } from '../authz-policy';
 import { forbidden, unauthorized } from '../http-error';
 
 /**
- * Site-scoping middleware (docs/architecture/authentication.md) — the second, independent RBAC
- * layer alongside `requirePermission`. Real, testable infrastructure as of Phase 1, but not yet
- * wired to any route: Employee Registry and Payroll Entry (the modules that actually have
- * site-scoped resources) don't exist until Phase 2/3. It's built now, ahead of those modules,
- * because it's foundational RBAC infrastructure the plan calls for in Phase 1 — using it is a
- * later phase's job, having it correct is this one's.
+ * Site-scoping middleware (docs/architecture/authentication.md) — the URL-param-scoped wrapper
+ * around `assertSiteAccess` (`common/authz-policy.ts`), the same function every site-scoped
+ * service calls once it has a `siteId` in hand. Kept as a distinct middleware (rather than folded
+ * into every handler) because a handful of routes (Project Units) scope directly off a URL param
+ * before any service-layer lookup happens.
  *
- * Master Admin bypasses this check entirely (implicit, unrestricted access — an empty
- * `siteIds` array for a Payroll Staff user means zero access, never "all sites"; the two cases
- * are deliberately not conflated). For everyone else, the site ID resolved by `getSiteId` must be
- * one of the user's assigned sites, checked fresh against `req.currentUser.siteIds` (itself loaded
- * fresh from the database by `attachUser` on this same request — no caching layer to go stale).
+ * `globalPermission`, when supplied, names the one permission this route's domain classifies as
+ * *global administrative authority* (docs/architecture/authentication.md's permission/scope
+ * matrix) — a holder bypasses site-scoping entirely, the same as Master Admin. Omit it for a route
+ * whose domain has no such global permission, so only Master Admin bypasses.
  *
- * Usage once site-scoped routes exist, e.g.:
- *   router.get('/sites/:siteId/employees', requireSiteAccess((req) => req.params.siteId), handler)
+ * Usage:
+ *   router.post('/sites/:siteId/units',
+ *     requireSiteAccess((req) => req.params.siteId, { globalPermission: PERMISSIONS.SITES_MANAGE }),
+ *     handler)
  */
-export function requireSiteAccess(getSiteId: (req: Request) => string | undefined) {
+export function requireSiteAccess(
+  getSiteId: (req: Request) => string | undefined,
+  options: { globalPermission?: PermissionKey } = {},
+) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (!req.currentUser) {
       next(unauthorized());
       return;
     }
 
-    if (req.currentUser.roleCode === ROLE_CODES.MASTER_ADMIN) {
+    try {
+      const targetSiteId = getSiteId(req);
+      if (!targetSiteId) {
+        next(forbidden('You do not have access to this project site'));
+        return;
+      }
+      assertSiteAccess(req.currentUser, targetSiteId, options.globalPermission);
       next();
-      return;
+    } catch (error) {
+      next(error);
     }
-
-    const targetSiteId = getSiteId(req);
-
-    if (!targetSiteId || !req.currentUser.siteIds.includes(targetSiteId)) {
-      next(forbidden('You do not have access to this project site'));
-      return;
-    }
-
-    next();
   };
 }

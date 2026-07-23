@@ -5,7 +5,7 @@ import { sumMoney } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
 import { stringifyCsvSafe } from '../../common/import-export';
-import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { computeEntryCalc } from '../payroll-entry/payroll-entry.service';
 

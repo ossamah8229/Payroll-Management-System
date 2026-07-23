@@ -5,7 +5,7 @@ import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
 import { parseTableFromFile, stringifyCsvSafe, type ImportRowError } from '../../common/import-export';
-import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { assertEntryEditable, mapUpdateInputToEntryData, mapUpdateInputToWorkLineData } from './payroll-entry.service';
 

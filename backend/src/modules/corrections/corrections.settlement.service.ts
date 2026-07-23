@@ -8,7 +8,7 @@ import type {
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { acquireBalanceAdjustmentLock } from './corrections.lock';
 import { calculateSettlement, calculateStandalonePayment } from './corrections.settlement';
 import {

@@ -2,7 +2,7 @@ import type { Prisma, CompanySettings } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { notFound } from '../../common/http-error';
-import { assertSiteAccess, isMasterAdmin } from '../employees/employees.service';
+import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { getCompanySettings } from '../settings/settings.service';
 import { computeEntryCalc } from '../payroll-entry/payroll-entry.service';
