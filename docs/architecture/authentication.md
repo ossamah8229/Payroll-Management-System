@@ -501,6 +501,168 @@ Site scope for each should match the real sites/units the tester actually needs 
 assigned broader than the test responsibility requires, and never "all sites" unless the role is
 genuinely meant to be system-wide.
 
+## System-Wide RBAC Consistency Audit and Remediation (production UAT)
+
+Production UAT with real custom roles surfaced what Checkpoint 4D's own "UAT Defect 1" fix had
+already predicted as a risk: `sites:manage`'s global-authority bypass was applied to Project Site
+*visibility* but nowhere else, and the resulting inconsistency was reachable by an ordinary
+administrator-created custom role, not just a contrived test. This section is the permanent record
+of the resulting system-wide audit, the permission/scope matrix it produced, and every fix applied.
+
+### The universal rule (unchanged, now consistently enforced)
+
+Authorization is always **explicit permission** + **explicit resource scope where scope applies**.
+It is never role display name, role code (with the small set of documented Master Admin exceptions
+below), frontend navigation visibility, or incidental membership in a predefined role. Frontend
+permission checks remain a usability layer only — the backend is authoritative everywhere.
+
+### Permission/scope classification (the matrix)
+
+Every permission is one of two kinds. Getting this classification right, per permission, is what
+this remediation actually is — the previous defects were not "missing checks," they were **the
+same permission classified inconsistently across its own domain's own routes**.
+
+| Permission | Classification | Scope source | Notes |
+|---|---|---|---|
+| `sites:manage` | **Global administrative** | none (unrestricted) | Now applied consistently to list/create/update/deactivate/delete for both Project Sites *and* Project Units — previously visibility-only (Checkpoint 4D), leaving Unit mutation/read still assignment-scoped. |
+| `users:manage` | Global administrative | none | Unchanged — Users module has no site concept. |
+| `settings:manage` | Global administrative | none | Unchanged. |
+| `audit-log:view` | Global administrative (not yet enforced — no audit-log route exists) | none | See "Not yet implemented" below. |
+| `tasks:manage` | **Global administrative** | none | Newly classified explicitly as global for its domain (see Tasks fix below) — Tasks has no site-scoping concept at all, so its only distinction is "every task" vs "only my own." |
+| `employees:view` / `:create` / `:edit` | **Site-scoped operational** | `UserSiteAssignment` | Deliberately **not** widened by also holding `sites:manage` — see the worked example below. |
+| `payroll:entry`, `payroll:view`, `payroll:release`, `advances:manage`, `bank-sheets:view`, `payslips:view`, `corrections:approve` | Site-scoped operational | `UserSiteAssignment` | Same rule as Employees — verified unchanged, all import the same `common/authz-policy.ts` helpers. |
+| `payroll-cycle:manage`, `banks:manage` | Global administrative | none | Unchanged (no site concept for either). |
+| `reports:view` | Not yet enforced | — | No `reports` module/routes exist yet; permission key is seedable/grantable but has zero enforcement points and zero frontend consumers. Not a defect — nothing to enforce yet. |
+
+**The worked example the audit centered on:** a "Payroll Manager" custom role holding both
+`sites:manage` (global, for Project Sites/Units administration) and `employees:view`/`:create`
+(site-scoped, for day-to-day Employee Registry work) is a legitimate, expected combination — a
+manager who administers site master data *and* processes employees at their own assigned sites.
+`sites:manage` being global for its own domain must never be read as "this user is unrestricted
+everywhere" — Employees (and every other site-scoped operational domain) stays scoped to that same
+user's real `UserSiteAssignment` rows, with no cross-domain leakage in either direction.
+
+### Centralized policy: `backend/src/common/authz-policy.ts`
+
+Previously, the site-scope check existed in **two independent implementations** that had already
+drifted: `require-site-access.ts`'s Express middleware (bypassed only for the literal Master Admin
+role code) and `employees.service.ts`'s own `assertSiteAccess`/`isMasterAdmin` (which every other
+site-scoped module imported). `project-sites.service.ts`'s `listProjectSites` had been separately
+taught the `sites:manage`-is-global rule (Checkpoint 4D) but `require-site-access.ts` never was —
+exactly the drift this file's own doc comment now warns against.
+
+`common/authz-policy.ts` is now the single source of truth: `isMasterAdmin`, `hasPermission`,
+`hasAnyPermission`, `hasGlobalAuthority(user, globalPermission?)`, `assertSiteAccess(user, siteId,
+globalPermission?)`, `getAccessibleSiteIds(user, globalPermission?)`. `require-site-access.ts`'s
+middleware now calls the same `assertSiteAccess` rather than reimplementing the check, and accepts
+an optional `{ globalPermission }` so a route can name its own domain's global-authority permission
+(`PERMISSIONS.SITES_MANAGE` for Project Units) — every site-scoped operational module omits it
+entirely, so only Master Admin bypasses those. `employees.service.ts` now imports and re-exports
+these from the shared module rather than defining its own copy; every one of its historical
+importers (`advances.service.ts`, `bank-sheets.service.ts`, `cash-receiving.service.ts`,
+`corrections.service.ts`, `corrections.settlement.service.ts`, `corrections.materialization.service.ts`,
+`payroll-entry.service.ts`, `payroll-entry-import-export.service.ts`, `payroll-release.service.ts`,
+`payslips.service.ts`, `employees-import-export.service.ts`) now imports directly from
+`common/authz-policy.ts` instead.
+
+### Fix 1 — Sites/Units: `sites:manage` is now consistently global
+
+`requireSiteAccess((req) => req.params.siteId, { globalPermission: PERMISSIONS.SITES_MANAGE })` is
+now applied to both the Project Unit list (`GET /sites/:siteId/units`) and create
+(`POST /sites/:siteId/units`) routes — previously each bypassed only for the literal Master Admin
+role code, so a `sites:manage`-holding custom role with no individual `UserSiteAssignment` row
+could list every Project Site but was rejected ("You do not have access to this project site")
+managing that site's own Units. Unit update/delete (`PATCH`/`DELETE /units/:id`) were already
+gated by `sites:manage` alone with no separate site check — unaffected, and now consistent with the
+same global-authority classification. See `backend/tests/project-units.test.ts`'s "a custom role
+holding sites:manage (no site assignments, not Master Admin)..." coverage and
+`tests/e2e/specs/10-site-visibility.spec.ts`'s Branch-creation regression.
+
+### Fix 2 — Employees: scope stays assignment-based; the UI is now consistent with it
+
+Employees' own scoping logic (`isMasterAdmin`/`assertSiteAccess`, Master-Admin-only bypass) was
+already correct and did not change — extending it to also bypass for `sites:manage` would have been
+exactly the "accidental hybrid" this remediation was asked to eliminate, not fix, since Employee
+access and Site administration are different questions with deliberately different answers (this
+file's own pre-existing "Role names remain unsuitable..." section already drew this line for
+`require-site-access.ts`'s Master-Admin-only Employee/Payroll bypass; this remediation keeps it,
+and extends the *same* reasoning explicitly to `sites:manage`). What was genuinely broken:
+
+1. **No distinct empty state.** A `sites:manage` holder with employee permissions but no site
+   assignment saw the exact same "No employees found — try adjusting the filters" as a genuinely
+   empty registry. Fixed: `employees-page.tsx` now renders "You have no assigned project sites —
+   contact an administrator" whenever `!isMasterAdmin(user) && user.siteIds.length === 0`, distinct
+   from the ordinary empty-filter state.
+2. **A create/list hybrid in the site pickers.** The Employee Registry's site filter and the
+   New/Edit Employee form's `SiteUnitSelect` both sourced from the shared, `sites:manage`-aware
+   `useProjectSites()` — so a `sites:manage` holder was offered every site in the org to file an
+   employee under, even sites their own Employee scope would immediately reject. Fixed by
+   `frontend/src/hooks/use-project-sites.ts`'s new `useAccessibleProjectSites(user)`: Master Admin
+   still sees every site; everyone else (including a `sites:manage` holder) sees only
+   `user.siteIds` — the Project Sites admin page and the Users module's own site-assignment picker
+   deliberately keep using the raw, unrestricted `useProjectSites()`, since both genuinely want it.
+
+See `backend/tests/employees.test.ts`'s "a custom role holding sites:manage AND employees:view..."
+block and `tests/e2e/specs/10-site-visibility.spec.ts`'s "Employee Registry visibility (UAT Defect
+3)" describe block.
+
+**Deliberately not fixed in this pass:** `corrections-page.tsx`, `salary-release-page.tsx`,
+`payslips-page.tsx`, `payroll-entry-page.tsx`, `bank-sheet-page.tsx`, `advances-page.tsx`, and
+`cash-receiving-page.tsx` all independently call the raw `useProjectSites()` for their own site
+filters, and share the identical latent inconsistency for the same dual-permission persona (a
+`sites:manage` holder also holding one of those modules' own site-scoped permissions would see more
+sites in that filter than the module's own backend scope would return data for). None of these were
+part of the reported UAT defects, and several (`corrections-page.tsx`'s `ReviewQueueTab`/
+`CorrectionsLedgerTab`) would need `user` prop-threading through sub-components that don't currently
+receive it. Recorded here as a known, scoped-out remaining inconsistency — the same
+`useAccessibleProjectSites` hook already exists and is the correct fix when this is picked up.
+
+### Fix 3 — Tasks: `tasks:manage` is now consistently global (found proactively, not reported)
+
+`createTask`/`updateTask` (gated by `tasks:manage` alone) already let any holder assign a task to
+anyone, with no Master-Admin-only restriction on the assignee. But `listTasks`/`getTask`
+(`requireTaskAccess`) bypassed ownership-scoping only for the literal Master Admin role code — so a
+custom role granted `tasks:manage` could create and assign a task, then immediately lose the
+ability to see it again, an exact "can mutate but cannot list" instance of the pattern this audit
+was asked to hunt for everywhere, not just in the reported modules. Fixed by classifying
+`tasks:manage` as this domain's own global-administrative permission
+(`hasGlobalAuthority(user, PERMISSIONS.TASKS_MANAGE)`, replacing the literal `isMasterAdmin` check
+in both `requireTaskAccess` and `listTasks`) — mirrored on the frontend (`tasks-panel.tsx`'s
+`isMasterUser` is now `canManageAllTasks(user)`, `lib/permissions.ts`).
+
+**A second, connected bug found while fixing this:** the Create/Edit Task dialog's assignee picker
+called `GET /api/v1/users` (`users:manage`-gated) to populate its dropdown — fine for the literal
+Master Admin role (who holds every permission) but a 403 for any custom `tasks:manage` holder who
+doesn't also hold `users:manage`. Fixed with a dedicated, minimally-scoped lookup,
+`GET /api/v1/users-lookup/assignable` (`users.routes.ts`'s `usersLookupRouter`, mounted separately
+from the `users:manage`-blanket-gated `usersRouter`), gated by `tasks:manage` instead and returning
+only `{ id, name, email }` per active user — never the fuller `UserSummary` shape (role, site
+assignments) `users:manage` administration genuinely needs. See
+`backend/tests/tasks.test.ts`'s two new blocks and this module's `frontend/src/hooks/use-users.ts`'s
+`useAssignableUsers`.
+
+### System-wide role-code audit — every remaining role-**code** check, and why each stays
+
+Confirmed via a full-codebase grep (`isMasterAdmin`, `isMasterUser`, `roleCode`, `role.code`,
+`ROLE_CODES.MASTER_ADMIN`) that no role-**name** check exists anywhere in this system, and every
+remaining role-**code** check is one of the following, already-documented, deliberate exceptions —
+none newly introduced by this remediation:
+
+- `common/authz-policy.ts`'s `isMasterAdmin` (the one true definition now) — Master Admin's
+  universal bypass, every domain.
+- `project-sites.service.ts`'s `listProjectSites` — Master Admin fast path kept alongside the
+  `sites:manage` permission check (Checkpoint 4D reasoning, unchanged): must keep working even if
+  Master Admin's own role were ever edited to no longer explicitly hold `sites:manage`.
+- `users.service.ts` — `createUser`/`updateUser` skip site-assignment specifically for the Master
+  Admin role code (unchanged from Phase 1 — Master Admin has no `UserSiteAssignment` rows by
+  design).
+- `users-page.tsx` — role-code-based UI showing/hiding the site-assignment field for a literally-
+  Master-Admin-coded user (unchanged; a data-shape question, not an authorization substitute).
+
+No occurrence of the literal string `"Master Admin"` gates any behavior — the two matches found
+(`prisma/seed.ts`'s display-name constant and an unrelated CNIC-collision hint's plain-English
+"contact a Master Admin") are both cosmetic text, not authorization.
+
 ## CSRF Protection
 
 Cookie-based sessions (as opposed to bearer tokens sent in an `Authorization` header) reintroduce

@@ -1812,3 +1812,34 @@ go-ahead before any work begins.**
   couldn't be designed in isolation from each other this time. Future sessions implementing Phase 4 or
   6 should not re-open architecture review for those phases; the design is already frozen and dated
   2026-07-05 alongside Phase 3's.
+
+## 9. Addendum, 2026-07-23 — System-Wide RBAC Consistency Audit and Remediation
+
+Production UAT (real custom roles, not synthetic test personas) found the RBAC conversion was
+incomplete: `sites:manage`'s global-authority bypass (KI-8/"UAT Defect 1") had only been applied to
+Project Site *visibility*, not the rest of the Sites/Units domain, and Employees/other operational
+modules had never been audited for the same class of drift. Full detail is in
+`docs/architecture/authentication.md`'s "System-Wide RBAC Consistency Audit and Remediation"
+section and `docs/release/KNOWN_ISSUES_v1.0.md` KI-11 through KI-14 — this entry is only the
+next-session pointer.
+
+**What changed**: a new single-source-of-truth `backend/src/common/authz-policy.ts` (replacing two
+independently-drifting implementations of the same site-scope check); `sites:manage` now
+consistently global across all of Sites/Units (list/create/update/deactivate, both Sites and
+Units); Employees' own site-scoping is confirmed correct and **unchanged** (deliberately not widened
+by `sites:manage` — a real architectural distinction, not a gap), but its site pickers and empty
+states are now consistent with that scope; `tasks:manage` reclassified as its own domain's global
+permission (found proactively, not reported); the Modal footer overlap (KI-9's own fix was
+necessary but not sufficient) is now fixed at the shared component level; the Employee form's
+"Gross Pay (Template)" label is now "Default Gross Pay."
+
+**What was deliberately not done**: `corrections-page.tsx`, `salary-release-page.tsx`,
+`payslips-page.tsx`, `payroll-entry-page.tsx`, `bank-sheet-page.tsx`, `advances-page.tsx`, and
+`cash-receiving-page.tsx` all share the identical latent site-picker inconsistency Employees had
+(each calls the raw, `sites:manage`-aware `useProjectSites()` for its own filter) — not part of the
+reported defects, not fixed this pass, and the fix (`useAccessibleProjectSites`) already exists for
+whoever picks this up next. No schema/migration change was needed — this was a pure
+application-layer (backend authorization logic + frontend consistency) remediation throughout.
+
+**Verification**: backend 883/883, frontend 91/91, full E2E suite 40/40 (two new specs), all
+typecheck/lint/build clean, Prisma schema/migrations untouched. Nothing pushed, nothing deployed.

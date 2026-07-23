@@ -5627,6 +5627,87 @@ found at any point. See `docs/architecture/testing.md`'s "Payslip PDF test relia
 
 ---
 
+### System-Wide RBAC Consistency Audit and Remediation (production UAT, 2026-07-23)
+
+Production UAT with real custom roles found the RBAC conversion was incomplete — Checkpoint 4D's
+"UAT Defect 1" fix (Sites list visibility for `sites:manage`) had not been applied consistently to
+the rest of the Sites/Units domain, to Employees, or audited for the same pattern elsewhere. This
+checkpoint was a full system-wide audit against one explicit rule — permissions determine actions,
+explicit scope determines which records, role names/codes never do — followed by remediation of
+every inconsistency found, both reported and proactively discovered.
+
+**Root causes, all traced to exact code before any fix:**
+1. **Sites/Units (reported)**: `requireSiteAccess` (Project Units routes' own middleware) and
+   `project-sites.service.ts`'s `listProjectSites` were two independent implementations of the same
+   site-scope check, and had drifted — `listProjectSites` recognized `sites:manage` as global
+   authority (Checkpoint 4D), `requireSiteAccess` never did. A `sites:manage`-holding custom role
+   could list every site but got "You do not have access to this project site" managing that site's
+   own Branches/Units.
+2. **Employees (reported)**: Employees' own scoping (`isMasterAdmin`/`assertSiteAccess`,
+   Master-Admin-only bypass) was and remains correct by design — `sites:manage` deliberately does
+   not widen it (a real, load-bearing distinction, not a gap). The actual defects were UX-level: no
+   distinct "you have no assigned sites" state (indistinguishable from a genuinely empty registry),
+   and the Employee Registry's own site pickers sourced from the shared, `sites:manage`-aware
+   `useProjectSites()`, offering sites the user's own Employee scope would reject.
+3. **Gross Pay label**: "Gross Pay (Template)" was internal jargon exposed directly to payroll
+   users, present only on the New/Edit Employee form (nowhere else in the app used "template" for
+   this field).
+4. **Modal footer overlap (reported)**: Checkpoint 4D's KI-9 fix consolidated Modal scrolling to one
+   region but kept `ModalFooter` `position: sticky` *inside* that scrollable body with no reserved
+   height — a dialog only slightly taller than its `max-h-[85vh]` cap rendered the footer overlapping
+   the last item(s), not after them.
+5. **Tasks (found proactively, not reported)**: `createTask` let any `tasks:manage` holder assign a
+   task to anyone, but `listTasks`/`getTask` bypassed ownership-scoping only for the literal Master
+   Admin role code — the exact "can mutate but cannot list" pattern this audit was asked to hunt for
+   system-wide. A connected bug: the assignee picker called the `users:manage`-gated `GET /users`,
+   403ing for a `tasks:manage` holder without `users:manage`.
+
+**Fixes:**
+- New `backend/src/common/authz-policy.ts` — the single, shared policy module (`isMasterAdmin`,
+  `hasPermission`, `hasAnyPermission`, `hasGlobalAuthority`, `assertSiteAccess`,
+  `getAccessibleSiteIds`). `require-site-access.ts`'s middleware now calls the same
+  `assertSiteAccess` instead of its own copy, with an optional `{ globalPermission }` a route can
+  supply. Project Units' list/create routes now pass `PERMISSIONS.SITES_MANAGE`. Every historical
+  importer of `employees.service.ts`'s `isMasterAdmin`/`assertSiteAccess` (11 files across Advances,
+  Bank Sheets, Cash Receiving, Corrections ×3, Payroll Entry ×2, Payroll Release, Payslips,
+  Employees Import/Export) now imports directly from the new shared module.
+- Employees: new `useAccessibleProjectSites(user)` (`frontend/src/hooks/use-project-sites.ts`) scopes
+  the Employee Registry's site filter and the New/Edit Employee form's `SiteUnitSelect` to the user's
+  real accessible sites; a distinct "You have no assigned project sites" empty state
+  (`employees-page.tsx`) replaces the generic "No employees found" whenever that's actually the
+  cause. Deliberately **not** applied yet to `corrections-page.tsx`, `salary-release-page.tsx`,
+  `payslips-page.tsx`, `payroll-entry-page.tsx`, `bank-sheet-page.tsx`, `advances-page.tsx`,
+  `cash-receiving-page.tsx` — same latent pattern, not part of the reported defects, recorded as a
+  known remainder (KI-12).
+- Gross Pay label renamed to "Default Gross Pay" with a helper line ("Used as the starting gross pay
+  in new payroll cycles") — UI text only, no schema/API/payload change, confirmed the only such
+  occurrence in the app.
+- `ModalContent` (`frontend/src/components/ui/modal.tsx`) now pulls any `ModalFooter` out of its
+  scrollable body and renders it as a true, non-overlaying flex sibling after the body — no call
+  site needed to restructure how it composes children.
+- Tasks: `tasks:manage` classified as its own domain's global-administrative permission
+  (`hasGlobalAuthority(user, PERMISSIONS.TASKS_MANAGE)` replaces the literal role-code check in
+  `requireTaskAccess`/`listTasks`, mirrored in `tasks-panel.tsx`). New
+  `GET /api/v1/users-lookup/assignable` (`tasks:manage`-gated, minimal `{id,name,email}` shape) for
+  the assignee picker, replacing its previous `users:manage`-gated call.
+
+**Verification**: Backend 883/883 (7 new tests: `project-units.test.ts` ×2, `employees.test.ts` ×3,
+`tasks.test.ts` ×2), typecheck/lint/build clean, Prisma schema/migrations unchanged (pure
+application-layer remediation, no schema change). Frontend 91/91, typecheck/lint/build clean. Full
+E2E suite 40/40 (2 new specs added to `tests/e2e/specs/10-site-visibility.spec.ts`: the Branch/Unit
+creation regression and the "Employee Registry visibility (UAT Defect 3)" describe block) — two
+transient failures on the first full run (`07-corrections.spec.ts` Scenario 4,
+`08-role-administration.spec.ts`'s role-rename test) did not reproduce on a clean rerun, confirmed
+pre-existing environment flakes unrelated to this remediation, not masked or weakened.
+
+See `docs/architecture/authentication.md`'s "System-Wide RBAC Consistency Audit and Remediation"
+section for the full permission/scope matrix and every role-code check audited, and
+`docs/release/KNOWN_ISSUES_v1.0.md` KI-11 through KI-14 for the per-defect record.
+
+**Not pushed, not deployed**, per this checkpoint's explicit instruction.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

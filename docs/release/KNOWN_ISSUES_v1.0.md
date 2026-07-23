@@ -317,6 +317,95 @@ during RC1 preparation (2026-07-19/20), not assumed.
 
 ---
 
+## KI-11 — `sites:manage`'s global authority was applied to Sites visibility only, not Unit read/create (KI-8 follow-up)
+
+- **Description**: KI-8's fix taught `listProjectSites` that `sites:manage` grants unrestricted
+  visibility, but the Project Units routes (`GET`/`POST /sites/:siteId/units`) still used a
+  separate, un-updated implementation (`requireSiteAccess` middleware) that bypassed only for the
+  literal Master Admin role code.
+- **Impact**: A custom role holding `sites:manage` (production UAT's "Payroll Manager" persona)
+  could list every Project Site but was rejected with "You do not have access to this project site"
+  opening or managing that site's own Branches/Units — reachable by any real administrator-created
+  custom role, not a contrived scenario.
+- **Status: RESOLVED (System-Wide RBAC Consistency remediation).** The two independent
+  implementations were unified into one, `common/authz-policy.ts`'s `assertSiteAccess`, which both
+  `requireSiteAccess` (middleware) and every site-scoped service function now call. The Project
+  Units routes now pass `{ globalPermission: PERMISSIONS.SITES_MANAGE }`. See
+  `docs/architecture/authentication.md`'s "System-Wide RBAC Consistency Audit and Remediation"
+  section, `backend/tests/project-units.test.ts`, and
+  `tests/e2e/specs/10-site-visibility.spec.ts`'s Branch-creation regression.
+
+---
+
+## KI-12 — Employee Registry showed an empty list indistinguishable from "no assigned sites," and offered sites the user's own scope would reject
+
+- **Description**: A custom role holding both `sites:manage` (global, for Site/Unit administration)
+  and `employees:view`/`:create` (site-scoped, for day-to-day Employee work) — a legitimate,
+  expected combination — could reach the Employee Registry and open New Employee, but the existing
+  employee list came back empty with no indication why, and the site pickers (registry filter,
+  New/Edit Employee form) offered every site `sites:manage` unlocked, not just the sites this same
+  user's Employee scope would actually return data for.
+- **Impact**: Indistinguishable from a genuine empty registry or a broken feature; the New Employee
+  form could be filled out for a site the create call would then reject.
+- **Status: RESOLVED (System-Wide RBAC Consistency remediation).** This is **not** a case where
+  `sites:manage` should have widened Employee access — Employees stays a site-scoped operational
+  domain with no global-administration permission of its own, by deliberate design (see the matrix
+  in `docs/architecture/authentication.md`). The actual fixes: (1) a distinct "You have no assigned
+  project sites" empty state, shown whenever a non-Master-Admin user has zero `UserSiteAssignment`
+  rows, never conflated with the ordinary "No employees found" filter-empty state; (2) a new
+  `useAccessibleProjectSites(user)` hook that scopes every Employee Registry site selector down to
+  the user's own real accessible sites, never the broader `sites:manage`-unlocked list. See
+  `backend/tests/employees.test.ts` and `tests/e2e/specs/10-site-visibility.spec.ts`'s "Employee
+  Registry visibility (UAT Defect 3)" block.
+- **Known, deliberately scoped-out remainder**: the identical latent site-picker inconsistency
+  exists in `corrections-page.tsx`, `salary-release-page.tsx`, `payslips-page.tsx`,
+  `payroll-entry-page.tsx`, `bank-sheet-page.tsx`, `advances-page.tsx`, and
+  `cash-receiving-page.tsx`, all of which call the raw `useProjectSites()` directly for their own
+  filters. Not part of the reported UAT defects; not fixed in this pass; the same
+  `useAccessibleProjectSites` hook is the correct fix when this is picked up.
+
+---
+
+## KI-13 — Tasks: a `tasks:manage` holder could assign a task to someone but never see it again (found proactively)
+
+- **Description**: `createTask`/`updateTask` (gated by `tasks:manage` alone) already let any holder
+  assign a task to anyone. But `listTasks`/`getTask` (`requireTaskAccess`) bypassed
+  ownership-scoping only for the literal Master Admin role code — not found in production UAT, but
+  discovered during this remediation's system-wide audit as the same "can mutate but cannot list"
+  pattern the audit was explicitly asked to hunt for beyond the reported modules.
+- **Status: RESOLVED.** `tasks:manage` is now classified as this domain's own global-administrative
+  permission; `requireTaskAccess`/`listTasks` use `hasGlobalAuthority(user, PERMISSIONS.TASKS_MANAGE)`
+  in place of the literal role-code check, mirrored on the frontend (`tasks-panel.tsx`'s
+  `isMasterUser` is now `canManageAllTasks(user)`). A connected bug found while fixing this — the
+  Create/Edit Task assignee picker called the `users:manage`-gated `GET /api/v1/users`, 403ing for a
+  `tasks:manage` holder without `users:manage` — was fixed with a new, minimally-scoped
+  `GET /api/v1/users-lookup/assignable` endpoint, gated by `tasks:manage` instead. See
+  `backend/tests/tasks.test.ts`.
+
+---
+
+## KI-14 — Roles & Permissions dialog footer still overlapped content at the bottom of a scrolled dialog (KI-9 follow-up)
+
+- **Description**: KI-9's fix consolidated Modal scrolling to one region and made `ModalFooter`
+  `position: sticky` — reachable without a further scroll, but still rendered *inside* that same
+  scrollable body with nothing reserving the footer's own height in the body's normal flow. Once a
+  dialog's content ran only slightly taller than its `max-h-[85vh]` cap (the Roles & Permissions
+  matrix with several groups selected being the most common real case), the sticky footer visually
+  sat on top of the last item(s) instead of after them.
+- **Impact**: The final permission/checkbox in a long list could render fully or partially hidden
+  underneath the Save/Cancel footer — exactly the residual defect production UAT reported, proving
+  KI-9's own fix was necessary but not sufficient.
+- **Status: RESOLVED (System-Wide RBAC Consistency remediation).** `ModalContent` now pulls any
+  `ModalFooter` element out of its scrollable body and renders it as a true, non-overlaying flex
+  sibling after the body — occupying real flex space the body can never scroll underneath, per the
+  preferred `Header / Body (flex-1, min-h-0, overflow-y-auto) / Footer (shrink-0)` structure. No
+  call site needed to change how it composes children. See
+  `tests/e2e/specs/11-permission-dialog-layout.spec.ts` (unchanged assertions, now passing against
+  the corrected markup) and `frontend/src/components/ui/modal.tsx`'s own doc comment for the full
+  root-cause explanation.
+
+---
+
 ## Summary
 
 | ID | Issue | Blocking? |
@@ -331,6 +420,10 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-8 | Custom role with `sites:manage` could not see the Project Sites list | No — **RESOLVED** 2026-07-23 |
 | KI-9 | Roles & Permissions dialog excessive scrolling / frame desync | No — **RESOLVED** 2026-07-23 |
 | KI-10 | `payslips.test.ts` intermittent full-suite-load failures | No — **substantially improved** 2026-07-23, not claimed fully eliminated (see entry) |
+| KI-11 | `sites:manage` global authority missing from Unit read/create (KI-8 follow-up) | No — **RESOLVED** 2026-07-23 |
+| KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
+| KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |
+| KI-14 | Roles & Permissions dialog footer still overlapped final content (KI-9 follow-up) | No — **RESOLVED** 2026-07-23 |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

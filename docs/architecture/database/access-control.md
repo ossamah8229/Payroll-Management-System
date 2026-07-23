@@ -132,13 +132,17 @@ Staff's.
   Master User is not treated as "no access." Originally consulted only for the two seeded
   Payroll Staff/Finance roles; since dynamic custom roles (Administration & Security Management
   Phase 1), this table is consulted for *any* role — system or custom — for operational
-  (employee/payroll) site-scoping. **One exception (Post-Phase-5 Stabilization Checkpoint 4D
-  correction, `docs/architecture/authentication.md`'s "UAT Defect 1" note):** for the Project
-  *Sites list itself* (`listProjectSites`), a role currently holding `sites:manage` sees every site
-  regardless of rows here, the same unrestricted visibility Master User already had — `sites:manage`
-  is a global administrative permission (`CRITICAL_ADMIN_PERMISSIONS`), not an operational,
-  site-scoped one. This table remains the sole source of truth for every other site-scoped check in
-  the system (employees, payroll, etc.).
+  (employee/payroll) site-scoping. **One exception, now applied consistently across the whole
+  Sites/Units domain (System-Wide RBAC Consistency remediation, `docs/architecture/authentication.md`'s
+  "System-Wide RBAC Consistency Audit and Remediation" section — supersedes the narrower Checkpoint
+  4D "UAT Defect 1" fix, which only covered the Sites *list*):** a role currently holding
+  `sites:manage` sees, creates, updates, and deactivates/deletes every Project Site *and* every
+  Project Unit regardless of rows here — the same unrestricted authority Master User already had.
+  `sites:manage` is a global administrative permission (`CRITICAL_ADMIN_PERMISSIONS`), not an
+  operational, site-scoped one. This table remains the sole source of truth for every other
+  site-scoped check in the system (employees, payroll, advances, bank sheets, cash receiving,
+  payslips, corrections) — holding `sites:manage` does **not** widen any of those, by deliberate
+  design (see authentication.md's worked "Payroll Manager" example).
 - **Module owner:** Settings/Authentication
 
 ---
