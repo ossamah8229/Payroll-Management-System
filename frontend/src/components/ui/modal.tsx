@@ -25,18 +25,27 @@ import { cn } from '@/lib/cn';
  * (`max-h-[85vh]`, still overridable per call site) flex column with exactly one scroll region —
  * the body div below, which needs `min-h-0` alongside `flex-1` or a flex child never shrinks below
  * its content's natural height and silently defeats the parent's own height cap (the standard
- * flexbox-scrolling pitfall). The header is `shrink-0` (never scrolls); `ModalFooter` is `sticky
- * bottom-0` *within* that same body scroll region, so it stays reachable at the bottom of the
- * viewport rather than requiring a further scroll past it, without needing every caller to restructure
- * how they compose header/body/footer (still just three children in document order). Every caller
- * that previously opted into scrolling via `overflow-y-auto` in `widthClassName` had that removed
- * (now redundant/handled here); callers with a custom `max-h` (e.g. `max-h-[75vh]` for an Import
- * Results summary) keep it, since `cn()`'s tailwind-merge resolves the conflict in the caller's
- * favor. A caller with content shorter than `max-h-[85vh]` is unaffected either way — the body
- * simply never overflows, so there's nothing to scroll.
+ * flexbox-scrolling pitfall). The header is `shrink-0` (never scrolls).
+ *
+ * **Footer-overlap correction (System-Wide RBAC Consistency remediation, UAT):** the above fix
+ * consolidated scrolling to one region but still rendered `ModalFooter` as `position: sticky`
+ * *inside* that same scrollable body — reachable without a further scroll, but with nothing
+ * reserving the footer's own height at the bottom of the body's scrollable content. Once a dialog's
+ * content (e.g. the Roles & Permissions matrix with many groups) ran only slightly taller than
+ * `max-h-[85vh]`, the sticky footer visually sat on top of the last item(s) rather than after them —
+ * exactly the "content flows underneath the footer" / "final permission obscured" defect. Fixed by
+ * making `ModalFooter` a true, non-overlaying flex sibling of the scrollable body — `ModalContent`
+ * below pulls any `ModalFooter` element out of `children` and renders it *after*, not inside, the
+ * scroll container, so it occupies real flex space the body can never scroll underneath. A caller
+ * still just lists header content, body content, and a `<ModalFooter>` as ordinary children, in any
+ * order — this component finds and repositions the footer regardless.
  */
 const Modal = DialogPrimitive.Root;
 const ModalTrigger = DialogPrimitive.Trigger;
+
+function isModalFooterElement(child: React.ReactNode): child is React.ReactElement {
+  return React.isValidElement(child) && child.type === ModalFooter;
+}
 
 function ModalContent({
   className,
@@ -48,6 +57,10 @@ function ModalContent({
   widthClassName?: string;
   title: string;
 }) {
+  const childArray = React.Children.toArray(children);
+  const footer = childArray.find(isModalFooterElement);
+  const bodyChildren = childArray.filter((child) => child !== footer);
+
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/40" />
@@ -71,8 +84,10 @@ function ModalContent({
         {/* The one body scroll region (see the class-level note above) — `min-h-0` is required
             alongside `flex-1`, not decorative, or this div refuses to shrink below its content's
             natural height and the outer `max-h-[85vh]` cap on `DialogPrimitive.Content` above stops
-            doing anything. */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">{children}</div>
+            doing anything. `ModalFooter`, if present, was already pulled out of `children` above —
+            never rendered in here, so the body can never scroll underneath it. */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">{bodyChildren}</div>
+        {footer}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );
@@ -82,10 +97,11 @@ function ModalFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
   return (
     <div
       className={cn(
-        // rounded-b-lg matches ModalContent's own rounded-lg — without it, this footer's flush
-        // (-mx-5 -mb-5) rectangular background would show square corners poking past the dialog's
-        // own rounded bottom corners.
-        'sticky bottom-0 -mx-5 -mb-5 mt-5 flex items-center justify-end gap-2 rounded-b-lg border-t border-border bg-surface-2 px-5 py-4',
+        // A true flex sibling of the scrollable body above (see the class-level note), not
+        // sandwiched inside its padding box — no negative margins needed to reach the dialog's own
+        // edges, since this div is no longer nested inside anything with its own padding.
+        // rounded-b-lg matches ModalContent's own rounded-lg corners at the bottom edge.
+        'shrink-0 flex items-center justify-end gap-2 rounded-b-lg border-t border-border bg-surface-2 px-5 py-4',
         className,
       )}
       {...props}
