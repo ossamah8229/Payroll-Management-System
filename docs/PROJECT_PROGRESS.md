@@ -5531,6 +5531,102 @@ asserts didn't change, only the mechanism producing it).
 
 ---
 
+### Pre-Deployment Reliability Checkpoint — Payslip PDF Full-Suite Flakiness
+
+**Investigated and substantially improved (not claimed fully eliminated) the intermittent
+`payslips.test.ts` failures observed during the previous checkpoint's own full-backend-suite runs
+(11 failures in one observed run, isolated reruns passing).** Per this checkpoint's own explicit
+instruction, "pre-existing" and "passes in isolation" were not treated as sufficient — this was a
+genuine investigation with controlled, repeated reproduction, not a re-labeling.
+
+**Reproduction, done properly before any fix**: 20 isolated `payslips.test.ts` runs and 10 full
+`npm test` runs, with `vm_stat`/Chrome-process-count sampling throughout. Isolated: 18/20 clean,
+2/20 failed (runs 9 and 19) — both genuine PDF/timeout cascades. Full-suite: 5/10 fully clean; of
+the other 5, three (`runs 1, 4, 7`) were entirely unrelated, pre-existing flakes in different
+modules (a Corrections concurrent-approval race, a Backup Packages CSV comparison) surfaced by the
+same reproduction effort but explicitly out of this checkpoint's scope — not touched. The remaining
+two (`runs 6, 8`) were genuine payslips/PDF failures; `run 8`'s 11 failures matched the originally
+reported count exactly.
+
+**Every failure, without exception, was a hard Jest timeout** (`Exceeded timeout of 15000 ms`) on an
+otherwise-correct operation — the `beforeEach` hook's `cleanTestData()`, or an individual PDF
+render — never an incorrect PDF, an incorrect HTTP response, or (checked directly, both before and
+after every reproduction run) a leaked Chrome process or unrecovered memory. `backend/src/lib/pdf/
+browser.ts`'s singleton-browser lifecycle was reviewed line by line and found correctly bounded:
+try/finally page cleanup, a concurrency-safe relaunch guard, and `closeBrowser()` called from this
+file's own `afterAll` — confirmed empirically too (zero orphaned Chrome processes and full memory
+recovery after every single one of 50+ reproduction runs, clean or failing). The root cause is this
+host's own measured, genuine resource contention from processes outside this test suite's control —
+`vm_stat` sampling during reproduction showed free memory dropping as low as ~15-20MB and the shared
+Puppeteer browser's own RSS reaching ~600-700MB during this file's heaviest test (a 300-employee
+batch render, `MAX_BATCH_PAYSLIPS_PER_REQUEST`'s own real production boundary, not reducible without
+weakening that test's coverage).
+
+**Fix — three parts, all lifecycle/resource-scoped, no payslip business logic touched:**
+1. `backend/src/lib/pdf/render-pdf.ts`'s `renderHtmlToPdf` now retries exactly once, against a
+   freshly discarded-and-relaunched browser (`discardBrowser()`, new in `browser.ts`), if a render
+   fails for any reason. This closes a real, previously-unaddressed gap: `getBrowser()`'s own health
+   check (`!browser.connected`) only detects a browser whose DevTools Protocol connection has fully
+   dropped — it cannot detect one that is still connected but transiently unable to service a new
+   page under resource pressure, so it would otherwise keep handing back the same degraded instance
+   indefinitely. `discardBrowser()` never blocks or throws (fire-and-forget close) — a browser too
+   degraded to render may also be too degraded to close cleanly, and the caller must not itself fail
+   because of it. A second failure (on the retry) is never retried again and propagates normally.
+2. `backend/tests/payslips.test.ts`'s 300-employee batch test — measured directly as this file's
+   single heaviest consumer of the shared browser's resources — now calls `closeBrowser()`
+   immediately after it succeeds, so its own outsized footprint can't compound into every test that
+   runs after it in the same file/process.
+3. This file's own Jest timeout is raised from the global 15000ms default (`tests/setup.ts`,
+   unchanged — still 15000ms for the other 44 suites) to 45000ms via a file-scoped
+   `jest.setTimeout(45000)` call (verified: this does not leak into other test files' own timeout,
+   since each Jest test file gets its own isolated test environment even under `--runInBand`'s
+   single process). Justified by the measured contention above, not a blind increase — the
+   accompanying comment in the test file documents the exact reasoning and evidence.
+
+**A separate, unrelated flake found during this same investigation, not fully resolved**: while
+reproducing, `'issues a constant number of queries regardless of batch size (no N+1)'` (a pure
+Prisma/Postgres query-count assertion — no Puppeteer involved at all) occasionally failed with an
+off-by-one query count (e.g. 8 vs. 7) under contention — a connection-pool-level effect (the
+underlying `small`/`large` result *lengths* were always correct, so this was never a real N+1
+regression), not the PDF/timeout issue this checkpoint targeted. The test's own warm-up (already
+present, with its own comment acknowledging "the very first query on a given connection can carry
+extra one-off setup cost") was broadened to prime all three batch shapes used in the test, not just
+one — this reduced but did not eliminate the ~5-10% recurrence rate observed in reproduction. Its
+exact-equality assertion was **not** weakened (this checkpoint's instructions explicitly forbid
+that); the remaining flake is documented (KI-10) as a separate, lower-priority follow-up rather than
+claimed fixed.
+
+**Validation — the same 20-isolated/10-full-suite battery repeated on the fixed code, plus the
+checkpoint's full required list:**
+- 20 isolated runs: 18/20 clean; the 2 failures were both the *separate* N+1 flake above (0/20
+  PDF/timeout failures, down from 2/20 pre-fix).
+- 10 full-suite runs: 8/10 clean; of the 2 failures, one was the separate N+1 flake, and the other
+  (`run 5`) was a genuine PDF-timeout cascade that coincided with a directly measured, severe host
+  slowdown — this file alone took 368s in that run against its normal ~70s, a >5x slowdown no
+  finite, principled timeout can fully absorb without becoming unrealistic (1/10 full-suite
+  PDF/timeout failures, down from 2/10 pre-fix).
+- `--detectOpenHandles`: clean, 47/47, zero open-handle warnings (previously, ordinary runs
+  regularly printed Jest's own "did not exit one second after" notice).
+- `--randomize` (Jest's built-in test-order shuffle): clean, 47/47.
+- Zero orphaned Chrome processes at any point across the entire ~50-run investigation (before and
+  after the fix, clean runs and failing runs alike).
+- typecheck, lint, and `npm run build` all clean.
+- Targeted regression check that the same-day CSRF/RBAC/UI checkpoint remains intact:
+  `csrf-concurrency.test.ts`, `csrf-cross-origin.test.ts`, `project-sites.test.ts`, `roles.test.ts`
+  — 84/84 passing. Frontend: 91/91 unchanged, typecheck/lint/build clean.
+
+**Honest conclusion, per this checkpoint's own explicit instruction not to claim resolution without
+repeated evidence**: this is a real, large, measured reduction in failure rate — not a claim of
+absolute zero. The residual risk is tied to genuinely severe ambient contention on this shared host,
+from processes outside this codebase's control, not to an unfixed defect in this codebase's own PDF
+rendering or test lifecycle — both were reviewed and confirmed correct, and no leak of any kind was
+found at any point. See `docs/architecture/testing.md`'s "Payslip PDF test reliability" section and
+`docs/release/KNOWN_ISSUES_v1.0.md` KI-10 for the full record.
+
+**Not pushed, not deployed**, per this checkpoint's explicit instruction.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -5873,7 +5969,32 @@ asserts didn't change, only the mechanism producing it).
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-23 (later same day) — Checkpoint 4D Correction and UAT Defect Remediation is
+**Updated 2026-07-23 (later still, same day) — Pre-Deployment Reliability Checkpoint (Payslip PDF
+Full-Suite Flakiness) is COMPLETE, NOT pushed.** See §1's own entry for the full record.
+`payslips.test.ts`'s intermittent full-suite failures (11 observed in one run) were investigated via
+extensive controlled reproduction (20 isolated + 10 full-suite runs, before and after the fix, with
+`vm_stat`/process sampling) — every failure was a hard Jest timeout on an otherwise-correct
+operation, never an incorrect PDF/response and never a leaked process (confirmed directly, 50+
+runs). Root cause: this host's own measured, severe ambient resource contention from processes
+outside this suite's control (free memory measured as low as ~15-20MB during reproduction), not a
+codebase defect — `browser.ts`'s singleton-browser lifecycle was reviewed and found correctly
+bounded. **Fix (three parts, no payslip business logic touched): a bounded one-time render-recovery
+retry (`render-pdf.ts`/`browser.ts`'s new `discardBrowser()`), the 300-employee batch test recycling
+the shared browser immediately after it succeeds, and this file's own Jest timeout raised from the
+global 15000ms to 45000ms (file-scoped — the other 44 suites are unaffected).** Measured result:
+PDF/timeout failures went from 2/20 to 0/20 isolated, and 2/10 to 1/10 full-suite (that one
+remaining case coincided with a directly measured 368s-vs-~70s, >5x host slowdown). **Reported
+honestly as a large, measured improvement, not a claim of absolute zero** — per this checkpoint's
+own explicit instruction not to claim resolution without repeated evidence. A separate, unrelated
+flake (a Prisma query-count assertion, no Puppeteer involved) was also found and partially
+(not fully) mitigated — see KI-10. Backend **876/876** (45 suites) on every clean run; targeted
+CSRF/RBAC re-verification 84/84; frontend 91/91 unchanged. See
+`docs/architecture/testing.md`'s "Payslip PDF test reliability" section for the full investigation.
+**Do not re-open this investigation without new evidence, and do not push or deploy without the
+user's own separate go-ahead.** The paragraph below is carried forward for its still-open content
+only.
+
+**Updated 2026-07-23 (earlier same day) — Checkpoint 4D Correction and UAT Defect Remediation is
 COMPLETE, NOT pushed.** See §1's own entry for the full record. Three items in one pass: (1) the
 same-day Checkpoint 4D CSRF fix (below) was reviewed and its `req.ip`-keyed in-memory coalescing map
 **rejected** — not a browser identity, not correct across multiple backend processes — and replaced

@@ -100,3 +100,29 @@ export async function closeBrowser(): Promise<void> {
     // Already dead or never successfully launched — nothing left to close.
   }
 }
+
+/**
+ * Pre-Deployment Reliability Checkpoint — discards the shared browser (best-effort close,
+ * fire-and-forget) so the next `getBrowser()` call launches a fresh instance. Distinct from
+ * `closeBrowser()`: this never awaits the close and never throws, since a browser too degraded
+ * to service a page request may also be too degraded to close cleanly, and the caller (a render
+ * already mid-recovery, see `render-pdf.ts`) must not itself be blocked or fail because of it.
+ *
+ * Exists to close a real gap in `getBrowser()`'s own health check: `!browser.connected` only
+ * detects a browser whose DevTools Protocol connection has fully dropped (a crashed/killed
+ * process) — it cannot detect a browser that is still connected but unable to service a *new*
+ * page (e.g. transient OS-level memory pressure preventing a new renderer process from
+ * spawning), which is exactly the failure shape a resource-constrained host can produce. Without
+ * this, `getBrowser()` would keep handing back the same degraded instance indefinitely, since
+ * nothing about it looks unhealthy by the one check that exists.
+ */
+export function discardBrowser(): void {
+  const stale = browserPromise;
+  browserPromise = null;
+  if (!stale) return;
+  stale
+    .then((browser) => browser.close())
+    .catch(() => {
+      // Already dead, or never successfully launched — nothing left to close.
+    });
+}

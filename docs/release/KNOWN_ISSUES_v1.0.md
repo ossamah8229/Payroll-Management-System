@@ -271,6 +271,52 @@ during RC1 preparation (2026-07-19/20), not assumed.
 
 ---
 
+## KI-10 — `payslips.test.ts` intermittently fails under full-backend-suite load
+
+- **Description**: `payslips.test.ts` is the only backend suite that launches a real Puppeteer/
+  Chrome-for-Testing browser (`backend/src/lib/pdf/browser.ts`) — every failure observed was a hard
+  Jest timeout (`Exceeded timeout of Nms`) on an otherwise-correct operation (a `cleanTestData()`
+  hook or an individual PDF render), never an incorrect PDF or response, and never a leaked process
+  or handle (confirmed directly across 50+ reproduction runs: zero orphaned Chrome processes, full
+  memory recovery after every run). Root cause: this host's own measured, genuine resource
+  contention from processes outside this suite's control — `vm_stat` sampling during reproduction
+  showed free memory dropping as low as ~15-20MB and the shared browser's own RSS reaching
+  ~600-700MB during the file's heaviest test (a 300-employee batch render).
+- **Impact**: Spurious CI/local test failures under system load, with no correctness impact — the
+  underlying PDF rendering pipeline itself was never shown to produce incorrect output in any
+  reproduction.
+- **Trigger**: Running the full backend suite (or this file in isolation) on a host under genuine,
+  severe concurrent resource pressure from other processes.
+- **Fix (2026-07-23, Pre-Deployment Reliability Checkpoint)**: (1) `renderHtmlToPdf` now retries
+  once against a freshly relaunched browser if a render fails, closing a real gap in
+  `getBrowser()`'s health check (`browser.connected` only detects a fully crashed browser, not one
+  alive but unable to service a new page). (2) The 300-employee batch test — the single heaviest
+  consumer of the shared browser's resources in this file — now recycles the browser immediately
+  after it succeeds, so its own footprint can't compound into later tests. (3) This file's own Jest
+  timeout is raised from the global 15000ms default to 45000ms, scoped to this file alone (the
+  other 44 suites are unaffected) — justified by the measured contention above, not a blind
+  increase. See `docs/architecture/testing.md`'s "Payslip PDF test reliability" section for the
+  full investigation.
+- **Status: SUBSTANTIALLY IMPROVED, not claimed fully eliminated — evidence-based, not
+  overclaimed.** Comparing 20 isolated + 10 full-suite runs before the fix against the same battery
+  after: PDF/timeout-specific failures in isolated runs went from 2/20 to 0/20; in full-suite runs,
+  from 2/10 to 1/10 — and that one remaining case coincided with a directly measured, severe host
+  slowdown (this file alone took 368s against its normal ~70s, a >5x slowdown) that no finite,
+  principled timeout can fully absorb. The residual risk is tied to genuinely severe ambient
+  contention on a shared host outside this codebase's control, not an unfixed code defect — this is
+  reported honestly rather than marked fully resolved, per this checkpoint's own explicit
+  instruction not to claim resolution without repeated evidence.
+- **A separate, unrelated flake found during this same investigation, not fully resolved**:
+  `'issues a constant number of queries regardless of batch size (no N+1)'` — a pure Prisma
+  query-count assertion with no Puppeteer involvement — occasionally observed an off-by-one query
+  count under contention (a connection-pool-level effect; the actual eligible-Payslip results were
+  always correct, so this is not a real N+1 regression). The test's warm-up was broadened to prime
+  all three batch shapes instead of one, reducing but not eliminating the ~5-10% recurrence rate
+  seen in reproduction. Not weakened (the exact-equality assertion is unchanged); left open as a
+  separate, lower-priority follow-up.
+
+---
+
 ## Summary
 
 | ID | Issue | Blocking? |
@@ -284,6 +330,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-7 | Concurrent first-contact CSRF race — intermittent login failure | No — **RESOLVED** 2026-07-23 (corrected design) |
 | KI-8 | Custom role with `sites:manage` could not see the Project Sites list | No — **RESOLVED** 2026-07-23 |
 | KI-9 | Roles & Permissions dialog excessive scrolling / frame desync | No — **RESOLVED** 2026-07-23 |
+| KI-10 | `payslips.test.ts` intermittent full-suite-load failures | No — **substantially improved** 2026-07-23, not claimed fully eliminated (see entry) |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

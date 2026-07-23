@@ -17,7 +17,25 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-07-23 (later same day) — Checkpoint 4D Correction and UAT Defect Remediation is
+> **Update, 2026-07-23 (latest same-day update) — Pre-Deployment Reliability Checkpoint (Payslip PDF
+> Full-Suite Flakiness) is COMPLETE, NOT pushed.** `payslips.test.ts`'s intermittent full-suite
+> failures were root-caused via extensive controlled reproduction (20 isolated + 10 full-suite runs,
+> before/after the fix) to this shared host's own measured, severe ambient resource contention from
+> processes outside this suite's control — never a codebase defect (the singleton Puppeteer browser
+> lifecycle was reviewed and confirmed correctly bounded; zero leaked processes across 50+
+> reproduction runs). Fixed with three lifecycle/resource measures — a bounded one-time
+> render-recovery retry, the heaviest test recycling the shared browser after itself, and a
+> file-scoped Jest timeout increase (15000ms → 45000ms, this file only) — backed by measured
+> evidence, not a blind change. Result: PDF/timeout failures dropped from 2/20 to 0/20 in isolated
+> runs and 2/10 to 1/10 in full-suite runs, the one remainder coinciding with a directly measured
+> >5x host slowdown. **Reported honestly as a large, measured improvement — not a claim of absolute
+> zero**, per this checkpoint's own explicit instruction. A separate, unrelated Prisma query-count
+> flake was found and partially (not fully) mitigated; see `docs/release/KNOWN_ISSUES_v1.0.md` KI-10.
+> Full record: `docs/architecture/testing.md`'s "Payslip PDF test reliability" section and
+> `docs/PROJECT_PROGRESS.md` §1's own dated entry. **Do not re-open this investigation without new
+> evidence; do not push or deploy without the user's own separate go-ahead.**
+
+> **Update, 2026-07-23 (earlier same day) — Checkpoint 4D Correction and UAT Defect Remediation is
 > COMPLETE, NOT pushed.** Three items: (1) the same-day Checkpoint 4D CSRF fix below was reviewed
 > and its design **rejected** — an in-memory map coalescing concurrent requests, keyed by `req.ip`,
 > is not a browser identity and cannot guarantee correctness across more than one backend process.

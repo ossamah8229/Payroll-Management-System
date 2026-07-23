@@ -25,8 +25,65 @@ to it rather than repeating it.
 
 **Backend and frontend suites are "deterministic" in the sense this project's own checkpoint
 instructions use the word** — no network flakiness, no browser timing, same result every run given
-the same code. The E2E suite is the one layer that is genuinely a real browser driving a real
-running stack, and is treated differently for that reason (see below).
+the same code — **with one documented exception: `payslips.test.ts`**, which launches a real
+Puppeteer/Chrome-for-Testing browser (see "PDF rendering" row above) and is therefore genuinely
+subject to host-level timing/resource variability the same way the E2E suite is, just without a
+real network/frontend involved. See "Payslip PDF test reliability" below for the full investigation,
+fix, and its measured limits. The E2E suite is the other layer that is genuinely a real browser
+driving a real running stack, and is treated differently for that reason (see below).
+
+## Payslip PDF test reliability (Pre-Deployment Reliability Checkpoint)
+
+`payslips.test.ts` intermittently failed under full-backend-suite load (11 failures in one observed
+run) — investigated by extensive controlled reproduction (20+ isolated runs, 15+ full-suite runs,
+both before and after the fix, with `vm_stat`/process-count sampling throughout). Full record:
+`docs/PROJECT_PROGRESS.md`'s "Pre-Deployment Reliability Checkpoint" entry and
+`docs/release/KNOWN_ISSUES_v1.0.md` KI-10.
+
+**Root cause**: every failure was a hard Jest timeout (`Exceeded timeout of Nms`) on an otherwise
+*correct* operation — a `beforeEach`/`afterAll` hook (`cleanTestData()`) or an individual PDF render
+— never an incorrect PDF, an incorrect response, or a leaked process/handle (both confirmed
+directly: zero orphaned Chrome processes and full memory recovery after every single reproduction
+run, clean or failing). The proximate trigger is this host's own measured, genuine resource
+contention from processes *outside* this test suite (other concurrent sessions on this shared
+sandbox) — `vm_stat` sampling during reproduction showed free memory dropping as low as ~15-20MB and
+the shared Puppeteer browser's own RSS reaching ~600-700MB during this file's heaviest test (a
+300-employee batch render). This is genuinely a resource-availability problem, not a code-level
+leak or a design defect in the singleton-browser lifecycle (`backend/src/lib/pdf/browser.ts`), which
+was reviewed and found correctly bounded (try/finally page cleanup, concurrency-safe relaunch,
+`closeBrowser()` in `afterAll`).
+
+**Fix** (three parts, all in `backend/src/lib/pdf/browser.ts`/`render-pdf.ts` and
+`backend/tests/payslips.test.ts` — no payslip business logic touched):
+1. `renderHtmlToPdf` now retries exactly once, against a freshly discarded-and-relaunched browser,
+   if a render fails for any reason — closes a real gap in `getBrowser()`'s own health check
+   (`browser.connected` only detects a fully crashed process, not one alive but unable to service a
+   new page under transient resource pressure).
+2. The 300-employee batch test — by far the single heaviest consumer of the shared browser's
+   resources in this file — now explicitly recycles the browser (`closeBrowser()`) immediately after
+   it succeeds, so its own outsized footprint doesn't compound into every test that runs after it.
+3. This file's own Jest timeout is raised from the global 15000ms default (`tests/setup.ts`, still
+   15000ms for the other 44 suites) to 45000ms, `jest.setTimeout()` scoped to this file alone —
+   justified by the same measured contention above, not a blind increase.
+
+**Measured result — a real, large reduction, not a claim of absolute zero**: comparing 20 isolated +
+10 full-suite runs before the fix against the same battery after: PDF/timeout-specific failures in
+isolated runs went from 2/20 to 0/20; in full-suite runs, from 2/10 to 1/10, and that one remaining
+case coincided with a directly measured, severe host slowdown (this file alone took 368s vs. its
+normal ~70s — a >5x slowdown) that no finite, principled timeout can fully absorb without becoming
+unrealistic. **This is the honest limit of an application-level fix**: the remaining, much-reduced
+residual risk is tied to genuinely severe ambient contention on a shared host outside this codebase's
+control, not a bug left unfixed.
+
+**A separate, unrelated flake found (not fully resolved) during this same investigation**:
+`'issues a constant number of queries regardless of batch size (no N+1)'` — a pure Prisma/Postgres
+query-count assertion with no Puppeteer involvement at all — occasionally observed an off-by-one
+query count under contention (a connection-pool-level effect, not an N+1 regression: `small`/`large`
+result lengths were always correct). The test's own warm-up was broadened to prime all three batch
+shapes instead of one, which reduced but did not eliminate the ~5-10% recurrence rate seen in
+reproduction. Left as a known, separate, lower-priority issue (KI-10 covers it) rather than weakening
+its exact-equality assertion, which the checkpoint's own instructions for this investigation
+explicitly forbid.
 
 ## Why Puppeteer *and* Playwright both exist in this repository
 

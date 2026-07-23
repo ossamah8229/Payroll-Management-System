@@ -1,5 +1,6 @@
 import type { PDFOptions } from 'puppeteer';
-import { getBrowser } from './browser';
+import { discardBrowser, getBrowser } from './browser';
+import { logger } from '../logger';
 
 export interface RenderPdfOptions {
   /** Defaults to `'A4'` — standard for Pakistani business documents; passed straight through to
@@ -28,8 +29,30 @@ export interface RenderPdfOptions {
  *
  * Stateless: returns a `Buffer` only, never passes a `path` to `page.pdf()` — nothing is ever
  * written to this process's filesystem by this function.
+ *
+ * **Pre-Deployment Reliability Checkpoint — one bounded recovery retry**: `getBrowser()`'s own
+ * health check only detects a browser whose connection has fully dropped, not one that is still
+ * connected but transiently unable to service a new page (measured directly on this project's own
+ * resource-constrained dev/CI sandbox — a real, if intermittent, condition, not hypothetical). If
+ * the render attempt throws for any reason, this discards the shared browser
+ * (`discardBrowser()`) and retries exactly once against a freshly launched instance. A second
+ * failure is never retried again — it propagates to the caller exactly as before, so a genuinely
+ * broken configuration still surfaces as a real error rather than being silently masked.
  */
 export async function renderHtmlToPdf(html: string, options: RenderPdfOptions = {}): Promise<Buffer> {
+  try {
+    return await renderOnce(html, options);
+  } catch (error) {
+    logger.warn(
+      { error },
+      'PDF render failed — discarding the shared browser and retrying once against a freshly launched instance',
+    );
+    discardBrowser();
+    return renderOnce(html, options);
+  }
+}
+
+async function renderOnce(html: string, options: RenderPdfOptions): Promise<Buffer> {
   const browser = await getBrowser();
   const page = await browser.newPage();
 

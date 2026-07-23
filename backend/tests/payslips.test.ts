@@ -9,6 +9,33 @@ import { buildArchiveEntryName, slugify } from '../src/modules/payslips/payslips
 import { loadSessionUser } from '../src/modules/auth/auth.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
+/**
+ * Pre-Deployment Reliability Checkpoint — this file's own default timeout (`tests/setup.ts`'s
+ * global 15000ms, otherwise shared by all 44 other suites, none of which launch a real browser)
+ * is raised to 45000ms **for this file only** — `jest.setTimeout()` scopes to the test file it's
+ * called in (each file gets its own isolated test environment/circus runner even under
+ * `--runInBand`'s single process), so this does not relax the other 44 suites' own fast-fail
+ * default at all.
+ *
+ * Measured evidence this responds to, not a blind increase: reproducing this file under full
+ * backend-suite load (10 consecutive `npm test` runs) surfaced real, intermittent failures —
+ * individual PDF-generation tests and `beforeEach`'s own `cleanTestData()` hook — every one of
+ * them a hard `Exceeded timeout of 15000 ms` from Jest itself, never an incorrect PDF/response. In
+ * the same reproduction, `vm_stat` sampling showed this host's free memory dropping as low as
+ * ~15-20MB and the shared Puppeteer browser's own RSS reaching ~600-700MB during this file's
+ * heaviest test — real, measured resource contention from processes outside this suite's control
+ * (other concurrent sessions on this shared host), not a leak in this codebase (confirmed
+ * separately: zero orphaned Chrome processes and full memory recovery after every run, clean or
+ * failing). 45000ms (3x) is a proportionate, still-bounded response to that measured contention —
+ * generous enough to absorb a realistic spike, nowhere near "wait indefinitely," and well under
+ * the 300-employee batch test's own already-established 120000ms for genuinely heavy work.
+ * Accompanies, not replaces, the lifecycle fixes in `src/lib/pdf/browser.ts`/`render-pdf.ts`
+ * (bounded one-time render recovery) and this file's own browser recycling after that same
+ * 300-employee test (see its own comment) — see `docs/release/KNOWN_ISSUES_v1.0.md` and
+ * `docs/PROJECT_PROGRESS.md` for the full investigation and reproduction evidence.
+ */
+jest.setTimeout(45000);
+
 const app = createApp();
 const PASSWORD = 'CorrectHorseBattery1!';
 
@@ -841,10 +868,19 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     // suite that installs a listener, and it reads the count immediately after each call.
     prisma.$on('query', listener);
 
-    // Warm the connection/prepared-statement cache with a throwaway call before measuring. The
-    // very first query on a given connection can carry extra one-off setup cost that has nothing
-    // to do with N+1 shape, which otherwise makes the two measured counts flaky by +/-1.
+    // Warm the connection/prepared-statement cache with a throwaway call of *each* batch shape
+    // before measuring, not just one generic call — under real contention (confirmed via the
+    // Pre-Deployment Reliability Checkpoint's own full-suite reproduction: an intermittent 8-vs-7
+    // mismatch here) a connection-pool acquisition/reconnect can land between the two measured
+    // calls, so warming only the small shape left the first *large*-shaped call still occasionally
+    // paying its own one-off setup cost — invisible until the large-batch measurement, since the
+    // small one had already been warmed. Warming both shapes up front removes that asymmetry
+    // without weakening the equality assertion below at all.
     await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: [employees[0]!.id] });
+    await getPayslipsBulk(sessionUser, cycle.id, {
+      employeeIds: [employees[0]!.id, employees[1]!.id],
+    });
+    await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: employees.map((e) => e.id) });
 
     queryCount = 0;
     const small = await getPayslipsBulk(sessionUser, cycle.id, {
@@ -1066,6 +1102,17 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
       expect(metadata.eligibleCount).toBe(MAX_BATCH_PAYSLIPS_PER_REQUEST);
       expect(metadata.successCount).toBe(MAX_BATCH_PAYSLIPS_PER_REQUEST);
       expect(metadata.failureCount).toBe(0);
+
+      // Pre-Deployment Reliability Checkpoint — this test alone cycles 300 real Puppeteer pages
+      // through the one shared browser instance (measured directly: shared-browser RSS grows to
+      // ~600-700MB by the end of this test, against a baseline of well under 100MB), by far the
+      // heaviest single consumer of that shared instance's resources anywhere in this file.
+      // Relaunching it here — rather than leaving every later test in this file to reuse the now
+      // much heavier instance — keeps this test's own outsized footprint from compounding into
+      // tests that have no reason to expect it, on a resource-constrained host. `closeBrowser()`
+      // (not a bare discard) is correct here specifically because this render just succeeded —
+      // there's a real, healthy browser to close cleanly, not a degraded one to abandon.
+      await closeBrowser();
     },
     120_000, // 300 real Puppeteer renders — generous, test-specific timeout (default is 15s)
   );
