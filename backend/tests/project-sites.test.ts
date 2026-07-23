@@ -182,6 +182,161 @@ describe('Project Sites', () => {
     expect(siteIds).not.toContain(siteB.body.site.id);
   });
 
+  // --- UAT Defect 1: a custom role granted sites:manage sees every site (Post-Phase-5
+  // Stabilization Checkpoint 4D correction) -----------------------------------------------------
+  //
+  // Root cause: `listProjectSites` (project-sites.service.ts) used to grant unrestricted
+  // visibility only to the literal seeded Master Admin `roleCode`, scoping every other role —
+  // including a *custom* role explicitly granted `sites:manage` — to its `UserSiteAssignment`
+  // rows. A brand-new custom role has none by default (nothing to assign it to before any site
+  // exists), so a "Payroll Manager" custom role with `sites:manage` could create a site (mutation
+  // was never scoped) but then see an empty list. `sites:manage` is one of this system's
+  // `CRITICAL_ADMIN_PERMISSIONS` (shared/src/constants/permissions.ts), the same class as the
+  // already-unscoped `users:manage`/`settings:manage` — the fix grants the same unrestricted
+  // visibility to any role, custom or system, that currently holds it.
+  describe('sites:manage grants global site visibility, regardless of role name/code (UAT Defect 1)', () => {
+    async function customSitesManagerAgent(email: string, roleCode = 'TEST_CUSTOM_SITES_MANAGER') {
+      return createAuthenticatedAgent(app, {
+        email,
+        password: PASSWORD,
+        roleCode,
+        permissionKeys: [PERMISSIONS.SITES_MANAGE],
+        // Deliberately no siteIds — a fresh custom role has no assignments yet, exactly the
+        // reported production scenario.
+      });
+    }
+
+    /** `masterAdminAgent` (top of this file) deliberately holds only `sites:manage`, matching its
+     * own existing tests' intent — editing a *role* (rename, etc.) needs `users:manage`
+     * (roles.routes.ts), which this dedicated helper adds on top, only for the tests below that
+     * actually need to perform a role edit. */
+    async function roleEditingAdminAgent(email: string) {
+      return createAuthenticatedAgent(app, {
+        email,
+        password: PASSWORD,
+        roleCode: ROLE_CODES.MASTER_ADMIN,
+        permissionKeys: [PERMISSIONS.SITES_MANAGE, PERMISSIONS.USERS_MANAGE],
+      });
+    }
+
+    it('a custom role with sites:manage and zero site assignments can list every existing site', async () => {
+      const masterAdmin = await masterAdminAgent('sites-custom-admin@test.local');
+      const existing = await masterAdmin.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', masterAdmin.csrfToken)
+        .send({ name: 'Test Site Pre-Existing For Custom Role' });
+
+      const { agent } = await customSitesManagerAgent('sites-custom-manager@test.local');
+
+      const listRes = await agent.get('/api/v1/sites');
+      expect(listRes.status).toBe(200);
+      const siteIds = listRes.body.sites.map((s: { id: string }) => s.id);
+      expect(siteIds).toContain(existing.body.site.id);
+    });
+
+    it('can create a site and immediately retrieve it in its own subsequent list call', async () => {
+      const { agent, csrfToken } = await customSitesManagerAgent('sites-custom-manager-create@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Created By Custom Manager' });
+      expect(createRes.status).toBe(201);
+
+      const listRes = await agent.get('/api/v1/sites');
+      const siteIds = listRes.body.sites.map((s: { id: string }) => s.id);
+      expect(siteIds).toContain(createRes.body.site.id);
+    });
+
+    it('renaming the role does not change its holder\'s access', async () => {
+      const { agent } = await customSitesManagerAgent('sites-custom-rename@test.local', 'TEST_RENAME_SITES_MANAGER');
+      const preRenameRes = await agent.get('/api/v1/sites');
+      expect(preRenameRes.status).toBe(200);
+
+      // The rename itself needs users:manage (roles.routes.ts), which this custom role
+      // deliberately doesn't hold — an administrator performs it, same as any real role edit would.
+      const admin = await roleEditingAdminAgent('sites-custom-rename-admin@test.local');
+      const role = await prisma.role.findFirstOrThrow({ where: { code: 'TEST_RENAME_SITES_MANAGER' } });
+      const renameRes = await admin.agent
+        .patch(`/api/v1/roles/${role.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ name: 'Totally Different Name' });
+      expect(renameRes.status).toBe(200);
+
+      const postRenameRes = await agent.get('/api/v1/sites');
+      expect(postRenameRes.status).toBe(200);
+      expect(postRenameRes.body.sites.length).toBe(preRenameRes.body.sites.length);
+    });
+
+    it('a custom role named "Master Admin" gains no special access — only sites:manage matters, never the name', async () => {
+      const { agent } = await createAuthenticatedAgent(app, {
+        email: 'sites-fake-master-admin@test.local',
+        password: PASSWORD,
+        roleCode: 'TEST_FAKE_MASTER_ADMIN',
+        // No sites:manage granted — only the role's *name* imitates the seeded Master Admin.
+        permissionKeys: [PERMISSIONS.PAYROLL_ENTRY],
+      });
+
+      // Rename this custom role's display name to literally "Master Admin" — Role.name is
+      // administrator-editable free text; Role.code (the only identity that matters here) was
+      // already generated at creation and never changes.
+      const role = await prisma.role.findFirstOrThrow({ where: { code: 'TEST_FAKE_MASTER_ADMIN' } });
+      const admin = await roleEditingAdminAgent('sites-fake-master-admin-actor@test.local');
+      await admin.agent
+        .patch(`/api/v1/roles/${role.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ name: 'Master Admin' });
+
+      const otherSite = await admin.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ name: 'Test Site Not Visible To Fake Master Admin' });
+
+      const listRes = await agent.get('/api/v1/sites');
+      expect(listRes.status).toBe(200);
+      const siteIds = listRes.body.sites.map((s: { id: string }) => s.id);
+      // Still scoped to nothing (no site assignments, no sites:manage) despite the name.
+      expect(siteIds).not.toContain(otherSite.body.site.id);
+    });
+
+    it('Master Admin behavior is unchanged — still sees every site with no explicit assignments', async () => {
+      const masterAdmin = await masterAdminAgent('sites-master-unchanged@test.local');
+      const site = await masterAdmin.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', masterAdmin.csrfToken)
+        .send({ name: 'Test Site Master Unchanged Check' });
+
+      const listRes = await masterAdmin.agent.get('/api/v1/sites');
+      const siteIds = listRes.body.sites.map((s: { id: string }) => s.id);
+      expect(siteIds).toContain(site.body.site.id);
+    });
+
+    it('a site-scoped user (no sites:manage) still only sees their assigned sites — no leak from the global-visibility fix', async () => {
+      const masterAdmin = await masterAdminAgent('sites-no-leak-admin@test.local');
+      const assignedSite = await masterAdmin.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', masterAdmin.csrfToken)
+        .send({ name: 'Test Site No Leak Assigned' });
+      const otherSite = await masterAdmin.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', masterAdmin.csrfToken)
+        .send({ name: 'Test Site No Leak Other' });
+
+      const { agent } = await createAuthenticatedAgent(app, {
+        email: 'sites-no-leak-staff@test.local',
+        password: PASSWORD,
+        roleCode: ROLE_CODES.PAYROLL_STAFF,
+        permissionKeys: [PERMISSIONS.PAYROLL_ENTRY],
+        siteIds: [assignedSite.body.site.id],
+      });
+
+      const listRes = await agent.get('/api/v1/sites');
+      const siteIds = listRes.body.sites.map((s: { id: string }) => s.id);
+      expect(siteIds).toContain(assignedSite.body.site.id);
+      expect(siteIds).not.toContain(otherSite.body.site.id);
+    });
+  });
+
   // --- Site-lookup read authorization (Post-Phase-5 Stabilization Checkpoint 4B remediation) -------
   //
   // GET /sites and GET /sites/:id previously carried no permission gate at all (any authenticated

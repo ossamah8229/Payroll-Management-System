@@ -129,8 +129,16 @@ Staff's.
 - **Unique constraints:** (`userId`, `siteId`)
 - **Indexes:** (`userId`), (`siteId`)
 - **Note:** Master User has implicit access to all sites and has no rows here — absence of rows for
-  Master User is not treated as "no access"; this table is only consulted for Payroll Staff and
-  Finance.
+  Master User is not treated as "no access." Originally consulted only for the two seeded
+  Payroll Staff/Finance roles; since dynamic custom roles (Administration & Security Management
+  Phase 1), this table is consulted for *any* role — system or custom — for operational
+  (employee/payroll) site-scoping. **One exception (Post-Phase-5 Stabilization Checkpoint 4D
+  correction, `docs/architecture/authentication.md`'s "UAT Defect 1" note):** for the Project
+  *Sites list itself* (`listProjectSites`), a role currently holding `sites:manage` sees every site
+  regardless of rows here, the same unrestricted visibility Master User already had — `sites:manage`
+  is a global administrative permission (`CRITICAL_ADMIN_PERMISSIONS`), not an operational,
+  site-scoped one. This table remains the sole source of truth for every other site-scoped check in
+  the system (employees, payroll, etc.).
 - **Module owner:** Settings/Authentication
 
 ---

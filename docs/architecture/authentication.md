@@ -446,9 +446,13 @@ administration, site assignment, route visibility, or permission-aware controls 
 functionality this phase delivers:
 
 - `require-site-access.ts` / `employees.service.ts`'s `isMasterAdmin` — Master Admin's site-scope
-  bypass (implicit, unrestricted access). A custom role, however permissive, is always site-scoped
-  like Payroll Staff/Finance unless it happens to literally be the seeded Master Admin role — this is
-  correct, secure behavior for a custom role, not a gap.
+  bypass for *operational* data (employees, payroll). A custom role, however permissive, is always
+  site-scoped for this data like Payroll Staff/Finance unless it happens to literally be the seeded
+  Master Admin role — this is correct, secure behavior for a custom role, not a gap. **Deliberately
+  not touched by the UAT Defect 1 fix below** — operational site-scoping ("which sites can this
+  person enter payroll for") and Site *administration* visibility ("can this person see/manage the
+  Site entity list itself") are different questions with different intended answers; only the
+  latter changed.
 - `users.service.ts` — `createUser`/`updateUser` skip site-assignment specifically for the Master
   Admin role code.
 - `tasks-panel.tsx`'s `isMasterUser` (frontend) mirrors `tasks.service.ts`'s own backend
@@ -457,6 +461,26 @@ functionality this phase delivers:
   its own dedicated RBAC design for Tasks specifically), would only create a new inconsistency, not
   close the gap. **This is safe as-is**: a custom role without Tasks access simply never sees the
   "Create Task"/assignee-filter UI or any tasks beyond its own assignments, exactly as intended.
+
+**UAT Defect 1 correction (Post-Phase-5 Stabilization Checkpoint 4D correction) — one exception
+carved out of the pattern above:** `project-sites.service.ts`'s `listProjectSites` no longer relies
+on the `roleCode === MASTER_ADMIN` check *alone* to decide who sees every site. `sites:manage` is
+one of this system's `CRITICAL_ADMIN_PERMISSIONS` (§6 above, `shared/src/constants/permissions.ts`)
+— the same class as the already-unscoped `users:manage`/`settings:manage`, both genuinely global
+administrative capabilities with no "assigned site" concept at all. A custom role explicitly granted
+`sites:manage` could previously create a Project Site (`createProjectSite` was, correctly, never
+site-scoped — a not-yet-created site can't already be in anyone's `UserSiteAssignment` rows) but then
+see an empty Sites list, since *visibility* was still gated on the literal seeded role code. Fixed by
+granting the same unrestricted visibility to any role — system or custom — currently holding
+`sites:manage`; the `roleCode === MASTER_ADMIN` fast path is kept alongside it (not replaced), for
+the same reason Master Admin's bypass is role-identity-based everywhere else in this system: it must
+keep working even if Master Admin's own role were ever edited to no longer explicitly hold
+`sites:manage`. A user without `sites:manage` (Payroll Staff, Finance, or a custom role that was
+never granted it) is completely unaffected — still scoped to their own `UserSiteAssignment` rows,
+exactly as before. See `backend/tests/project-sites.test.ts`'s "sites:manage grants global site
+visibility" block and `tests/e2e/specs/10-site-visibility.spec.ts` for regression coverage, including
+that renaming the role or copying the literal string "Master Admin" as a custom role's *name* grants
+no special access — only the permission key and the real seeded role's `code` matter, never a name.
 
 Every one of these remains a role-**code** dependency, never a role-**name** one — renaming any
 seeded role's display label still changes nothing, since `code` (not `name`) is what these checks
@@ -503,7 +527,7 @@ the `x-csrf-token` request header on every `POST`/`PUT`/`PATCH`/`DELETE`; the ha
 that bypass `apiRequest` for file upload/download (`use-employees.ts`, `use-payroll-entries.ts`,
 `use-payslips.ts`) call the same `getCsrfToken()` accessor rather than re-reading a cookie.
 
-### Checkpoint 4C/4D — the concurrent first-contact race, root cause and fix
+### Checkpoint 4C/4D — the concurrent first-contact race: root cause, a rejected fix, and the corrected design
 
 **Root cause (4C):** `issueCsrfCookie` used to mint a fresh random token any time a request arrived
 with no `csrf_token` cookie yet. Two requests that both arrive before either has round-tripped its
@@ -517,30 +541,69 @@ longer matched the cookie on its next mutation and was rejected with a 403 "Miss
 token" — intermittent by nature, since it depended on request/response timing, not on anything a
 user did wrong.
 
-**Fix (4D):** `issueCsrfCookie` now mints a "first contact" token through `firstContactToken`, a
-short-lived (3s), in-memory, per-process map keyed by `req.ip` — concurrent cookie-less requests
-from the same client converge on the identical token instead of each minting their own, so whichever
-`Set-Cookie` the browser ultimately keeps always matches every tab's own in-memory copy. This closes
-the race entirely on the issuing side: the double-submit-cookie model itself, its cookie attributes,
-and its timing-safe comparison (`csrfProtection`/`tokensMatch`) are all unchanged. No frontend change
-was needed or made — `api-client.ts` already just reads whatever the response header says.
+**A first fix attempt (Checkpoint 4D, rejected on review):** made concurrent "no cookie yet"
+requests converge on one token via a short-lived, in-memory, per-process map keyed by `req.ip`.
+Rejected, correctly: `req.ip` is not a browser identity — it identifies a network path, and
+unrelated users behind one NAT/corporate egress, or behind a reverse proxy, can share an IP without
+being the same client. Worse, an in-memory `Map` is process-local — correctness depended on every
+racing request landing on the *same* Node process within a fixed TTL window, which stops holding
+the moment this backend runs more than one instance (the ordinary case for any real deployment) or
+restarts mid-window. A mitigation whose correctness depends on single-process, single-request-path
+accidents is not a fix for a security-relevant race condition, even though it happened to work in
+this project's own single-instance sandbox testing.
 
-**Token rotation, added alongside the fix:** `rotateCsrfCookie` issues a brand-new token and echoes
-it in the response header of that same request — including on state-changing responses, which
-normally never carry the header — called after every event that already rotates or destroys the
-session: successful login (alongside the existing `req.session.regenerate`), logout, self-service
-`POST /auth/change-password`, and an admin's `POST /users/:id/reset-password` when resetting *their
-own* account (not when resetting someone else's — the acting admin's own session/token is untouched
-in that case). A token learned before authentication is therefore never still valid afterward, the
-same rationale as session-fixation protection already gets from regenerating the session ID itself.
-Because `api-client.ts`'s `captureCsrfToken` already reads the `x-csrf-token` header off *every*
-response (not just safe ones), the frontend picks up a rotated token with no separate round trip and
-no code change.
+**The corrected design does not try to prevent the race server-side at all.** `issueCsrfCookie`
+(`backend/src/common/middleware/csrf.ts`) is the simplest possible stateless rule: mint a token if
+the request has none, echo it on safe methods, full stop — a first-contact race may still briefly
+mint two different tokens, exactly as it could before Checkpoint 4C. What changed is that this is no
+longer a problem the *server* needs to solve:
 
-Regression coverage: `backend/tests/csrf-concurrency.test.ts` (concurrent first-contact requests,
-multi-tab simulation, rotation on login/logout/password-change/self-reset, CSRF-mismatch-still-403,
-unauthenticated-requests-still-401) and `tests/e2e/specs/09-csrf-concurrency.spec.ts` (the same
-scenarios through a real Chromium browser with a real shared cookie jar across multiple tabs).
+1. `csrfProtection` rejects a genuine mismatch with a specific, distinguishable error code
+   (`CSRF_TOKEN_MISMATCH` — `common/http-error.ts`'s `csrfMismatch`), not the generic `FORBIDDEN`
+   every ordinary permission denial also uses.
+2. `frontend/src/lib/api-client.ts`'s `apiRequest` performs **one controlled recovery** when — and
+   only when — it sees that specific code: call `GET /api/v1/csrf-token` (`app.ts`, a
+   dependency-free, unauthenticated safe endpoint with exactly the same "echo the token bound to
+   whatever cookie the request already carries, mint one if it carries none" behavior every safe
+   request already gets from `issueCsrfCookie`), capture the token it returns, and retry the
+   original mutation exactly once with that token.
+3. A second mismatch — on the retry itself — is never retried again; it surfaces to the caller as a
+   normal `ApiError`. No other status/code (401, an ordinary 403 permission denial, 400, 409, 422,
+   500) ever triggers this path. Concurrent requests that all hit a mismatch around the same moment
+   share one in-flight recovery call (`pendingCsrfRefresh`) rather than each firing their own.
+
+This keeps the double-submit-cookie model and its timing-safe comparison (`csrfProtection`/
+`tokensMatch`) completely unweakened — every comparison is still a strict, real equality check, and
+neither the cookie's attributes nor the middleware ordering changed. It needs no shared state, no
+assumption about process topology, and no client identity signal of any kind — a genuine, if now
+rare, race simply costs one extra round trip on whichever tab loses it, invisibly to the user,
+instead of a hard failure.
+
+**Token rotation** (retained from the original design — this part of Checkpoint 4D was correct and
+was not part of what got rejected): `rotateCsrfCookie` issues a brand-new token and echoes it in the
+response header of that same request — including on state-changing responses, which normally never
+carry the header — called after every event that already rotates or destroys *the acting request's
+own* session: successful login (alongside the existing `req.session.regenerate`), logout,
+self-service `POST /auth/change-password`, and an administrator resetting *their own* password via
+`POST /users/:id/reset-password`. **Never called when an administrator resets someone else's
+password** — that only destroys the *target* user's sessions, an entirely different browser/cookie
+jar this response has no access to; the acting administrator's own token is correctly left as-is. A
+token learned before authentication is therefore never still valid afterward, the same rationale as
+session-fixation protection already gets from regenerating the session ID itself. Because
+`api-client.ts`'s `captureCsrfToken` already reads the `x-csrf-token` header off *every* response
+(not just safe ones), the frontend picks up a rotated token with no separate round trip and no
+special-case code — the same mechanism the mismatch-recovery endpoint's response flows through.
+
+Regression coverage: `backend/tests/csrf-concurrency.test.ts` (normal validation, mismatch still
+403 with the specific code, the recovery endpoint's echo/mint behavior, no IP-based coupling between
+unrelated simulated clients — including two sharing one simulated IP, statelessness across separate
+`createApp()` instances standing in for separate processes, rotation on login/logout/password-change/
+self-reset, full login→change-password→re-login flows, and no backend-side automatic retry of any
+kind); `frontend/src/lib/api-client.test.ts` (one-shot recovery and retry, a second mismatch
+surfaced not retried again, every non-CSRF status/code left alone, concurrent-mismatch dedup, no
+`localStorage`/`sessionStorage` at any point); and `tests/e2e/specs/09-csrf-concurrency.spec.ts`
+(the same scenarios through a real Chromium browser with a real shared cookie jar across multiple
+tabs, including the original two-tab race run repeatedly).
 
 ## Session Expiration
 

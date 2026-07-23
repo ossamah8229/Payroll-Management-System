@@ -186,16 +186,88 @@ during RC1 preparation (2026-07-19/20), not assumed.
   settles after the first completed round trip) typically succeeded.
 - **Release-blocking status**: Root-caused (not fixed) as Post-Phase-5 Stabilization Checkpoint 4C,
   deliberately deferred to its own separate implementation checkpoint.
-- **Status: RESOLVED (2026-07-23, Post-Phase-5 Stabilization Checkpoint 4D).** Fixed by making
-  concurrent "no cookie yet" requests from the same client converge on one identical token (a
-  short-lived, in-memory, per-process coalescing map keyed by `req.ip` —
-  `firstContactToken`/`backend/src/common/middleware/csrf.ts`) instead of each minting its own —
-  the double-submit-cookie model, its cookie attributes, and its timing-safe comparison are all
-  unchanged. CSRF token rotation was added alongside it (login/logout/self-service password
-  change/admin self-password-reset). No frontend change was required. See
-  `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section for the full design, and
-  `backend/tests/csrf-concurrency.test.ts` / `tests/e2e/specs/09-csrf-concurrency.spec.ts` for
-  regression coverage.
+- **First fix attempt (2026-07-23, Post-Phase-5 Stabilization Checkpoint 4D) — REJECTED on review.**
+  Made concurrent "no cookie yet" requests converge on one token via a short-lived, in-memory,
+  per-process coalescing map keyed by `req.ip`. Rejected because `req.ip` is not a browser identity
+  (unrelated clients can share an IP behind a NAT/proxy) and a process-local map cannot guarantee
+  correctness once the backend runs as more than one instance — a mitigation whose correctness
+  depends on single-process, single-request-path accidents is not a fix for a security-relevant race
+  condition, even though it passed every test in this project's own single-instance sandbox.
+- **Status: RESOLVED (2026-07-23, Post-Phase-5 Stabilization Checkpoint 4D correction), corrected
+  design.** The backend no longer tries to prevent the race at all — `issueCsrfCookie` is the
+  simplest stateless rule (mint if absent, echo on safe methods), unchanged from before Checkpoint
+  4C. Instead, `csrfProtection` rejects a genuine mismatch with a specific, distinguishable code
+  (`CSRF_TOKEN_MISMATCH`, never the generic code an ordinary permission denial also uses), and the
+  frontend (`frontend/src/lib/api-client.ts`) performs exactly one controlled recovery on that
+  specific code: refetch the token bound to the browser's actual current cookie
+  (`GET /api/v1/csrf-token`, a dependency-free safe endpoint) and retry the original mutation once.
+  A second mismatch is never retried again. The double-submit-cookie model, its cookie attributes,
+  and its timing-safe comparison are all unweakened — this only adds a client-side "learn the real
+  token and try once more" step, with no shared state, no process-topology assumption, and no client
+  identity signal of any kind. CSRF token rotation (login/logout/self-service password change/admin
+  self-password-reset) is unchanged from the original design — it was not part of what got rejected.
+  See `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section for the full design, and
+  `backend/tests/csrf-concurrency.test.ts` / `frontend/src/lib/api-client.test.ts` /
+  `tests/e2e/specs/09-csrf-concurrency.spec.ts` for regression coverage.
+
+---
+
+## KI-8 — Custom role with `sites:manage` could not see the Project Sites list
+
+- **Description**: `listProjectSites` (`backend/src/modules/project-sites/project-sites.service.ts`)
+  granted unrestricted site visibility only to the literal seeded Master Admin `roleCode`, scoping
+  every other role — including a *custom* role explicitly granted `sites:manage` — to its
+  `UserSiteAssignment` rows. A brand-new custom role has none by default (nothing to assign it to
+  before any site exists), so a "Payroll Manager" custom role with `sites:manage` could create a
+  Project Site (`createProjectSite` was, correctly, never site-scoped) but then see an empty list.
+- **Impact**: A Master User granting a custom role `sites:manage` (intending it as site-administration
+  authority, the permission's evident purpose) got a role that could mutate sites but never see any
+  — including ones it had itself just created — making the permission effectively unusable for its
+  own stated purpose.
+- **Trigger**: Create a custom role, grant it only `sites:manage`, assign a user, log in as that
+  user, visit Project Sites.
+- **Workaround (while open)**: A Master User could also grant the affected user explicit
+  `UserSiteAssignment` rows via the Users page, but this only worked for sites that already existed
+  at assignment time — a newly created site would still not appear.
+- **Status: RESOLVED (2026-07-23, Post-Phase-5 Stabilization Checkpoint 4D correction, UAT Defect
+  1).** `sites:manage` is one of this system's `CRITICAL_ADMIN_PERMISSIONS` — the same class as the
+  already-unscoped `users:manage`/`settings:manage`. `listProjectSites` now grants the same
+  unrestricted visibility to any role, system or custom, currently holding `sites:manage`, alongside
+  (not replacing) the existing Master Admin `roleCode` fast path. Operational site-scoping for every
+  other module (employees, payroll) is unchanged. See `docs/architecture/authentication.md`'s "UAT
+  Defect 1" note and `docs/architecture/database/access-control.md`'s `UserSiteAssignment` note for
+  the full design, and `backend/tests/project-sites.test.ts` /
+  `tests/e2e/specs/10-site-visibility.spec.ts` for regression coverage.
+
+---
+
+## KI-9 — Roles & Permissions dialog had excessive empty scrolling and a frame/content desync
+
+- **Description**: The permission matrix (`frontend/src/components/roles/permission-matrix.tsx`)
+  nested its own independently `max-h-[420px]`/`overflow-y-auto` scroll region *inside*
+  `ModalContent`'s own `max-h-[85vh]`/`overflow-y-auto` region
+  (`frontend/src/components/ui/modal.tsx`) — two competing scroll contexts in one dialog, with
+  neither the header nor footer pinned in place.
+- **Impact**: Scrolling the Create/Edit Role dialog continued through a large empty area past the
+  real content, and the dialog's own frame could appear to separate from its content while
+  scrolling — the same class of modal-alignment issue this project has hit before in a different
+  form (a static-prototype-only `justify-content` bug, AUD-007, unrelated code path — see
+  `docs/PROJECT_PROGRESS.md`).
+- **Trigger**: Open Create Role or Edit Role with enough permissions selected/assigned to overflow
+  the matrix's own capped height, then scroll to the bottom.
+- **Status: RESOLVED (2026-07-23, Post-Phase-5 Stabilization Checkpoint 4D correction, UAT Defect
+  2).** Fixed at the shared `ModalContent`/`ModalFooter` level, not a one-off patch to the Roles
+  page: `ModalContent` is now a proper flex column with exactly one scroll region (a `min-h-0
+  flex-1 overflow-y-auto` body, required alongside `flex-1` or the parent's own height cap silently
+  stops working — the classic flexbox-scrolling pitfall), a non-scrolling header, and a `sticky
+  bottom-0` footer; the permission matrix's own inner scroll region was removed entirely. Every
+  other dialog in the app (all sharing the same component) had its now-redundant
+  `overflow-y-auto`/default `max-h-[85vh]` removed from its own `widthClassName` prop. See
+  `tests/e2e/specs/11-permission-dialog-layout.spec.ts` for regression coverage — measured
+  (scrollHeight/clientHeight, nested-scroll-region detection, dialog bounding-box stability while
+  scrolling, footer visibility, overlay coverage) at 1366×768, 1440×900, and 1920×1080, plus a
+  regression check that two other, unrelated dialogs (New User, New Project Site) are unaffected by
+  the shared-component change.
 
 ---
 
@@ -209,7 +281,9 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-4 | 6 pre-existing cosmetic lint warnings | No |
 | KI-5 | One timing-dependent test flake (confirmed non-deterministic) | No |
 | KI-6 | Puppeteer/embedded-Postgres manual install step in script-restricted environments | No (now documented) |
-| KI-7 | Concurrent first-contact CSRF race — intermittent login failure | No — **RESOLVED** 2026-07-23 |
+| KI-7 | Concurrent first-contact CSRF race — intermittent login failure | No — **RESOLVED** 2026-07-23 (corrected design) |
+| KI-8 | Custom role with `sites:manage` could not see the Project Sites list | No — **RESOLVED** 2026-07-23 |
+| KI-9 | Roles & Permissions dialog excessive scrolling / frame desync | No — **RESOLVED** 2026-07-23 |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

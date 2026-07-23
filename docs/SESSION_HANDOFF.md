@@ -17,20 +17,25 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-07-23 — Post-Phase-5 Stabilization Checkpoint 4D (CSRF Concurrent First-Request
-> Race — Implementation) is COMPLETE, NOT pushed.** Fixes the race Checkpoint 4C (below) root-caused
-> but deliberately deferred: concurrent "no cookie yet" requests from the same client (two tabs
-> opened together, a rapid refresh, several parallel first-load calls) used to each mint a different
-> CSRF token, and the browser's one shared cookie jar could only keep one of them, producing an
-> intermittent 403 "Missing or invalid CSRF token." Fixed entirely on the backend
-> (`backend/src/common/middleware/csrf.ts`'s `firstContactToken`, a short-lived per-client
-> coalescing map) with **no frontend change** — the double-submit-cookie model, its cookie
-> attributes, and its timing-safe comparison are all unchanged, and middleware ordering is
-> unchanged. CSRF token rotation was added alongside it, on login/logout/self-service password
-> change/admin self-password-reset (`rotateCsrfCookie`). Full record:
-> `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section and `docs/PROJECT_PROGRESS.md`
-> §1's own dated entry (following the Checkpoint 5 entry below). **The CSRF race is no longer an
-> open item — do not re-open or re-fix it without a new, genuinely reproduced defect.**
+> **Update, 2026-07-23 (later same day) — Checkpoint 4D Correction and UAT Defect Remediation is
+> COMPLETE, NOT pushed.** Three items: (1) the same-day Checkpoint 4D CSRF fix below was reviewed
+> and its design **rejected** — an in-memory map coalescing concurrent requests, keyed by `req.ip`,
+> is not a browser identity and cannot guarantee correctness across more than one backend process.
+> Corrected to a stateless backend (unchanged from before Checkpoint 4C) plus a one-shot client-side
+> recovery on a specifically recognized `CSRF_TOKEN_MISMATCH` code
+> (`frontend/src/lib/api-client.ts`) — token rotation itself was untouched by the correction. (2) UAT
+> Defect 1 fixed: a custom role granted `sites:manage` could create a Project Site but never see it
+> or any other site (`listProjectSites` scoped visibility to the literal Master Admin role code only;
+> `sites:manage` is a global `CRITICAL_ADMIN_PERMISSIONS` capability and now grants the same
+> unrestricted visibility any role holding it). (3) UAT Defect 2 fixed: the Roles & Permissions
+> dialog's excessive empty scrolling / frame desync, caused by a nested independent scroll region
+> inside the permission matrix — fixed at the shared `ModalContent`/`ModalFooter` level (proper flex
+> column, one scroll region, sticky footer), benefiting every dialog in the app. Full record:
+> `docs/architecture/authentication.md` ("Checkpoint 4C/4D" section, now describing the corrected
+> design, and its new "UAT Defect 1" note) and `docs/PROJECT_PROGRESS.md` §1's own dated
+> "Checkpoint 4D Correction and UAT Defect Remediation" entry (following the original, now-superseded
+> Checkpoint 4D entry). **None of these three items is an open item anymore — do not re-open or
+> re-fix without a new, genuinely reproduced defect. Do not reintroduce an IP-keyed CSRF design.**
 
 > **Update, 2026-07-22 — Post-Phase-5 Stabilization Checkpoint 5 (Administration & Security
 > Management Phase 1) is COMPLETE**, committed as `bf1a749`/`5983232`/`2e4c81f`, **not pushed**. A

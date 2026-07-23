@@ -5223,6 +5223,11 @@ committed). The pre-existing `04-session-revocation.spec.ts` was also fixed — 
 
 ### Post-Phase-5 Stabilization Checkpoint 4D — CSRF Concurrent First-Request Race, fixed
 
+> **Superseded, 2026-07-23 (same day).** The design below (an in-memory map coalescing concurrent
+> requests, keyed by `req.ip`) was rejected on review — see the "Checkpoint 4D Correction and UAT
+> Defect Remediation" entry further down for why and for the corrected design. Kept here, not
+> deleted, as an honest record of what was tried; do not implement this specific design again.
+
 **Implements the fix for the race Checkpoint 4C root-caused but explicitly deferred** (see that
 entry, and the entry directly above): two requests arriving before either had round-tripped its
 `Set-Cookie` back to the browser — two tabs opened together, or several parallel first-load
@@ -5311,6 +5316,216 @@ now-stale captured token is supposed to fail — that's correct rotation behavio
 tested). Fixed by submitting both tabs' login forms concurrently via a local `submitLoginForm`
 helper that doesn't re-navigate, matching the real "two tabs opened simultaneously" scenario more
 precisely in the process.
+
+**Not pushed, not deployed**, per this checkpoint's explicit instruction.
+
+---
+
+### Post-Phase-5 Stabilization Checkpoint 4D Correction and UAT Defect Remediation
+
+**Three independent items in one session: correcting the rejected Checkpoint 4D CSRF design, and
+fixing two UAT defects found in production usage.** All three implemented, tested, and documented
+in one pass per the checkpoint's own instructions; none pushed or deployed.
+
+#### 1. CSRF design correction — why the IP-keyed map was rejected, and the corrected design
+
+Reviewed and rejected: the original Checkpoint 4D fix coalesced concurrent "no cookie yet" requests
+into one token via an in-memory `Map` keyed by `req.ip`, with correctness resting on a fixed TTL
+window. Two independent problems, either alone sufficient to reject it: **`req.ip` is not a browser
+identity** — it identifies a network path, and unrelated users behind a shared NAT/corporate egress,
+or behind Render's own proxy layer, can present the same IP without being the same client, meaning
+the map could silently couple two different people's tokens together. **An in-memory map is
+process-local** — its correctness depended on every racing request landing on the *same* Node
+process within the TTL window, an assumption that holds in a single-instance dev/test sandbox but
+breaks the moment the backend runs as more than one instance (the ordinary case for any real
+deployment) or restarts mid-window. A mitigation that only works under those accidental conditions
+is not a fix for a security-relevant race condition, regardless of how cleanly it passed every test
+written against that same single-instance environment — a genuine blind spot in the original
+checkpoint's own verification, not a flaw in the tests' execution.
+
+**Corrected design — the backend no longer tries to prevent the race at all.**
+`issueCsrfCookie` (`backend/src/common/middleware/csrf.ts`) reverted to the simplest possible
+stateless rule: mint a token if the request has none, echo it on safe methods — identical to before
+Checkpoint 4C ever started. The race can still happen; what changed is that it's no longer the
+server's problem to solve:
+
+- `csrfProtection` now rejects a genuine mismatch with a distinguishable error code
+  (`CSRF_TOKEN_MISMATCH`, `common/http-error.ts`'s new `csrfMismatch` — deliberately distinct from
+  the generic `FORBIDDEN` an ordinary permission denial uses) instead of the same generic code every
+  other 403 already used.
+- A new safe, unauthenticated, dependency-free endpoint, `GET /api/v1/csrf-token`
+  (`backend/src/app.ts`, mounted beside `/health`), does nothing beyond what `issueCsrfCookie`
+  already does for any safe request — echo the token bound to the request's existing cookie, mint
+  one if it has none. Deliberately not `/health` (a liveness probe, semantically unrelated) or
+  `/auth/me` (requires authentication and carries session-bootstrap React Query side effects a
+  plain recovery call has no business triggering).
+- `frontend/src/lib/api-client.ts`'s `apiRequest` performs **exactly one** controlled recovery when
+  — and only when — it sees `CSRF_TOKEN_MISMATCH`: call the recovery endpoint, capture the token it
+  returns, retry the original mutation once. A second mismatch (on the retry itself) is never
+  retried again and surfaces as a normal `ApiError`. No other status/code (401, an ordinary 403
+  permission denial, 400, 409, 422, 500) ever enters this path — the match is on the specific error
+  code alone. Concurrent requests that all hit a mismatch around the same moment share one in-flight
+  recovery call (`pendingCsrfRefresh`) rather than each firing their own, so a burst of failures
+  can't turn into a refresh storm. The recovery call itself is a plain `fetch` outside `apiRequest`,
+  never routed back through the retry logic, so this cannot loop by construction.
+
+This keeps the double-submit-cookie model, its cookie attributes, and its timing-safe comparison
+(`tokensMatch`) completely unweakened — every comparison is still a strict, real equality check —
+and needs no shared state, no assumption about process topology, and no client identity signal at
+all. **Token rotation is unchanged from the original design** (login/logout/self-service password
+change/administrator resetting their own password rotate the token; resetting someone *else's*
+password does not, since that only touches the target's own session/cookie jar, not the acting
+administrator's) — rotation was not part of what got rejected, only the first-contact coalescing
+map was.
+
+**A necessary test-suite correction, caught by re-running the suite after the redesign**: the
+original `backend/tests/csrf-concurrency.test.ts` asserted that concurrent first-contact requests
+*automatically* converge on one token — true only under the rejected map design. Rewritten entirely
+(19 tests) to verify the corrected, stateless design instead: normal double-submit validation;
+mismatch still 403 with the specific code; the recovery endpoint's echo/mint behavior; **no
+IP-based sharing** — two unrelated simulated clients on the same simulated IP mint independent
+tokens and one's token never validates against the other's cookie; **no process-local-map
+dependency** — two separately constructed `createApp()` instances (standing in for two backend
+processes) issue independent tokens; rotation on every boundary, with the pre-rotation token
+confirmed rejected afterward; full login→change-password→re-login flows; and no backend-side
+automatic retry of any kind. New `frontend/src/lib/api-client.test.ts` coverage (7 tests) verifies
+the recovery/retry logic itself with mocked `fetch`: one refresh + one retry on a recognized
+mismatch; a second mismatch surfaced, not retried again; every non-CSRF status/code (401, 403, 400,
+409, 422, 500) left completely alone; concurrent-mismatch dedup; and — spied via `vi.stubGlobal`
+rather than `Storage.prototype` (this project's vitest config runs under plain Node, not jsdom, so
+no real `Storage` global exists to spy on) — no `localStorage`/`sessionStorage` access at any point.
+**Verified meaningful, not just green**: both the backend and frontend new-test files were
+temporarily run against a reverted (pre-fix) version of the code first, confirmed to fail exactly as
+expected, then the fix was restored and re-confirmed passing.
+
+`tests/e2e/specs/09-csrf-concurrency.spec.ts` needed no changes to its own scenarios — the two-tab
+race scenario now succeeds via the frontend's own retry-on-mismatch path instead of via backend
+convergence, but the *observable* outcome (both tabs end up authenticated, no error surfaced) is
+identical, and the existing spec already asserted exactly that outcome, not the mechanism behind it.
+
+#### 2. UAT Defect 1 — custom role with `sites:manage` could not see the Sites list
+
+**Root cause**: `listProjectSites` (`backend/src/modules/project-sites/project-sites.service.ts`)
+granted unrestricted site visibility only to the literal seeded Master Admin `roleCode`; every other
+role, including a custom role explicitly granted `sites:manage`, was scoped to its
+`UserSiteAssignment` rows — empty by default for a brand-new role, since nothing existed yet to
+assign it to. `createProjectSite` was, correctly, never site-scoped (a not-yet-created site can't
+already be in anyone's assignments), which is exactly why create succeeded while list stayed empty
+— an asymmetry between the two operations' authorization models, not a bug in either alone.
+
+**Site-scope rule, confirmed from existing documentation, not invented for this fix**:
+`sites:manage` is one of this system's `CRITICAL_ADMIN_PERMISSIONS`
+(`shared/src/constants/permissions.ts`) — the same class as the already-unscoped
+`users:manage`/`settings:manage`, both genuinely global administrative capabilities with no
+"assigned site" concept. This settles the question the checkpoint asked directly: `sites:manage`
+represents global site administration (option A), not assignment-scoped mutation (option B) — a
+role holding it administers the Site *entity list itself*, structurally distinct from *operational*
+site-scoping (which sites can this person enter payroll for), and that distinction, not a
+name/role-code shortcut, is what the fix is keyed on.
+
+**Fix**: `listProjectSites` now grants the same unrestricted visibility to any role — system or
+custom — currently holding `sites:manage`, *alongside* (not replacing) the existing Master Admin
+`roleCode === ROLE_CODES.MASTER_ADMIN` fast path, kept for the same reason that bypass is
+role-identity-based everywhere else in this system (`require-site-access.ts`,
+`employees.service.ts`'s `isMasterAdmin`): it must keep working even if Master Admin's own role were
+ever edited to no longer explicitly hold `sites:manage`. No `roleCode` dependency was removed —
+one was added alongside the existing ones, narrowly scoped to this one function. Every *other*
+site-scoped check in the system (employees, payroll, `require-site-access.ts`) is unchanged —
+`sites:manage` grants nothing there, deliberately, since operational site-scoping and Site-entity
+administration are different questions.
+
+**Frontend**: `project-sites-page.tsx`'s Sites list now distinguishes a query error from a genuine
+empty list (`error` destructured from `useProjectSites()`, following the same pattern already
+established by `advances-page.tsx`/`corrections-page.tsx`/etc.) — "Could not load Sites" instead of
+silently falling through to "No project sites yet" for a non-empty-list reason. In practice, the
+route-level `RequirePermission` guard (`App.tsx`) intercepts before the Sites page ever mounts once
+`sites:manage` is gone, showing the shared "access denied" page instead — this inline fix is the
+defense-in-depth layer for a query that fails while the page is already mounted (e.g. a transient
+backend error), not the only thing preventing a false empty state.
+
+**Verification**: `backend/tests/project-sites.test.ts` gained a dedicated block (6 new tests): a
+custom role with `sites:manage` and zero assignments lists every site; create-then-list works; role
+rename doesn't change access; a custom role literally named "Master Admin" gains nothing (only the
+real seeded role's `code` matters, never a name); Master Admin's own behavior is unchanged; a
+site-scoped user without `sites:manage` still sees only their own assignments (no leak from the
+fix). `tests/e2e/specs/10-site-visibility.spec.ts` (2 tests) drives the full real-stack reproduction
+through the real UI — create sites, create a custom Payroll Manager role and user through the real
+Roles/Users pages, log in as that user, confirm existing and newly-created sites both appear without
+logout, confirm a browser refresh preserves the data, confirm the direct API response matches the
+UI, confirm renaming the role changes nothing, and confirm removing the permission removes access on
+the very next request with no forced logout — plus a second test confirming a role with zero
+qualifying permissions cannot enumerate sites at all (403, not a filtered 200).
+
+#### 3. UAT Defect 2 — Roles & Permissions dialog excessive scrolling / frame desync
+
+**Root cause**: the permission matrix (`frontend/src/components/roles/permission-matrix.tsx`) had
+its own independently `max-h-[420px]`/`overflow-y-auto` scroll region nested *inside*
+`ModalContent`'s own `max-h-[85vh]`/`overflow-y-auto` region (`frontend/src/components/ui/modal.tsx`)
+— two competing scroll contexts in one dialog, with neither the header nor the footer pinned in
+place. Every *other* modal in the app uses the same outer `ModalContent` pattern without a second
+nested scroll region and was confirmed unaffected — this was the Roles dialog's own, unique
+divergence, not a defect in the shared component's base design.
+
+**Fix — shared component, not a one-off page patch** (per the checkpoint's own preference: "fix the
+shared component if the root cause is shared," and this bug's fix benefits from a more robust
+structure regardless): `ModalContent` (`components/ui/modal.tsx`) is now a genuine flex column —
+fixed max-height (`max-h-[85vh]`, still overridable per call site), a non-scrolling header
+(`shrink-0`), and exactly **one** scrolling body (`min-h-0 flex-1 overflow-y-auto` — the `min-h-0`
+is required, not decorative, or a flex child never shrinks below its own content's natural height
+and the parent's height cap silently stops doing anything, the standard flexbox-scrolling pitfall).
+`ModalFooter` is now `sticky bottom-0` *within* that same scroll region (with a matching
+`rounded-b-lg` so its flush background doesn't poke past the dialog's own rounded corners), so it
+stays reachable at the bottom without needing every caller to restructure how it composes
+header/body/footer — still three children in document order. The permission matrix's own inner
+scroll region was removed entirely; every other of the 10 call sites across the app that had opted
+into scrolling via `overflow-y-auto`/a matching `max-h-[85vh]` in `widthClassName` had that removed
+too (now redundant, handled internally); call sites with a genuinely different height
+(`max-h-[75vh]`/`max-h-[80vh]` for a couple of Import Results/Sites modals) kept their own override.
+
+**Verification, measured not just screenshotted**: `tests/e2e/specs/11-permission-dialog-layout.spec.ts`
+runs against a role holding the *entire* permission catalog (guaranteed to overflow) at all three
+required viewports (1366×768, 1440×900, 1920×1080), checking: the dialog's bounding box stays fully
+within the viewport; **no nested scrollable regions exist** (the actual structural bug — checked by
+CSS `overflow-y` property directly on every element inside the dialog *including the dialog element
+itself*, not by inferring it from measured overflow amounts, which turned out to depend on exact
+content height and passed even against the bug on a first attempt at this test — see the note
+below); the one recognized scroll region's overflow amount is present but bounded (rules out a
+runaway value); the dialog's own position does not move while scrolling internally (the literal
+reported "frame stays behind" symptom); the footer remains visible and clickable after scrolling to
+the bottom; the overlay still fully covers the viewport; and closing restores the underlying page.
+Screenshots captured at top/middle/bottom scroll position for each viewport
+(`test-results/permission-dialog-layout-screenshots/`, gitignored). A separate test confirms two
+other, unrelated dialogs (New User, New Project Site) still open and close correctly, unaffected by
+the shared-component change.
+
+**A real defect in the test itself, found and fixed during this same verification pass**: the first
+version of this spec measured "is there exactly one element whose `scrollHeight` currently exceeds
+its `clientHeight`" — reverting the fix and re-running showed this still passed, since the outer
+frame didn't happen to overflow its own `max-h-[85vh]` at the content size tested (the inner,
+independently-capped 420px box absorbed enough of the content that the outer total stayed under the
+cap). Rewritten to check the CSS `overflow-y` property structurally on every element instead
+(nested-scrollable-inside-scrollable, regardless of whether either currently overflows) — re-run
+against the reverted code and confirmed to fail (3/4 tests, exactly the three viewport-scroll tests,
+with the fourth, unrelated-dialogs test correctly still passing), then re-confirmed passing against
+the real fix. A second, smaller defect in the same first draft — `dialog.evaluate((dialogEl) =>
+dialogEl.querySelectorAll('*'))` excludes `dialogEl` itself, which is exactly where the historical
+bug's outer `overflow-y: auto` lived — was found and fixed in the same pass.
+
+#### Verification totals (this entry)
+
+Backend: **876 tests**, 45 suites — no new suite *file* (both `csrf-concurrency.test.ts` and
+`project-sites.test.ts` already existed; only their content changed): 868 prior, net +2 from
+replacing 17 old (map-dependent) CSRF tests with 19 corrected ones, net +6 from the new Sites block.
+Full suite run clean twice in a row after an initial run's 11 `payslips.test.ts` failures were
+confirmed to be this project's own already-documented system-load-dependent flake (re-ran that file
+alone: 47/47) rather than a regression — no code in that module was touched, and it also passed
+cleanly the second time as part of the full suite. typecheck/lint/build/`prisma validate`/`prisma
+migrate status` all clean; 19 migrations, no new migration introduced (no schema change in this
+correction). Frontend: **91 tests** (80 baseline + 11 new in `api-client.test.ts`'s CSRF-recovery
+block), typecheck/lint (6 pre-existing warnings, unchanged)/build all clean. E2E: **38/38** (27
+prior + 2 Sites + 4 dialog + 5 CSRF, with CSRF's own scenario count and content unchanged from
+before — no spec was removed, and the two-tab scenario needed no edits since the *outcome* it
+asserts didn't change, only the mechanism producing it).
 
 **Not pushed, not deployed**, per this checkpoint's explicit instruction.
 
@@ -5658,18 +5873,26 @@ precisely in the process.
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-23 — Post-Phase-5 Stabilization Checkpoint 4D (CSRF Concurrent First-Request
-Race — Implementation) is COMPLETE, NOT pushed.** See §1's own entry for the full record. Fixes the
-race Checkpoint 4C root-caused but explicitly deferred, entirely on the backend
-(`backend/src/common/middleware/csrf.ts`'s `firstContactToken` coalescing map), with no frontend
-change and no change to the double-submit-cookie model, cookie attributes, timing-safe comparison,
-or middleware ordering; adds CSRF token rotation on login/logout/self-service password
-change/admin self-password-reset. Backend **868/868** (45 suites), frontend **80/80** (unchanged —
-no frontend file touched), E2E **32/32**, new `09-csrf-concurrency.spec.ts` (5 scenarios) plus
-every pre-existing regression spec. **The Checkpoint 4C CSRF
-race is resolved — do not re-open or re-fix without a new, genuinely reproduced defect.** **Do not
-push or deploy without the user's own separate go-ahead.** The paragraphs below are carried forward
-for their still-open content only.
+**Updated 2026-07-23 (later same day) — Checkpoint 4D Correction and UAT Defect Remediation is
+COMPLETE, NOT pushed.** See §1's own entry for the full record. Three items in one pass: (1) the
+same-day Checkpoint 4D CSRF fix (below) was reviewed and its `req.ip`-keyed in-memory coalescing map
+**rejected** — not a browser identity, not correct across multiple backend processes — and replaced
+with a stateless backend plus a one-shot client-side recovery on a specific `CSRF_TOKEN_MISMATCH`
+code; token rotation itself was unaffected. (2) UAT Defect 1: a custom role granted `sites:manage`
+couldn't see the Sites list (`listProjectSites` was scoped to the literal Master Admin role code
+only) — fixed, since `sites:manage` is a global `CRITICAL_ADMIN_PERMISSIONS` capability. (3) UAT
+Defect 2: the Roles & Permissions dialog's excessive scrolling/frame desync (a nested independent
+scroll region) — fixed at the shared `ModalContent`/`ModalFooter` level, benefiting every dialog.
+Backend **876/876** (45 suites), frontend **91/91**, E2E **38/38** — new `10-site-visibility.spec.ts`
+(2 tests) and `11-permission-dialog-layout.spec.ts` (4 tests) plus every pre-existing regression
+spec, including `09-csrf-concurrency.spec.ts` unchanged. **None of these three items is open
+anymore — do not re-open or re-fix without a new, genuinely reproduced defect, and do not
+reintroduce an IP-keyed CSRF design.** **Do not push or deploy without the user's own separate
+go-ahead.** The paragraphs below are carried forward for their still-open content only.
+
+**Updated 2026-07-23 (superseded by the entry above, kept for its still-open content only) —
+Post-Phase-5 Stabilization Checkpoint 4D (CSRF Concurrent First-Request Race — Implementation) was
+COMPLETE, NOT pushed**, but its design was rejected on review the same day — see the entry above.
 
 **Updated 2026-07-22 — Post-Phase-5 Stabilization Checkpoint 5 (Administration & Security
 Management Phase 1 — Dynamic Roles, Permission Matrix, User Role Assignment) is COMPLETE,

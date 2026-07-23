@@ -69,7 +69,9 @@ specs depend on state an earlier one creates (see each file's own header comment
 | `04-session-revocation.spec.ts` | AUD-009 regression: two independent browser sessions, password change invalidates both immediately |
 | `05-backup-generation.spec.ts` | Backup Package generation reaches `READY` through the real stack; no `storageKey` leak. API-only — no frontend UI exists for this yet (Phase 5 Checkpoint 2's own approved scope) |
 | `06-ui-regression.spec.ts` | Durable stabilization-era UI invariants: Payslips filter alignment (AUD-004), no document-level scroll, standard vs. compact table density, no sidebar emoji, modal centering/Escape |
-| `09-csrf-concurrency.spec.ts` | Post-Phase-5 Stabilization Checkpoint 4D: the concurrent first-contact CSRF race (two real tabs, one shared cookie jar, converging on one token) and CSRF token rotation on login/logout/self-service password reset — see `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section |
+| `09-csrf-concurrency.spec.ts` | Post-Phase-5 Stabilization Checkpoint 4D: the concurrent first-contact CSRF race (two real tabs, one shared cookie jar), recovered via the frontend's one-shot mismatch-retry (not backend coalescing — that design was rejected on review), and CSRF token rotation on login/logout/self-service password reset — see `docs/architecture/authentication.md`'s "Checkpoint 4C/4D" section |
+| `10-site-visibility.spec.ts` | UAT Defect 1: a custom role granted `sites:manage` sees existing/newly-created sites without logout, and loses access the moment the permission is removed — see `docs/architecture/authentication.md`'s "UAT Defect 1" note |
+| `11-permission-dialog-layout.spec.ts` | UAT Defect 2: the Roles & Permissions dialog's scroll geometry at 1366×768/1440×900/1920×1080 — measured (no nested scroll regions, bounded overflow, stable frame position, visible footer), not just screenshotted — plus a regression check that other dialogs are unaffected |
 
 ### A deliberate scope boundary: AUD-011 crash recovery is *not* re-tested here
 
