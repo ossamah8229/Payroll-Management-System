@@ -77,3 +77,13 @@ export function defaultCorrectionsTab(user: SessionUser): CorrectionsTab | null 
   if (canViewCorrectionsLedger(user)) return 'ledger';
   return null;
 }
+
+// --- Tasks domain (System-Wide RBAC Consistency remediation) ---------------------------------
+// `tasks:manage` is Tasks' own global administrative permission — mirrors the backend's
+// `hasGlobalAuthority(user, PERMISSIONS.TASKS_MANAGE)` (tasks.service.ts's `requireTaskAccess`/
+// `listTasks`) so a custom role holding `tasks:manage` sees the same "every task"/"assign to
+// anyone" UI a literal Master Admin sees, instead of the previous `roleCode === MASTER_ADMIN`-only
+// check, which let such a role create and assign a task it could then never see again.
+export function canManageAllTasks(user: SessionUser): boolean {
+  return hasPermission(user, PERMISSIONS.TASKS_MANAGE);
+}

@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { ArrowDownAZ, ArrowUpAZ, Plus, X } from 'lucide-react';
-import { ROLE_CODES, type SessionUser, type TaskPriority, type TaskStatus } from '@payroll/shared';
+import type { SessionUser, TaskPriority, TaskStatus } from '@payroll/shared';
 import { cn } from '@/lib/cn';
+import { canManageAllTasks } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTasks, type Task, type TaskSortBy, type TaskSortDir } from '@/hooks/use-tasks';
-import { useUsers } from '@/hooks/use-users';
+import { useAssignableUsers } from '@/hooks/use-users';
 import { TaskListItem } from './task-list-item';
 
 const PAGE_SIZE = 20;
@@ -50,11 +51,11 @@ export function TasksPanel({
   onCreateClick: () => void;
   onEditTask: (task: Task) => void;
 }) {
-  const isMasterUser = user.roleCode === ROLE_CODES.MASTER_ADMIN;
-  // GET /api/v1/users is users:manage-gated server-side — only fetch it for the assignee filter
-  // Master User actually sees, and only once the panel is open; an assignee session must never
-  // fire this request at all (it would 403).
-  const users = useUsers({ enabled: isMasterUser && open });
+  const isMasterUser = canManageAllTasks(user);
+  // GET /api/v1/users-lookup/assignable is tasks:manage-gated server-side — only fetch it for the
+  // assignee filter a `tasks:manage` holder actually sees, and only once the panel is open; an
+  // assignee session must never fire this request at all (it would 403).
+  const users = useAssignableUsers({ enabled: isMasterUser && open });
 
   const [status, setStatus] = useState<TaskStatus | ''>('');
   const [priority, setPriority] = useState<TaskPriority | ''>('');

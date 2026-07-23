@@ -9,7 +9,7 @@ import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { DateInput } from '@/components/ui/date-input';
 import { cn } from '@/lib/cn';
 import { useCreateTask, useUpdateTask, type Task } from '@/hooks/use-tasks';
-import { useUsers } from '@/hooks/use-users';
+import { useAssignableUsers } from '@/hooks/use-users';
 
 const PRIORITIES: { value: TaskPriority; label: string }[] = [
   { value: 'LOW', label: 'Low' },
@@ -36,11 +36,12 @@ export function TaskFormDialog({
   const isEdit = Boolean(task);
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
-  // This dialog only ever opens for Master User in practice (the assignee never gets a
-  // create/edit trigger anywhere in the UI) — gating by `open` rather than a role check both
-  // avoids firing GET /api/v1/users (users:manage-gated) before the dialog is shown at all, and,
-  // as a direct consequence, means it's never fetched for a session that would 403 on it either.
-  const users = useUsers({ enabled: open });
+  // This dialog only ever opens for a `tasks:manage` holder in practice (the assignee never gets
+  // a create/edit trigger anywhere in the UI) — gating by `open` avoids firing the assignee lookup
+  // before the dialog is shown at all. `useAssignableUsers` (tasks:manage-gated, System-Wide RBAC
+  // Consistency remediation) replaces the previous `useUsers` (users:manage-gated) call, which
+  // 403'd for any custom role holding `tasks:manage` without also holding `users:manage`.
+  const users = useAssignableUsers({ enabled: open });
   const isPending = createTask.isPending || updateTask.isPending;
 
   const [title, setTitle] = useState('');
@@ -144,13 +145,11 @@ export function TaskFormDialog({
               <option value="" disabled>
                 Select a user…
               </option>
-              {(users.data ?? [])
-                .filter((u) => u.isActive)
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name} ({u.email})
-                  </option>
-                ))}
+              {(users.data ?? []).map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.email})
+                </option>
+              ))}
             </select>
           </div>
 

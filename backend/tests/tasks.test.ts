@@ -152,6 +152,66 @@ describe('Phase 3.5 Checkpoint 2/3 — Tasks Workspace', () => {
     );
   });
 
+  // System-Wide RBAC Consistency remediation — before this fix, `createTask`/`updateTask`
+  // (gated by `tasks:manage` alone) let any `tasks:manage` holder assign a task to anyone, but
+  // `listTasks`/`getTask` (`requireTaskAccess`) only bypassed ownership-scoping for the literal
+  // Master Admin role code — so a custom role granted `tasks:manage` could create and assign a
+  // task, then immediately lose the ability to see it again. Fixed by making `hasGlobalAuthority`
+  // recognize `tasks:manage` the same way Master Admin is recognized everywhere in this domain.
+  it('a custom role holding tasks:manage (not literal Master Admin) sees every task, same as Master User', async () => {
+    const customManager = await createAuthenticatedAgent(app, {
+      email: 'tasks-custom-manager@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_TASKS_MANAGER',
+      permissionKeys: [PERMISSIONS.TASKS_MANAGE],
+    });
+    const staffA = await payrollStaffAgent('tasks-custom-manager-a@test.local');
+    const staffB = await payrollStaffAgent('tasks-custom-manager-b@test.local');
+
+    const createRes = await customManager.agent
+      .post('/api/v1/tasks')
+      .set('x-csrf-token', customManager.csrfToken)
+      .send({ title: 'Assigned by custom manager', assignedToUserId: staffA.userId });
+    expect(createRes.status).toBe(201);
+
+    await customManager.agent
+      .post('/api/v1/tasks')
+      .set('x-csrf-token', customManager.csrfToken)
+      .send({ title: 'Second task', assignedToUserId: staffB.userId });
+
+    // The exact regression: the custom tasks:manage holder must be able to see the task it just
+    // created and assigned to someone else, both in its own detail fetch and in the list — not
+    // just receive a 201 on creation and then never see it again.
+    const detailRes = await customManager.agent.get(`/api/v1/tasks/${createRes.body.task.id}`);
+    expect(detailRes.status).toBe(200);
+
+    const listRes = await customManager.agent.get('/api/v1/tasks');
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.tasks.length).toBeGreaterThanOrEqual(2);
+    expect(listRes.body.tasks.some((t: { id: string }) => t.id === createRes.body.task.id)).toBe(true);
+  });
+
+  // Assignable-users lookup: `GET /api/v1/users-lookup/assignable` is gated by `tasks:manage`,
+  // deliberately separate from `GET /api/v1/users` (users:manage-gated) — this is what the Create/
+  // Edit Task dialog's assignee picker actually calls, so a tasks:manage holder without also
+  // holding users:manage can still populate it.
+  it('a tasks:manage holder without users:manage can use the assignable-users lookup, but not GET /users', async () => {
+    const customManager = await createAuthenticatedAgent(app, {
+      email: 'tasks-assignable-lookup@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_TASKS_MANAGER_ONLY',
+      permissionKeys: [PERMISSIONS.TASKS_MANAGE],
+    });
+
+    const assignableRes = await customManager.agent.get('/api/v1/users-lookup/assignable');
+    expect(assignableRes.status).toBe(200);
+    expect(Array.isArray(assignableRes.body.users)).toBe(true);
+    expect(assignableRes.body.users.some((u: Record<string, unknown>) => 'role' in u)).toBe(false);
+
+    const usersRes = await customManager.agent.get('/api/v1/users');
+    expect(usersRes.status).toBe(403);
+  });
+
   // ---------------------------------------------------------------------------
   // Notifications: creation, unread count, mark-read
   // ---------------------------------------------------------------------------

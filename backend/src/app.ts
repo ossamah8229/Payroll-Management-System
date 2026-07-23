@@ -17,7 +17,7 @@ import { projectUnitsRouter } from './modules/project-units/project-units.routes
 import { banksRouter } from './modules/banks/banks.routes';
 import { employeesRouter } from './modules/employees/employees.routes';
 import { settingsRouter } from './modules/settings/settings.routes';
-import { usersRouter } from './modules/users/users.routes';
+import { usersLookupRouter, usersRouter } from './modules/users/users.routes';
 import { rolesRouter } from './modules/roles/roles.routes';
 import { payrollCyclesRouter } from './modules/payroll-processing/payroll-processing.routes';
 import {
@@ -139,6 +139,9 @@ export function createApp(): Express {
   app.use('/api/v1/banks', banksRouter);
   app.use('/api/v1/employees', employeesRouter);
   app.use('/api/v1/settings', settingsRouter);
+  // Mounted before usersRouter's own blanket users:manage gate — /assignable is intentionally
+  // gated by tasks:manage instead (System-Wide RBAC Consistency remediation).
+  app.use('/api/v1/users-lookup', usersLookupRouter);
   app.use('/api/v1/users', usersRouter);
   app.use('/api/v1/roles', rolesRouter);
   // Nested under a cycle for list/create; mounted before payrollCyclesRouter's own /:id route so

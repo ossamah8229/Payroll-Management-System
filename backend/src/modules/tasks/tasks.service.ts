@@ -1,12 +1,12 @@
 import type { Prisma, Task } from '@prisma/client';
-import type { CreateTaskInput, ListTasksQuery, SessionUser, UpdateTaskInput } from '@payroll/shared';
+import { PERMISSIONS, type CreateTaskInput, type ListTasksQuery, type SessionUser, type UpdateTaskInput } from '@payroll/shared';
 import { isoDateToUtcDate } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, forbidden, notFound } from '../../common/http-error';
 import { diffFields, omitKeys } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { isMasterAdmin } from '../employees/employees.service';
+import { hasGlobalAuthority } from '../../common/authz-policy';
 import { createTaskNotification, markTaskNotificationsRead } from './task-notifications.service';
 
 /**
@@ -51,9 +51,17 @@ async function getTaskForMutation(id: string): Promise<TaskWithUsers> {
  * both exist in this codebase. No existing middleware touches Prisma; introducing one that does
  * here would be a real, avoidable deviation from every other middleware's pure request-shape-check
  * role.
+ *
+ * `TASKS_MANAGE` is this domain's global administrative permission (System-Wide RBAC Consistency
+ * remediation) — Tasks has no site-scoping concept at all, so a holder's authority is either
+ * "every task" (Master Admin or `TASKS_MANAGE`) or "only tasks assigned to me" (everyone else).
+ * Before this fix, only the literal Master Admin role bypassed this check, while `createTask`
+ * already let any `TASKS_MANAGE` holder assign a task to anyone — a custom role granted
+ * `TASKS_MANAGE` could create and assign a task but then never see it again, an exact instance of
+ * "can mutate but cannot list" the RBAC audit was asked to find and close.
  */
 export function requireTaskAccess(currentUser: SessionUser, task: Pick<Task, 'assignedToUserId'>): void {
-  if (isMasterAdmin(currentUser)) return;
+  if (hasGlobalAuthority(currentUser, PERMISSIONS.TASKS_MANAGE)) return;
   if (task.assignedToUserId === currentUser.id) return;
   throw forbidden('You do not have access to this task');
 }
@@ -95,18 +103,20 @@ export interface ListTasksResult {
 }
 
 /**
- * Master User sees every task (optionally filtered to one assignee); everyone else is forced to
- * `assignedToUserId = currentUser.id` regardless of what the client sends — the ownership analogue
- * of `listPayrollEntries`'s own "a Payroll Staff user with no explicit siteId filter is scoped to
- * every site they're assigned to" dual-scope shape, just keyed by a single id instead of a site
- * list. `sortBy` is a closed, three-value set (Due Date / Priority / Recently Assigned, frozen
- * decision 2026-07-10) — never an arbitrary client-supplied column.
+ * Master User or a `TASKS_MANAGE` holder sees every task (optionally filtered to one assignee);
+ * everyone else is forced to `assignedToUserId = currentUser.id` regardless of what the client
+ * sends — the ownership analogue of `listPayrollEntries`'s own "a Payroll Staff user with no
+ * explicit siteId filter is scoped to every site they're assigned to" dual-scope shape, just keyed
+ * by a single id instead of a site list. `sortBy` is a closed, three-value set (Due Date / Priority
+ * / Recently Assigned, frozen decision 2026-07-10) — never an arbitrary client-supplied column.
  */
 export async function listTasks(currentUser: SessionUser, query: ListTasksQuery): Promise<ListTasksResult> {
   const page = Math.max(1, query.page);
   const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, query.pageSize ?? DEFAULT_PAGE_SIZE));
 
-  const assignedToUserId = isMasterAdmin(currentUser) ? query.assignedToUserId : currentUser.id;
+  const assignedToUserId = hasGlobalAuthority(currentUser, PERMISSIONS.TASKS_MANAGE)
+    ? query.assignedToUserId
+    : currentUser.id;
 
   const where: Prisma.TaskWhereInput = {
     ...(assignedToUserId && { assignedToUserId }),

@@ -5,7 +5,31 @@ import { requirePermission } from '../../common/middleware/require-permission';
 import { rotateCsrfCookie } from '../../common/middleware/csrf';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { createUser, getUser, listUsers, resetUserPassword, updateUser } from './users.service';
+import { createUser, getUser, listAssignableUsers, listUsers, resetUserPassword, updateUser } from './users.service';
+
+/**
+ * A deliberately separate, more narrowly-gated router (System-Wide RBAC Consistency remediation) —
+ * mounted at its own path, never under `usersRouter`'s blanket `users:manage` gate below, so a
+ * `tasks:manage` holder without `users:manage` can still populate an assignee picker. See
+ * `listAssignableUsers` (users.service.ts) for the full rationale and its deliberately minimal
+ * response shape.
+ */
+export const usersLookupRouter = Router();
+
+usersLookupRouter.use(requireAuth);
+
+usersLookupRouter.get(
+  '/assignable',
+  requirePermission(PERMISSIONS.TASKS_MANAGE),
+  async (_req, res, next) => {
+    try {
+      const users = await listAssignableUsers();
+      res.status(200).json({ users });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 export const usersRouter = Router();
 

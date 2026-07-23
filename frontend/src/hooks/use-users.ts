@@ -56,3 +56,26 @@ export function useResetUserPassword() {
       apiRequest<void>(`/api/v1/users/${id}/reset-password`, { method: 'POST', body: input }),
   });
 }
+
+export interface AssignableUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+const ASSIGNABLE_USERS_QUERY_KEY = ['users-lookup', 'assignable'] as const;
+
+/** `GET /api/v1/users-lookup/assignable` is gated by `tasks:manage`, not `users:manage`
+ * (System-Wide RBAC Consistency remediation) — the Tasks Workspace's "Assign to" picker (Create/
+ * Edit Task, and the panel's own assignee filter) must work for any `tasks:manage` holder, not
+ * only a user who also happens to hold `users:manage`. Deliberately a separate hook/query key from
+ * `useUsers`, never a shared one — the two endpoints return different shapes for different
+ * audiences and must not be conflated. */
+export function useAssignableUsers(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ASSIGNABLE_USERS_QUERY_KEY,
+    queryFn: () =>
+      apiRequest<{ users: AssignableUser[] }>('/api/v1/users-lookup/assignable').then((res) => res.users),
+    enabled: options.enabled ?? true,
+  });
+}

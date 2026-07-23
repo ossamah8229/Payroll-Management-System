@@ -117,6 +117,31 @@ export async function listUsers(): Promise<UserSummary[]> {
   return users.map(toUserSummary);
 }
 
+export interface AssignableUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/**
+ * A deliberately minimal, separately-gated lookup (System-Wide RBAC Consistency remediation) —
+ * every active user's id/name/email only, for an assignee picker (Tasks Workspace's Create/Edit
+ * Task dialog). Before this existed, that dialog's only source for the same data was
+ * `GET /api/v1/users`, gated by `users:manage` — fine for the literal Master Admin role (which
+ * holds every permission) but wrong for a custom role granted `tasks:manage` without
+ * `users:manage`: the exact "can mutate (create/assign a task) but the UI it needs 403s" shape the
+ * RBAC audit was asked to find, here on the *lookup* side rather than the list/mutation side. This
+ * intentionally returns far less than `UserSummary` (no role, no site assignments) — a
+ * `tasks:manage` holder needs an assignee list, not the User Management module's own data.
+ */
+export async function listAssignableUsers(): Promise<AssignableUser[]> {
+  return prisma.user.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: 'asc' },
+  });
+}
+
 async function getUserRaw(
   id: string,
   tx: PrismaTransactionClient = prisma,
