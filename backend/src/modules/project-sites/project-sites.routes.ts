@@ -25,9 +25,9 @@ projectSitesRouter.use(requireAuth);
  * Post-Phase-5 Stabilization Checkpoint 4B remediation — `GET /sites`/`GET /sites/:id` previously
  * carried no permission gate at all (any authenticated user, any role), which let a direct URL to
  * the Project Sites admin page render for a role the sidebar hides it from (Checkpoint 4B
- * validation finding). `listProjectSites` (project-sites.service.ts) already scope-filters its
- * results correctly (Master Admin sees every site; everyone else only their own
- * `UserSiteAssignment` rows) — the only thing missing was a permission check before reaching it.
+ * validation finding). `listProjectSites` (project-sites.service.ts) scope-filters its results
+ * (Master Admin and any `sites:manage` holder see every site; everyone else only their own
+ * `UserSiteAssignment` rows) — this permission check gates who can reach it in the first place.
  *
  * This is deliberately an any-of list, not `sites:manage` alone: this endpoint is the shared site
  * lookup nearly every operational page in the app depends on for a dropdown/filter (Employee

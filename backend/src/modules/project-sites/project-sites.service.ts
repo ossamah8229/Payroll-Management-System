@@ -1,19 +1,36 @@
 import type { CreateProjectSiteInput, SessionUser, UpdateProjectSiteInput } from '@payroll/shared';
-import { ROLE_CODES } from '@payroll/shared';
+import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
 
 /**
- * Master Admin sees every site (implicit, unrestricted access); Payroll Staff sees only their
- * assigned sites — the same site-scoping rule applied everywhere else
- * (docs/architecture/authentication.md), so this list can double as a management view for Master
- * Admin and a scoped dropdown source for Payroll Staff.
+ * UAT Defect 1 correction (Post-Phase-5 Stabilization Checkpoint 4D correction) — `sites:manage`
+ * is one of this system's `CRITICAL_ADMIN_PERMISSIONS` (`shared/src/constants/permissions.ts`),
+ * the same class as `users:manage`/`settings:manage`/`audit-log:view` — every one of which is a
+ * global, unscoped administrative capability, never site-scoped. A holder of `sites:manage`
+ * administers the Site *entity list itself* (create/edit/deactivate/delete any site), which has no
+ * meaningful "assigned site" concept to scope by in the first place — a not-yet-created site can't
+ * already be in anyone's `UserSiteAssignment` rows, which is exactly why a brand-new custom role
+ * granted only `sites:manage` (no site assignments, since none make sense yet) could previously
+ * create a site but then see an empty list: `createProjectSite` was correctly unscoped, but this
+ * function still gated *visibility* on `UserSiteAssignment` rows for every role except the
+ * literal seeded Master Admin.
+ *
+ * The Master Admin `roleCode` fast path is kept, not replaced — it's the same bypass identity used
+ * everywhere else in this system (`require-site-access.ts`, `employees.service.ts`'s
+ * `isMasterAdmin`), deliberately unrelated to permissions, and this function should stay
+ * consistent with it. `sites:manage` is the *additional* path: any role — system or custom — that
+ * currently holds it gets the same unrestricted visibility, exactly as it already gets unrestricted
+ * create/edit/delete. Everyone else (Payroll Staff, Finance, or a custom role without
+ * `sites:manage`) is unchanged — still scoped to their own `UserSiteAssignment` rows, since they
+ * only need to see the sites they actually operate within, not administer.
  */
 export async function listProjectSites(currentUser: SessionUser) {
-  const isMasterAdmin = currentUser.roleCode === ROLE_CODES.MASTER_ADMIN;
+  const hasGlobalSiteVisibility =
+    currentUser.roleCode === ROLE_CODES.MASTER_ADMIN || currentUser.permissions.includes(PERMISSIONS.SITES_MANAGE);
 
   return prisma.projectSite.findMany({
-    where: isMasterAdmin ? {} : { id: { in: currentUser.siteIds } },
+    where: hasGlobalSiteVisibility ? {} : { id: { in: currentUser.siteIds } },
     orderBy: { name: 'asc' },
   });
 }

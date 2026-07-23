@@ -302,7 +302,7 @@ function ManageUnitsModal({
         onOpenChange(next);
       }}
     >
-      <ModalContent title={title} widthClassName="max-w-[560px] max-h-[80vh] overflow-y-auto">
+      <ModalContent title={title} widthClassName="max-w-[560px] max-h-[80vh]">
         {view.mode === 'list' && (
           <div className="flex flex-col gap-3.5">
             <div className="flex items-center justify-between">
@@ -459,7 +459,7 @@ function ManageUnitsModal({
 }
 
 export function ProjectSitesPage({ user }: { user: SessionUser }) {
-  const { data: sites, isLoading } = useProjectSites();
+  const { data: sites, isLoading, error } = useProjectSites();
   const [createOpen, setCreateOpen] = useState(false);
   const [editingSite, setEditingSite] = useState<ProjectSite | undefined>(undefined);
   const [deletingSite, setDeletingSite] = useState<ProjectSite | undefined>(undefined);
@@ -484,14 +484,27 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
             </div>
           )}
 
-          {!isLoading && sites && sites.length === 0 && (
+          {!isLoading && error && (
+            // UAT Defect 1 correction — an authorization or server error must never render as
+            // indistinguishable from a genuine empty list (this project's established convention,
+            // see e.g. advances-page.tsx), which is exactly what let the original site-visibility
+            // defect look like "no sites exist yet" instead of a real permission problem.
+            <div className="flex flex-col items-center gap-1 py-14 text-center">
+              <p className="text-xs font-medium text-danger">Could not load Sites</p>
+              <p className="text-xs text-text-muted">
+                {error instanceof ApiError ? error.message : 'Something went wrong'}
+              </p>
+            </div>
+          )}
+
+          {!isLoading && !error && sites && sites.length === 0 && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-text">No project sites yet</p>
               <p className="text-xs text-text-muted">Create the first one to get started.</p>
             </div>
           )}
 
-          {!isLoading && sites && sites.length > 0 && (
+          {!isLoading && !error && sites && sites.length > 0 && (
             // Layout Integrity (permanent rule, corrected 2026-07-13): Address previously used
             // `truncate` with a `title` tooltip fallback — exactly the "visible only by tooltip"
             // pattern the rule forbids. A horizontal-scroll wrapper plus `whitespace-nowrap`
