@@ -1,5 +1,6 @@
 import { test, expect, login, getCsrfToken } from '../fixtures/auth';
 import { apiGet, apiPost } from '../helpers/api';
+import { createSiteWithEmployee } from '../helpers/fixtures';
 import { BACKEND_URL } from '../setup/config';
 
 /**
@@ -138,6 +139,79 @@ test.describe('Custom-role Sites visibility (UAT Defect 1)', () => {
     await context.close();
   });
 
+  // UAT Defect 2 (System-Wide RBAC Consistency remediation) — the reported production
+  // contradiction: a custom role with `sites:manage` could list every Project Site (the fix
+  // above) but got "You do not have access to this project site" creating a Branch/Unit under one,
+  // since `requireSiteAccess` (the Project Units route middleware) only bypassed for the literal
+  // Master Admin role code, never for the `sites:manage` permission `listProjectSites` already
+  // recognized. Fixed by teaching `requireSiteAccess` the same permission-based global-authority
+  // rule (`common/authz-policy.ts`'s `assertSiteAccess`), applied consistently to both the Unit
+  // list and Unit create routes. Driven through the real UI end to end, not just the API.
+  test('a custom Payroll Manager role with sites:manage can list, create, and rename a Branch under any site — not just an assigned one', async ({
+    authenticatedPage: adminPage,
+    browser,
+  }) => {
+    const label = Date.now();
+
+    const site = await apiPost<{ site: { id: string; name: string; unitLabel: string } }>(
+      adminPage.context(),
+      '/api/v1/sites',
+      { name: `E2E Branch Global Authority Site ${label}` },
+    );
+
+    const role = await apiPost<{ role: { id: string } }>(adminPage.context(), '/api/v1/roles', {
+      name: `E2E Branch Global Authority Role ${label}`,
+      permissionKeys: ['sites:manage'],
+    });
+
+    const email = `e2e-branch-global-authority-${label}@example.test`;
+    const password = 'E2EBranchGlobalAuthority1!';
+    // Deliberately no siteIds — this user's only path to site visibility/authority is
+    // sites:manage, exactly the reported production persona.
+    await apiPost(adminPage.context(), '/api/v1/users', {
+      name: 'E2E Branch Global Authority',
+      email,
+      password,
+      roleId: role.role.id,
+    });
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await login(page, email, password);
+
+    await page.goto('/sites');
+    await expect(page.getByText(site.site.name)).toBeVisible();
+
+    // Open the site's own "Manage Branches" action — the previously-broken read path.
+    await page.getByRole('button', { name: `Actions for ${site.site.name}` }).click();
+    await page.getByRole('menuitem', { name: /^Manage Branch/ }).click();
+    await expect(page.getByText('No branches yet')).toBeVisible();
+
+    // Create a Branch under this unassigned-but-sites:manage-visible site — the exact previously
+    // 403'ing action.
+    await page.getByRole('button', { name: 'New Branch' }).click();
+    const branchName = `E2E Branch Created ${label}`;
+    await page.locator('#unit-name').fill(branchName);
+    await page.getByRole('button', { name: 'Create branch' }).click();
+    await expect(page.getByText('Branch created', { exact: true })).toBeVisible();
+    await expect(page.getByText(branchName)).toBeVisible();
+
+    // Rename it — the same previously-403'ing scope applies to update too, though update was
+    // already permission-only gated; asserted here for full-flow regression coverage.
+    await page.getByRole('button', { name: `Actions for ${branchName}` }).click();
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    const renamedBranchName = `${branchName} Renamed`;
+    await page.locator('#unit-name').fill(renamedBranchName);
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.getByText(renamedBranchName)).toBeVisible();
+
+    // Direct API confirms the same, from a fresh request — not just an optimistic UI update.
+    const unitsRes = await apiGet<{ units: { name: string }[] }>(context, `/api/v1/sites/${site.site.id}/units`);
+    expect(unitsRes.body.units.some((u) => u.name === renamedBranchName)).toBe(true);
+
+    await context.close();
+  });
+
   test('an unauthorized user cannot enumerate sites at all', async ({ authenticatedPage: adminPage, browser }) => {
     const label = Date.now();
     await apiPost(adminPage.context(), '/api/v1/sites', { name: `E2E Site No Enumeration ${label}` });
@@ -166,6 +240,81 @@ test.describe('Custom-role Sites visibility (UAT Defect 1)', () => {
 
     const res = await apiGet(context, '/api/v1/sites');
     expect(res.status).toBe(403);
+
+    await context.close();
+  });
+});
+
+/**
+ * UAT Defect 3 (System-Wide RBAC Consistency remediation) — a custom "Payroll Manager" role could
+ * reach the Employee Registry (`employees:view`) and open New Employee (`employees:create`), but
+ * the existing employee list came back empty. Root cause: Employees is a site-scoped operational
+ * domain with no global-administration permission of its own — `sites:manage` (which this same
+ * persona held, and which grants unrestricted Project Site visibility) was never meant to widen
+ * Employee access, and does not after this fix either. The actual, correct fix is two-fold:
+ * (1) the empty state must be distinguishable from "you have no assigned sites" so this is never
+ * mistaken for a bug or an empty registry, and (2) every site selector the Employee Registry
+ * itself offers (the site filter, the New/Edit Employee site picker) must be scoped to this user's
+ * real accessible sites, never the broader sites:manage-unlocked list — so the UI never offers a
+ * site the Employee Registry would return zero records for.
+ */
+test.describe('Employee Registry visibility (UAT Defect 3)', () => {
+  test('a Payroll Manager with sites:manage and employees:view sees a distinct "no assigned sites" state until assigned, then sees exactly their site\'s employees', async ({
+    authenticatedPage: adminPage,
+    browser,
+  }) => {
+    const label = Date.now();
+    const { siteId, employeeId } = await createSiteWithEmployee(adminPage.context(), `emp-visibility-${label}`);
+
+    const role = await apiPost<{ role: { id: string } }>(adminPage.context(), '/api/v1/roles', {
+      name: `E2E Employee Visibility Payroll Manager ${label}`,
+      permissionKeys: ['sites:manage', 'employees:view', 'employees:create'],
+    });
+
+    const email = `e2e-employee-visibility-${label}@example.test`;
+    const password = 'E2EEmployeeVisibility1!';
+    // Deliberately no siteIds at first — reproduces the exact reported defect setup.
+    const user = await apiPost<{ user: { id: string } }>(adminPage.context(), '/api/v1/users', {
+      name: 'E2E Employee Visibility Manager',
+      email,
+      password,
+      roleId: role.role.id,
+    });
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await login(page, email, password);
+
+    // Sees every site (sites:manage is global for that domain)...
+    await page.goto('/sites');
+    await expect(page.getByText('All Sites')).toBeVisible();
+
+    // ...but the Employee Registry shows the distinct "no assigned sites" state, not a generic
+    // empty registry and not a 403 — sites:manage grants no Employee access on its own.
+    await page.goto('/employees');
+    await expect(page.getByText('You have no assigned project sites')).toBeVisible();
+    await expect(page.getByText('No employees found')).toHaveCount(0);
+
+    const emptyRes = await apiGet<{ employees: unknown[] }>(context, '/api/v1/employees');
+    expect(emptyRes.status).toBe(200);
+    expect(emptyRes.body.employees).toEqual([]);
+
+    // Now actually assign the site — the fix is assignment, not a permanent block.
+    const assignCsrfToken = await getCsrfToken(adminPage.context());
+    const assignRes = await adminPage.context().request.patch(`${BACKEND_URL}/api/v1/users/${user.user.id}`, {
+      headers: { 'x-csrf-token': assignCsrfToken },
+      data: { siteIds: [siteId] },
+    });
+    expect(assignRes.status()).toBe(200);
+
+    // Role reassignment/permission edits take effect on the very next request, no forced logout
+    // (docs/architecture/authentication.md) — a plain reload is enough.
+    await page.reload();
+    await expect(page.getByText('No employees found')).toHaveCount(0);
+    await expect(page.getByText('You have no assigned project sites')).toHaveCount(0);
+
+    const scopedRes = await apiGet<{ employees: { id: string }[] }>(context, '/api/v1/employees');
+    expect(scopedRes.body.employees.some((e) => e.id === employeeId)).toBe(true);
 
     await context.close();
   });

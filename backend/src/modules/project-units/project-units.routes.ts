@@ -23,11 +23,15 @@ projectUnitsRouter.use(requireAuth);
 
 // Nested under a Project Site — list/create are scoped by `requireSiteAccess`, the same
 // middleware docs/architecture/authentication.md documents for exactly this route shape (Master
-// Admin bypasses it; Payroll Staff must be assigned to the site). This is the middleware's first
-// real route: it existed since Phase 1 but had no site-scoped resource to guard until now.
+// Admin bypasses it; Payroll Staff must be assigned to the site). `sites:manage` is also passed as
+// this route's global-authority permission (System-Wide RBAC Consistency remediation) — the same
+// permission that already grants unrestricted Project Site *visibility* (`listProjectSites`) must
+// grant the same unrestricted authority over that site's Units, or a `sites:manage` holder with no
+// individual `UserSiteAssignment` row could list every site but manage none of their units, exactly
+// the production contradiction this fix closes.
 projectUnitsRouter.get(
   '/sites/:siteId/units',
-  requireSiteAccess((req) => req.params.siteId),
+  requireSiteAccess((req) => req.params.siteId, { globalPermission: PERMISSIONS.SITES_MANAGE }),
   async (req, res, next) => {
     try {
       const units = await listProjectUnits(requireIdParam(req.params.siteId));
@@ -40,7 +44,7 @@ projectUnitsRouter.get(
 
 projectUnitsRouter.post(
   '/sites/:siteId/units',
-  requireSiteAccess((req) => req.params.siteId),
+  requireSiteAccess((req) => req.params.siteId, { globalPermission: PERMISSIONS.SITES_MANAGE }),
   requirePermission(PERMISSIONS.SITES_MANAGE),
   async (req, res, next) => {
     try {

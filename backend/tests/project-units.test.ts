@@ -202,4 +202,61 @@ describe('Project Units', () => {
     const deniedRes = await agent.get(`/api/v1/sites/${unassignedSite.id}/units`);
     expect(deniedRes.status).toBe(403);
   });
+
+  // System-Wide RBAC Consistency remediation — the exact production UAT defect: a custom role
+  // (never the literal Master Admin role code) holding `sites:manage` with zero `UserSiteAssignment`
+  // rows could list every Project Site (`project-sites.test.ts`'s own "sites:manage grants global
+  // site visibility" coverage) but was rejected by `requireSiteAccess` creating/listing a Unit under
+  // any of them, since that middleware only recognized the literal Master Admin role code. Fixed by
+  // teaching `requireSiteAccess` the same `sites:manage`-is-global-authority rule
+  // `project-sites.service.ts`'s `listProjectSites` already used.
+  it('a custom role holding sites:manage (no site assignments, not Master Admin) can list units for, and create a unit under, any site', async () => {
+    const site = await createTestSite('Test Site Unit Global Authority');
+
+    const { agent, csrfToken } = await createAuthenticatedAgent(app, {
+      email: 'units-global-authority@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_CUSTOM_SITE_MANAGER',
+      permissionKeys: [PERMISSIONS.SITES_MANAGE],
+      // Deliberately no siteIds — this role's site visibility comes entirely from holding
+      // sites:manage, exactly like the reported production persona.
+    });
+
+    const listRes = await agent.get(`/api/v1/sites/${site.id}/units`);
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.units).toEqual([]);
+
+    const createRes = await agent
+      .post(`/api/v1/sites/${site.id}/units`)
+      .set('x-csrf-token', csrfToken)
+      .send({ name: 'Created By Global Authority' });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.unit.siteId).toBe(site.id);
+
+    const updateRes = await agent
+      .patch(`/api/v1/units/${createRes.body.unit.id}`)
+      .set('x-csrf-token', csrfToken)
+      .send({ name: 'Renamed By Global Authority' });
+    expect(updateRes.status).toBe(200);
+    expect(updateRes.body.unit.name).toBe('Renamed By Global Authority');
+  });
+
+  it('a custom role with a misleading name but no sites:manage permission still gets no unit access, even to a site it can list', async () => {
+    const site = await createTestSite('Test Site Unit Misleading Role');
+
+    const { agent, csrfToken } = await createAuthenticatedAgent(app, {
+      email: 'units-misleading-role@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_MASTER_ADMIN_LOOKALIKE',
+      permissionKeys: [],
+    });
+
+    const createRes = await agent
+      .post(`/api/v1/sites/${site.id}/units`)
+      .set('x-csrf-token', csrfToken)
+      .send({ name: 'Should Not Be Created' });
+
+    expect(createRes.status).toBe(403);
+  });
 });
