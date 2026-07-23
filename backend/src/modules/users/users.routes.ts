@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createUserSchema, PERMISSIONS, resetUserPasswordSchema, updateUserSchema } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
+import { rotateCsrfCookie } from '../../common/middleware/csrf';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { createUser, getUser, listUsers, resetUserPassword, updateUser } from './users.service';
@@ -122,7 +123,9 @@ usersRouter.post('/:id/reset-password', async (req, res, next) => {
     // edge case where a Master Admin resets their own account's password, their own current
     // session row was just deleted too — `req.session.destroy()` (same pattern as `/logout` and
     // `/auth/change-password`) clears this request's own cookie so its response reflects that
-    // immediately, rather than only on this session's next request.
+    // immediately, rather than only on this session's next request. The CSRF token is rotated
+    // here too (Checkpoint 4D), same rationale as login/logout/change-password — only in this
+    // branch, since only here was the acting user's own session/token just invalidated.
     if (req.currentUser!.id === id) {
       req.session.destroy((error) => {
         if (error) {
@@ -130,6 +133,7 @@ usersRouter.post('/:id/reset-password', async (req, res, next) => {
           return;
         }
         res.clearCookie('connect.sid');
+        rotateCsrfCookie(res);
         res.status(204).send();
       });
       return;

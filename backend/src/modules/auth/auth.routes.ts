@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { changePasswordSchema, loginSchema, updateProfileSchema } from '@payroll/shared';
 import { isTest } from '../../config/env';
 import { requireAuth } from '../../common/middleware/attach-user';
+import { rotateCsrfCookie } from '../../common/middleware/csrf';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import {
   changeOwnPassword,
@@ -62,6 +63,10 @@ authRouter.post('/login', loginRateLimiter, async (req, res, next) => {
 
       req.session.userId = userId;
 
+      // Rotate the CSRF token alongside the session regenerate above — a token learned before
+      // authentication must not still be valid afterward (docs/architecture/authentication.md).
+      rotateCsrfCookie(res);
+
       await touchLastLogin(userId);
       await recordAuditLog({
         actorUserId: userId,
@@ -90,6 +95,9 @@ authRouter.post('/logout', requireAuth, (req, res, next) => {
     }
 
     res.clearCookie('connect.sid');
+    // Same rationale as login's rotation above — a token learned while authenticated must not
+    // still be valid after logout.
+    rotateCsrfCookie(res);
 
     if (userId) {
       await recordAuditLog({
@@ -155,6 +163,8 @@ authRouter.post('/change-password', requireAuth, async (req, res, next) => {
         return;
       }
       res.clearCookie('connect.sid');
+      // Same rationale as login/logout rotation above — the session backing this token is gone.
+      rotateCsrfCookie(res);
       res.status(204).send();
     });
   } catch (error) {
