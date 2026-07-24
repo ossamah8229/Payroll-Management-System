@@ -312,6 +312,10 @@ export async function syncEmployeeIntoCurrentDraftCycle(
   employee: Employee,
   actorUserId: string,
   requestMeta: RequestMeta,
+  /** Audit-trail provenance only — never changes behavior. `reconcileDraftCycleRoster` (below)
+   * passes `'draft_roster_reconciliation'` so its own audit entries are distinguishable from the
+   * create/reactivate/import call sites' `'employee_sync'`. */
+  trigger: string = 'employee_sync',
 ): Promise<void> {
   if (employee.dateOfLeaving) {
     return;
@@ -372,12 +376,105 @@ export async function syncEmployeeIntoCurrentDraftCycle(
       action: 'payroll_entry.created',
       entityType: 'PayrollEntry',
       entityId: created.id,
-      metadata: { cycleId: draftCycle.id, employeeId: employee.id, siteId: employee.siteId, trigger: 'employee_sync' },
+      metadata: { cycleId: draftCycle.id, employeeId: employee.id, siteId: employee.siteId, trigger },
       ipAddress: requestMeta.ipAddress,
       userAgent: requestMeta.userAgent,
     },
     tx,
   );
+}
+
+/**
+ * Draft Payroll Roster Reconciliation (2026-07-24) — closes the residual gap
+ * `syncEmployeeIntoCurrentDraftCycle` above cannot: an employee who was already active before that
+ * fix was deployed, and so never passed through the create/reactivate/import hooks it lives on,
+ * stays permanently missing from an already-open Draft cycle otherwise (`bootstrapPayrollEntries`
+ * only ever runs once, at that cycle's own creation/rollover — see its own doc comment). An
+ * eligible active employee must not remain silently absent from the current Draft indefinitely.
+ *
+ * **Explicit, cycle-targeted action — never an implicit "whatever's current Draft" mutation**, the
+ * same convention `finalizePayrollCycle`/`archiveAndCreateNextPayrollCycle` already establish: the
+ * caller always names the exact cycle, and this rejects outright if that cycle is not (still)
+ * `DRAFT` — `RELEASED`/`ARCHIVED` cycles are never reachable here, not merely "not touched by
+ * accident."
+ *
+ * **Deliberately not a GET-triggered side effect.** A Payroll Entry list/read endpoint stays a pure
+ * read (Principle 10's 10,000-employee scale floor makes an eligibility diff against the full
+ * active-employee roster on every poll/page-load a real cost, not a free correctness improvement,
+ * and an ordinary `GET` silently writing rows is exactly the "unsafe/surprising mutation path" this
+ * checkpoint was told not to force). This is its own explicit, `PAYROLL_CYCLE_MANAGE`-gated action —
+ * the same permission class as cycle creation/finalize/rollover, not the narrower `payroll:entry` a
+ * day-to-day Payroll Manager holds — wired to fire automatically (best-effort, silent unless it
+ * actually changes something) when a session that already holds that permission opens the current
+ * Draft cycle's Payroll Entry page, so the common case still feels self-healing without turning a
+ * read endpoint into a mutation or widening who can trigger a cycle-wide write.
+ *
+ * **Reuses `syncEmployeeIntoCurrentDraftCycle` verbatim, once per missing employee** — no second
+ * PayrollEntry-creation implementation. The "which employees are missing" computation is the only
+ * new logic: two bulk, indexed reads (every active `Employee`, every `PayrollEntry.employeeId`
+ * already in this cycle) and an in-memory set difference, the same bulk-query-over-row-by-row-scan
+ * shape `bootstrapPayrollEntries` already uses at this same scale. Every one of
+ * `syncEmployeeIntoCurrentDraftCycle`'s own guarantees carries over unchanged: idempotent (an
+ * employee already present is a no-op, so re-running reconciliation after a partial success or a
+ * client retry never double-creates), the unique `(cycleId, employeeId)` constraint remains the
+ * final concurrency backstop, no existing `PayrollEntry` is ever read for a write — only its
+ * `employeeId` is read, to exclude it from the missing set — so an existing row's own `siteId`,
+ * released/hold state, or any other field is never touched.
+ */
+export async function reconcileDraftCycleRoster(
+  currentUser: SessionUser,
+  cycleId: string,
+  requestMeta: RequestMeta,
+): Promise<{ reconciledCount: number; reconciledEmployeeIds: string[] }> {
+  const cycle = await prisma.payrollCycle.findUnique({ where: { id: cycleId } });
+  if (!cycle) {
+    throw notFound('Payroll cycle not found');
+  }
+  if (cycle.status !== 'DRAFT') {
+    throw badRequest('Roster reconciliation only applies to the current Draft cycle');
+  }
+
+  const [activeEmployees, existingEntries] = await Promise.all([
+    prisma.employee.findMany({ where: { dateOfLeaving: null } }),
+    prisma.payrollEntry.findMany({ where: { cycleId }, select: { employeeId: true } }),
+  ]);
+  const existingEmployeeIds = new Set(existingEntries.map((entry) => entry.employeeId));
+  const missingEmployees = activeEmployees.filter((employee) => !existingEmployeeIds.has(employee.id));
+
+  if (missingEmployees.length === 0) {
+    return { reconciledCount: 0, reconciledEmployeeIds: [] };
+  }
+
+  await prisma.$transaction(
+    async (tx) => {
+      for (const employee of missingEmployees) {
+        await syncEmployeeIntoCurrentDraftCycle(tx, employee, currentUser.id, requestMeta, 'draft_roster_reconciliation');
+      }
+
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'payroll_cycle.roster_reconciled',
+          entityType: 'PayrollCycle',
+          entityId: cycle.id,
+          metadata: {
+            cycleId: cycle.id,
+            reconciledEmployeeIds: missingEmployees.map((employee) => employee.id),
+            reconciledCount: missingEmployees.length,
+          },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    },
+    { timeout: 30_000 },
+  );
+
+  return {
+    reconciledCount: missingEmployees.length,
+    reconciledEmployeeIds: missingEmployees.map((employee) => employee.id),
+  };
 }
 
 /**

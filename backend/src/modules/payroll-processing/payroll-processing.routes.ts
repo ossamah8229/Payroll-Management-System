@@ -9,6 +9,7 @@ import {
   finalizePayrollCycle,
   getPayrollCycle,
   listPayrollCycles,
+  reconcileDraftCycleRoster,
 } from './payroll-processing.service';
 
 function requireIdParam(id: string | undefined): string {
@@ -110,6 +111,32 @@ payrollCyclesRouter.post(
       );
 
       res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Master-User-only, same permission as creation/Finalize/rollover (Draft Payroll Roster
+// Reconciliation, 2026-07-24) — a cycle-wide write, not a single Payroll Manager's own
+// `payroll:entry` day-to-day scope, deliberately gated the same as every other cycle-lifecycle
+// action in this router. Explicit `:cycleId` route, same convention as `/:id/finalize` and
+// `/:cycleId/archive-and-create-next` — a reconciliation request always names the exact cycle it
+// targets, and `reconcileDraftCycleRoster` itself rejects if that cycle is not (still) Draft.
+payrollCyclesRouter.post(
+  '/:cycleId/reconcile-roster',
+  requirePermission(PERMISSIONS.PAYROLL_CYCLE_MANAGE),
+  async (req, res, next) => {
+    try {
+      // reconcileDraftCycleRoster owns its own audit logging inside its own transaction — the
+      // route never logs a second, redundant entry after the fact (same convention as
+      // createPayrollCycle/finalizePayrollCycle/archiveAndCreateNextPayrollCycle).
+      const result = await reconcileDraftCycleRoster(req.currentUser!, requireIdParam(req.params.cycleId), {
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+
+      res.status(200).json(result);
     } catch (error) {
       next(error);
     }
