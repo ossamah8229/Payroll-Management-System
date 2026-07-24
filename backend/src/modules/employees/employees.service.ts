@@ -12,6 +12,7 @@ import { diffFields, omitKeys, type JsonPrimitive } from '../../common/audit-dif
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
+import { syncEmployeeIntoCurrentDraftCycle } from '../payroll-processing/payroll-processing.service';
 
 export type { RequestMeta };
 
@@ -189,37 +190,50 @@ export async function getEmployee(currentUser: SessionUser, id: string) {
   return employee;
 }
 
-export async function createEmployee(currentUser: SessionUser, input: CreateEmployeeInput) {
+export async function createEmployee(
+  currentUser: SessionUser,
+  input: CreateEmployeeInput,
+  requestMeta: RequestMeta,
+) {
   assertSiteAccess(currentUser, input.siteId);
   await assertUnitBelongsToSite(input.unitId, input.siteId);
 
-  return prisma.employee.create({
-    data: {
-      employeeCode: input.employeeCode ?? null,
-      cnic: input.cnic ?? null,
-      name: input.name,
-      fatherName: input.fatherName ?? null,
-      religion: input.religion ?? null,
-      dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
-      mobileNumber: input.mobileNumber ?? null,
-      designation: input.designation,
-      siteId: input.siteId,
-      unitId: input.unitId,
-      dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
-      payType: input.payType ?? undefined,
-      grossPay: input.grossPay,
-      bankId: input.bankId ?? null,
-      branchCode: input.branchCode ?? null,
-      // A cash employee (no bank) never has an Account Number/IBAN on file — enforced here even
-      // though `createEmployeeSchema` already rejects "bank set, no Account Number", since the
-      // reverse (no bank, but an Account Number/IBAN supplied anyway) is a normalization, not a
-      // rejection (docs/architecture/database/employee.md §7's banking-fields note).
-      accountNumber: input.bankId ? (input.accountNumber ?? null) : null,
-      iban: input.bankId ? (input.iban ?? null) : null,
-      ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount ?? undefined }),
-      ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
-    },
-    include: { site: true, unit: true, bank: true },
+  return prisma.$transaction(async (tx) => {
+    const employee = await tx.employee.create({
+      data: {
+        employeeCode: input.employeeCode ?? null,
+        cnic: input.cnic ?? null,
+        name: input.name,
+        fatherName: input.fatherName ?? null,
+        religion: input.religion ?? null,
+        dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
+        mobileNumber: input.mobileNumber ?? null,
+        designation: input.designation,
+        siteId: input.siteId,
+        unitId: input.unitId,
+        dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
+        payType: input.payType ?? undefined,
+        grossPay: input.grossPay,
+        bankId: input.bankId ?? null,
+        branchCode: input.branchCode ?? null,
+        // A cash employee (no bank) never has an Account Number/IBAN on file — enforced here even
+        // though `createEmployeeSchema` already rejects "bank set, no Account Number", since the
+        // reverse (no bank, but an Account Number/IBAN supplied anyway) is a normalization, not a
+        // rejection (docs/architecture/database/employee.md §7's banking-fields note).
+        accountNumber: input.bankId ? (input.accountNumber ?? null) : null,
+        iban: input.bankId ? (input.iban ?? null) : null,
+        ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount ?? undefined }),
+        ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
+      },
+      include: { site: true, unit: true, bank: true },
+    });
+
+    // Operational Stabilization Checkpoint (2026-07-24) — a newly created, active employee is
+    // immediately eligible for the current Draft cycle, if one exists; see
+    // `syncEmployeeIntoCurrentDraftCycle`'s own doc comment for why this was previously missing.
+    await syncEmployeeIntoCurrentDraftCycle(tx, employee, currentUser.id, requestMeta);
+
+    return employee;
   });
 }
 
@@ -554,6 +568,11 @@ export async function reactivateEmployee(
       },
       tx,
     );
+
+    // Operational Stabilization Checkpoint (2026-07-24) — a rehire is immediately eligible for the
+    // current Draft cycle again, same as a genuinely new employee; see
+    // `syncEmployeeIntoCurrentDraftCycle`'s own doc comment.
+    await syncEmployeeIntoCurrentDraftCycle(tx, updated, currentUser.id, requestMeta);
 
     return updated;
   });

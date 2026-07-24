@@ -13,6 +13,7 @@ import {
   type RequestMeta,
 } from './employees.service';
 import { assertSiteAccess } from '../../common/authz-policy';
+import { syncEmployeeIntoCurrentDraftCycle } from '../payroll-processing/payroll-processing.service';
 
 /**
  * The official Employee Registry template header set, in column order, extracted verbatim from
@@ -461,7 +462,14 @@ export async function importEmployees(
         }
         updated += 1;
       } else {
-        await prisma.employee.create({ data });
+        await prisma.$transaction(async (tx) => {
+          const employee = await tx.employee.create({ data });
+          // Operational Stabilization Checkpoint (2026-07-24) — same sync a form-created employee
+          // gets (employees.service.ts's createEmployee); an imported employee is just as newly
+          // eligible for the current Draft cycle. See syncEmployeeIntoCurrentDraftCycle's own doc
+          // comment.
+          await syncEmployeeIntoCurrentDraftCycle(tx, employee, currentUser.id, requestMeta);
+        });
         created += 1;
       }
     } catch (error) {

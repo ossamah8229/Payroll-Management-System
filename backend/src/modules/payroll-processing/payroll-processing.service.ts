@@ -281,6 +281,106 @@ async function bootstrapPayrollEntries(params: BootstrapPayrollEntriesParams): P
 }
 
 /**
+ * Synchronizes one newly-eligible employee into the current Draft cycle, if one exists (Operational
+ * Stabilization Checkpoint, 2026-07-24). `bootstrapPayrollEntries` above only ever runs once per
+ * cycle — at that cycle's own creation or rollover — so an employee created (or reactivated) after
+ * that point previously had no automatic path into the cycle's Payroll Entry grid at all: the only
+ * other entry point, `payroll-entry.service.ts`'s `createPayrollEntry` ("add this employee to the
+ * cycle" — see its own doc comment), is a real, working, RBAC-checked endpoint, but the frontend
+ * never surfaced it, so in practice a newly onboarded or reactivated employee simply never appeared
+ * for anyone, Master Admin included — not an RBAC defect, a population-lifecycle gap.
+ *
+ * No-op if no cycle is currently Draft (§10: automatic sync applies only to the current Draft
+ * cycle — never reaches back into a `RELEASED`/`ARCHIVED` cycle), if the employee is not active
+ * (`dateOfLeaving` set — mirrors `createPayrollCycle`'s own `activeEmployees` eligibility filter;
+ * departure-during-a-cycle already has its own, separate, intentionally different handling —
+ * `bootstrapPayrollEntries`'s `departedObligationEmployees` path, decided at rollover, not
+ * reinvented here), or if this employee already has an entry for it (defensive — the unique
+ * `(cycleId, employeeId)` constraint on `PayrollEntry` is the real backstop against a race, so a
+ * concurrent duplicate attempt fails loudly with a constraint violation rather than silently
+ * succeeding twice).
+ *
+ * Reuses the exact "genuinely new employee, no prior entry" seeding shape `bootstrapPayrollEntries`
+ * and `createPayrollEntry` both already use — a single fresh work line seeded from the employee's
+ * current default Unit, attendance zeroed, every payroll figure taken from `Employee`'s own current
+ * defaults (there is no prior entry to carry forward from). Must run inside the caller's own
+ * transaction (employee creation/reactivation/import), so the `Employee` row and its first Payroll
+ * Entry are created atomically or not at all.
+ */
+export async function syncEmployeeIntoCurrentDraftCycle(
+  tx: PrismaTransactionClient,
+  employee: Employee,
+  actorUserId: string,
+  requestMeta: RequestMeta,
+): Promise<void> {
+  if (employee.dateOfLeaving) {
+    return;
+  }
+
+  const draftCycle = await tx.payrollCycle.findFirst({ where: { status: 'DRAFT' } });
+  if (!draftCycle) {
+    return;
+  }
+
+  const existing = await tx.payrollEntry.findUnique({
+    where: { cycleId_employeeId: { cycleId: draftCycle.id, employeeId: employee.id } },
+  });
+  if (existing) {
+    return;
+  }
+
+  const maxSortOrder = await tx.payrollEntry.aggregate({
+    where: { cycleId: draftCycle.id },
+    _max: { sortOrder: true },
+  });
+  const nextSortOrder = (maxSortOrder._max.sortOrder ?? -1) + 1;
+
+  const created = await tx.payrollEntry.create({
+    data: {
+      cycleId: draftCycle.id,
+      employeeId: employee.id,
+      siteId: employee.siteId,
+      employeeNameSnapshot: employee.name,
+      fatherNameSnapshot: employee.fatherName,
+      designation: employee.designation,
+      bankId: employee.bankId,
+      branchCode: employee.branchCode,
+      accountNumber: employee.accountNumber,
+      iban: employee.iban,
+      grossPay: employee.grossPay,
+      eobiAmount: employee.defaultEobiAmount,
+      eobiApplicable: employee.defaultEobiApplicable,
+      sortOrder: nextSortOrder,
+      workLines: {
+        create: [
+          {
+            siteId: employee.siteId,
+            unitId: employee.unitId,
+            days: '0',
+            otHours: '0',
+            otRate: null,
+            cycleDays: 30,
+          },
+        ],
+      },
+    },
+  });
+
+  await recordAuditLog(
+    {
+      actorUserId,
+      action: 'payroll_entry.created',
+      entityType: 'PayrollEntry',
+      entityId: created.id,
+      metadata: { cycleId: draftCycle.id, employeeId: employee.id, siteId: employee.siteId, trigger: 'employee_sync' },
+      ipAddress: requestMeta.ipAddress,
+      userAgent: requestMeta.userAgent,
+    },
+    tx,
+  );
+}
+
+/**
  * `isCurrentDraft` (Phase 5 Checkpoint 4) is derived here, not stored — trivially `status ===
  * 'DRAFT'`, but computed server-side so every page consuming this list treats "which one is the
  * editable cycle" as a fact the API states, not a status string each page re-interprets itself.

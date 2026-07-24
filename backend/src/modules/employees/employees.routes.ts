@@ -161,7 +161,10 @@ employeesRouter.get('/:id', requirePermission(PERMISSIONS.EMPLOYEES_VIEW), async
 employeesRouter.post('/', requirePermission(PERMISSIONS.EMPLOYEES_CREATE), async (req, res, next) => {
   try {
     const input = createEmployeeSchema.parse(req.body);
-    const employee = await createEmployee(req.currentUser!, input);
+    const employee = await createEmployee(req.currentUser!, input, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
 
     await recordAuditLog({
       actorUserId: req.currentUser!.id,
