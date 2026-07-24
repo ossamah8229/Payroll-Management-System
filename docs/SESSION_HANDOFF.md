@@ -1880,3 +1880,39 @@ total** (the flake is `payslips.test.ts` under host resource contention — pre-
 KI-10 pattern, confirmed via isolated rerun at 47/47, not a regression). Frontend **91/91**. Full
 E2E suite **44/44, with two legitimate conditional skips**. All typecheck/lint/build clean,
 Prisma schema/migrations untouched. **Nothing pushed, nothing deployed** as of this addendum.
+
+---
+
+## 11. Addendum, 2026-07-24 — Operational Stabilization Checkpoint (unplanned, against `origin/main`)
+
+An unplanned checkpoint, requested before any Phase 7 work began: two operational defects reported
+against the currently shipped Payroll Entry workflow. **Explicitly does not start Phase 7** — full
+detail is in `docs/PROJECT_PROGRESS.md`'s own dated entry; this is only the next-session pointer.
+
+**Defect A (table misalignment)**: the totals row's hand-written cell list had silently drifted out
+of sync with the canonical `PAYROLL_COLUMNS` array (missing the IBAN column's own placeholder cell),
+shifting every total from Gross Pay through Net Salary one column left. Fixed by making the totals
+row iterate `PAYROLL_COLUMNS` directly instead of a second, hand-maintained list — this class of
+drift is now structurally impossible, not just corrected once. Header/body rows were already correct
+(independently verified).
+
+**Defect B (Payroll Manager missing data)**: not an RBAC defect — every user, Master Admin included,
+saw the same absence. `bootstrapPayrollEntries` only ever populates a cycle once, at its own creation
+or rollover; an employee created or reactivated afterward had no automatic path into the current
+Draft cycle. Fixed with a new `syncEmployeeIntoCurrentDraftCycle`, run inside employee
+creation/reactivation/CSV-import — Draft-cycle-only, no duplicates, released/archived history
+unaffected.
+
+**Verification**: backend full suite 901 passed, 1 failed (`backup-packages.test.ts`'s "Generated
+On" timestamp-comparison test — a distinct test/mechanism from the documented KI-10, not classified
+as that issue; confirmed non-reproducible via an immediate isolated rerun at 38/38, consistent with
+full-suite-load timing sensitivity but not written up as 902/902 since this was not a clean full-suite
+run). Frontend 94/94 (91 + 3 new alignment tests, verified to actually catch the original defect), 10
+new backend integration tests (verified to fail pre-fix, pass post-fix), E2E 45/46 (one conditional
+skip). Typecheck/lint/build all clean (one pre-existing, unrelated E2E-spec typecheck error predates
+this checkpoint). Real browser verification performed with a Master User and a site-scoped Payroll
+Manager against realistic data — the Draft-cycle synchronization rule (employee creation,
+reactivation, and CSV/Excel import are the three sync entry points; current-Draft-cycle-only, no
+duplicates, released/archived history untouched) confirmed live in both. **Stopped for approval
+before any commit — nothing committed, nothing pushed, nothing deployed. Phase 7 status unchanged
+(Not started).**

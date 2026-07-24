@@ -5767,6 +5767,76 @@ Employee Lookup search-and-select flow, print support, and import template downl
 
 ---
 
+### Operational Stabilization Checkpoint — Payroll Entry Table Alignment and Draft-Cycle Population (2026-07-24)
+
+Unplanned checkpoint against the `origin/main` baseline (the checkpoint above, already pushed) —
+two operational defects reported against the currently shipped Payroll Entry workflow, traced to
+root cause and fixed before any Phase 7 work began. **Explicitly does not start Phase 7.**
+
+**Defect A — Payroll Entry table misalignment.** Root cause: `payroll-entry-totals-row.tsx`'s
+hand-written JSX cell list (one `<div role="cell">` per column, positionally ordered to match
+`PAYROLL_COLUMNS`) silently omitted the IBAN column's own placeholder cell — a manual-sync drift
+`columns.test.ts`'s 100%-covered pure-function tests could never catch, since none of them render a
+single component. Every total from Gross Pay onward (Cycle Days, Leave Rate, Allowance, EOBI,
+both deductions, Fine, Net Salary) rendered one grid column to the left of its own header; Net
+Salary's total had no cell at all (grid one short). The header and body rows were independently
+verified already correct — this was a totals-row-only defect. Fixed: `payroll-entry-totals-row.tsx`
+now iterates `PAYROLL_COLUMNS` directly (one cell per column, looked up by id), making this class of
+drift structurally impossible rather than just corrected once. Every cell in the header, body, and
+totals rows now also carries a shared `data-col-id` attribute (`ReadOnlyCell` gained an optional
+`colId` prop for its four call sites) — real alignment is now mechanically verifiable, not only
+visually apparent.
+
+**Defect B — Payroll Manager not seeing expected data.** Traced end-to-end (RBAC → site assignment
+→ Draft-cycle population → repository query → API → frontend); the RBAC/site-scoping path itself
+was confirmed already correct at every layer. Root cause: `bootstrapPayrollEntries`
+(`payroll-processing.service.ts`) only ever runs once per cycle, at that cycle's own creation or
+rollover. An employee created (or reactivated) *after* the current Draft cycle already exists had no
+automatic path into that cycle's Payroll Entry grid — the only other entry point,
+`payroll-entry.service.ts`'s `createPayrollEntry` ("add this employee to the cycle"), was a real,
+working, RBAC-checked endpoint the frontend never called. Every user, Master Admin included, saw the
+identical absence, because the row simply never existed — not an RBAC defect. Fixed: a new
+`syncEmployeeIntoCurrentDraftCycle` (`payroll-processing.service.ts`) runs inside the same
+transaction as employee creation (`employees.service.ts`'s `createEmployee`), reactivation
+(`reactivateEmployee`), and CSV/Excel import (`employees-import-export.service.ts`) — no-op if no
+cycle is currently Draft, if the employee isn't active, or if an entry already exists for that
+`(cycleId, employeeId)` pair (the real backstop is still the schema's own unique constraint).
+Reuses the exact "genuinely new employee, no prior entry" seeding shape `bootstrapPayrollEntries`/
+`createPayrollEntry` already use. Automatic synchronization only ever reaches the current Draft
+cycle; released/archived history, and an already-existing entry's own `siteId` after a later
+employee site transfer, are both unaffected (verified by test) — no invented behavior for inactive
+employees beyond the existing, already-documented departure/carry-forward rules.
+
+**Verification**: backend full suite **901 passed, 1 failed** (`backup-packages.test.ts`'s
+"Generated On" timestamp-comparison test) — a distinct test and mechanism from the documented KI-10
+(`payslips.test.ts`, Puppeteer-specific), not classified as that same issue. Confirmed
+non-reproducible on its own evidence: an immediate isolated rerun of that file passed **38/38**,
+consistent with a full-suite-load timing sensitivity rather than a deterministic regression, but not
+labeled as any previously-documented known issue. **Not written as 902/902** — this was not a clean
+full-suite run. Frontend **94/94** (91 + 3 new: a real-component
+render test proving header/body/totals `data-col-id` sequences all equal `PAYROLL_COLUMNS`'s own
+order — verified to actually catch the shipped defect, by reproducing it against the pre-fix totals
+row and confirming the new test failed). 10 new backend integration tests
+(`payroll-entry-draft-cycle-sync.test.ts`) covering the critical lifecycle case, the reactivation and
+CSV-import sync paths, Master User/Payroll Manager/multi-site RBAC visibility, the `sites:manage`-
+does-not-widen-Payroll-Entry-visibility case, and released-entry site-transfer immutability — every
+one independently confirmed to fail against the pre-fix backend and pass after. E2E full suite
+**45/46** (one conditional skip, down from the previous checkpoint's two — the second skip's own
+precondition happened to become satisfied by this checkpoint's own better Draft-cycle population,
+and the newly-run test passed). Typecheck/lint/build all clean (the one pre-existing E2E-spec
+typecheck error, `08-role-administration.spec.ts:83`, predates this checkpoint — see the previous
+checkpoint's own push review). Real-browser verification performed with realistic data (two Project
+Sites, four employees split across them, one created after Draft-cycle creation) as both Master User
+and a Payroll Manager scoped to one site: totals row confirmed pixel-aligned under every header in
+both normal-width and horizontally-scrolled states; the late-hired employee confirmed visible to the
+scoped Payroll Manager; the Site B employee confirmed invisible to them.
+
+**Not committed, not pushed, not deployed** — this checkpoint stops for approval before any commit,
+per its own explicit instruction. **Phase 7 status is unchanged (Not started) — this checkpoint
+does not begin it.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -6108,6 +6178,24 @@ Employee Lookup search-and-select flow, print support, and import template downl
 ---
 
 ## 5. Exact next action for the next development session
+
+**Updated 2026-07-24 — Operational Stabilization Checkpoint (Payroll Entry Table Alignment and
+Draft-Cycle Population) is COMPLETE, NOT COMMITTED.** See §1's own entry for the full record. Two
+reported defects against the currently shipped Payroll Entry workflow: (1) the totals row's
+hand-written cell list had silently drifted out of sync with `PAYROLL_COLUMNS`, shifting every total
+from Gross Pay onward one column left — fixed by making the totals row iterate the canonical column
+array directly, structurally closing the drift, not just correcting the one instance. (2) an
+employee created (or reactivated) after the current Draft cycle already existed never appeared in
+it, for any user — a Draft-cycle population lifecycle gap, not an RBAC defect — fixed with a new
+`syncEmployeeIntoCurrentDraftCycle` running inside employee creation/reactivation/import. Backend
+full suite 901 passed, 1 failed (`backup-packages.test.ts`, a distinct test/mechanism from the
+documented KI-10 — not classified as that issue; confirmed non-reproducible at 38/38 on an isolated
+rerun, not written up as 902/902 since this was not a clean full-suite run), frontend 94/94, E2E
+45/46 (one conditional skip), all real-component/integration tests independently verified to catch
+the original defects by reproducing them against the pre-fix code. Real-browser verification
+performed with realistic Master User and Payroll Manager personas. **This checkpoint stops for
+approval before any commit — do not commit or push without the user's own separate go-ahead, and do
+not treat Phase 7 as started.**
 
 **Updated 2026-07-23 (later still, same day) — Pre-Deployment Reliability Checkpoint (Payslip PDF
 Full-Suite Flakiness) is COMPLETE, NOT pushed.** See §1's own entry for the full record.
