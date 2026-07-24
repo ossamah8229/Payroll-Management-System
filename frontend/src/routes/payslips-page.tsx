@@ -7,6 +7,8 @@ import { AppShell } from '@/components/layout/app-shell';
 import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -14,9 +16,10 @@ import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { FilterField } from '@/components/ui/filter-field';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ApiError } from '@/lib/api-client';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useProjectUnits } from '@/hooks/use-project-units';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import {
   downloadPayslipPdf,
@@ -56,7 +59,9 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
     selectCycle,
   } = useSelectedPayrollCycle('payslips');
   const hasAnyCycle = cycles.length > 0;
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) — Payslips
+  // stays a strictly site-scoped operational domain; holding sites:manage does not widen it.
+  const sites = useAccessibleProjectSites(user);
 
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
@@ -164,7 +169,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
         <Card>
           <CardContent className="flex flex-col items-center gap-1 py-14 text-center">
             <p className="text-xs font-medium text-text">You don't have access to Payslips</p>
-            <p className="text-xs text-text-muted">Contact a Master Admin if you believe this is a mistake.</p>
+            <p className="text-xs text-text-muted">Contact a Master User if you believe this is a mistake.</p>
           </CardContent>
         </Card>
       </AppShell>
@@ -220,6 +225,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
             }
             actions={
               <>
+                <PrintButton />
                 {selectedCount > 0 && (
                   <span className="text-xs text-text-muted">
                     {selectedCount} selected
@@ -250,6 +256,11 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
           />
         </CardHeader>
         <CardContent className="p-0">
+          {cycle && (
+            <div className="px-[18px] pt-[18px]">
+              <PrintContextHeader title="Payslips" context={formatCycleLabel(cycle)} />
+            </div>
+          )}
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
               <Skeleton className="h-12 w-full" />
@@ -306,7 +317,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                   Search filters to see and select the rest.
                 </div>
               )}
-              <div className="overflow-x-auto">
+              <div className="print-flow overflow-x-auto">
                 <Table className="min-w-full">
                   <TableHeader>
                     <TableRow>

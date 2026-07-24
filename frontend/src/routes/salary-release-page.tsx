@@ -7,13 +7,15 @@ import { AppShell } from '@/components/layout/app-shell';
 import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { FilterField } from '@/components/ui/filter-field';
 import { ApiError } from '@/lib/api-client';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import {
   formatCycleLabel,
   useFinalizePayrollCycle,
@@ -218,7 +220,10 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   } = useSelectedPayrollCycle('release');
   const hasAnyCycle = cycles.length > 0;
   const navigate = useNavigate();
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) — never
+  // the raw, sites:manage-aware unrestricted useProjectSites() list. Salary Release stays a
+  // strictly site-scoped operational domain; holding sites:manage does not widen it.
+  const sites = useAccessibleProjectSites(user);
   const [siteId, setSiteId] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState<UnitReleaseStatus | undefined>(undefined);
   const [confirmingFinalize, setConfirmingFinalize] = useState(false);
@@ -329,26 +334,32 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
               </>
             }
             actions={
-              cycle &&
-              canFinalize &&
-              (cycle.status === 'DRAFT' || cycle.status === 'RELEASED') && (
-                <>
-                  {cycle.status === 'DRAFT' && (
-                    <Button variant="secondary" onClick={() => setConfirmingFinalize(true)}>
-                      Finalize Cycle
-                    </Button>
-                  )}
-                  {cycle.status === 'RELEASED' && (
-                    <Button variant="secondary" onClick={() => setConfirmingRollover(true)}>
-                      Start New Payroll Cycle
-                    </Button>
-                  )}
-                </>
-              )
+              <>
+                <PrintButton />
+                {cycle && canFinalize && (cycle.status === 'DRAFT' || cycle.status === 'RELEASED') && (
+                  <>
+                    {cycle.status === 'DRAFT' && (
+                      <Button variant="secondary" onClick={() => setConfirmingFinalize(true)}>
+                        Finalize Cycle
+                      </Button>
+                    )}
+                    {cycle.status === 'RELEASED' && (
+                      <Button variant="secondary" onClick={() => setConfirmingRollover(true)}>
+                        Start New Payroll Cycle
+                      </Button>
+                    )}
+                  </>
+                )}
+              </>
             }
           />
         </CardHeader>
         <CardContent className="p-0">
+          {cycle && (
+            <div className="px-[18px] pt-[18px]">
+              <PrintContextHeader title="Salary Release" context={`${formatCycleLabel(cycle)} · ${cycle.status}`} />
+            </div>
+          )}
           {cycleError && (
             <div className="flex flex-col items-center gap-1 py-14 text-center">
               <p className="text-xs font-medium text-danger">Could not load the payroll cycle</p>

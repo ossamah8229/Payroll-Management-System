@@ -7,13 +7,16 @@ import { AppShell } from '@/components/layout/app-shell';
 import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
+import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { FilterField } from '@/components/ui/filter-field';
 import { ApiError } from '@/lib/api-client';
 import { useBanks } from '@/hooks/use-banks';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { CASH_BANK_FILTER, downloadBankSheetExport, useBankSheet } from '@/hooks/use-bank-sheet';
@@ -31,7 +34,9 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
     selectCycle,
   } = useSelectedPayrollCycle('bank-sheet');
   const hasAnyCycle = cycles.length > 0;
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) — Bank
+  // Sheet stays a strictly site-scoped operational domain; holding sites:manage does not widen it.
+  const sites = useAccessibleProjectSites(user);
   const banks = useBanks();
 
   const [bankFilter, setBankFilter] = useState<string | undefined>(undefined);
@@ -108,6 +113,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
             }
             actions={
               <>
+                <PrintButton />
                 <Button
                   variant="secondary"
                   onClick={() => handleExport('csv')}
@@ -129,6 +135,11 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
           />
         </CardHeader>
         <CardContent className="p-0">
+          {cycle && (
+            <div className="px-[18px] pt-[18px]">
+              <PrintContextHeader title="Bank Sheet" context={formatCycleLabel(cycle)} />
+            </div>
+          )}
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
               <Skeleton className="h-10 w-full" />
@@ -182,7 +193,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
             // this wraps in its own horizontal-scroll container rather than shrinking columns, so
             // Employee Code, CNIC, Bank, Account Number, IBAN, and amounts always render at full
             // width regardless of viewport.
-            <div className="overflow-x-auto">
+            <div className="print-flow overflow-x-auto">
               <Table className="min-w-full" density="compact">
                 <TableHeader>
                   <TableRow>

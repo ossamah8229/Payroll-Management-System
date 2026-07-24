@@ -7,12 +7,14 @@ import { AppShell } from '@/components/layout/app-shell';
 import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useCompanySettings } from '@/hooks/use-company-settings';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
@@ -50,7 +52,9 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
     selectCycle,
   } = useSelectedPayrollCycle('cash-receiving');
   const hasAnyCycle = cycles.length > 0;
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) — Cash
+  // Receiving stays a strictly site-scoped operational domain; holding sites:manage does not widen it.
+  const sites = useAccessibleProjectSites(user);
   const companySettings = useCompanySettings();
 
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
@@ -115,6 +119,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
             }
             actions={
               <>
+                <PrintButton />
                 <Button
                   variant="secondary"
                   onClick={() => handleExport('csv')}
@@ -136,6 +141,11 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
           />
         </CardHeader>
         <CardContent className="p-0">
+          {cycle && (
+            <div className="px-[18px] pt-[18px]">
+              <PrintContextHeader title="Cash Receiving" context={cycleLabel} />
+            </div>
+          )}
           {isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
               <Skeleton className="h-10 w-full" />
@@ -212,7 +222,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
                   pattern exactly. The Signature/Thumb Impression column additionally needs a
                   reserved minimum width to stay physically usable once printed, not just wide
                   enough for its own header text. */}
-              <div className="overflow-x-auto">
+              <div className="print-flow overflow-x-auto">
                 <Table className="min-w-full" density="compact">
                   <TableHeader>
                     <TableRow>

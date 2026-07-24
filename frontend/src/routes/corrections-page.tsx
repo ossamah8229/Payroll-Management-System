@@ -5,6 +5,8 @@ import { AppShell } from '@/components/layout/app-shell';
 import { canAccessCorrections, canReviewCorrectionRequests, defaultCorrectionsTab } from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
@@ -12,7 +14,7 @@ import { FilterField } from '@/components/ui/filter-field';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import { ApiError } from '@/lib/api-client';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useCorrectionRequests, type CorrectionRequest } from '@/hooks/use-correction-requests';
 import { useBalanceAdjustments, type BalanceAdjustment } from '@/hooks/use-balance-adjustments';
 import {
@@ -50,9 +52,12 @@ function matchesSearch(name: string, code: string | null, search: string): boole
 
 // --- Review Queue --------------------------------------------------------------------------
 
-function ReviewQueueTab() {
+function ReviewQueueTab({ user }: { user: SessionUser }) {
   const navigate = useNavigate();
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) —
+  // Corrections stays a strictly site-scoped operational domain; holding sites:manage does not
+  // widen it.
+  const sites = useAccessibleProjectSites(user);
   const [status, setStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | ''>('PENDING');
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -75,7 +80,7 @@ function ReviewQueueTab() {
 
   return (
     <>
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="flex flex-wrap items-end gap-3 print:hidden">
         <FilterField id="queue-status-filter" label="Status">
           <select
             id="queue-status-filter"
@@ -132,7 +137,7 @@ function ReviewQueueTab() {
       )}
 
       {!requests.isLoading && !requests.error && rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <div className="print-flow overflow-x-auto">
           <Table className="min-w-full">
             <TableHeader>
               <TableRow>
@@ -175,9 +180,12 @@ function ReviewQueueTab() {
 
 // --- Corrections Ledger ----------------------------------------------------------------------
 
-function CorrectionsLedgerTab() {
+function CorrectionsLedgerTab({ user }: { user: SessionUser }) {
   const navigate = useNavigate();
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) —
+  // Corrections stays a strictly site-scoped operational domain; holding sites:manage does not
+  // widen it.
+  const sites = useAccessibleProjectSites(user);
   const [statusFilter, setStatusFilter] = useState<'PENDING' | 'SETTLED' | ''>('');
   const [typeFilter, setTypeFilter] = useState<'PAYABLE' | 'RECOVERY' | ''>('');
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
@@ -204,7 +212,7 @@ function CorrectionsLedgerTab() {
 
   return (
     <>
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="flex flex-wrap items-end gap-3 print:hidden">
         <FilterField id="ledger-status-filter" label="Status">
           <select
             id="ledger-status-filter"
@@ -272,7 +280,7 @@ function CorrectionsLedgerTab() {
       )}
 
       {!adjustments.isLoading && !adjustments.error && rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <div className="print-flow overflow-x-auto">
           <Table className="min-w-full">
             <TableHeader>
               <TableRow>
@@ -344,8 +352,13 @@ export function CorrectionsPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Corrections" subtitle="Review Queue and Corrections Ledger">
       <Card>
         <CardHeader className="flex-col items-start gap-3 border-b-0 pb-0">
-          <CardTitle>Corrections</CardTitle>
-          <div className="flex gap-6">
+          <div className="flex w-full items-center justify-between">
+            <CardTitle>Corrections</CardTitle>
+            <div className="print:hidden">
+              <PrintButton />
+            </div>
+          </div>
+          <div className="flex gap-6 print:hidden">
             {canApprove && (
               <TabButton active={tab === 'queue'} onClick={() => setTab('queue')}>
                 Review Queue
@@ -357,8 +370,9 @@ export function CorrectionsPage({ user }: { user: SessionUser }) {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 border-t border-border">
-          {tab === 'queue' && canApprove && <ReviewQueueTab />}
-          {tab === 'ledger' && <CorrectionsLedgerTab />}
+          <PrintContextHeader title={tab === 'queue' ? 'Corrections — Review Queue' : 'Corrections — Ledger'} />
+          {tab === 'queue' && canApprove && <ReviewQueueTab user={user} />}
+          {tab === 'ledger' && <CorrectionsLedgerTab user={user} />}
         </CardContent>
       </Card>
     </AppShell>
