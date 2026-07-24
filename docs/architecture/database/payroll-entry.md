@@ -188,20 +188,20 @@ yet typed the account number must not have that in-progress edit rejected.
   (`bulkUpdatePayrollEntries` — filters its matched set to `released = false` and the cycle not being
   `Archived`, rather than calling `assertEntryEditable` per row, but enforces the identical boundary;
   an `Archived` cycle's bulk request degrades gracefully to `appliedCount: 0` for the whole matched
-  set, never a thrown error, the same shape it already used for an all-released set); the CSV/Excel
-  importer (`importPayrollEntries` — calls `assertEntryEditable` per row, now passing the cycle's own
-  already-fetched status, skipping every row with a "locked" reason once the cycle is `Archived`, or
-  only already-released ones otherwise); and Advance Deduction Deferral (`deferAdvanceSchedule`,
-  `database/advances.md §15` — calls `assertEntryEditable` on the *source* entry, which already
-  includes its own `cycle` relation, so this surface inherited the Checkpoint 4 extension with zero
-  code change; a held, unreleased entry may still have its deduction deferred through `Released`,
-  exactly as before, and now also locks the instant its own cycle archives; the deferral *target*
-  period's own cycle, if one already exists, must independently still be `DRAFT` — an unrelated,
-  preserved check, see that section). **None of these five surfaces ever gates on
-  `PayrollCycle.status` for reasons unrelated to this row-level rule** — a whole-cycle
+  set, never a thrown error, the same shape it already used for an all-released set); and Advance
+  Deduction Deferral (`deferAdvanceSchedule`, `database/advances.md §15` — calls `assertEntryEditable`
+  on the *source* entry, which already includes its own `cycle` relation, so this surface inherited
+  the Checkpoint 4 extension with zero code change; a held, unreleased entry may still have its
+  deduction deferred through `Released`, exactly as before, and now also locks the instant its own
+  cycle archives; the deferral *target* period's own cycle, if one already exists, must independently
+  still be `DRAFT` — an unrelated, preserved check, see that section). **None of these surfaces ever
+  gates on `PayrollCycle.status` for reasons unrelated to this row-level rule** — a whole-cycle
   `status !== 'DRAFT'` check survives only where its real purpose is something else entirely (cycle
   creation eligibility, per-Unit release, cycle finalization itself, or the Advance target-period
-  check just mentioned).
+  check just mentioned). **A CSV/Excel importer (`importPayrollEntries`) used to be a fourth such
+  surface — removed entirely 2026-07-24 (Payroll Entry Sorting, Deputed Branch & Import Removal
+  checkpoint, `docs/PROJECT_PROGRESS.md` §1): payroll data must never be imported, per product
+  decision. Export is unaffected and remains this table's only CSV/Excel data-transfer surface.**
 - **Optimistic locking required:** yes — this is the primary candidate. Multiple Payroll Staff (or
   multiple tabs, or an autosave retry after a network hiccup) may edit different rows concurrently;
   `version` prevents a lost update on the same row
@@ -276,7 +276,7 @@ employee is simply the common case of exactly one line.
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `payrollEntryId` | uuid | no | — | FK → `PayrollEntry.id`, `ON DELETE CASCADE` — a work line has no meaning without its parent entry, and a `PayrollEntry` row is never deleted in practice (Principle 2), so this is one of the few relationships in this schema where cascade delete is appropriate, alongside `RolePermission` (`database/access-control.md §4`) |
 | `siteId` | uuid | no | — | denormalized copy of the parent `PayrollEntry.siteId` at line-creation time, present specifically so `unitId` below can be composite-FK'd against it |
-| `unitId` | uuid | no | — | FK → `ProjectUnit.id`, paired with `siteId` above via a composite FK `(unitId, siteId) → ProjectUnit(id, siteId)` (`database/sites-and-units.md §8a`) — Postgres itself rejects a line whose unit doesn't belong to the parent entry's own site, which is what makes "multi-unit splitting is always intra-site" (the 2026-07-03 decision, see below) a database guarantee, not just a UI restriction |
+| `unitId` | uuid | no | — | FK → `ProjectUnit.id`, paired with `siteId` above via a composite FK `(unitId, siteId) → ProjectUnit(id, siteId)` (`database/sites-and-units.md §8a`) — Postgres itself rejects a line whose unit doesn't belong to the parent entry's own site, which is what makes "multi-unit splitting is always intra-site" (the 2026-07-03 decision, see below) a database guarantee, not just a UI restriction. **Added 2026-07-24: every read of a `PayrollEntry`'s work lines now also includes the referenced `ProjectUnit` row (`payroll-entry.service.ts`'s shared `WORK_LINES_INCLUDE`)** — this is the grid's "Deputed Branch" column's source (`entry.workLines[0].unit.code`, the *primary* line), never `Employee.unitId`'s current live assignment, since this row is frozen forever once the entry releases (§12) and the live employee assignment is not |
 | `days` | numeric(5,2) | no | `0` | working days attributable to this unit |
 | `otHours` | numeric(6,2) | no | `0` | OT hours attributable to this unit |
 | `otRate` | numeric(10,2) | yes | — | null ⇒ derive from `grossPay / this-line's cycleDays / 8` at read time (§12) |

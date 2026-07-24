@@ -1462,6 +1462,12 @@ explicit instruction — before any implementation began:
 
 ### Phase 3, Checkpoint 5 — Payroll Entry CSV/Excel import/export — COMPLETE, 2026-07-09 (COMMITTED as `b4c1d21`)
 
+**Superseded 2026-07-24 (Payroll Entry Sorting, Deputed Branch & Import Removal checkpoint, §1 below)
+— the *import* half of this checkpoint (parsing, template generation, the `/import` and
+`/import-template` routes/UI) has since been removed entirely: payroll data must never be imported,
+per an explicit product decision. Export (CSV/Excel) is untouched and remains exactly as this
+checkpoint shipped it.**
+
 A dedicated read-only architecture review preceded implementation (per the user's own explicit
 process for this project), covering what Checkpoints 0–4 already built, the reusable Employee
 Registry import/export infrastructure, the frozen `PayrollEntry`/`PayrollEntryWorkLine` schema, and
@@ -2356,7 +2362,9 @@ conflict, and included.
   scope; not built.
 - **Payroll Entry import/export unchanged** — no automatic Advance linking during CSV/Excel import;
   linkage happens only through payroll generation (interactive entry creation and automatic
-  materialization), never a bulk-import side effect.
+  materialization), never a bulk-import side effect. **(Payroll Entry import itself was later removed
+  entirely, 2026-07-24 — see §1's Payroll Entry Sorting, Deputed Branch & Import Removal entry — this
+  note is preserved only for the historical linkage-design context.)**
 - **No new permission** — `advances:manage` already existed (seeded since Phase 1, reserved ahead of
   time exactly like `bank-sheets:view` was before Checkpoint 3) and was already granted to Payroll
   Staff; reused unchanged. Finance receives none, unchanged.
@@ -5741,8 +5749,11 @@ unsearchable `<select>` in Advances/Corrections; employee search extended to cov
 IBAN/Site/Branch, not just Name/CNIC/Code); standard print support across all 8 named pages
 (`PrintButton`/`PrintContextHeader`, `AppShell`'s `print:` utilities, a non-virtualized print-only
 table for Payroll Entry's own virtualized grid); downloadable import templates for Employees and
-Payroll Entry (the two modules with real import — Bank Sheet/Cash Receiving/Sites/Users have no
-import to template); a terminology audit that found "Master User" was never actually seeded (only
+Payroll Entry (the two modules with real import at the time — Bank Sheet/Cash Receiving/Sites/Users
+had none; **Payroll Entry's own import/template was later removed entirely, 2026-07-24, per §1's
+Payroll Entry Sorting, Deputed Branch & Import Removal entry — Employee Registry's import/template
+is unaffected and remains this system's only import surface**); a terminology audit that found
+"Master User" was never actually seeded (only
 documented) — `prisma/seed.ts` and a new data-only migration
 (`20260723120000_master_user_terminology`) now make it the live, seeded display name everywhere,
 with four scattered "Master Admin" UI strings corrected to match.
@@ -6020,8 +6031,96 @@ entry — a materially bigger live-browser fixture than a one-line label change 
 **Schema/migration impact**: one additive migration (new enum value only, no column/constraint
 change to any existing row). Documentation updated: `docs/architecture/database/advances.md` (BR-ADV-007,
 immediate materialization, the Edit matrix, Cancel/Void, the `CANCELLED` status) and this entry.
-**Phase 7 remains Not Started.** Do not commit, push, or deploy without the user's own separate
-go-ahead — this checkpoint's own explicit instruction.
+**Phase 7 remains Not Started.** **Committed (`fb13204`/`9086e87`/`1d1e811`/`3647b77`/`1229916`),
+integrated on `main` together with the Payroll Entry checkpoint immediately below, approved for push
+and Render auto-deploy this same session — see `docs/SESSION_HANDOFF.md` for the push/deploy
+record.**
+
+### Payroll Entry Sorting, Deputed Branch & Import Removal — COMPLETE, 2026-07-24 (COMMITTED as `89af663`, integrating the Operational Stabilization checkpoint above)
+
+The next Payroll Entry usability improvement, approved and scoped separately from the Advances/
+Corrections stabilization work immediately above (developed in parallel, in an isolated worktree
+based on `fdd25b3`, then rebased cleanly onto `main` at `1229916` with no conflicts other than a
+trivial auto-merge in `payroll-entry-alignment.test.tsx`, where this checkpoint's `makeEntry` mock
+edit and the stabilization checkpoint's appended sticky/frozen-column regression test sit in
+non-overlapping regions of the same file — both are preserved intact).
+
+**1. Sortable columns.** The grid's dataset is already fully resident client-side (Checkpoint 6's
+own 10,000-employee architecture decision), so sorting is a pure, client-side, non-mutating
+reorder (`sort-entries.ts`'s `sortPayrollEntries`) fed into the existing TanStack Table instance as
+its `data` — TanStack's own column/header machinery is reused, but its built-in sort engine is not,
+since the "missing values always sort last, in both directions" requirement (below) needs direction-
+independent null handling that fighting TanStack's automatic desc-negation would have made needlessly
+fragile. Sortable: Employee (name, A→Z/Z→A), Employee Code, Deputed Branch, Gross Pay, Net Salary —
+alphanumeric compare (`numeric: true`, so "BR-2" sorts before "BR-10") for the two code columns,
+numeric compare for the two money columns, plain locale compare for Employee. Every comparator
+breaks ties on each entry's original array index, so equal values never reorder relative to each
+other regardless of the sort engine's own stability guarantees. Clicking a sortable header toggles
+asc → desc → asc via a chevron-indicator button (`ChevronUp`/`ChevronDown`/neutral `ChevronsUpDown`)
+that shares the header's own `data-col-id`, so alignment stays mechanically verifiable the same way
+Section B's stabilization fix already made the header/body/totals column order. Sorting reorders the
+whole `PayrollEntryRow` (bank details, gross pay, units, everything) together, never individual
+cells — the row is a single component per TanStack row, not per-column cell renderers. The totals
+row reads from the unsorted, already-site-filtered `entries` prop directly (never the sorted view),
+so it represents the current filter and is unaffected by display order.
+
+**2. "Deputed Branch" column.** A new, dedicated column showing the deputed branch/site code for
+each employee — sourced from `entry.workLines[0].unit.code` (the entry's own *primary work line's*
+`ProjectUnit`, newly included server-side via a shared `WORK_LINES_INCLUDE` constant in
+`payroll-entry.service.ts`, added to every query that returns work lines), **never**
+`employee.unit.code` (the employee's *current* default unit), since work lines are frozen forever
+once an entry releases (§12) — reading the live employee assignment would silently rewrite a
+released/archived entry's historical branch onto whatever the employee is deputed to today. A Draft
+entry's work line reflects the current roster/reconciliation state, exactly as intended. Missing
+values (`code` is nullable on `ProjectUnit`) render the standard `—` placeholder and sort
+deterministically last in both directions — implemented as a direction-invariant null branch in the
+comparator, not by letting the framework's own asc/desc negation flip blank-row position on toggle
+(the same reasoning as item 1's TanStack-sort-engine decision).
+
+**Naming decision (flagged, not guessed):** the grid already had a column literally labeled "Branch
+Code" (the employee's *bank* branch code, under the "Bank Details" group — an unrelated concept that
+only coincidentally shares the word "Branch"). Rendering the new column under the same literal label
+would have shipped two identically-named columns in one table — surfaced to the user rather than
+resolved unilaterally; the user chose **"Deputed Branch"** for the new column, positioned beside the
+other employee/site identity columns (right after Site), never grouped under "Bank Details".
+
+**3. Payroll Entry import removed entirely.** Per an explicit product decision that payroll data
+must never be imported: the `/entries/import` and `/import-template` routes, `multer` upload wiring,
+template generation/parsing/`importPayrollEntries` (`payroll-entry-import-export.service.ts`), and
+every frontend Import/Download-Import-Template affordance (buttons, file input, result modal,
+`useImportPayrollEntries`/`downloadPayrollEntryImportTemplate` hooks) are gone. **CSV/Excel export is
+completely unaffected** — same headers, same rows, same routes, same tests, now the *only* Payroll
+Entry data-transfer surface. **Employee Registry's own, separate import feature is untouched** — it
+was never in scope and nothing about it changed. Every backend test file that had exercised the now-
+removed import path (`payroll-entry-import-export.test.ts`, `payroll-cycle-finalize.test.ts`,
+`payroll-entry-performance.test.ts`, `payroll-cycle-archived-lock.test.ts`) had its obsolete import
+coverage removed and, where the same regression concern was import-specific, no replacement was
+needed (the underlying held/unreleased-editability and Archived-cycle-lock behavior each already has
+independent non-import coverage in the same files).
+
+**Testing**: frontend typecheck/lint/build clean, full suite **113/113**. Backend typecheck/lint
+clean; full suite **890-891/902** across two clean full runs (12/11 failures respectively) — every
+failure independently confirmed pre-existing and unrelated by `git diff` against `origin/main`
+showing zero changes to the failing files: **11 in `payslips.test.ts`** (PDF-generation 500s,
+environment-load-sensitive per the Pre-Deployment Reliability Checkpoint above, not this
+checkpoint's own regression) and **one flaky concurrency test in `corrections-service.test.ts`**
+(passes cleanly, 47/47, in isolation — a full-suite-load flake, not a regression; confirmed
+unrelated, since neither file has any diff from `origin/main`). Every Payroll-Entry-specific test
+file this checkpoint touched or added is **100% green**. Real-browser verification (Chromium via
+Playwright, driving the actual dev servers against a freshly seeded local database): logged in as
+Master User, created a site/branch/two employees, started the first Draft cycle, and confirmed by
+screenshot — the Deputed Branch column visible and correctly populated; clicking the Employee header
+sorted full rows both directions (chevron flips) with the Gross Pay total unchanged
+(`PKR 100,000.00`) before and after; horizontal scroll keeps header/body/totals aligned; Import,
+Download Import Template, and the file input are completely absent; Export CSV/Export Excel remain
+present and clickable.
+
+**Integration**: developed in an isolated worktree branched from `fdd25b3` (before the Operational
+Stabilization/Advances-Cancel checkpoints above existed), then cleanly rebased onto `main` at
+`1229916` — a fast-forward, zero data loss, zero dropped behavior from either side. **Committed as
+`89af663`, on `main` together with the Advances/Corrections stabilization commits above, approved for
+push and Render auto-deploy this same session — see `docs/SESSION_HANDOFF.md` for the push/deploy
+record.** **Phase 7 remains Not Started; this checkpoint does not begin it.**
 
 ---
 
@@ -6032,7 +6131,7 @@ go-ahead — this checkpoint's own explicit instruction.
 | 1 | Auth, RBAC, Audit Log | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — full suite passing against live PostgreSQL (§1's Database verification subsection) |
 | 2 | Project Sites, Employee Registry, Settings, User Management | **Closed, 2026-07-02; DB-backed evidence completed 2026-07-04** — same basis as Phase 1 |
 | 2.5 | Project Units (new module), Payroll Work Lines prerequisite, Employee Registry refinements | **CLOSED and committed, 2026-07-05.** All five checkpoints (0–4) complete — `e26fe8c` |
-| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed |
+| 3 | Payroll Entry & Payroll Processing (`calcNet` over Work Lines, the Payroll Entry grid) | **CLOSED, 2026-07-10.** All seven checkpoints (0–6: schema foundation; cycle bootstrap/creation + backend CRUD; the grid frontend; Split by {unitLabel}; multi-site filter + Copy to All; CSV/Excel import/export; 10,000-employee performance/concurrency validation) are COMPLETE and committed — see §1. Phase 3's own 🛑 review checkpoint has passed. **Import specifically was later removed entirely (2026-07-24, §1's Payroll Entry Sorting, Deputed Branch & Import Removal entry) — export is unaffected.** |
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
@@ -6367,18 +6466,25 @@ go-ahead — this checkpoint's own explicit instruction.
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-24 (later) — Draft Payroll Roster Reconciliation is COMPLETE, NOT COMMITTED.**
-See §1's own entry for the full record. Narrow follow-up to the Operational Stabilization Checkpoint
-below (now committed, pushed, and deployed — see that entry's own updated status), triggered by
-production verification finding one real pre-existing employee ("Asim Khan") who predates the
-deployed sync hooks and so stayed absent from the already-open Draft cycle. Adds an explicit,
-idempotent `reconcileDraftCycleRoster` action (`payroll-cycle:manage`-gated, matching every other
+**Updated 2026-07-24 (latest) — Advances/Corrections Operational Stabilization AND Payroll Entry
+Sorting/Deputed Branch/Import Removal are both COMPLETE and COMMITTED on `main`** (five commits
+`fb13204`/`9086e87`/`1d1e811`/`3647b77`/`1229916` plus `89af663` — see §1's own two entries for the
+full record of each). Approved together this session for integration, push, and Render auto-deploy.
+See `docs/SESSION_HANDOFF.md` for the exact push/deploy outcome and any production smoke-check
+findings. **Phase 7 remains Not Started; do not begin it.**
+
+**Updated 2026-07-24 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Draft Payroll Roster Reconciliation is COMPLETE and has since been committed**
+(as `fdd25b3`/`c355d0d`/`af8dbe8`/`06c4863`, the base the two checkpoints above were built on top
+of — no longer "NOT COMMITTED" as this entry originally read). See §1's own entry for the full
+record. Narrow follow-up to the Operational Stabilization Checkpoint below, triggered by production
+verification finding one real pre-existing employee ("Asim Khan") who predates the deployed sync
+hooks and so stayed absent from the already-open Draft cycle. Adds an explicit, idempotent
+`reconcileDraftCycleRoster` action (`payroll-cycle:manage`-gated, matching every other
 cycle-lifecycle route's own convention), triggered automatically but safely — once, silently, on
 Draft-cycle Payroll Entry page open by a session already holding that permission — never as a side
 effect of the entries list's own `GET`. 11 new backend tests, each verified to fail pre-fix/pass
-post-fix; typecheck/lint/build clean for both workspaces; no schema/migration change. **This
-checkpoint stops for approval before any commit — do not commit or push without the user's own
-separate go-ahead, and do not treat Phase 7 as started.**
+post-fix; typecheck/lint/build clean for both workspaces; no schema/migration change.
 
 **Updated 2026-07-24 (superseded by the entry above for status purposes, kept for its own still-
 useful defect record) — Operational Stabilization Checkpoint (Payroll Entry Table Alignment and

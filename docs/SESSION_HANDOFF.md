@@ -1942,4 +1942,41 @@ the entries list's own `GET` ever mutating.
 pre-fix code and pass after (including the Draft-only guard, verified by temporarily disabling it).
 Typecheck/lint/build clean for both workspaces. No schema/migration change.
 
-**Not committed as of this entry's own writing.**
+**Since committed** as `fdd25b3`/`c355d0d`/`af8dbe8`/`06c4863` — no longer "not committed" as this
+entry originally read; see §13 below for what was built on top of it and its own push/deploy record.
+
+## 13. Addendum, 2026-07-24 (latest) — Advances/Corrections Operational Stabilization + Payroll Entry Sorting, Deputed Branch & Import Removal
+
+Two separately-approved checkpoints, developed in parallel (one directly against `main`, one in an
+isolated worktree branched from §12's `fdd25b3`), integrated together this session. Full detail in
+`docs/PROJECT_PROGRESS.md` §1's two own dated entries; this is only the next-session pointer.
+
+**A. Advances/Corrections Operational Stabilization** (committed `fb13204`/`9086e87`/`1d1e811`/
+`3647b77`/`1229916`, directly on `main`): immediate Draft-cycle deduction materialization for a
+newly-recorded Advance (no longer waiting for the next cycle bootstrap); lifecycle-aware Advance
+Edit/Cancel (a new `CANCELLED` status, additive migration, `cancelAdvance` action); a redundant
+"OPTIONAL — LEAVE BLANK FOR CASH" label removed from the Corrections Record Settlement dialog (Cash
+remains explicitly selectable); a new sticky/frozen-column regression test for the Payroll Entry
+grid (investigation found no defect — added as a mechanical guard against ever reintroducing one).
+
+**B. Payroll Entry Sorting, Deputed Branch & Import Removal** (committed `89af663`, rebased cleanly
+onto `main` after the five commits above — a fast-forward, no conflicts other than a trivial
+auto-merge in `payroll-entry-alignment.test.tsx`, both sides' changes preserved intact): client-side
+sortable columns (Employee, Employee Code, Deputed Branch, Gross Pay, Net Salary — stable, full-row
+reordering, totals unaffected by sort direction); a new "Deputed Branch" column sourced from each
+entry's own primary work-line `ProjectUnit` (never the employee's current live unit — preserves
+historical branch meaning for released/archived payroll); Payroll Entry CSV/Excel import removed
+entirely (routes, service, template, frontend UI) per product decision — export is unaffected, and
+Employee Registry's own separate import feature is untouched.
+
+**Verification**: frontend 113/113, backend 890-891/902 (all remaining failures independently
+confirmed pre-existing/environmental — `payslips.test.ts` PDF-generation flakiness and one
+`corrections-service.test.ts` concurrency test that passes cleanly in isolation — via `git diff`
+showing zero changes to either file). Both workspaces' typecheck/lint/build clean. Real-browser
+verification performed for the Payroll Entry checkpoint (Chromium/Playwright).
+
+**Push/deploy record:** approved for push and Render auto-deploy this same session, immediately
+after this documentation commit — pending as of this entry's own writing; see the next session's
+own addendum (or this section's own follow-up edit) for the confirmed `origin/main` SHA, Render
+deploy health, and production smoke-check results.
+
