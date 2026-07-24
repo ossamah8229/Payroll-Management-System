@@ -75,6 +75,60 @@ that this cycle's `PayrollEntry` was actually populated. A deferred advance prod
 time its (possibly several-times-moved) target finally resolves — never the reverse, and never more
 than one materialization for the same scheduled landing.
 
+**BR-ADV-007 and immediate materialization (Operational Stabilization Checkpoint, 2026-07-24).**
+Production observed an Advance recorded against the current Draft cycle not appearing as a deduction
+in that cycle's Payroll Entry — root cause: `materializeScheduledAdvanceDeductions` only ever ran at
+cycle *bootstrap* (`createPayrollCycle`/`archiveAndCreateNextPayrollCycle`), a moment that, for any
+Advance recorded after the Draft cycle already exists (the ordinary case), has already passed. Fixed
+two ways:
+
+> **BR-ADV-007.** A new Advance's first scheduled deduction period may never be earlier than the
+> current Draft payroll cycle (or, if no cycle is currently Draft, today's real calendar month — never
+> an invented cycle). The UI defaults to the current Draft cycle and offers an explicit "Future Cycle"
+> choice; it never defaults to next-cycle automatically.
+
+`createAdvance` (`advances.service.ts`) now also checks, in the same transaction as the Advance's own
+creation: if the resolved period *is* the current Draft cycle and this employee already has a
+still-editable (not released) entry in it, materialize the deduction immediately — the exact same
+single-advance calculation `materializeScheduledAdvanceDeductions` uses for its bulk sweep (both now
+call one shared `materializeOneAdvanceDeduction` helper, never two independent copies). A future
+period, no current Draft cycle, or an already individually-released entry (a per-Unit Late Entry
+release inside a nominally Draft cycle) are all left unmaterialized exactly as before — a future
+period resolves at that cycle's own bootstrap; a released entry is never retroactively modified
+(Principle 9), and the Advance itself stays visible, unmaterialized, on the Advances list.
+
+**Lifecycle-aware Edit (Section F).** `updateAdvance` now also accepts `totalAmount`. Every financial
+field (`totalAmount`, `repaymentType`, `scheduledInstallmentAmount`) is rejected outright once
+`status` is `PAID_OFF`/`CANCELLED`; `notes` remains editable at every lifecycle stage. The deduction
+start cycle (`originalScheduledPeriodId`/`currentScheduledPeriodId`) is still never editable through
+this endpoint, at any stage — `originalScheduledPeriodId` stays permanently immutable (BR-ADV-001);
+correcting a wrong start cycle before materialization means cancelling the mistaken Advance and
+recording a fresh one (below), and after materialization it is still `deferAdvanceSchedule`'s job.
+
+**The `totalAmount` floor, and live-Draft recalculation (corrected on post-implementation review,
+same day).** The floor for a `totalAmount` reduction is what has been repaid via **RELEASED** payroll
+only — never a still-Draft (unreleased) figure, which remains fully reversible until release. If this
+Advance currently has a live (unreleased) materialized deduction when a financial field actually
+changes, `updateAdvance` reverses it first (the identical zero-the-entry-and-restore-the-balance step
+`cancelAdvance`/`deferAdvanceSchedule` already use), computes the floor and the new
+pre-this-cycle balance against that reversed state, then re-materializes the SAME cycle's deduction
+under the NEW rules via the same shared `materializeOneAdvanceDeduction` helper every other
+materialization path uses — exactly once, never a second independent calculation, and a RELEASED
+entry (excluded by the `released: false` lookup) is never reversed or touched regardless of what the
+edit changes. A same-value resubmission (no financial field actually different from what is already
+stored) skips this reversal/recalculation entirely, so a notes-only save never bumps the live entry's
+`version` or writes reversal/re-materialization audit noise.
+
+**Cancel/Void (Section G).** `AdvanceStatus` gains a `CANCELLED` value — a non-destructive correction
+for a mistakenly-recorded Advance, applying uniformly whether or not any deduction has yet
+materialized. This schema already has **no delete path for `Advance` at all** (see the model's own
+doc comment below) — matching that existing "no hard delete of a permanent financial/master record"
+convention was the deciding factor over adding a narrow hard-delete-if-untouched carve-out. Cancelling
+reverses a still-Draft (unreleased) materialized deduction first, if one currently carries this
+Advance's linkage — the identical zero-the-entry-fields-and-restore-the-balance step
+`deferAdvanceSchedule` already performs — but never touches a RELEASED deduction. `advance.cancelled`
+and (when a Draft deduction was reversed) `payroll_entry.advance_cancelled` audit events are recorded.
+
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
@@ -85,7 +139,7 @@ than one materialization for the same scheduled landing.
 | `dateGiven` | date | no | — | |
 | `repaymentType` | `AdvanceRepaymentType` | no | — | informational only, per spec — does not drive auto-calculation |
 | `notes` | text | yes | — | |
-| `status` | `AdvanceStatus` | no | `'ACTIVE'` | flips to `PAID_OFF` when `outstandingBalance` reaches 0 |
+| `status` | `AdvanceStatus` | no | `'ACTIVE'` | flips to `PAID_OFF` when `outstandingBalance` reaches 0; **added 2026-07-24:** may also transition to `CANCELLED` — see "Cancel/Void" below |
 | `originalScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (`database/payroll-cycle.md §10a`), `ON DELETE RESTRICT` — **BR-ADV-001.** Set once, the first time this advance's deduction is ever scheduled; immutable forever after, regardless of any later deferral |
 | `currentScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (`database/payroll-cycle.md §10a`), `ON DELETE RESTRICT` — the live "where does the next deduction land" pointer. Exactly one value at a time (**BR-ADV-005** — a deferral overwrites this, never adds a second pointer). Null once `status = PAID_OFF` |
 | `createdAt` | timestamptz | no | `now()` | |
@@ -102,9 +156,16 @@ against the *correct* advance even if the employee has since paid it off and tak
 the same type — see `docs/architecture/workflows/corrections-and-balance-adjustments.md` ("Interaction
 with Advances").
 
-- **Unique constraints:** partial unique (`employeeId`, `type`) `WHERE status = 'ACTIVE'`
+- **Unique constraints:** partial unique (`employeeId`, `type`) `WHERE status = 'ACTIVE'` — a
+  `CANCELLED` advance (2026-07-24) is excluded exactly like `PAID_OFF`, so a fresh Advance of the same
+  type may be recorded immediately after cancelling a mistaken one
 - **Check constraints:** `totalAmount > 0`; `outstandingBalance >= 0`; `outstandingBalance <=
   totalAmount`; **added 2026-07-08:** `status = 'PAID_OFF' ⇒ currentScheduledPeriodId IS NULL`
+  (application code applies the identical rule to `CANCELLED`, 2026-07-24, but this specific
+  constraint was not widened to also require it — a deliberate, narrow simplification to avoid a
+  same-transaction-unsafe two-step enum-then-constraint migration for a single-domain, additive
+  change; `materializeScheduledAdvanceDeductions`'s own `status: 'ACTIVE'` filter already excludes
+  `CANCELLED` regardless of this column's value, so no functional correctness depends on it)
 - **Indexes:** the partial unique index above (also the primary lookup); (`employeeId`); **added
   2026-07-08:** (`currentScheduledPeriodId`) — the lookup the cycle-bootstrap sweep uses to find every
   `ACTIVE` advance whose schedule resolves to the cycle being created

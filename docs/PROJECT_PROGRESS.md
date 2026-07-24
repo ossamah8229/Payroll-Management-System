@@ -5899,6 +5899,132 @@ it, not touched. No schema or migration changes.
 
 ---
 
+### Payroll Entry & Advances Operational Stabilization Checkpoint (2026-07-24)
+
+Started from deployed baseline `fdd25b3`, against production screenshots/manual-testing observations
+covering the Corrections settlement dialog, the Payroll Entry table, a production smoke-test
+employee, and a focused end-to-end Advances domain review. See the checkpoint report delivered to
+the user for the full 14-point record; summarized here. **Committed LOCALLY only, per the user's own
+explicit instruction — NOT pushed, no deploy, Phase 7 not started** — as five commits: `fb13204`
+(fix: immediate Draft materialization, BR-ADV-007), `9086e87` (feat: lifecycle-aware edit and
+cancel), `1d1e811` (fix: settlement wording), `3647b77` (test: sticky-column guard), and this
+documentation commit. Another session is separately implementing Payroll Entry sorting, Branch Code,
+and import-functionality removal on `main`; the two lines of local work are to be reconciled together
+before any combined verification and push.
+
+**A. Record Settlement wording** — the Balance Adjustment → Record Settlement dialog's bank field
+label ("Bank (optional — leave blank for cash)") was redundant with the dropdown's own explicit
+`Cash` option. Relabeled to "Payment Method / Bank"; no submission-path/financial behavior touched
+(`record-settlement-modal.tsx`).
+
+**B. Payroll Entry table sticky/frozen columns** — investigated in full (`PAYROLL_COLUMNS`,
+`payroll-entry-grid.tsx`, `payroll-entry-row.tsx`, `payroll-entry-totals-row.tsx`) and verified in a
+real Chromium browser at normal/narrow viewports across full left/mid/right horizontal scroll,
+including a Released row: **no code defect found**. The grid's only `position: sticky` usage is the
+group-header/column-header/totals rows, pinned on the vertical axis only, inside the one shared
+horizontal-scroll container the body also uses — no column, including `status` (the Released badge),
+is independently sticky/frozen, and there is no per-cell margin/transform hack. A new mechanical
+regression test (`payroll-entry-alignment.test.tsx`) now asserts this directly (no `sticky`/`fixed`/
+`left-`/`right-`/`translate-` class and no inline `position` style on any `[data-col-id]` cell) so a
+future regression fails immediately rather than only being visually apparent.
+
+**C. Production smoke-test employee (`ZZZ SMOKETEST DeployCheck`)** — confirmed via full-repository
+grep (source, seed data, migrations, tests, bootstrap logic) **not hard-coded anywhere**; it is
+ordinary production data created through the Employee Registry UI during deployment verification.
+No hard-delete path exists for `Employee` (by design — `markEmployeeLeft`/departure is the only
+retirement mechanism, matching every other permanent record in this schema). Documented, not
+executed (no access to the production database from this environment): the safe cleanup is Mark
+Employee Left (dated to the verification date) so it stops appearing in any future Draft cycle
+roster, plus — only if it still has an entry in a currently-open Draft cycle — deleting that one
+still-Draft `PayrollEntry` via the existing per-entry Delete action (`assertEntryEditable`-gated,
+blocked automatically if ever released). Any released history is left untouched, same as any other
+employee's.
+
+**D/E. Advance not appearing in current Draft Payroll Entry — root cause found and fixed.** Confirmed
+NOT a frontend caching issue: `materializeScheduledAdvanceDeductions` only ever ran at cycle
+*bootstrap*, a moment that, for any Advance recorded after the Draft cycle already exists, has
+already passed — a genuine missing backend step, the same class of gap `syncEmployeeIntoCurrentDraftCycle`
+closed for employees. Fixed in `advances.service.ts`'s `createAdvance`: if the resolved period is the
+current Draft cycle and the employee already has a still-editable entry in it, materialize
+immediately, in the same transaction, via a newly-extracted `materializeOneAdvanceDeduction` helper
+shared with the bulk cycle-bootstrap sweep (one calculation, not two). New BR-ADV-007: a new
+Advance's first deduction period may never be earlier than the current Draft cycle (or today's real
+month if none is Draft) — enforced server-side (`assertPeriodAtOrAfterFloor`) and reflected in the
+Record Advance UI as a "Current Draft Cycle" / "Future Cycle" toggle (defaulting to Current Draft,
+replacing two unconstrained year/month number inputs).
+
+**F. Advance Edit — lifecycle-aware editability matrix defined and implemented.** `updateAdvance` now
+also accepts `totalAmount`; every financial field is rejected once `PAID_OFF`/`CANCELLED`; `notes`
+remains editable always. The deduction start cycle stays not directly editable at any stage — before
+materialization, correct it by cancelling and re-recording (G); after, `deferAdvanceSchedule` remains
+the only path (its `AdvanceScheduleChange.payrollEntryId NOT NULL` schema constraint architecturally
+forecloses a "reschedule before it lands" mechanism, confirmed by inspection, not reopened).
+
+**Post-implementation review correction, same day, before commit.** The user's own pre-commit review
+asked to confirm a specific case directly: editing an ACTIVE Advance already materialized into the
+current Draft recalculates that Draft deduction correctly and exactly once, while Released payroll
+stays untouched. It did not — the original `updateAdvance` only ever wrote `Advance.totalAmount`/
+`outstandingBalance`, never touching an already-materialized, still-unreleased `PayrollEntry`, so a
+live Draft deduction silently went stale relative to the edit. Fixed: `updateAdvance` now reverses a
+live (unreleased) materialized deduction first — the identical math `cancelAdvance`/
+`deferAdvanceSchedule` already use — and re-materializes it under the new rules in the same
+transaction via the same shared `materializeOneAdvanceDeduction` helper, exactly once; a RELEASED
+entry is still never touched. This also corrected the `totalAmount` floor itself: it is now what has
+been repaid via **RELEASED** payroll only, never a still-Draft, reversible figure (the original floor
+incorrectly counted a live, not-yet-released deduction as locked in). A same-value resubmission
+(e.g. a notes-only save) skips the reversal/recalculation entirely, so it never bumps the live
+entry's `version` or writes audit noise. New focused tests added and passing: the exact requested
+scenario (a two-cycle fixture — Released Cycle 1 stays untouched, Cycle 2's live deduction
+recalculates from 4000 to 1500 in exactly one reversal + one re-materialization), the corrected
+released-only floor, and a no-op-edit-does-not-touch-the-entry guard. Full focused suite re-run
+green after the fix: 27/27 (later 29/29 with the new tests) `advances.test.ts`, 15 suites/368 tests
+overall, typecheck/build/lint clean.
+
+**G. Advance Cancel/Void — investigated, Cancel chosen over Delete.** The `Advance` model's own
+existing doc comment already states "Never hard-deletable... matching this schema's established
+convention for every other permanent financial/master record" — so a hard-delete-if-untouched
+carve-out was rejected as inconsistent with the codebase's own frozen design, not merely
+under-scoped. Added `AdvanceStatus.CANCELLED` (additive migration
+`20260724130000_advance_cancelled_status`, single `ALTER TYPE ... ADD VALUE`) and a new
+`cancelAdvance` action, gated by the same `ADVANCES_MANAGE` permission as create/edit: reverses a
+still-Draft (unreleased) materialized deduction first if one exists (identical math to
+`deferAdvanceSchedule`'s own reversal), never touches a RELEASED deduction, clears the live schedule
+pointer, and audits `advance.cancelled`/`payroll_entry.advance_cancelled`. Works uniformly whether or
+not any deduction has yet materialized.
+
+**H. Numeric lifecycle reconciliation** — a new three-cycle fixture test independently recomputes
+Original − Released deductions = Outstanding Balance at every step (decimal-safe, non-evenly-divisible
+installment amounts deliberately used), confirms release-once semantics, no double-decrement on
+refetch, and cross-checks the total against every `advance.schedule_materialized` audit-log entry
+summed independently.
+
+**Testing**: 27/27 backend `advances.test.ts` (13 pre-existing + 14 new), 15 focused backend suites
+(`advances`, `payroll-entry`, `payroll-processing`, `corrections`) **366/366**, frontend **95/95**
+(new alignment regression test included), backend/frontend/shared typecheck and build clean,
+backend/frontend lint clean (0 errors; 6 pre-existing warnings in untouched files). Full regression
+suite deliberately not run — nothing here changed a shared financial-calculation primitive,
+authorization primitive, or broad release/settlement behavior, and focused testing surfaced no
+evidence a wider run was needed (Section J's own stated bar).
+
+**Real-browser verification** (Chromium via Playwright, driving the actual dev servers — the Claude
+in Chrome extension was declined for this session): Record Advance with the new Current Draft/Future
+Cycle toggle; a current-Draft Full Deduction advance immediately showing "Paid Off"/PKR 0.00 balance
+with no manual refresh; the same deduction visible in Payroll Entry's Advance Ded. column and totals
+row with no separate action; a Future Cycle advance correctly resolving to next month and not
+deducting in the current Draft; editing `totalAmount` on an ACTIVE advance; Cancel transitioning an
+ACTIVE advance to a red "Cancelled" badge with Edit-only actions remaining; Payroll Entry table
+horizontal scroll at narrow viewport confirming Section B's finding. Section A's dialog was verified
+by source inspection only (reaching it live requires an approved Correction against a released
+entry — a materially bigger live-browser fixture than a one-line label change justified).
+
+**Schema/migration impact**: one additive migration (new enum value only, no column/constraint
+change to any existing row). Documentation updated: `docs/architecture/database/advances.md` (BR-ADV-007,
+immediate materialization, the Edit matrix, Cancel/Void, the `CANCELLED` status) and this entry.
+**Phase 7 remains Not Started.** Do not commit, push, or deploy without the user's own separate
+go-ahead — this checkpoint's own explicit instruction.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
