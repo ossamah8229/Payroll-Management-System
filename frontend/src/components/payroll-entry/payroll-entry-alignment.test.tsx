@@ -196,4 +196,68 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
 
     expect(dataColIds(container)).toEqual(expectedColumnIds);
   });
+
+  /**
+   * Section B, Operational Stabilization Checkpoint (2026-07-24) — "Payroll Entry data columns
+   * should move together naturally... Data columns should not remain independently sticky/frozen
+   * while other columns scroll." Investigation found `PayrollEntryGrid`'s only `position: sticky`
+   * usage is the group-header row, the column-header row, and the totals row — each pinned on the
+   * *vertical* axis only (`top`/`bottom`), inside the single scroll container that also carries the
+   * body, so all three still pan horizontally together with the body (see that component's own doc
+   * comment). No ordinary data cell (`[data-col-id]`, including `status`, where the Released badge
+   * lives) carries `sticky`/`fixed`/`left-`/`right-` positioning, and no per-cell margin/transform
+   * hack repositions any cell independently of the shared `gridTemplateColumns` every row/header/
+   * totals cell already renders from. This test makes that mechanical, not just visually apparent —
+   * it fails immediately if a future change reintroduces a per-column sticky/frozen offset or an
+   * isolated Released-badge margin/transform hack, exactly what this checkpoint was told not to do
+   * again.
+   */
+  it('no individual data cell (including the Released status cell) is independently sticky/frozen or carries a one-off repositioning hack', () => {
+    const releasedEntry = makeEntry({ released: true, releasedAt: '2026-07-01T00:00:00.000Z' });
+    const resolved = computeColumnWidths([releasedEntry], [testBank]);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={releasedEntry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          canCorrect
+          onCreateCorrection={() => {}}
+          onViewCorrectionHistory={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    const cells = Array.from(container.querySelectorAll<HTMLElement>('[data-col-id]'));
+    expect(cells.length).toBeGreaterThan(0);
+
+    for (const cell of cells) {
+      const colId = cell.getAttribute('data-col-id');
+      const className = cell.className;
+      expect(className).not.toMatch(/\bsticky\b/);
+      expect(className).not.toMatch(/\bfixed\b/);
+      expect(className).not.toMatch(/\bleft-\d/);
+      expect(className).not.toMatch(/\bright-\d/);
+      // No one-off transform/margin hack (the exact anti-pattern this checkpoint forbids repeating
+      // for the Released badge specifically, but checked for every column generally).
+      expect(className).not.toMatch(/\btranslate-/);
+      expect(cell.getAttribute('style') ?? '').not.toMatch(/position\s*:\s*(sticky|fixed|absolute)/);
+      if (colId === 'status') {
+        expect(className).not.toMatch(/\bm[trblxy]?-\d/); // no isolated margin nudging the badge
+      }
+    }
+
+    // The row root itself carries the one shared `gridTemplateColumns` (inline style) and no
+    // sticky/fixed positioning of its own — the whole row moves as a single horizontal unit.
+    const rowRoot = container.querySelector('[role="row"]') as HTMLElement;
+    expect(rowRoot.className).not.toMatch(/\bsticky\b/);
+    expect(rowRoot.className).not.toMatch(/\bfixed\b/);
+  });
 });
