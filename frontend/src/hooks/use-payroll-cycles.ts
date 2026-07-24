@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreatePayrollCycleInput } from '@payroll/shared';
 import { apiRequest } from '@/lib/api-client';
+import { payrollEntriesQueryKey } from './use-payroll-entries';
 
 export type PayrollCycleStatus = 'DRAFT' | 'RELEASED' | 'ARCHIVED';
 
@@ -160,6 +161,37 @@ export function useRolloverPayrollCycle() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PAYROLL_CYCLES_QUERY_KEY });
+    },
+  });
+}
+
+export interface ReconcileDraftCycleRosterResult {
+  reconciledCount: number;
+  reconciledEmployeeIds: string[];
+}
+
+/**
+ * Draft Payroll Roster Reconciliation (2026-07-24) — `payroll-entry-page.tsx` fires this once,
+ * silently, on mount for a Draft cycle when the viewing session holds `payroll-cycle:manage` (the
+ * same permission this action's own backend route requires — see `reconcileDraftCycleRoster`'s own
+ * doc comment for why a cycle-wide write is gated at that level, not the narrower `payroll:entry` a
+ * day-to-day Payroll Manager holds). This is what makes opening the current Draft self-healing
+ * without the Payroll Entry list's own `GET` ever doing a write itself — the read stays a pure read,
+ * and this is its own explicit, separately-audited mutation the page happens to trigger
+ * automatically. Invalidates the entries query only when something actually changed
+ * (`reconciledCount > 0`), so an already-complete roster never causes a pointless refetch.
+ */
+export function useReconcileDraftCycleRoster() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (cycleId: string) =>
+      apiRequest<ReconcileDraftCycleRosterResult>(`/api/v1/payroll-cycles/${cycleId}/reconcile-roster`, {
+        method: 'POST',
+      }),
+    onSuccess: (result, cycleId) => {
+      if (result.reconciledCount > 0) {
+        queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
+      }
     },
   });
 }

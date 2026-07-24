@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, FileEdit, Lock, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
@@ -20,7 +20,7 @@ import { canRequestCorrection } from '@/lib/permissions';
 import { useBanks } from '@/hooks/use-banks';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
-import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
+import { formatCycleLabel, useReconcileDraftCycleRoster } from '@/hooks/use-payroll-cycles';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import {
   downloadPayrollEntryExport,
@@ -179,6 +179,34 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
 
   const canManageCycles = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const isLoading = cycleLoading || (Boolean(cycleId) && (entriesLoading || banks.isLoading));
+
+  // Draft Payroll Roster Reconciliation (2026-07-24) — fires once per Draft cycle actually opened
+  // by a session that already holds payroll-cycle:manage (the same permission this action's own
+  // backend route requires), so opening the current Draft is self-healing for the sessions that can
+  // act on it, without the entries GET above ever performing a write itself: this is its own
+  // explicit, separately-audited mutation the page happens to trigger automatically, not a side
+  // effect of the read. Silent when there was nothing to reconcile; a brief toast only when it
+  // actually added someone, since that's a real, useful fact for whoever's looking at this page.
+  const reconcileRoster = useReconcileDraftCycleRoster();
+  const reconciledCycleIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!cycleId || !canManageCycles || cycle?.status !== 'DRAFT') return;
+    if (reconciledCycleIdRef.current === cycleId) return;
+    reconciledCycleIdRef.current = cycleId;
+    reconcileRoster.mutate(cycleId, {
+      onSuccess: (result) => {
+        if (result.reconciledCount > 0) {
+          toast.success(
+            `${result.reconciledCount} ${result.reconciledCount === 1 ? 'employee' : 'employees'} added to this Draft cycle`,
+          );
+        }
+      },
+      // Best-effort only — a failure here (e.g. a permission edge case, or the cycle having moved
+      // on between page load and this call) must never block or error the page itself.
+      onError: () => {},
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cycleId, canManageCycles, cycle?.status]);
 
   const filteredEntries = useMemo(
     () => filterEntriesBySite(entries ?? [], selectedSiteIds),
