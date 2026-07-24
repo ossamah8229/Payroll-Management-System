@@ -1913,6 +1913,33 @@ skip). Typecheck/lint/build all clean (one pre-existing, unrelated E2E-spec type
 this checkpoint). Real browser verification performed with a Master User and a site-scoped Payroll
 Manager against realistic data — the Draft-cycle synchronization rule (employee creation,
 reactivation, and CSV/Excel import are the three sync entry points; current-Draft-cycle-only, no
-duplicates, released/archived history untouched) confirmed live in both. **Stopped for approval
-before any commit — nothing committed, nothing pushed, nothing deployed. Phase 7 status unchanged
-(Not started).**
+duplicates, released/archived history untouched) confirmed live in both. **Since committed as
+`a063b25`/`90b5f2f`/`bf89a06`, pushed to `origin/main`, and deployed via Render's existing
+auto-deploy — production verification confirmed both fixes live. It also surfaced one further gap,
+addressed in §12 below. Phase 7 status unchanged (Not started).**
+
+---
+
+## 12. Addendum, 2026-07-24 (later) — Draft Payroll Roster Reconciliation
+
+Narrow follow-up to §11 above, triggered by that checkpoint's own production verification: a real
+pre-existing employee ("Asim Khan," ABL West Region) predates the deployed create/reactivate/import
+sync hooks and so stayed absent from the already-open Draft cycle — those hooks are forward-looking
+only, and nothing else re-checks an already-active employee's presence in an already-open Draft
+cycle after the fact. Full detail is in `docs/PROJECT_PROGRESS.md`'s own dated entry; this is only
+the next-session pointer.
+
+**Solution**: a new, explicit, idempotent `reconcileDraftCycleRoster` (`payroll-processing.service.ts`)
+— hard-rejects any cycle that isn't (still) Draft before touching `PayrollEntry`, creates only
+missing entries by reusing `syncEmployeeIntoCurrentDraftCycle` verbatim per employee (no second
+creation implementation), never touches an existing entry. Gated the same as every other
+cycle-lifecycle action (`payroll-cycle:manage`), not the narrower `payroll:entry` a day-to-day
+Payroll Manager holds. Triggered automatically but safely: `payroll-entry-page.tsx` fires it once,
+silently, when a session already holding that permission opens a Draft cycle — self-healing without
+the entries list's own `GET` ever mutating.
+
+**Verification**: 11 new backend integration tests, each independently confirmed to fail against the
+pre-fix code and pass after (including the Draft-only guard, verified by temporarily disabling it).
+Typecheck/lint/build clean for both workspaces. No schema/migration change.
+
+**Not committed as of this entry's own writing.**

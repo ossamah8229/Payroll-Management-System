@@ -5831,9 +5831,71 @@ and a Payroll Manager scoped to one site: totals row confirmed pixel-aligned und
 both normal-width and horizontally-scrolled states; the late-hired employee confirmed visible to the
 scoped Payroll Manager; the Site B employee confirmed invisible to them.
 
-**Not committed, not pushed, not deployed** — this checkpoint stops for approval before any commit,
-per its own explicit instruction. **Phase 7 status is unchanged (Not started) — this checkpoint
-does not begin it.**
+**Updated after approval — committed as `a063b25`/`90b5f2f`/`bf89a06`, pushed to `origin/main`, and
+deployed via Render's existing auto-deploy.** Production verification with a real Master User and
+the one real non-Master-User account (Junaid Khan, Payroll Staff, all-sites) confirmed both fixes
+live: the totals row rendered pixel-aligned in production exactly as in local verification, and a
+newly-created employee synced into the live Draft cycle immediately (subsequently marked Left as
+test cleanup — see the Draft Payroll Roster Reconciliation entry below for the one gap this exposed:
+a pre-existing employee who predates the deployed sync hooks, "Asim Khan," stayed absent from that
+same Draft cycle, since the fix is forward-looking only). **Phase 7 status is unchanged (Not
+started) — this checkpoint did not begin it.**
+
+---
+
+### Draft Payroll Roster Reconciliation (2026-07-24)
+
+Narrow follow-up to the Operational Stabilization Checkpoint, triggered by production verification
+finding one real employee ("Asim Khan," ABL West Region) who predates the deployed
+create/reactivate/import sync hooks and so was never enrolled in the already-open Draft cycle —
+those hooks are forward-looking only; nothing re-checks an already-active employee's presence in an
+already-open Draft cycle after the fact.
+
+**Root cause**: `bootstrapPayrollEntries` only ever populates a cycle once, at that cycle's own
+creation/rollover; `syncEmployeeIntoCurrentDraftCycle` only fires at employee create/reactivate/
+import. An employee active before that fix shipped falls into the gap between both and stays
+permanently missing until something else explicitly checks for it.
+
+**Solution**: `reconcileDraftCycleRoster` (`payroll-processing.service.ts`) — an explicit, idempotent
+reconciliation operation. Loads the named cycle, hard-rejects (400, before any `PayrollEntry` read)
+unless it is still `DRAFT`, computes the set of active employees with no existing entry for that
+cycle via two bulk indexed reads and an in-memory set difference (the same bulk-query shape
+`bootstrapPayrollEntries` already uses at 10,000-employee scale), then creates exactly the missing
+entries by calling `syncEmployeeIntoCurrentDraftCycle` once per employee — no second
+`PayrollEntry`-creation implementation. Never updates, deletes, or recreates an existing entry;
+never reaches a Released/Archived cycle; the schema's own unique `(cycleId, employeeId)` constraint
+remains the final concurrency backstop, same as the sync hooks it reuses.
+
+**Trigger**: an explicit `POST /api/v1/payroll-cycles/:cycleId/reconcile-roster`,
+`payroll-cycle:manage`-gated — the same permission class as cycle creation/finalize/rollover, not
+the narrower `payroll:entry` a day-to-day Payroll Manager holds — matching every other
+cycle-lifecycle action's own route convention exactly. Deliberately **not** a side effect of the
+Payroll Entry list's own `GET` (Principle 10's 10,000-employee scale floor makes an eligibility diff
+on every read a real, avoidable cost, and a read silently writing rows is exactly the "unsafe/
+surprising mutation path" this checkpoint was told not to force). Instead, `payroll-entry-page.tsx`
+fires this action once, silently, whenever a session already holding `payroll-cycle:manage` opens a
+Draft cycle — self-healing for the sessions that can act on it, without the read endpoint itself
+ever mutating. A toast appears only when it actually added someone; a no-op reconciliation is
+invisible, and a failed attempt never hides or corrupts the already-independently-fetched Payroll
+Entry grid.
+
+**Verification**: 11 new backend integration tests (`payroll-entry-draft-roster-reconciliation.test.ts`)
+— a pre-existing missing employee gets reconciled; existing Draft entries (including an already-
+released one) stay field-for-field unchanged; idempotent and duplicate-safe under repeated/concurrent
+calls; a Released or Archived cycle is rejected before any mutation; a departed employee is never
+introduced; an entry's `siteId` survives a later employee transfer unchanged; multiple missing
+employees reconcile correctly in one pass; a site-scoped Payroll Manager's own read visibility is
+unaffected; the endpoint itself rejects a `payroll:entry`-only Payroll Manager with 403 — every one
+independently confirmed to fail against the pre-fix code and pass after (the Draft-only guard
+specifically verified by temporarily disabling it and confirming the corresponding test catches it).
+Backend typecheck/lint/build clean. Frontend typecheck/lint/build clean, existing 94/94 suite
+unaffected. Related existing suites re-run unchanged (`payroll-entry-draft-cycle-sync.test.ts`,
+`payroll-cycle.test.ts`, `payroll-release.test.ts`, `payroll-cycle-rollover.test.ts`) — one unrelated
+pre-existing failure (`payroll-cycle-finalize.test.ts`, a Bank Sheets test) confirmed to reproduce
+identically against unmodified `bf89a06` with this checkpoint's changes fully stashed, not caused by
+it, not touched. No schema or migration changes.
+
+**Not committed as of this entry's own writing.**
 
 ---
 
@@ -6179,8 +6241,23 @@ does not begin it.**
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-24 — Operational Stabilization Checkpoint (Payroll Entry Table Alignment and
-Draft-Cycle Population) is COMPLETE, NOT COMMITTED.** See §1's own entry for the full record. Two
+**Updated 2026-07-24 (later) — Draft Payroll Roster Reconciliation is COMPLETE, NOT COMMITTED.**
+See §1's own entry for the full record. Narrow follow-up to the Operational Stabilization Checkpoint
+below (now committed, pushed, and deployed — see that entry's own updated status), triggered by
+production verification finding one real pre-existing employee ("Asim Khan") who predates the
+deployed sync hooks and so stayed absent from the already-open Draft cycle. Adds an explicit,
+idempotent `reconcileDraftCycleRoster` action (`payroll-cycle:manage`-gated, matching every other
+cycle-lifecycle route's own convention), triggered automatically but safely — once, silently, on
+Draft-cycle Payroll Entry page open by a session already holding that permission — never as a side
+effect of the entries list's own `GET`. 11 new backend tests, each verified to fail pre-fix/pass
+post-fix; typecheck/lint/build clean for both workspaces; no schema/migration change. **This
+checkpoint stops for approval before any commit — do not commit or push without the user's own
+separate go-ahead, and do not treat Phase 7 as started.**
+
+**Updated 2026-07-24 (superseded by the entry above for status purposes, kept for its own still-
+useful defect record) — Operational Stabilization Checkpoint (Payroll Entry Table Alignment and
+Draft-Cycle Population) is COMPLETE and has since been committed, pushed, and deployed — see §1's
+own updated entry for the current status.** Two
 reported defects against the currently shipped Payroll Entry workflow: (1) the totals row's
 hand-written cell list had silently drifted out of sync with `PAYROLL_COLUMNS`, shifting every total
 from Gross Pay onward one column left — fixed by making the totals row iterate the canonical column
@@ -6193,9 +6270,10 @@ documented KI-10 — not classified as that issue; confirmed non-reproducible at
 rerun, not written up as 902/902 since this was not a clean full-suite run), frontend 94/94, E2E
 45/46 (one conditional skip), all real-component/integration tests independently verified to catch
 the original defects by reproducing them against the pre-fix code. Real-browser verification
-performed with realistic Master User and Payroll Manager personas. **This checkpoint stops for
-approval before any commit — do not commit or push without the user's own separate go-ahead, and do
-not treat Phase 7 as started.**
+performed with realistic Master User and Payroll Manager personas. **Since committed as
+`a063b25`/`90b5f2f`/`bf89a06`, pushed, and deployed — see §1's own updated entry and the Draft
+Payroll Roster Reconciliation entry above for what production verification found next. Phase 7 was
+not, and still is not, started.**
 
 **Updated 2026-07-23 (later still, same day) — Pre-Deployment Reliability Checkpoint (Payslip PDF
 Full-Suite Flakiness) is COMPLETE, NOT pushed.** See §1's own entry for the full record.
