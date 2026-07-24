@@ -134,11 +134,18 @@ export function InlineSelectCell({ value, onChange, disabled, options, nav, aria
 
 export function ReadOnlyCell({
   children,
+  colId,
   align = 'left',
   muted = true,
   truncate = true,
 }: {
   children: React.ReactNode;
+  /** The `PAYROLL_COLUMNS` id this cell renders — same `data-col-id` convention every other cell in
+   * the row carries, so header/body/totals alignment stays mechanically verifiable (Operational
+   * Stabilization Checkpoint, 2026-07-24). Every current caller (`payroll-entry-row.tsx`) supplies
+   * it; optional only so a future usage without a meaningful column id doesn't need a placeholder
+   * value. */
+  colId?: string;
   align?: 'left' | 'right' | 'center';
   muted?: boolean;
   /** Defaults to the original ellipsis-on-overflow behavior. Set `false` for a business-critical
@@ -150,6 +157,8 @@ export function ReadOnlyCell({
 }) {
   return (
     <div
+      role="cell"
+      data-col-id={colId}
       className={cn(
         'px-1.5 py-1 text-xs',
         truncate ? 'truncate' : 'overflow-visible whitespace-nowrap',

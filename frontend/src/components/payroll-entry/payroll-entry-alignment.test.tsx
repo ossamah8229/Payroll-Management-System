@@ -1,0 +1,199 @@
+// @vitest-environment jsdom
+import { describe, expect, it } from 'vitest';
+import { render } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { Bank } from '@/hooks/use-banks';
+import type { PayrollEntry } from '@/hooks/use-payroll-entries';
+import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns } from './columns';
+import { PayrollEntryRow } from './payroll-entry-row';
+import { PayrollEntryTotalsRow } from './payroll-entry-totals-row';
+import { LiveTotalsStore } from './live-totals-store';
+
+/**
+ * Operational Stabilization Checkpoint (2026-07-24) — Defect A regression coverage.
+ *
+ * `columns.test.ts` already proves `PAYROLL_COLUMNS`/`computeColumnWidths` are internally
+ * consistent, but every one of those tests operates purely on the column-definition array — none
+ * of them ever render a single component, so none of them could have caught (and didn't catch) the
+ * actual shipped defect: `payroll-entry-totals-row.tsx`'s hand-written JSX silently omitted the
+ * IBAN column's own placeholder cell, shifting every total from Gross Pay onward one column to the
+ * left. These tests render the real components and assert what a browser actually paints: the
+ * ordered sequence of `data-col-id` values in the header, a body row, and the totals row must all
+ * equal `PAYROLL_COLUMNS`'s own order, exactly, with no gaps and no extras. Reverting
+ * `payroll-entry-totals-row.tsx` to its pre-fix, hand-listed cell sequence fails the totals-row test
+ * below immediately (verified while writing this file).
+ */
+
+function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
+  return {
+    id: 'entry-1',
+    cycleId: 'cycle-1',
+    employeeId: 'employee-1',
+    employee: {
+      id: 'employee-1',
+      employeeCode: 'V001',
+      cnic: null,
+      name: 'Test Employee',
+      fatherName: null,
+      religion: null,
+      dateOfBirth: null,
+      mobileNumber: null,
+      designation: 'Guard',
+      siteId: 'site-1',
+      site: { id: 'site-1', name: 'Test Site', address: null, unitLabel: 'Branch', isActive: true, createdAt: '', updatedAt: '' },
+      unitId: 'unit-1',
+      unit: { id: 'unit-1', siteId: 'site-1', name: 'Main Branch', code: null, isActive: true, createdAt: '', updatedAt: '' },
+      dateOfJoining: null,
+      dateOfLeaving: null,
+      payType: 'DAILY_WAGE',
+      grossPay: '30000',
+      bankId: null,
+      bank: null,
+      branchCode: null,
+      accountNumber: null,
+      iban: null,
+      defaultEobiAmount: '400',
+      defaultEobiApplicable: true,
+      createdAt: '',
+      updatedAt: '',
+    },
+    siteId: 'site-1',
+    site: { id: 'site-1', name: 'Test Site', address: null, unitLabel: 'Branch', isActive: true, createdAt: '', updatedAt: '' },
+    designation: 'Guard',
+    bankId: null,
+    branchCode: null,
+    accountNumber: null,
+    iban: null,
+    grossPay: '30000',
+    allowance: '0',
+    leaveDays: '0',
+    leaveRate: null,
+    eobiAmount: '400',
+    eobiApplicable: true,
+    advanceDeduction: '0',
+    advanceId: null,
+    advance: null,
+    eidAdvanceDeduction: '0',
+    eidAdvanceId: null,
+    eidAdvance: null,
+    fine: '0',
+    hold: false,
+    released: false,
+    releasedAt: null,
+    releasedBy: null,
+    lateReason: null,
+    remarks: null,
+    sortOrder: 0,
+    version: 1,
+    createdAt: '',
+    updatedAt: '',
+    workLines: [
+      {
+        id: 'line-1',
+        payrollEntryId: 'entry-1',
+        siteId: 'site-1',
+        unitId: 'unit-1',
+        days: '30',
+        otHours: '0',
+        otRate: null,
+        cycleDays: 30,
+        sortOrder: 0,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ],
+    calc: {
+      workLines: [{ sortOrder: 0, dailyRate: '1000', effectiveOtRate: '0', earnedAmount: '30000', otEarned: '0' }],
+      effectiveLeaveRate: '0',
+      earnedAmount: '30000',
+      otEarned: '0',
+      leaveEarned: '0',
+      correctionBalancePayable: '0',
+      totalEarning: '30000',
+      eobiDeduction: '400',
+      correctionBalanceRecovery: '0',
+      totalDeduction: '400',
+      netSalary: '29600',
+    },
+    ...overrides,
+  };
+}
+
+const testBank: Bank = { id: 'bank-1', code: 'HABIBMETRO', name: 'Habib Metropolitan Bank', isActive: true, isReferenced: true };
+
+/** Every direct grid-item child, in DOM order, that carries the shared `data-col-id` convention —
+ * the same attribute the header, body, and totals rows all now use. */
+function dataColIds(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('[data-col-id]')).map(
+    (el) => el.getAttribute('data-col-id')!,
+  );
+}
+
+describe('Payroll Entry grid — header/body/totals column alignment', () => {
+  const expectedColumnIds = PAYROLL_COLUMNS.map((c) => c.id);
+
+  it('the totals row renders exactly one cell per PAYROLL_COLUMNS entry, in the same order', () => {
+    const entry = makeEntry({ iban: 'PK36SCBL0000001123456702' });
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const store = new LiveTotalsStore();
+    store.setBase([{ id: entry.id, snapshot: { grossPay: 30000, days: 30, otHours: 0, otRate: null, cycleDays: 30, leaveDays: 0, leaveRate: null, allowance: 0, eobiAmount: 400, advanceDeduction: 0, eidAdvanceDeduction: 0, fine: 0, netSalary: 29600 } }]);
+
+    const { container } = render(
+      <PayrollEntryTotalsRow store={store} gridTemplateColumns={gridTemplateColumns(resolved)} />,
+    );
+
+    expect(dataColIds(container)).toEqual(expectedColumnIds);
+  });
+
+  it('a body row renders exactly one cell per PAYROLL_COLUMNS entry, in the same order', () => {
+    const entry = makeEntry();
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={entry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          canCorrect={false}
+          onCreateCorrection={() => {}}
+          onViewCorrectionHistory={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(dataColIds(container)).toEqual(expectedColumnIds);
+  });
+
+  it('a released row (with the Released badge/actions cell) still renders every column exactly once, in order', () => {
+    const entry = makeEntry({ released: true, releasedAt: '2026-07-01T00:00:00.000Z' });
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={entry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          canCorrect
+          onCreateCorrection={() => {}}
+          onViewCorrectionHistory={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(dataColIds(container)).toEqual(expectedColumnIds);
+  });
+});

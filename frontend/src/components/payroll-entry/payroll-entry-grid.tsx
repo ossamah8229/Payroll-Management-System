@@ -154,6 +154,7 @@ export function PayrollEntryGrid({
                 <div
                   role="columnheader"
                   key={header.id}
+                  data-col-id={header.column.id}
                   className="truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted"
                 >
                   {flexRender(header.column.columnDef.header, header.getContext())}

@@ -118,7 +118,7 @@ function PayrollEntryRowImpl({
         status === 'conflict' && 'bg-danger-light/40',
       )}
     >
-      <div role="cell" className="flex items-center justify-center gap-1 px-1.5 py-1">
+      <div role="cell" data-col-id="serial" className="flex items-center justify-center gap-1 px-1.5 py-1">
         <SaveStatusIndicator
           status={status}
           errorMessage={errorMessage}
@@ -132,7 +132,7 @@ function PayrollEntryRowImpl({
           released entry is immutable (every input above is `disabled`), so this is the row's own
           entry point into the correction workflow instead of a single page-wide toolbar button with
           no per-row indication of *which* rows it even applies to. */}
-      <div role="cell" className="flex items-center justify-center gap-1">
+      <div role="cell" data-col-id="status" className="flex items-center justify-center gap-1">
         {entry.released ? (
           <>
             <Badge tone="blue">Released</Badge>
@@ -164,12 +164,12 @@ function PayrollEntryRowImpl({
       {/* Employee Code is a business-critical identifier under the permanent Layout Integrity
           Rule — never ellipsis-clipped, even though every other read-only cell in this row still
           truncates by default. */}
-      <ReadOnlyCell truncate={false}>{entry.employee.employeeCode ?? '—'}</ReadOnlyCell>
-      <ReadOnlyCell muted={false}>
+      <ReadOnlyCell colId="employeeCode" truncate={false}>{entry.employee.employeeCode ?? '—'}</ReadOnlyCell>
+      <ReadOnlyCell colId="employeeName" muted={false}>
         <span className="font-medium">{entry.employee.name}</span>
       </ReadOnlyCell>
 
-      <div role="cell">
+      <div role="cell" data-col-id="designation">
         <InlineTextCell
           value={effectiveEntry.designation}
           onChange={(v) => editor.setEntryField('designation', v)}
@@ -180,9 +180,9 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <ReadOnlyCell>{entry.site.name}</ReadOnlyCell>
+      <ReadOnlyCell colId="site">{entry.site.name}</ReadOnlyCell>
 
-      <div role="cell">
+      <div role="cell" data-col-id="bankId">
         <InlineSelectCell
           value={effectiveEntry.bankId ?? ''}
           onChange={(v) => editor.setEntryField('bankId', v || null)}
@@ -201,7 +201,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Bank for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="branchCode">
         <InlineTextCell
           value={effectiveEntry.branchCode ?? ''}
           onChange={(v) => editor.setEntryField('branchCode', v || null)}
@@ -211,7 +211,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Branch code for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="accountNumber">
         <InlineTextCell
           value={effectiveEntry.accountNumber ?? ''}
           onChange={(v) => editor.setEntryField('accountNumber', v || null)}
@@ -221,7 +221,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Account number for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="iban">
         <InlineTextCell
           value={effectiveEntry.iban ?? ''}
           // Stored uppercase, displayed exactly as entered (2026-07-11 banking refinement) —
@@ -235,7 +235,7 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <div role="cell">
+      <div role="cell" data-col-id="grossPay">
         <InlineNumberCell
           value={effectiveEntry.grossPay}
           onChange={(v) => editor.setEntryField('grossPay', v)}
@@ -245,7 +245,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Gross pay for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell" className="flex items-center justify-center">
+      <div role="cell" data-col-id="units" className="flex items-center justify-center">
         <button
           type="button"
           onClick={() => setIsSplitOpen(true)}
@@ -258,7 +258,7 @@ function PayrollEntryRowImpl({
         </button>
       </div>
 
-      <div role="cell">
+      <div role="cell" data-col-id="days">
         <InlineNumberCell
           value={effectiveLine.days}
           onChange={(v) => editor.setWorkLineField('days', v)}
@@ -268,7 +268,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Working days for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="otHours">
         <InlineNumberCell
           value={effectiveLine.otHours}
           onChange={(v) => editor.setWorkLineField('otHours', v)}
@@ -278,7 +278,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`OT hours for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="otRate">
         <InlineNumberCell
           value={effectiveLine.otRate ?? ''}
           onChange={(v) => editor.setWorkLineField('otRate', v || null)}
@@ -289,7 +289,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`OT rate for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="cycleDays">
         <InlineNumberCell
           value={cycleDaysInputValue}
           onChange={(v) => editor.setWorkLineField('cycleDays', v)}
@@ -299,7 +299,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Cycle days for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="leaveDays">
         <InlineNumberCell
           value={effectiveEntry.leaveDays}
           onChange={(v) => editor.setEntryField('leaveDays', v)}
@@ -309,7 +309,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Leave days for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="leaveRate">
         <InlineNumberCell
           value={effectiveEntry.leaveRate ?? ''}
           onChange={(v) => editor.setEntryField('leaveRate', v || null)}
@@ -320,7 +320,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`Leave rate for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="allowance">
         <InlineNumberCell
           value={effectiveEntry.allowance}
           onChange={(v) => editor.setEntryField('allowance', v)}
@@ -331,7 +331,7 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <div role="cell">
+      <div role="cell" data-col-id="eobiAmount">
         <InlineNumberCell
           value={effectiveEntry.eobiAmount}
           onChange={(v) => editor.setEntryField('eobiAmount', v)}
@@ -341,7 +341,7 @@ function PayrollEntryRowImpl({
           ariaLabel={`EOBI amount for ${entry.employee.name}`}
         />
       </div>
-      <div role="cell" className="flex justify-center">
+      <div role="cell" data-col-id="eobiApplicable" className="flex justify-center">
         <ToggleSwitch
           checked={effectiveEntry.eobiApplicable}
           onCheckedChange={(v) => editor.setEntryField('eobiApplicable', v)}
@@ -351,7 +351,7 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <div role="cell">
+      <div role="cell" data-col-id="advanceDeduction">
         <InlineNumberCell
           value={effectiveEntry.advanceDeduction}
           onChange={(v) => editor.setEntryField('advanceDeduction', v)}
@@ -370,7 +370,7 @@ function PayrollEntryRowImpl({
           </p>
         )}
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="eidAdvanceDeduction">
         <InlineNumberCell
           value={effectiveEntry.eidAdvanceDeduction}
           onChange={(v) => editor.setEntryField('eidAdvanceDeduction', v)}
@@ -386,7 +386,7 @@ function PayrollEntryRowImpl({
           </p>
         )}
       </div>
-      <div role="cell">
+      <div role="cell" data-col-id="fine">
         <InlineNumberCell
           value={effectiveEntry.fine}
           onChange={(v) => editor.setEntryField('fine', v)}
@@ -398,7 +398,7 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <div role="cell" className="flex justify-center">
+      <div role="cell" data-col-id="hold" className="flex justify-center">
         <ToggleSwitch
           checked={effectiveEntry.hold}
           onCheckedChange={(v) => editor.setEntryField('hold', v)}
@@ -408,7 +408,7 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <div role="cell">
+      <div role="cell" data-col-id="remarks">
         <InlineTextCell
           value={effectiveEntry.remarks ?? ''}
           onChange={(v) => editor.setEntryField('remarks', v || null)}
@@ -419,7 +419,7 @@ function PayrollEntryRowImpl({
         />
       </div>
 
-      <ReadOnlyCell align="right" muted={false}>
+      <ReadOnlyCell colId="netSalary" align="right" muted={false}>
         <span className={cn('font-semibold', Number(calc.netSalary) < 0 ? 'text-danger' : 'text-success')}>
           {formatMoney(calc.netSalary)}
         </span>
