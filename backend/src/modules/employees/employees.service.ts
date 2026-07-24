@@ -145,15 +145,27 @@ export async function listEmployees(currentUser: SessionUser, filters: ListEmplo
       ? filters.siteIds.filter((id) => currentUser.siteIds.includes(id))
       : allowedSiteIds;
 
+  // Reusable Employee Lookup search (Corrections/RBAC completion checkpoint) — covers every field
+  // the lookup's own documented priority order names (Employee Code, CNIC, Account Number, IBAN,
+  // Name, Site, Branch/Unit), not just Name/CNIC/Code. An empty normalized-digits CNIC candidate
+  // (the search term contains no digits at all, e.g. a pure-name search) is deliberately omitted
+  // from the OR list rather than passed through as an empty-string `contains`, which would
+  // otherwise match every row regardless of `dateOfLeaving`/site scope.
+  const normalizedCnicSearch = filters.search ? normalizeCnic(filters.search) : null;
+
   return prisma.employee.findMany({
     where: {
       ...(siteIdFilter && { siteId: { in: siteIdFilter } }),
       ...(filters.activeOnly && { dateOfLeaving: null }),
       ...(filters.search && {
         OR: [
-          { name: { contains: filters.search, mode: 'insensitive' } },
-          { cnic: { contains: filters.search } },
           { employeeCode: { contains: filters.search, mode: 'insensitive' } },
+          ...(normalizedCnicSearch ? [{ cnic: { contains: normalizedCnicSearch } }] : []),
+          { accountNumber: { contains: filters.search, mode: 'insensitive' } },
+          { iban: { contains: filters.search, mode: 'insensitive' } },
+          { name: { contains: filters.search, mode: 'insensitive' } },
+          { site: { name: { contains: filters.search, mode: 'insensitive' } } },
+          { unit: { name: { contains: filters.search, mode: 'insensitive' } } },
         ],
       }),
     },

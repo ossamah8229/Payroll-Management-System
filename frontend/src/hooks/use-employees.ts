@@ -36,7 +36,9 @@ export interface Employee {
 
 const EMPLOYEES_QUERY_KEY = ['employees'] as const;
 
-export function useEmployees(filters: { siteIds?: string[]; activeOnly?: boolean; search?: string } = {}) {
+export function useEmployees(
+  filters: { siteIds?: string[]; activeOnly?: boolean; search?: string; enabled?: boolean } = {},
+) {
   const params = new URLSearchParams();
   if (filters.siteIds?.length) params.set('siteIds', filters.siteIds.join(','));
   if (filters.activeOnly) params.set('activeOnly', 'true');
@@ -49,6 +51,7 @@ export function useEmployees(filters: { siteIds?: string[]; activeOnly?: boolean
       apiRequest<{ employees: Employee[] }>(`/api/v1/employees${queryString ? `?${queryString}` : ''}`).then(
         (res) => res.employees,
       ),
+    enabled: filters.enabled ?? true,
   });
 }
 
@@ -127,6 +130,23 @@ export async function downloadEmployeeExport(format: 'csv' | 'xlsx'): Promise<vo
   const link = document.createElement('a');
   link.href = url;
   link.download = `employee-registry.${format}`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Import Templates checkpoint — a blank template with the exact required header set, one sample
+ * row, and an Instructions sheet (`generateEmployeeImportTemplate`, backend). Same download
+ * mechanics as `downloadEmployeeExport` above, a distinct endpoint (never real employee data). */
+export async function downloadEmployeeImportTemplate(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/employees/import-template`, { credentials: 'include' });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'TEMPLATE_DOWNLOAD_FAILED', 'Failed to download the import template');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'employee-import-template.xlsx';
   link.click();
   URL.revokeObjectURL(url);
 }

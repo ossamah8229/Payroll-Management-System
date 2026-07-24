@@ -6,6 +6,8 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -14,9 +16,9 @@ import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { FilterField } from '@/components/ui/filter-field';
+import { EmployeeLookup } from '@/components/ui/employee-lookup';
 import { ApiError } from '@/lib/api-client';
-import { useProjectSites } from '@/hooks/use-project-sites';
-import { useEmployees } from '@/hooks/use-employees';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useCurrentPayrollCycle } from '@/hooks/use-payroll-cycles';
 import { apiRequest } from '@/lib/api-client';
 import {
@@ -50,7 +52,6 @@ function RecordAdvanceModal({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const employees = useEmployees({ activeOnly: true });
   const { cycle } = useCurrentPayrollCycle();
   const createAdvance = useCreateAdvance();
 
@@ -113,20 +114,13 @@ function RecordAdvanceModal({
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="advance-employee">Employee</Label>
-            <select
+            <EmployeeLookup
               id="advance-employee"
-              className={selectClassName}
               value={employeeId}
-              onChange={(e) => setEmployeeId(e.target.value)}
+              onChange={(id) => setEmployeeId(id)}
+              activeOnly
               required
-            >
-              <option value="">Select an employee…</option>
-              {(employees.data ?? []).map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.name} {employee.employeeCode ? `(${employee.employeeCode})` : ''}
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -441,7 +435,9 @@ function DeferAdvanceModal({
 }
 
 export function AdvancesPage({ user }: { user: SessionUser }) {
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) —
+  // Advances stays a strictly site-scoped operational domain; holding sites:manage does not widen it.
+  const sites = useAccessibleProjectSites(user);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -470,10 +466,13 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
     <AppShell user={user} title="Advances" subtitle="Record and track Advance / Eid Advance balances">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center justify-between gap-2.5">
             <CardTitle>Advances</CardTitle>
+            <div className="print:hidden">
+              <PrintButton />
+            </div>
           </div>
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-end gap-3 print:hidden">
             <MultiSelectFilter
               id="advances-site-filter"
               label="Site"
@@ -513,6 +512,9 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          <div className="px-[18px] pt-[18px]">
+            <PrintContextHeader title="Advances" />
+          </div>
           {advances.isLoading && (
             <div className="flex flex-col gap-2 p-[18px]">
               <Skeleton className="h-12 w-full" />
@@ -538,7 +540,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
           )}
 
           {!advances.isLoading && !advances.error && rows.length > 0 && (
-            <div className="overflow-x-auto">
+            <div className="print-flow overflow-x-auto">
               <Table className="min-w-full">
                 <TableHeader>
                   <TableRow>
@@ -571,7 +573,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{periodLabel(advance.currentScheduledPeriod)}</TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 print:hidden">
                           <Button size="sm" variant="secondary" onClick={() => setEditingAdvance(advance)}>
                             Edit
                           </Button>

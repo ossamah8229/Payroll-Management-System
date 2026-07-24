@@ -330,6 +330,74 @@ describe('Employee Registry', () => {
     expect(noCnicTwo.status).toBe(201);
   });
 
+  // Reusable Employee Lookup checkpoint — the search behind the shared EmployeeLookup component
+  // (Advances/Corrections) covers Employee Code, CNIC, Account Number, IBAN, Name, Site, and
+  // Branch/Unit, not just Name/CNIC/Code (employees.service.ts's own `listEmployees`).
+  it('search matches on account number, IBAN, site name, and unit name — not just name/CNIC/code', async () => {
+    const site = await makeSite('Test Site Employees Search Priority');
+    const unitId = await unitIdForSite(site.id);
+    const unit = await prisma.projectUnit.findUniqueOrThrow({ where: { id: unitId } });
+    const { agent } = await masterAdminAgent('emp-search-priority@test.local');
+
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Search Priority Employee',
+        designation: 'Clerk',
+        siteId: site.id,
+        unitId,
+        grossPay: '20000',
+        bankId: (await prisma.bank.findFirstOrThrow()).id,
+        accountNumber: 'ACCT-9988776655',
+        iban: 'PK36SCBL0000001123456702',
+      },
+    });
+
+    for (const search of ['ACCT-9988776655', 'PK36SCBL0000001123456702', site.name, unit.name]) {
+      const res = await agent.get(`/api/v1/employees?search=${encodeURIComponent(search)}`);
+      expect(res.status).toBe(200);
+      expect(res.body.employees.some((e: { id: string }) => e.id === employee.id)).toBe(true);
+    }
+  });
+
+  it('search by a dashed/spaced CNIC still matches the normalized, digits-only stored value', async () => {
+    const site = await makeSite('Test Site Employees Search CNIC');
+    const unitId = await unitIdForSite(site.id);
+    const { agent } = await masterAdminAgent('emp-search-cnic@test.local');
+
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'CNIC Search Employee',
+        designation: 'Clerk',
+        siteId: site.id,
+        unitId,
+        grossPay: '20000',
+        cnic: '3520112345671',
+      },
+    });
+
+    const res = await agent.get(`/api/v1/employees?search=${encodeURIComponent('35201-1234567-1')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.employees.some((e: { id: string }) => e.id === employee.id)).toBe(true);
+  });
+
+  it('a pure-name search never matches every employee via an empty normalized-CNIC clause', async () => {
+    const site = await makeSite('Test Site Employees Search No Digits');
+    const unitId = await unitIdForSite(site.id);
+    const { agent } = await masterAdminAgent('emp-search-no-digits@test.local');
+
+    await prisma.employee.create({
+      data: { name: 'Unrelated Employee', designation: 'Clerk', siteId: site.id, unitId, grossPay: '20000' },
+    });
+    const target = await prisma.employee.create({
+      data: { name: 'Zzyzx Search Target', designation: 'Clerk', siteId: site.id, unitId, grossPay: '20000' },
+    });
+
+    const res = await agent.get(`/api/v1/employees?search=${encodeURIComponent('Zzyzx')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.employees).toHaveLength(1);
+    expect(res.body.employees[0].id).toBe(target.id);
+  });
+
   it('updates an employee and records a field-level diff on the audit log', async () => {
     const site = await makeSite('Test Site Employees Update');
     const { agent, csrfToken } = await masterAdminAgent('emp-update@test.local');
