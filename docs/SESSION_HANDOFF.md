@@ -1975,8 +1975,33 @@ confirmed pre-existing/environmental — `payslips.test.ts` PDF-generation flaki
 showing zero changes to either file). Both workspaces' typecheck/lint/build clean. Real-browser
 verification performed for the Payroll Entry checkpoint (Chromium/Playwright).
 
-**Push/deploy record:** approved for push and Render auto-deploy this same session, immediately
-after this documentation commit — pending as of this entry's own writing; see the next session's
-own addendum (or this section's own follow-up edit) for the confirmed `origin/main` SHA, Render
-deploy health, and production smoke-check results.
+**Push/deploy record:** pushed to `origin/main` this same session — `origin/main` confirmed at
+`94ad4b8` (local `main` and `origin/main` resolve to the identical SHA). Render auto-deployed from
+this push with no build/migration failure — both `https://payroll-management-api-wlic.onrender.com/health`
+and `https://payroll-management-app-qa3x.onrender.com/` returned 200 shortly after the push, and a
+full authenticated production smoke pass (Chromium/Playwright, logged in as the real production
+Master User) confirmed the new code is live:
+
+- **Payroll Entry**: the Deputed Branch column is visible with real branch codes (`0206`, `3322`,
+  `5455`), sortable both directions (verified for Employee, Deputed Branch, Employee Code, Gross
+  Pay, and Net Salary); full rows — including the `Released` badge staying attached to its own
+  employee ("Ossamah") — move together on sort; the totals row (`PKR 200,000.00`) is unchanged
+  across every sort applied; horizontal scroll keeps header/body/totals aligned; Import, Download
+  Import Template, and the file input are completely absent; Export CSV/Export Excel remain present.
+- **Advances**: page and Record Advance dialog both load; "Current Draft — July 2026" is the
+  pre-selected first-deduction-cycle option; existing Advances' Edit dialog exposes Total
+  Amount/Repayment Type/Notes (the approved lifecycle-aware fields) and a Cancel action is present
+  in the row list — inspected only, nothing submitted/cancelled. **One genuine limitation, not a
+  defect**: the three pre-existing production Advances inspected (scheduled June/July 2026) all show
+  `PKR 0` in Payroll Entry's Advance Ded. column — expected, since each predates this session's
+  "materialize immediately into an already-open Draft" fix (that fix only applies to newly-recorded
+  Advances going forward) and per this checkpoint's own explicit instruction, no new Advance was
+  recorded in production merely to exercise it.
+- **Corrections**: no pending or ledger correction requests currently exist in production, so the
+  Record Settlement dialog itself could not be opened for a live wording check without fabricating a
+  correction request — explicitly not done, per the same instruction above. The label removal
+  (`1d1e811`) was already confirmed via direct source diff before this session's push.
+
+No discrepancies found beyond the two explicitly-noted, expected limitations above (both a direct
+consequence of "do not create unnecessary production financial/test records," not a code defect).
 
