@@ -181,6 +181,12 @@ function PayrollEntryRowImpl({
       </div>
 
       <ReadOnlyCell colId="site">{entry.site.name}</ReadOnlyCell>
+      {/* "Deputed Branch" — the deputed branch/site code for this entry's primary work line, its
+          own `unit` relation. Never `entry.employee.unit` (the employee's *current* default unit,
+          which would silently rewrite a released entry's historical branch). Labeled "Deputed
+          Branch" rather than "Branch Code" to avoid colliding with the unrelated bank Branch Code
+          column below. */}
+      <ReadOnlyCell colId="unitCode">{entry.workLines[0]?.unit.code ?? '—'}</ReadOnlyCell>
 
       <div role="cell" data-col-id="bankId">
         <InlineSelectCell

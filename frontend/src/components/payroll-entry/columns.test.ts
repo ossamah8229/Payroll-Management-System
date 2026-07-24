@@ -72,6 +72,7 @@ function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
         payrollEntryId: 'entry-1',
         siteId: 'site-1',
         unitId: 'unit-1',
+        unit: { id: 'unit-1', siteId: 'site-1', name: 'Main Branch', code: 'BR-01', isActive: true, createdAt: '', updatedAt: '' },
         days: '30',
         otHours: '0',
         otRate: null,

@@ -20,6 +20,14 @@ import { getPayrollCycle } from '../payroll-processing/payroll-processing.servic
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 50;
 
+/** Every `workLines` include across this file, in one place — always ordered by `sortOrder` (so
+ * `[0]` is reliably the primary line) and always carrying its own `unit` relation, the source of
+ * the grid's "Deputed Branch" column (`ProjectUnit.code` — the "deputed branch/site code" for that
+ * specific work line). A released/archived entry's work lines are never edited again (§12), so
+ * this is the same historical snapshot for those entries forever; a Draft entry's lines reflect
+ * whatever the roster reconciliation/edits currently have them pointing at. */
+const WORK_LINES_INCLUDE = { orderBy: { sortOrder: 'asc' as const }, include: { unit: true } };
+
 export type EntryWithWorkLines = PayrollEntry & { workLines: PayrollEntryWorkLine[] };
 
 /**
@@ -56,7 +64,11 @@ export function computeEntryCalc(entry: EntryWithWorkLines): CalcNetResult {
   return calcNet(input);
 }
 
-function withCalc(entry: EntryWithWorkLines) {
+// Generic over the caller's actual fetched shape (not fixed to `EntryWithWorkLines`) so a caller
+// that included `unit` on its `workLines` (via `WORK_LINES_INCLUDE`, above) gets that field back on
+// the returned object — `computeEntryCalc` itself never reads `unit`, so it doesn't need to be part
+// of the type it requires, only of what this function happens to be passed and preserves.
+function withCalc<T extends EntryWithWorkLines>(entry: T): T & { calc: CalcNetResult } {
   return { ...entry, calc: computeEntryCalc(entry) };
 }
 
@@ -93,7 +105,7 @@ export function assertEntryEditable(entry: { released: boolean; cycle: { status:
 async function getEntryForMutation(id: string) {
   const entry = await prisma.payrollEntry.findUnique({
     where: { id },
-    include: { cycle: true, workLines: { orderBy: { sortOrder: 'asc' } } },
+    include: { cycle: true, workLines: WORK_LINES_INCLUDE },
   });
   if (!entry) {
     throw notFound('Payroll entry not found');
@@ -104,7 +116,7 @@ async function getEntryForMutation(id: string) {
 async function getWorkLineForMutation(workLineId: string) {
   const line = await prisma.payrollEntryWorkLine.findUnique({
     where: { id: workLineId },
-    include: { payrollEntry: { include: { cycle: true, workLines: { orderBy: { sortOrder: 'asc' } } } } },
+    include: { payrollEntry: { include: { cycle: true, workLines: WORK_LINES_INCLUDE } } },
   });
   if (!line) {
     throw notFound('Payroll entry work line not found');
@@ -155,7 +167,7 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
         // the Advance/Eid Advance grid cells; a light select, not the full row.
         advance: { select: { id: true, outstandingBalance: true, status: true } },
         eidAdvance: { select: { id: true, outstandingBalance: true, status: true } },
-        workLines: { orderBy: { sortOrder: 'asc' } },
+        workLines: WORK_LINES_INCLUDE,
       },
       orderBy: { sortOrder: 'asc' },
       skip: (page - 1) * pageSize,
@@ -182,7 +194,7 @@ export async function getPayrollEntry(currentUser: SessionUser, id: string) {
       // the Advance/Eid Advance grid cells; a light select, not the full row.
       advance: { select: { id: true, outstandingBalance: true, status: true } },
       eidAdvance: { select: { id: true, outstandingBalance: true, status: true } },
-      workLines: { orderBy: { sortOrder: 'asc' } },
+      workLines: WORK_LINES_INCLUDE,
     },
   });
   if (!entry) {
@@ -285,7 +297,7 @@ export async function createPayrollEntry(
           })),
         },
       },
-      include: { workLines: { orderBy: { sortOrder: 'asc' } } },
+      include: { workLines: WORK_LINES_INCLUDE },
     });
 
     await recordAuditLog(
@@ -398,7 +410,7 @@ export async function updatePayrollEntry(
 
     const updated = await tx.payrollEntry.findUniqueOrThrow({
       where: { id },
-      include: { workLines: { orderBy: { sortOrder: 'asc' } } },
+      include: { workLines: WORK_LINES_INCLUDE },
     });
     return withCalc(updated);
   });
@@ -501,7 +513,7 @@ export async function addWorkLine(
 
     const updated = await tx.payrollEntry.findUniqueOrThrow({
       where: { id: entryId },
-      include: { workLines: { orderBy: { sortOrder: 'asc' } } },
+      include: { workLines: WORK_LINES_INCLUDE },
     });
     return withCalc(updated);
   });
@@ -574,7 +586,7 @@ export async function updateWorkLine(
 
     const updated = await tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
-      include: { workLines: { orderBy: { sortOrder: 'asc' } } },
+      include: { workLines: WORK_LINES_INCLUDE },
     });
     return withCalc(updated);
   });
@@ -627,7 +639,7 @@ export async function deleteWorkLine(
 
     const updated = await tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
-      include: { workLines: { orderBy: { sortOrder: 'asc' } } },
+      include: { workLines: WORK_LINES_INCLUDE },
     });
     return withCalc(updated);
   });

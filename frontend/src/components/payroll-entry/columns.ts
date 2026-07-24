@@ -50,6 +50,12 @@ export const PAYROLL_COLUMNS: PayrollColumnDef[] = [
   { id: 'employeeName', label: 'Employee', minWidth: 110 },
   { id: 'designation', label: 'Designation', minWidth: 100 },
   { id: 'site', label: 'Site', minWidth: 90 },
+  // The deputed branch/site code (`ProjectUnit.code`) for this entry's primary work line —
+  // labeled "Deputed Branch" (not "Branch Code") specifically to avoid colliding with the
+  // `branchCode` column below, which is the employee's unrelated *bank* branch code (product
+  // decision, Payroll Entry usability checkpoint, 2026-07-24). Never grouped under "Bank
+  // Details"; placed beside the other employee/site identity columns instead.
+  { id: 'unitCode', label: 'Deputed Branch', minWidth: 90 },
   // Bank Code only in this dense grid, per the approved Bank display rule (2026-07-13) — the full
   // Bank Name stays in Employee Registry's own dropdown, where users need it to pick the right one.
   { id: 'bankId', label: 'Bank', group: 'Bank Details', minWidth: 60 },
@@ -94,6 +100,8 @@ function extractColumnValue(columnId: string, entry: PayrollEntry, bankCodeById:
       return entry.designation;
     case 'site':
       return entry.site.name;
+    case 'unitCode':
+      return entry.workLines[0]?.unit.code ?? '';
     case 'bankId':
       return entry.bankId ? (bankCodeById.get(entry.bankId) ?? '') : 'Cash';
     case 'branchCode':

@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import multer from 'multer';
 import {
   addWorkLineSchema,
   bulkUpdatePayrollEntriesSchema,
@@ -23,15 +22,7 @@ import {
   updatePayrollEntry,
   updateWorkLine,
 } from './payroll-entry.service';
-import {
-  exportPayrollEntriesToCsv,
-  exportPayrollEntriesToXlsx,
-  generatePayrollEntryImportTemplate,
-  importPayrollEntries,
-  parsePayrollEntryImportFile,
-} from './payroll-entry-import-export.service';
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+import { exportPayrollEntriesToCsv, exportPayrollEntriesToXlsx } from './payroll-entry-import-export.service';
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
@@ -158,67 +149,11 @@ payrollCycleEntriesRouter.get(
   },
 );
 
-/** Payroll Entry CSV/Excel import (Phase 3 Checkpoint 5) — **update-only** (never creates a
- * `PayrollEntry`/`PayrollEntryWorkLine`, per the approved architecture); `importPayrollEntries`
- * owns all per-row validation/authorization/editability checks and reports a per-row result. This
- * route owns the one summary `AuditLog` entry for the whole operation, mirroring Employee
- * Registry's `employee.import` precedent exactly. */
-payrollCycleEntriesRouter.post(
-  '/import',
-  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
-  upload.single('file'),
-  async (req, res, next) => {
-    try {
-      const cycleId = requireIdParam(req.params.cycleId);
-      if (!req.file) {
-        throw badRequest('No file uploaded — expected a multipart field named "file"');
-      }
-
-      const rows = await parsePayrollEntryImportFile(req.file.buffer, req.file.originalname);
-      const result = await importPayrollEntries(req.currentUser!, cycleId, rows);
-
-      await recordAuditLog({
-        actorUserId: req.currentUser!.id,
-        action: 'payroll_entry.import',
-        entityType: 'PayrollEntry',
-        metadata: { cycleId, updated: result.updated, skippedCount: result.skipped.length },
-        ipAddress: req.ip ?? null,
-        userAgent: req.get('user-agent') ?? null,
-      });
-
-      res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
 /** Mounted at /api/v1/payroll-entries and /api/v1/work-lines — individual resources addressed
  * directly by their own id, the same shape as Project Units' PATCH/DELETE routes. */
 export const payrollEntriesRouter = Router();
 
 payrollEntriesRouter.use(requireAuth);
-
-// Registered ahead of GET /:id — a distinct static path, same reasoning as Employee Registry's own
-// /import-template route (employees.routes.ts). Not cycle-scoped: this is a blank template, no real
-// cycle data.
-payrollEntriesRouter.get(
-  '/import-template',
-  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
-  async (_req, res, next) => {
-    try {
-      const buffer = await generatePayrollEntryImportTemplate();
-      res.setHeader('Content-Disposition', 'attachment; filename="payroll-entry-import-template.xlsx"');
-      res.setHeader(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
-      res.status(200).send(buffer);
-    } catch (error) {
-      next(error);
-    }
-  },
-);
 
 payrollEntriesRouter.get('/:id', requirePermission(VIEW_PERMISSIONS), async (req, res, next) => {
   try {

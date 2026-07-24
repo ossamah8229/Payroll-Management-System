@@ -7,15 +7,23 @@ import type {
   UpdatePayrollEntryInput,
   UpdateWorkLineInput,
 } from '@payroll/shared';
-import { apiRequest, ApiError, API_BASE_URL, getCsrfToken } from '@/lib/api-client';
+import { apiRequest, ApiError, API_BASE_URL } from '@/lib/api-client';
 import type { Employee } from '@/hooks/use-employees';
 import type { ProjectSite } from '@/hooks/use-project-sites';
+import type { ProjectUnit } from '@/hooks/use-project-units';
 
 export interface PayrollEntryWorkLine {
   id: string;
   payrollEntryId: string;
   siteId: string;
   unitId: string;
+  /** The `ProjectUnit` this line is deputed to *for this cycle's entry* — always frozen for a
+   * released/archived entry (work lines never change post-release, §12) and the current Draft
+   * roster's assignment otherwise. This (specifically `.code`) is the grid's "Deputed Branch"
+   * column source — never `employee.unit`, which is the employee's *current* default unit and
+   * would silently rewrite a released entry's historical branch onto whatever the employee is
+   * deputed to today. */
+  unit: ProjectUnit;
   days: string;
   otHours: string;
   otRate: string | null;
@@ -310,61 +318,5 @@ export async function downloadPayrollEntryExport(
   URL.revokeObjectURL(url);
 }
 
-/** Import Templates checkpoint — a blank template with the exact header set, one sample row, and
- * an Instructions sheet documenting that this import is update-only (`generatePayrollEntryImportTemplate`,
- * backend) — mirrors `downloadEmployeeImportTemplate` (`use-employees.ts`) exactly. Not cycle-scoped:
- * the shape is the same for every cycle. */
-export async function downloadPayrollEntryImportTemplate(): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/payroll-entries/import-template`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw new ApiError(response.status, 'TEMPLATE_DOWNLOAD_FAILED', 'Failed to download the import template');
-  }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'payroll-entry-import-template.xlsx';
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-export interface PayrollEntryImportResult {
-  updated: number;
-  skipped: { row: number; reason: string }[];
-}
-
-/**
- * Payroll Entry CSV/Excel import (Phase 3 Checkpoint 5) — **update-only**, mirroring
- * `useImportEmployees` (`use-employees.ts`) exactly, scoped to one cycle. On success, invalidates
- * the cycle's entries query (a full refetch, not a per-row merge — an import can touch far more
- * rows than are ever mounted by the virtualizer at once, the same cache strategy
- * `useBulkUpdatePayrollEntries` already uses for the same reason).
- */
-export function useImportPayrollEntries(cycleId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append('file', file);
-      const csrfToken = getCsrfToken();
-
-      const response = await fetch(`${API_BASE_URL}/api/v1/payroll-cycles/${cycleId}/entries/import`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: csrfToken ? { 'x-csrf-token': csrfToken } : undefined,
-        body: formData,
-      });
-
-      const payload = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        throw new ApiError(response.status, payload?.error?.code ?? 'IMPORT_FAILED', payload?.error?.message ?? 'Import failed');
-      }
-      return payload as PayrollEntryImportResult;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
-    },
-  });
-}
+// Payroll Entry import was removed (Payroll Entry usability checkpoint, 2026-07-24) — payroll
+// data must never be imported, per the approved product decision. Export (above) is unaffected.

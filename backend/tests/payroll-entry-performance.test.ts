@@ -1,5 +1,4 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
-import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
 import { PAYROLL_ENTRY_TEMPLATE_HEADERS } from '../src/modules/payroll-entry/payroll-entry-import-export.service';
@@ -26,7 +25,9 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
  * free, and Checkpoint 6 is validating the *existing* architecture, not paying its setup cost
  * ten times over. Tests are ordered so a later test's mutations never invalidate an earlier test's
  * assertions: read-only/measurement tests first, then Copy to All (bulk-mutates one field for
- * every entry), then export (reads current state), then import last (mutates every field).
+ * every entry), then export last (reads current state). Payroll Entry import was removed (Payroll
+ * Entry usability checkpoint, 2026-07-24) — payroll data must never be imported — so its own
+ * 10,000-row perf case was removed with it.
  */
 
 jest.setTimeout(10 * 60 * 1000);
@@ -319,60 +320,4 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
     console.log(`[perf] export of ${EMPLOYEE_COUNT} rows to CSV: ${ms}ms (correctness-first, no strict target)`);
   });
 
-  it('import updates all 10,000 matched rows correctly, with its duration on record', async () => {
-    const rows: Record<string, string>[] = [];
-    for (let i = 0; i < EMPLOYEE_COUNT; i += 1) {
-      const base: Record<(typeof PAYROLL_ENTRY_TEMPLATE_HEADERS)[number], string> = {
-        CNIC: '',
-        'Employee Code': `PERF-${String(i).padStart(6, '0')}`,
-        Name: '',
-        Site: '',
-        Designation: '',
-        'Gross Pay': '',
-        Days: '22',
-        'OT Hrs': '',
-        'OT Rate': '',
-        Allowance: '',
-        Leave: '',
-        'Leave Rate': '',
-        'Cycle Days': '',
-        'EOBI Amount': '',
-        'EOBI On': '',
-        Advance: '',
-        'Eid Advance': '',
-        Fine: '',
-        Hold: '',
-        Released: '',
-      };
-      rows.push(base);
-    }
-    const csv = Buffer.from(
-      stringifyCsvSync([
-        PAYROLL_ENTRY_TEMPLATE_HEADERS as unknown as string[],
-        ...rows.map((row) => PAYROLL_ENTRY_TEMPLATE_HEADERS.map((header) => row[header] ?? '')),
-      ]),
-      'utf-8',
-    );
-
-    const start = Date.now();
-    const res = await admin.agent
-      .post(`/api/v1/payroll-cycles/${cycleId}/entries/import`)
-      .set('x-csrf-token', admin.csrfToken)
-      .attach('file', csv, 'payroll.csv');
-    const ms = Date.now() - start;
-
-    expect(res.status).toBe(200);
-    expect(res.body.updated).toBe(EMPLOYEE_COUNT);
-    expect(res.body.skipped).toHaveLength(0);
-    // eslint-disable-next-line no-console
-    console.log(
-      `[perf] import of ${EMPLOYEE_COUNT} rows (row-by-row, per approved architecture): ${ms}ms ` +
-        `(correctness-first, no strict target — Decision 4)`,
-    );
-
-    const sample = await prisma.payrollEntryWorkLine.findFirst({
-      where: { payrollEntry: { cycleId, employee: { employeeCode: 'PERF-000000' } } },
-    });
-    expect(Number(sample?.days)).toBe(22);
-  });
 });

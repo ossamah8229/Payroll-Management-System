@@ -189,34 +189,8 @@ describe('Phase 5 Checkpoint 4 — Archived Cycle Ordinary-Editing Lock', () => 
     expect(res.body).toEqual({ matchedCount: 2, appliedCount: 0 });
   });
 
-  it('skips every row on import once the cycle is Archived, including a held, unreleased entry', async () => {
-    const admin = await masterAdminAgent('archived-lock-import-admin@test.local');
-    const { archivedCycleId, heldEntry } = await makeArchivedCycleWithHeldAndReleasedEntries(admin, 5);
-
-    const employeeId = (await prisma.payrollEntry.findUniqueOrThrow({ where: { id: heldEntry.id } })).employeeId;
-    const employee = await prisma.employee.update({
-      where: { id: employeeId },
-      data: { employeeCode: 'ARCHLOCK5' },
-    });
-
-    const csv = [
-      'CNIC,Employee Code,Name,Site,Designation,Gross Pay,Days,OT Hrs,OT Rate,Allowance,Leave,Leave Rate,Cycle Days,EOBI Amount,EOBI On,Advance,Eid Advance,Fine,Hold,Released',
-      `,${employee.employeeCode},${employee.name},,,88888,,,,,,,,,,,,,,`,
-    ].join('\n');
-
-    const res = await admin.agent
-      .post(`/api/v1/payroll-cycles/${archivedCycleId}/entries/import`)
-      .set('x-csrf-token', admin.csrfToken)
-      .attach('file', Buffer.from(csv, 'utf-8'), 'payroll.csv');
-
-    expect(res.status).toBe(200);
-    expect(res.body.updated).toBe(0);
-    expect(res.body.skipped).toHaveLength(1);
-    expect(res.body.skipped[0].reason).toMatch(/archived/i);
-
-    const unchanged = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: heldEntry.id } });
-    expect(Number(unchanged.grossPay)).not.toBe(88888);
-  });
+  // Payroll Entry import was removed entirely (Payroll Entry usability checkpoint, 2026-07-24) —
+  // payroll data must never be imported — so its own Archived-cycle lock coverage went with it.
 
   // --- The already-released entry — confirms no regression in the pre-existing rejection reason ---
 

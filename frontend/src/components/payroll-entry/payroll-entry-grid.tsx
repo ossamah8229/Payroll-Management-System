@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createColumnHelper, getCoreRowModel, useReactTable, flexRender } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import type { PayrollCycle } from '@/hooks/use-payroll-cycles';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import type { Bank } from '@/hooks/use-banks';
@@ -10,6 +11,7 @@ import { PayrollEntryTotalsRow } from './payroll-entry-totals-row';
 import { LiveTotalsStore } from './live-totals-store';
 import { computeServerSnapshot } from './calc-input';
 import { useGridKeyboardNav } from './use-grid-keyboard-nav';
+import { isSortableColumnId, sortPayrollEntries, type SortableColumnId, type SortState } from './sort-entries';
 
 const columnHelper = createColumnHelper<PayrollEntry>();
 const GROUP_ROW_HEIGHT = 22;
@@ -63,10 +65,29 @@ export function PayrollEntryGrid({
   // this checkpoint's tested scale) the virtualizer has never mounted — without this, the totals
   // row would silently only ever sum whatever's currently rendered on screen. Safe to call on
   // every `entries` change (any row's autosave produces a new array reference): `setBase` never
-  // overwrites a row that's currently being actively edited (see live-totals-store.ts).
+  // overwrites a row that's currently being actively edited (see live-totals-store.ts). Always
+  // reads the *unsorted* `entries` prop (the currently-filtered dataset), not the sorted view built
+  // below — the totals row represents the filtered dataset and must never shift when only the
+  // display order changes (Payroll Entry usability checkpoint, 2026-07-24).
   useEffect(() => {
     liveTotalsStore.setBase(entries.map((entry) => ({ id: entry.id, snapshot: computeServerSnapshot(entry) })));
   }, [entries, liveTotalsStore]);
+
+  // Sortable columns (Payroll Entry usability checkpoint, 2026-07-24) — a pure client-side reorder
+  // of the already-fully-fetched, already-site-filtered `entries` array (Checkpoint 6's own
+  // in-memory-grid architecture decision means the whole cycle is resident client-side already, so
+  // there's no server-side sort/pagination to introduce). Never mutates `entries`; `sortedEntries`
+  // is a new array, reused only as the table's row order — every other computation below
+  // (`resolvedColumns`, the totals store above) still reads the original `entries`.
+  const [sort, setSort] = useState<SortState | null>(null);
+  const sortedEntries = useMemo(() => sortPayrollEntries(entries, sort), [entries, sort]);
+
+  function toggleSort(columnId: SortableColumnId) {
+    setSort((current) => {
+      if (!current || current.columnId !== columnId) return { columnId, direction: 'asc' };
+      return { columnId, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+    });
+  }
 
   // TanStack Table drives column/header structure and the row model the virtualizer scrolls over
   // (tech-stack.md: "sorting/filtering hooks, per-cell editing, and — critically — integrates with
@@ -80,7 +101,7 @@ export function PayrollEntryGrid({
   );
 
   const table = useReactTable({
-    data: entries,
+    data: sortedEntries,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => row.id,
@@ -150,16 +171,40 @@ export function PayrollEntryGrid({
               className="sticky z-20 grid border-b border-border bg-surface"
               style={{ top: GROUP_ROW_HEIGHT, gridTemplateColumns: gridTemplate, width, height: HEADER_ROW_HEIGHT }}
             >
-              {headerGroup.headers.map((header) => (
-                <div
-                  role="columnheader"
-                  key={header.id}
-                  data-col-id={header.column.id}
-                  className="truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted"
-                >
-                  {flexRender(header.column.columnDef.header, header.getContext())}
-                </div>
-              ))}
+              {headerGroup.headers.map((header) => {
+                const sortable = isSortableColumnId(header.column.id);
+                const isActive = sortable && sort?.columnId === header.column.id;
+                return (
+                  <div
+                    role="columnheader"
+                    key={header.id}
+                    data-col-id={header.column.id}
+                    aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : sortable ? 'none' : undefined}
+                    className="truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted"
+                  >
+                    {sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(header.column.id as SortableColumnId)}
+                        className="flex w-full items-center gap-1 truncate text-left hover:text-text"
+                      >
+                        <span className="truncate">{flexRender(header.column.columnDef.header, header.getContext())}</span>
+                        {isActive ? (
+                          sort!.direction === 'asc' ? (
+                            <ChevronUp className="h-3 w-3 shrink-0" aria-hidden />
+                          ) : (
+                            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-40" aria-hidden />
+                        )}
+                      </button>
+                    ) : (
+                      flexRender(header.column.columnDef.header, header.getContext())
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ))}
 

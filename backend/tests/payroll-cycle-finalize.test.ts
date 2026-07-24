@@ -1,9 +1,7 @@
 import request from 'supertest';
-import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { PAYROLL_ENTRY_TEMPLATE_HEADERS } from '../src/modules/payroll-entry/payroll-entry-import-export.service';
 import { cleanTestData, createAuthenticatedAgent, extractCookie } from './helpers';
 
 const app = createApp();
@@ -61,44 +59,6 @@ describe('Phase 5 Checkpoint 1 — Finalize Payroll Cycle', () => {
 
   async function makeEmployee(siteId: string, unitId: string, name: string, grossPay = '30000') {
     return prisma.employee.create({ data: { name, designation: 'Guard', siteId, unitId, grossPay } });
-  }
-
-  async function makeEmployeeWithCnic(siteId: string, unitId: string, name: string, cnic: string, grossPay = '30000') {
-    return prisma.employee.create({ data: { name, designation: 'Guard', siteId, unitId, grossPay, cnic } });
-  }
-
-  function templateRow(overrides: Partial<Record<(typeof PAYROLL_ENTRY_TEMPLATE_HEADERS)[number], string>>) {
-    const base: Record<(typeof PAYROLL_ENTRY_TEMPLATE_HEADERS)[number], string> = {
-      CNIC: '',
-      'Employee Code': '',
-      Name: '',
-      Site: '',
-      Designation: '',
-      'Gross Pay': '',
-      Days: '',
-      'OT Hrs': '',
-      'OT Rate': '',
-      Allowance: '',
-      Leave: '',
-      'Leave Rate': '',
-      'Cycle Days': '',
-      'EOBI Amount': '',
-      'EOBI On': '',
-      Advance: '',
-      'Eid Advance': '',
-      Fine: '',
-      Hold: '',
-      Released: '',
-    };
-    return { ...base, ...overrides };
-  }
-
-  function toCsv(rows: Record<string, string>[]): Buffer {
-    const csv = stringifyCsvSync([
-      PAYROLL_ENTRY_TEMPLATE_HEADERS as unknown as string[],
-      ...rows.map((row) => PAYROLL_ENTRY_TEMPLATE_HEADERS.map((header) => row[header] ?? '')),
-    ]);
-    return Buffer.from(csv, 'utf-8');
   }
 
   async function makeDraftCycle(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, month: number) {
@@ -712,49 +672,4 @@ describe('Phase 5 Checkpoint 1 — Finalize Payroll Cycle', () => {
     expect(releasedAfter.released).toBe(true);
   });
 
-  it('regression: a held, unreleased entry remains importable (CSV) after cycle finalization; a released entry stays permanently skipped', async () => {
-    const admin = await masterAdminAgent('finalize-regress-import-admin@test.local');
-    const { site, units } = await makeSiteWithUnits('Test Site Finalize Regress Import', ['Alpha']);
-    const cycle = await makeDraftCycle(admin, 1);
-    const releasedEmployee = await makeEmployeeWithCnic(
-      site.id,
-      units[0]!.id,
-      'Import Regress Released',
-      '1111122222333',
-    );
-    const heldEmployee = await makeEmployeeWithCnic(site.id, units[0]!.id, 'Import Regress Held', '4444455555666');
-    await createEntry(admin, cycle.id, releasedEmployee.id);
-    const heldEntry = await createEntry(admin, cycle.id, heldEmployee.id);
-    await holdEntry(admin, heldEntry.id, heldEntry.version);
-    await releaseUnit(admin, cycle.id, units[0]!.id);
-
-    const finalizeRes = await finalize(admin, cycle.id);
-    expect(finalizeRes.status).toBe(200);
-
-    const csv = toCsv([
-      templateRow({ CNIC: '1111122222333', 'Gross Pay': '99999' }),
-      templateRow({ CNIC: '4444455555666', 'Gross Pay': '45000' }),
-    ]);
-
-    const importRes = await admin.agent
-      .post(`/api/v1/payroll-cycles/${cycle.id}/entries/import`)
-      .set('x-csrf-token', admin.csrfToken)
-      .attach('file', csv, 'payroll.csv');
-
-    expect(importRes.status).toBe(200);
-    expect(importRes.body.updated).toBe(1);
-    expect(importRes.body.skipped).toHaveLength(1);
-    expect(importRes.body.skipped[0].reason).toMatch(/locked/i);
-
-    const heldAfter = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: heldEntry.id } });
-    expect(Number(heldAfter.grossPay)).toBe(45000);
-    expect(heldAfter.hold).toBe(true);
-    expect(heldAfter.released).toBe(false);
-
-    const releasedAfter = await prisma.payrollEntry.findFirstOrThrow({
-      where: { cycleId: cycle.id, employeeId: releasedEmployee.id },
-    });
-    expect(Number(releasedAfter.grossPay)).not.toBe(99999);
-    expect(releasedAfter.released).toBe(true);
-  });
 });
