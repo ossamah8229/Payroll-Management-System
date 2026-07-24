@@ -1843,3 +1843,40 @@ application-layer (backend authorization logic + frontend consistency) remediati
 
 **Verification**: backend 883/883, frontend 91/91, full E2E suite 40/40 (two new specs), all
 typecheck/lint/build clean, Prisma schema/migrations untouched. Nothing pushed, nothing deployed.
+
+---
+
+## 10. Addendum, 2026-07-24 — Corrections Workflow Redesign / RBAC Consistency Completion
+
+Two objectives: finish migrating the "deliberately not done" remainder §9 above named (the 7
+site-scoped modules still calling the raw, `sites:manage`-aware `useProjectSites()`) to
+`useAccessibleProjectSites(user)`, and give the Corrections workflow a real, discoverable entry
+point. Full detail is in `docs/PROJECT_PROGRESS.md`'s "Corrections Workflow Redesign / RBAC
+Consistency Completion (2026-07-24)" entry — this is only the next-session pointer.
+
+**RBAC completion**: all 7 remaining modules (Corrections, Salary Release, Payslips, Payroll Entry,
+Bank Sheet, Cash Receiving, Advances) now call `useAccessibleProjectSites(user)`. **All seven
+operational modules named across both this checkpoint and §9's now use
+`useAccessibleProjectSites(user)` — no module in this system follows a different site-scope rule
+than any other, beyond the two pages that intentionally retain the unrestricted list: Project Sites
+administration and the Users module's own site-assignment picker**, both of which genuinely need
+every site regardless of the acting user's own assignment.
+
+**Corrections discoverability**: the backend corrections lifecycle (create → review →
+approve/reject → ledger → outstanding balance) was already complete and exhaustively tested (nine
+backend test files) — it was **not duplicated** by this checkpoint. The actual gap was frontend
+discoverability, now implemented at the released-entry row level:
+`payroll-entry-row.tsx` renders a Released badge and a per-row actions menu (Create Correction, View
+Correction History) on any row whose own `entry.released` is true, replacing the previous
+single, page-wide toolbar button gated on cycle status rather than per-entry release state.
+
+**Also delivered**: a reusable searchable `EmployeeLookup` component; standard print support across
+all 8 named pages; downloadable import templates for Employees and Payroll Entry; a terminology
+audit that made "Master User" the live seeded display name (it had only ever been documented, not
+actually seeded).
+
+**Verification**: backend **891 passed plus 1 known pre-existing isolated timing flake, 892
+total** (the flake is `payslips.test.ts` under host resource contention — pre-existing, documented
+KI-10 pattern, confirmed via isolated rerun at 47/47, not a regression). Frontend **91/91**. Full
+E2E suite **44/44, with two legitimate conditional skips**. All typecheck/lint/build clean,
+Prisma schema/migrations untouched. **Nothing pushed, nothing deployed** as of this addendum.

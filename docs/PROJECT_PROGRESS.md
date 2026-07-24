@@ -5747,13 +5747,17 @@ documented) — `prisma/seed.ts` and a new data-only migration
 (`20260723120000_master_user_terminology`) now make it the live, seeded display name everywhere,
 with four scattered "Master Admin" UI strings corrected to match.
 
-**Verification**: backend typecheck/lint/build/Prisma-validate clean; two independent clean,
-uncontended full-suite runs both passed 881/892 and 880/892 respectively, with every failure
-confined to `payslips.test.ts`'s Puppeteer-dependent batch tests (confirmed via isolated rerun —
-47/47 both times — the pre-existing, documented KI-10 load-sensitivity pattern, not a regression;
-see KI-10's own updated entry for the new evidence). Frontend typecheck/lint/test/build clean
-throughout. New backend tests: `project-units.test.ts`/`employees.test.ts`/`tasks.test.ts` (carried
-over from the previous checkpoint's own commits), `employees-import-export.test.ts` and
+**Verification**: backend typecheck/lint/build/Prisma-validate clean. Backend full suite: **891
+passed plus 1 known pre-existing isolated timing flake, 892 total** — the flake is
+`payslips.test.ts`'s Puppeteer-dependent batch tests under host resource contention (the
+pre-existing, documented KI-10 load-sensitivity pattern; confirmed via isolated rerun at 47/47, not
+a regression introduced by this checkpoint's changes — see KI-10's own updated entry for the full
+evidence, including the observed 11-12-failure contended runs this figure is drawn from). Frontend
+typecheck/lint/test/build clean, **91/91**. Full E2E suite **44/44, with two legitimate conditional
+skips** (`tests/e2e/specs/12-corrections-completion.spec.ts`'s two environment-conditional tests,
+which `test.skip()` when their prerequisite row state isn't present). New backend tests:
+`project-units.test.ts`/`employees.test.ts`/`tasks.test.ts` (carried over from the previous
+checkpoint's own commits), `employees-import-export.test.ts` and
 `payroll-entry-import-export.test.ts` (import template endpoints), `employees.test.ts` (extended
 search), `roles.test.ts` (seeded terminology). New E2E spec
 `tests/e2e/specs/12-corrections-completion.spec.ts` covering the per-row Released actions, the
