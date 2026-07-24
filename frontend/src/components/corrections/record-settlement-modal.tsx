@@ -142,7 +142,7 @@ export function RecordSettlementModal({
                           Settles the full remaining balance ({formatMoney(available)}) in one payment, outside
                           any payroll cycle.
                         </p>
-                        <FilterField id="settlement-bank" label="Bank (optional — leave blank for cash)">
+                        <FilterField id="settlement-bank" label="Payment Method / Bank">
                           <select
                             id="settlement-bank"
                             className={selectClassName}
