@@ -141,6 +141,86 @@ export async function exportPayrollEntriesToXlsx(
   return { buffer: Buffer.from(buffer), rowCount: entries.length };
 }
 
+const PAYROLL_ENTRY_TEMPLATE_COLUMN_NOTES: Record<(typeof PAYROLL_ENTRY_TEMPLATE_HEADERS)[number], string> = {
+  CNIC: 'Matches an existing employee together with/instead of Employee Code — at least one of the two must identify a real employee already on file.',
+  'Employee Code': 'Matches an existing employee together with/instead of CNIC.',
+  Name: 'Informational only, for readability — never matched against or written back.',
+  Site: 'Informational only.',
+  Designation: 'Editable.',
+  'Gross Pay': 'Editable — numeric, e.g. 35000.00.',
+  Days: 'Editable — the primary Work Line only (Option C: a split employee\'s other lines are never represented here).',
+  'OT Hrs': 'Editable — the primary Work Line only.',
+  'OT Rate': 'Editable — leave blank for the automatic default rate.',
+  Allowance: 'Editable — numeric.',
+  Leave: 'Editable — leave days, numeric.',
+  'Leave Rate': 'Editable — leave blank for the automatic default rate.',
+  'Cycle Days': 'Editable — the primary Work Line only.',
+  'EOBI Amount': 'Editable — numeric.',
+  'EOBI On': 'Editable — "Yes" or "No".',
+  Advance: 'Editable — advance deduction amount, numeric.',
+  'Eid Advance': 'Editable — Eid advance deduction amount, numeric.',
+  Fine: 'Editable — numeric.',
+  Hold: 'Editable — "Yes" or "No".',
+  Released: 'Read-only/informational — never parsed back into a write. A row for an already-released entry is rejected outright, matching the grid\'s own edit lock.',
+};
+
+/**
+ * A blank, downloadable Payroll Entry import template (Import Templates checkpoint). This import
+ * is deliberately **update-only** — it never creates a new PayrollEntry (Option C, this file's own
+ * frozen architecture note) — so unlike the Employee Registry's template, the sample row here
+ * illustrates the exact column shape only; it can never be a stand-in for "any row matching no
+ * existing employee creates one," which is not how this importer works. The "Instructions" sheet
+ * says so explicitly, alongside which columns are actually editable vs. informational/read-only.
+ */
+export async function generatePayrollEntryImportTemplate(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+
+  const templateSheet = workbook.addWorksheet('Payroll Entry Import Template');
+  templateSheet.addRow(PAYROLL_ENTRY_TEMPLATE_HEADERS as unknown as string[]);
+  templateSheet.addRow([
+    '3520112345671',
+    'EMP-0001',
+    'Muhammad Ali',
+    'Model Town Site',
+    'Security Guard',
+    '35000.00',
+    '30',
+    '4',
+    '',
+    '1000.00',
+    '0',
+    '',
+    '30',
+    '0.00',
+    'Yes',
+    '0.00',
+    '0.00',
+    '0.00',
+    'No',
+    'No',
+  ]);
+  templateSheet.getRow(1).font = { bold: true };
+
+  const instructionsSheet = workbook.addWorksheet('Instructions');
+  instructionsSheet.addRow([
+    'This import updates existing Payroll Entries for the cycle you upload it against — it never',
+  ]);
+  instructionsSheet.addRow([
+    'creates a new entry. Every row must match an existing employee via CNIC and/or Employee Code.',
+  ]);
+  instructionsSheet.addRow([]);
+  instructionsSheet.addRow(['Column', 'Notes']);
+  instructionsSheet.getRow(4).font = { bold: true };
+  for (const header of PAYROLL_ENTRY_TEMPLATE_HEADERS) {
+    instructionsSheet.addRow([header, PAYROLL_ENTRY_TEMPLATE_COLUMN_NOTES[header]]);
+  }
+  instructionsSheet.getColumn(1).width = 18;
+  instructionsSheet.getColumn(2).width = 100;
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
 interface ParsedRow {
   rowNumber: number;
   cells: Record<string, string>;

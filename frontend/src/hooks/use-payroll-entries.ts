@@ -310,6 +310,26 @@ export async function downloadPayrollEntryExport(
   URL.revokeObjectURL(url);
 }
 
+/** Import Templates checkpoint — a blank template with the exact header set, one sample row, and
+ * an Instructions sheet documenting that this import is update-only (`generatePayrollEntryImportTemplate`,
+ * backend) — mirrors `downloadEmployeeImportTemplate` (`use-employees.ts`) exactly. Not cycle-scoped:
+ * the shape is the same for every cycle. */
+export async function downloadPayrollEntryImportTemplate(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/payroll-entries/import-template`, {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'TEMPLATE_DOWNLOAD_FAILED', 'Failed to download the import template');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'payroll-entry-import-template.xlsx';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export interface PayrollEntryImportResult {
   updated: number;
   skipped: { row: number; reason: string }[];

@@ -19,7 +19,13 @@ import {
   reactivateEmployee,
   updateEmployee,
 } from './employees.service';
-import { exportEmployeesToCsv, exportEmployeesToXlsx, importEmployees, parseEmployeeImportFile } from './employees-import-export.service';
+import {
+  exportEmployeesToCsv,
+  exportEmployeesToXlsx,
+  generateEmployeeImportTemplate,
+  importEmployees,
+  parseEmployeeImportFile,
+} from './employees-import-export.service';
 
 export const employeesRouter = Router();
 
@@ -61,6 +67,26 @@ employeesRouter.get('/export', requirePermission(PERMISSIONS.EMPLOYEES_VIEW), as
     next(error);
   }
 });
+
+// Registered ahead of POST /import — a distinct static path, but grouped here since both are the
+// same import workflow's two halves (get the correct shape, then upload a filled-in copy of it).
+employeesRouter.get(
+  '/import-template',
+  requirePermission(PERMISSIONS.EMPLOYEES_CREATE),
+  async (_req, res, next) => {
+    try {
+      const buffer = await generateEmployeeImportTemplate();
+      res.setHeader('Content-Disposition', 'attachment; filename="employee-import-template.xlsx"');
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.status(200).send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 employeesRouter.post(
   '/import',

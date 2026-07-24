@@ -118,6 +118,86 @@ export async function exportEmployeesToXlsx(currentUser: SessionUser, siteIds?: 
   return Buffer.from(buffer);
 }
 
+/**
+ * Per-column required/optional/validation documentation for the downloadable Employee import
+ * template (Import Templates checkpoint) — kept as data, not just prose, so the "Instructions"
+ * sheet below and any future consumer (a future in-app column-hint tooltip, say) share one source
+ * rather than a second hand-written copy that could drift from `createEmployeeSchema`
+ * (`shared/src/schemas/employee.ts`), the actual authority every one of these notes describes.
+ */
+const EMPLOYEE_TEMPLATE_COLUMN_NOTES: Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], { required: boolean; note: string }> = {
+  'Sr. No': { required: false, note: 'Not imported — a convenience column for the source file only.' },
+  Project: { required: true, note: 'Must exactly match an existing Project Site name.' },
+  'Employee Number/Code': { required: false, note: 'Unique if provided; left blank to let the system leave it unset.' },
+  Religion: { required: false, note: 'Free text.' },
+  Name: { required: true, note: 'Employee full name.' },
+  'Father Name': { required: false, note: 'Free text.' },
+  CNIC: { required: false, note: '13 digits; dashes/spaces are stripped automatically. Must be unique across all employees if provided.' },
+  DOB: { required: false, note: 'Date of birth — YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY.' },
+  DOJ: { required: false, note: 'Date of joining — same accepted formats as DOB.' },
+  DOL: { required: false, note: 'Date of leaving — leave blank for an active employee.' },
+  'Mobile Number': { required: false, note: 'Free text, up to 20 characters.' },
+  Designation: { required: true, note: 'Job title/role.' },
+  Area: { required: true, note: `The employee's Branch/Unit name within their Project Site — must match "Area/Location" and "Branch Code" if both are also provided.` },
+  'Branch Code': { required: false, note: 'The Branch/Unit code, if your site uses one — must identify the same unit as "Area".' },
+  'Area/Location': { required: false, note: 'Alias of "Area" — must match it if both are provided.' },
+  'Project Bank': { required: false, note: 'Bank name — leave every bank column blank for a cash employee.' },
+  'Bank Branch Code': { required: false, note: "The employee's own bank branch code (unrelated to \"Branch Code\" above)." },
+  'Account Number': { required: false, note: 'Required if "Project Bank" is set; must stay blank for a cash employee.' },
+  'Basic/Gross Pay': { required: true, note: 'Numeric, e.g. 35000.00 — the employee\'s starting gross pay for new payroll cycles.' },
+};
+
+/**
+ * A blank, downloadable Employee Registry import template (Import Templates checkpoint) — every
+ * required header (`EMPLOYEE_TEMPLATE_HEADERS`, the exact set `parseEmployeeImportFile` validates
+ * against), one fully-filled sample row so a real import file's shape is unambiguous, and a second
+ * "Instructions" sheet documenting which columns are required vs. optional and any validation
+ * rule that isn't obvious from the sample alone. Never queries real employee data — this is a
+ * template, not an export, and needs no `currentUser`/site-scope at all.
+ */
+export async function generateEmployeeImportTemplate(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+
+  const templateSheet = workbook.addWorksheet('Employee Import Template');
+  templateSheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
+  templateSheet.addRow([
+    '1',
+    'Model Town Site',
+    'EMP-0001',
+    'Islam',
+    'Muhammad Ali',
+    'Ghulam Ali',
+    '3520112345671',
+    '1990-01-15',
+    '2020-06-01',
+    '',
+    '03001234567',
+    'Security Guard',
+    'Main Branch',
+    'MB-01',
+    'Main Branch',
+    'Allied Bank Limited',
+    '0470',
+    '01234567890123',
+    '35000.00',
+  ]);
+  templateSheet.getRow(1).font = { bold: true };
+
+  const instructionsSheet = workbook.addWorksheet('Instructions');
+  instructionsSheet.addRow(['Column', 'Required', 'Notes']);
+  instructionsSheet.getRow(1).font = { bold: true };
+  for (const header of EMPLOYEE_TEMPLATE_HEADERS) {
+    const { required, note } = EMPLOYEE_TEMPLATE_COLUMN_NOTES[header];
+    instructionsSheet.addRow([header, required ? 'Required' : 'Optional', note]);
+  }
+  instructionsSheet.getColumn(1).width = 22;
+  instructionsSheet.getColumn(2).width = 12;
+  instructionsSheet.getColumn(3).width = 90;
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
 interface ParsedRow {
   rowNumber: number;
   cells: Record<string, string>;

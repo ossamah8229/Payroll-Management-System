@@ -26,6 +26,7 @@ import {
 import {
   exportPayrollEntriesToCsv,
   exportPayrollEntriesToXlsx,
+  generatePayrollEntryImportTemplate,
   importPayrollEntries,
   parsePayrollEntryImportFile,
 } from './payroll-entry-import-export.service';
@@ -197,6 +198,27 @@ payrollCycleEntriesRouter.post(
 export const payrollEntriesRouter = Router();
 
 payrollEntriesRouter.use(requireAuth);
+
+// Registered ahead of GET /:id — a distinct static path, same reasoning as Employee Registry's own
+// /import-template route (employees.routes.ts). Not cycle-scoped: this is a blank template, no real
+// cycle data.
+payrollEntriesRouter.get(
+  '/import-template',
+  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
+  async (_req, res, next) => {
+    try {
+      const buffer = await generatePayrollEntryImportTemplate();
+      res.setHeader('Content-Disposition', 'attachment; filename="payroll-entry-import-template.xlsx"');
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.status(200).send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 payrollEntriesRouter.get('/:id', requirePermission(VIEW_PERMISSIONS), async (req, res, next) => {
   try {

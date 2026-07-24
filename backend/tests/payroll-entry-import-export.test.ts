@@ -9,6 +9,22 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
 const app = createApp();
 const PASSWORD = 'CorrectHorseBattery1!';
 
+/** supertest/superagent only auto-buffers `res.body` for content-types it recognizes as binary —
+ * the xlsx spreadsheetml content-type isn't reliably one of them, so without this, `res.body` can
+ * come back empty/corrupted rather than a real workbook buffer. Same pattern as
+ * `payslips.test.ts`'s own `binaryParser`, duplicated locally per that file's own convention. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function binaryParser(res: any, callback: (err: Error | null, body: unknown) => void) {
+  res.setEncoding('binary');
+  let data = '';
+  res.on('data', (chunk: string) => {
+    data += chunk;
+  });
+  res.on('end', () => {
+    callback(null, Buffer.from(data, 'binary'));
+  });
+}
+
 describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel import/export', () => {
   beforeEach(async () => {
     await cleanTestData();
@@ -212,6 +228,46 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel import/export', () =>
     // The re-import is still a real write (version increments even when values are unchanged —
     // Checkpoint 4's administrative-bulk-operation precedent, not a per-row version check).
     expect(after.version).toBe(before.version + 1);
+  });
+
+  // Import Templates checkpoint — the blank, downloadable template, not cycle-scoped (unlike
+  // export, which needs a real cycle to pull rows from).
+  it('serves a downloadable import template with the exact header row, one sample row, and an Instructions sheet documenting update-only behavior', async () => {
+    const admin = await masterAdminAgent('payroll-entry-import-template@test.local');
+
+    const res = await admin.agent.get('/api/v1/payroll-entries/import-template').buffer(true).parse(binaryParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml');
+    expect(res.headers['content-disposition']).toContain('payroll-entry-import-template.xlsx');
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.body as Buffer);
+
+    const templateSheet = workbook.getWorksheet('Payroll Entry Import Template');
+    expect(templateSheet).toBeDefined();
+    const headerRow = templateSheet!.getRow(1).values as unknown[];
+    expect(headerRow.slice(1)).toEqual(PAYROLL_ENTRY_TEMPLATE_HEADERS);
+    expect(templateSheet!.rowCount).toBe(2); // header + exactly one sample row
+
+    const instructionsSheet = workbook.getWorksheet('Instructions');
+    expect(instructionsSheet).toBeDefined();
+  });
+
+  it('rejects a template download from a user without payroll:entry', async () => {
+    // A custom, non-seeded role code — see employees-import-export.test.ts's own note on why a
+    // real seeded system role (PAYROLL_STAFF/FINANCE/MASTER_ADMIN) can't be used to construct an
+    // under-permissioned persona (createTestUser's upsert-by-code ignores permissionKeys once the
+    // role already exists).
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'payroll-entry-import-template-unauthorized@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_NO_PAYROLL_ENTRY',
+      permissionKeys: [PERMISSIONS.PAYROLL_VIEW],
+    });
+
+    const res = await agent.get('/api/v1/payroll-entries/import-template');
+    expect(res.status).toBe(403);
   });
 
   it('matches an existing entry by Employee Code alone (no CNIC on file)', async () => {

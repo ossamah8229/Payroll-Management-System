@@ -16,6 +16,22 @@ const EMPLOYEE_PERMISSIONS = [
   PERMISSIONS.EMPLOYEES_CREATE,
 ];
 
+/** supertest/superagent only auto-buffers `res.body` for content-types it recognizes as binary —
+ * the xlsx spreadsheetml content-type isn't reliably one of them, so without this, `res.body` can
+ * come back empty/corrupted rather than a real workbook buffer. Same pattern as `payslips.test.ts`'s
+ * own `binaryParser`, duplicated locally per that file's own established convention. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function binaryParser(res: any, callback: (err: Error | null, body: unknown) => void) {
+  res.setEncoding('binary');
+  let data = '';
+  res.on('data', (chunk: string) => {
+    data += chunk;
+  });
+  res.on('end', () => {
+    callback(null, Buffer.from(data, 'binary'));
+  });
+}
+
 describe('Employee Registry import/export', () => {
   beforeEach(async () => {
     await cleanTestData();
@@ -100,6 +116,51 @@ describe('Employee Registry import/export', () => {
     expect(res.status).toBe(200);
     const firstLine = res.text.split('\n')[0]!.trim();
     expect(firstLine).toBe(EMPLOYEE_TEMPLATE_HEADERS.join(','));
+  });
+
+  // Import Templates checkpoint — the blank, downloadable template a user fills in before ever
+  // running a real import. Distinct from /export (which requires real employee data to exist and
+  // returns whatever rows match), this endpoint needs no data and no site scope at all.
+  it('serves a downloadable import template with the exact header row, one sample row, and an Instructions sheet', async () => {
+    const { agent } = await masterAdminAgent('import-template@test.local');
+    const res = await agent.get('/api/v1/employees/import-template').buffer(true).parse(binaryParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml');
+    expect(res.headers['content-disposition']).toContain('employee-import-template.xlsx');
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.body as Buffer);
+
+    const templateSheet = workbook.getWorksheet('Employee Import Template');
+    expect(templateSheet).toBeDefined();
+    const headerRow = templateSheet!.getRow(1).values as unknown[];
+    // ExcelJS rows are 1-indexed with a leading empty slot at index 0.
+    expect(headerRow.slice(1)).toEqual(EMPLOYEE_TEMPLATE_HEADERS);
+    expect(templateSheet!.rowCount).toBe(2); // header + exactly one sample row
+
+    const instructionsSheet = workbook.getWorksheet('Instructions');
+    expect(instructionsSheet).toBeDefined();
+    // One instructions row per template column, plus its own header row.
+    expect(instructionsSheet!.rowCount).toBe(EMPLOYEE_TEMPLATE_HEADERS.length + 1);
+  });
+
+  it('rejects a template download from a user without employees:create', async () => {
+    const site = await makeSite('Test Site Template Unauthorized');
+    // A custom, non-seeded role code — PAYROLL_STAFF/FINANCE/MASTER_ADMIN are real seeded system
+    // roles whose default permission grants already exist in the database, so createTestUser's
+    // upsert-by-code would silently reuse (and ignore any narrower permissionKeys against) one of
+    // those rather than actually construct an under-permissioned persona.
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'import-template-unauthorized@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_EMPLOYEES_VIEW_ONLY',
+      permissionKeys: [PERMISSIONS.EMPLOYEES_VIEW],
+      siteIds: [site.id],
+    });
+
+    const res = await agent.get('/api/v1/employees/import-template');
+    expect(res.status).toBe(403);
   });
 
   it('round-trips: exporting then re-importing the same data updates the existing employee rather than duplicating it', async () => {
