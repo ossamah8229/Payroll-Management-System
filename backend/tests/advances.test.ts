@@ -662,6 +662,407 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(Number(entryAfter?.advanceDeduction)).toBe(0);
   });
 
+  // --- Lifecycle-aware Edit (Section F) --------------------------------------------------------
+
+  it('allows editing totalAmount on an untouched ACTIVE Advance, adjusting outstandingBalance in lockstep', async () => {
+    const admin = await masterAdminAgent('adv-edit-total-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit Total');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit Total Employee');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    const res = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '12000' });
+    expect(res.status).toBe(200);
+    expect(Number(res.body.advance.totalAmount)).toBeCloseTo(12000, 2);
+    expect(Number(res.body.advance.outstandingBalance)).toBeCloseTo(12000, 2);
+  });
+
+  it('rejects reducing totalAmount below what has been RELEASED — a still-Draft (unreleased) deduction is not a floor', async () => {
+    const admin = await masterAdminAgent('adv-edit-total-floor-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit Total Floor');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit Total Floor Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '4000',
+      originalPeriod: { year: 2903, month: 8 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2903, 8); // materializes 4000 immediately (Defect D/E fix)
+
+    const advanceAfter = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(Number(advanceAfter.outstandingBalance)).toBeCloseTo(5000, 2); // 9000 - 4000
+
+    // Now release the unit — the live 4000 deduction becomes permanent/released. (The separate
+    // "while still Draft/unreleased, that same 4000 is NOT a floor" behavior is covered by its own
+    // dedicated test below, which also verifies the live recalculation itself — kept as two focused
+    // tests rather than one that both edits a live figure and then re-edits after release.)
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const tooLow = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '3000' }); // below the 4000 now-released amount
+    expect(tooLow.status).toBe(400);
+
+    const ok = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '10000' });
+    expect(ok.status).toBe(200);
+    expect(Number(ok.body.advance.outstandingBalance)).toBeCloseTo(6000, 2); // 10000 - 4000 released
+
+    // The released entry itself is never touched by this edit.
+    const releasedEntry = await prisma.payrollEntry.findFirst({ where: { cycleId: cycle.id, employeeId: employee.id } });
+    expect(releasedEntry?.released).toBe(true);
+    expect(Number(releasedEntry?.advanceDeduction)).toBeCloseTo(4000, 2);
+  });
+
+  it('editing an ACTIVE Advance already materialized into the current Draft recalculates the Draft deduction correctly and exactly once, while a prior Released deduction stays untouched', async () => {
+    const admin = await masterAdminAgent('adv-edit-live-recalc-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit Live Recalc');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit Live Recalc Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '12000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '4000',
+      originalPeriod: { year: 2903, month: 12 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    // Cycle 1 — materializes 4000 immediately (Defect D/E fix), then release it (permanent history).
+    const cycle1 = await makeDraftCycle(admin, 2903, 12);
+    const cycle1EntryPreRelease = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle1.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(Number(cycle1EntryPreRelease.advanceDeduction)).toBeCloseTo(4000, 2);
+    await releaseUnit(admin, cycle1.id, unit.id);
+
+    // Captured AFTER release (which itself writes the entry, bumping its version) — this is the
+    // "already released, now immutable" snapshot the edit below must never change.
+    const cycle1EntryBefore = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: cycle1EntryPreRelease.id } });
+
+    const finalize1 = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle1.id}/finalize`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(finalize1.status).toBe(200);
+
+    // Cycle 2 — rollover materializes the next installment (4000) automatically, still Draft/unreleased.
+    const cycle2Res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle1.id}/archive-and-create-next`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(cycle2Res.status).toBe(201);
+    const cycle2 = cycle2Res.body.newCycle as { id: string };
+
+    const cycle2EntryBefore = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle2.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(Number(cycle2EntryBefore.advanceDeduction)).toBeCloseTo(4000, 2);
+    expect(cycle2EntryBefore.advanceId).toBe(advanceId);
+
+    const materializationCountBefore = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+
+    // Edit the standing installment schedule while Cycle 2's deduction is still live (unreleased).
+    const editRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ scheduledInstallmentAmount: '1500' });
+    expect(editRes.status).toBe(200);
+
+    // Cycle 2's Draft deduction recalculates to the new amount — exactly once, not additive/doubled.
+    const cycle2EntryAfter = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle2.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(Number(cycle2EntryAfter.advanceDeduction)).toBeCloseTo(1500, 2);
+    expect(cycle2EntryAfter.advanceId).toBe(advanceId);
+    expect(cycle2EntryAfter.version).toBe(cycle2EntryBefore.version + 2); // one reversal + one re-materialization
+
+    const advanceAfter = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    // 12000 total - 4000 released (cycle 1) - 1500 newly recalculated (cycle 2) = 6500.
+    expect(Number(advanceAfter.outstandingBalance)).toBeCloseTo(6500, 2);
+    expect(advanceAfter.status).toBe('ACTIVE');
+
+    // Exactly one new materialization audit entry was recorded for this recalculation.
+    const materializationCountAfter = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+    expect(materializationCountAfter).toBe(materializationCountBefore + 1);
+
+    const reversalAudit = await prisma.auditLog.findFirst({
+      where: { action: 'payroll_entry.advance_edit_reversed', entityId: cycle2EntryBefore.id },
+    });
+    expect(reversalAudit).not.toBeNull();
+
+    // Cycle 1's RELEASED entry is completely untouched by this edit.
+    const cycle1EntryAfter = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: cycle1EntryBefore.id } });
+    expect(cycle1EntryAfter.released).toBe(true);
+    expect(Number(cycle1EntryAfter.advanceDeduction)).toBeCloseTo(4000, 2);
+    expect(cycle1EntryAfter.advanceId).toBe(advanceId);
+    expect(cycle1EntryAfter.version).toBe(cycle1EntryBefore.version);
+  });
+
+  it('a no-op edit (notes only) does not reverse or re-version an already-correct live Draft deduction', async () => {
+    const admin = await masterAdminAgent('adv-edit-noop-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit NoOp');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit NoOp Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '4000',
+      originalPeriod: { year: 2903, month: 9 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2903, 9);
+    const entryBefore = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+
+    const res = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '9000', repaymentType: 'INSTALLMENT', scheduledInstallmentAmount: '4000', notes: 'just a note' });
+    expect(res.status).toBe(200);
+
+    const entryAfter = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryBefore.id } });
+    expect(entryAfter.version).toBe(entryBefore.version); // untouched — no reversal/re-materialization
+    expect(Number(entryAfter.advanceDeduction)).toBeCloseTo(4000, 2);
+  });
+
+  it('rejects any financial-field edit once an Advance is PAID_OFF, but still allows notes', async () => {
+    const admin = await masterAdminAgent('adv-edit-paidoff-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit PaidOff');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit PaidOff Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2903, month: 9 },
+    });
+    const advanceId = created.body.advance.id as string;
+    await makeDraftCycle(admin, 2903, 9); // fully materializes and pays off immediately
+
+    const rejected = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '15000' });
+    expect(rejected.status).toBe(400);
+
+    const notesOk = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ notes: 'closed out' });
+    expect(notesOk.status).toBe(200);
+    expect(notesOk.body.advance.notes).toBe('closed out');
+  });
+
+  // --- Cancel/Void (Section G) ------------------------------------------------------------------
+
+  it('cancels an untouched Advance and immediately allows a fresh one of the same type', async () => {
+    const admin = await masterAdminAgent('adv-cancel-untouched-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Cancel Untouched');
+    const employee = await makeEmployee(site.id, unit.id, 'Cancel Untouched Employee');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    const blockedSecond = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '5000',
+      dateGiven: '2026-01-02',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 2 },
+    });
+    expect(blockedSecond.status).toBe(409);
+
+    const cancelRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Entered against the wrong employee' });
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body.advance.status).toBe('CANCELLED');
+    expect(cancelRes.body.advance.currentScheduledPeriodId).toBeNull();
+
+    const freshOne = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '5000',
+      dateGiven: '2026-01-02',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 2 },
+    });
+    expect(freshOne.status).toBe(201);
+
+    const auditEntry = await prisma.auditLog.findFirst({ where: { action: 'advance.cancelled', entityId: advanceId } });
+    expect(auditEntry).not.toBeNull();
+  });
+
+  it('cancelling an Advance with a live Draft deduction reverses it and restores the outstanding balance', async () => {
+    const admin = await masterAdminAgent('adv-cancel-live-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Cancel Live');
+    const employee = await makeEmployee(site.id, unit.id, 'Cancel Live Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '3500',
+      originalPeriod: { year: 2903, month: 10 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2903, 10); // materializes 3500 immediately, stays ACTIVE
+
+    const entryBefore = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(Number(entryBefore.advanceDeduction)).toBeCloseTo(3500, 2);
+
+    const advanceBefore = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(advanceBefore.status).toBe('ACTIVE');
+    expect(Number(advanceBefore.outstandingBalance)).toBeCloseTo(5500, 2);
+
+    // Cancel must first reverse the still-Draft (unreleased) materialization — nothing about it is
+    // final yet — the same reasoning `deferAdvanceSchedule` already established.
+    const cancelRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Advance amount was wrong' });
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body.advance.status).toBe('CANCELLED');
+    expect(Number(cancelRes.body.advance.outstandingBalance)).toBeCloseTo(9000, 2); // fully restored
+
+    const entryAfter = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryBefore.id } });
+    expect(entryAfter.advanceId).toBeNull();
+    expect(Number(entryAfter.advanceDeduction)).toBe(0);
+
+    const entryAudit = await prisma.auditLog.findFirst({
+      where: { action: 'payroll_entry.advance_cancelled', entityId: entryBefore.id },
+    });
+    expect(entryAudit).not.toBeNull();
+  });
+
+  it('cancelling an Advance whose only deduction is already released preserves that released entry untouched', async () => {
+    const admin = await masterAdminAgent('adv-cancel-released-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Cancel Released');
+    const employee = await makeEmployee(site.id, unit.id, 'Cancel Released Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '3000',
+      originalPeriod: { year: 2903, month: 11 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2903, 11); // materializes 3000 immediately, stays ACTIVE
+
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const cancelRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'No further installments needed' });
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body.advance.status).toBe('CANCELLED');
+    // The released deduction is preserved exactly as it was — never reversed.
+    expect(Number(cancelRes.body.advance.outstandingBalance)).toBeCloseTo(6000, 2);
+
+    const entry = await prisma.payrollEntry.findFirst({ where: { cycleId: cycle.id, employeeId: employee.id } });
+    expect(entry?.released).toBe(true);
+    expect(entry?.advanceId).toBe(advanceId);
+    expect(Number(entry?.advanceDeduction)).toBeCloseTo(3000, 2);
+  });
+
+  it('rejects cancelling an Advance that is already PAID_OFF or already CANCELLED', async () => {
+    const admin = await masterAdminAgent('adv-cancel-twice-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Cancel Twice');
+    const employee = await makeEmployee(site.id, unit.id, 'Cancel Twice Employee');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    const first = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Mistake' });
+    expect(first.status).toBe(200);
+
+    const second = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Again' });
+    expect(second.status).toBe(400);
+  });
+
+  it('rejects a blank cancel reason', async () => {
+    const admin = await masterAdminAgent('adv-cancel-blank-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Cancel Blank');
+    const employee = await makeEmployee(site.id, unit.id, 'Cancel Blank Employee');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    const res = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: '   ' });
+    expect(res.status).toBe(400);
+  });
 
   // --- Numeric lifecycle reconciliation (Section H) ----------------------------------------------
 

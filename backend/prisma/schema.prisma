@@ -1176,6 +1176,9 @@ enum AdvanceRepaymentType {
 enum AdvanceStatus {
   ACTIVE
   PAID_OFF
+  /// Added Operational Stabilization Checkpoint, 2026-07-24 — see the `Advance` model's own doc
+  /// comment for the full rationale (a non-destructive correction for a mistaken Advance).
+  CANCELLED
 }
 
 /// A record of a loan or Eid advance given to an employee, and its remaining balance (Phase 4
@@ -1201,6 +1204,20 @@ enum AdvanceStatus {
 /// established convention for every other permanent financial/master record (Employee, Bank's
 /// protected Cash row). "Amount recovered" (`totalAmount - outstandingBalance`) is calculated on
 /// read, never stored, per Principle 5/6 — the same convention `netSalary` already follows.
+///
+/// **`CANCELLED` status (added Operational Stabilization Checkpoint, 2026-07-24).** A user-facing
+/// correction for an Advance entered by mistake — deliberately a status transition, not a delete,
+/// for exactly the same reason the paragraph above already forbids hard-deleting this table: an
+/// Advance is a permanent financial/master record. This applies uniformly regardless of whether any
+/// deduction has yet materialized (an advance recorded against the wrong employee/amount/start cycle
+/// with zero history is corrected by cancelling it and recording a fresh one, never by deleting the
+/// mistaken row). Cancelling reverses any deduction still sitting on a Draft (unreleased)
+/// `PayrollEntry` — the same reversal `deferAdvanceSchedule` already performs — but never touches a
+/// RELEASED deduction. `currentScheduledPeriodId` is cleared, same as `PAID_OFF`, so a cancelled
+/// Advance is excluded from every future materialization sweep
+/// (`materializeScheduledAdvanceDeductions` already filters `status: 'ACTIVE'` only). The partial
+/// unique index below is `WHERE status = 'ACTIVE'` only, so a new Advance of the same type may be
+/// recorded immediately after cancellation, exactly as after `PAID_OFF`.
 model Advance {
   id                         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   employeeId                 String               @db.Uuid

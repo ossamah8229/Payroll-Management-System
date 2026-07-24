@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  cancelAdvanceSchema,
   createAdvanceSchema,
   deferAdvanceScheduleSchema,
   listAdvancesQuerySchema,
@@ -10,6 +11,7 @@ import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import {
+  cancelAdvance,
   createAdvance,
   deferAdvanceSchedule,
   getAdvance,
@@ -87,6 +89,20 @@ advancesRouter.post('/:id/defer', async (req, res, next) => {
     const id = requireIdParam(req.params.id);
     const input = deferAdvanceScheduleSchema.parse(req.body);
     const advance = await deferAdvanceSchedule(req.currentUser!, id, input, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+    res.status(200).json({ advance });
+  } catch (error) {
+    next(error);
+  }
+});
+
+advancesRouter.post('/:id/cancel', async (req, res, next) => {
+  try {
+    const id = requireIdParam(req.params.id);
+    const input = cancelAdvanceSchema.parse(req.body);
+    const advance = await cancelAdvance(req.currentUser!, id, input, {
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });

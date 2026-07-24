@@ -24,6 +24,7 @@ import { apiRequest } from '@/lib/api-client';
 import {
   type Advance,
   useAdvances,
+  useCancelAdvance,
   useCreateAdvance,
   useDeferAdvanceSchedule,
   useUpdateAdvance,
@@ -48,6 +49,18 @@ function formatYearMonth(year: number, month: number): string {
 function periodLabel(period: Advance['currentScheduledPeriod']): string {
   if (!period) return '—';
   return formatYearMonth(period.year, period.month);
+}
+
+function statusTone(status: Advance['status']): 'green' | 'gray' | 'red' {
+  if (status === 'ACTIVE') return 'green';
+  if (status === 'CANCELLED') return 'red';
+  return 'gray';
+}
+
+function statusLabel(status: Advance['status']): string {
+  if (status === 'ACTIVE') return 'Active';
+  if (status === 'CANCELLED') return 'Cancelled';
+  return 'Paid Off';
 }
 
 function RecordAdvanceModal({
@@ -280,6 +293,14 @@ function RecordAdvanceModal({
   );
 }
 
+/** Lifecycle-aware editability (Section F, Operational Stabilization Checkpoint 2026-07-24) — see
+ * `advances.service.ts`'s `updateAdvance` doc comment for the full matrix this mirrors. `notes` is
+ * always editable; `repaymentType`/`scheduledInstallmentAmount`/`totalAmount` only while
+ * `status === 'ACTIVE'` (the backend independently enforces this — the UI just avoids offering an
+ * edit that would only bounce back as a 400). The deduction start cycle is deliberately not offered
+ * here at all — see the same doc comment for why (Cancel + re-record before materialization, Defer
+ * after).
+ */
 function EditAdvanceModal({
   advance,
   onOpenChange,
@@ -288,17 +309,22 @@ function EditAdvanceModal({
   onOpenChange: (open: boolean) => void;
 }) {
   const updateAdvance = useUpdateAdvance();
+  const [totalAmount, setTotalAmount] = useState('');
   const [repaymentType, setRepaymentType] = useState<'FULL_DEDUCTION' | 'INSTALLMENT'>('FULL_DEDUCTION');
   const [scheduledInstallmentAmount, setScheduledInstallmentAmount] = useState('');
   const [notes, setNotes] = useState('');
 
   useEffect(() => {
     if (advance) {
+      setTotalAmount(advance.totalAmount);
       setRepaymentType(advance.repaymentType);
       setScheduledInstallmentAmount(advance.scheduledInstallmentAmount ?? '');
       setNotes(advance.notes ?? '');
     }
   }, [advance]);
+
+  const isActive = advance?.status === 'ACTIVE';
+  const alreadyRepaid = advance ? (Number(advance.totalAmount) - Number(advance.outstandingBalance)).toFixed(2) : '0.00';
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -307,8 +333,11 @@ function EditAdvanceModal({
       await updateAdvance.mutateAsync({
         id: advance.id,
         input: {
-          repaymentType,
-          scheduledInstallmentAmount: repaymentType === 'INSTALLMENT' && scheduledInstallmentAmount ? scheduledInstallmentAmount : null,
+          ...(isActive && {
+            totalAmount,
+            repaymentType,
+            scheduledInstallmentAmount: repaymentType === 'INSTALLMENT' && scheduledInstallmentAmount ? scheduledInstallmentAmount : null,
+          }),
           notes: notes || null,
         },
       });
@@ -324,29 +353,53 @@ function EditAdvanceModal({
       {advance && (
         <ModalContent title={`Edit ${typeLabel(advance.type)} — ${advance.employee.name}`} widthClassName="max-w-[480px]">
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="edit-advance-repayment-type">Repayment Type</Label>
-              <select
-                id="edit-advance-repayment-type"
-                className={selectClassName}
-                value={repaymentType}
-                onChange={(e) => setRepaymentType(e.target.value as 'FULL_DEDUCTION' | 'INSTALLMENT')}
-              >
-                <option value="FULL_DEDUCTION">Full Deduction</option>
-                <option value="INSTALLMENT">Installment</option>
-              </select>
-            </div>
-            {repaymentType === 'INSTALLMENT' && (
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="edit-advance-installment-amount">Scheduled Installment Amount</Label>
-                <Input
-                  id="edit-advance-installment-amount"
-                  inputMode="decimal"
-                  value={scheduledInstallmentAmount}
-                  onChange={(e) => setScheduledInstallmentAmount(e.target.value)}
-                  placeholder="e.g. 3000"
-                />
-              </div>
+            {!isActive && (
+              <p className="rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted">
+                This Advance is {advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — only
+                its notes can still be edited.
+              </p>
+            )}
+            {isActive && (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="edit-advance-total">Total Amount</Label>
+                  <Input
+                    id="edit-advance-total"
+                    inputMode="decimal"
+                    value={totalAmount}
+                    onChange={(e) => setTotalAmount(e.target.value)}
+                  />
+                  {Number(alreadyRepaid) > 0 && (
+                    <p className="text-[11px] text-text-muted">
+                      {formatMoney(alreadyRepaid)} already repaid — cannot reduce below this.
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="edit-advance-repayment-type">Repayment Type</Label>
+                  <select
+                    id="edit-advance-repayment-type"
+                    className={selectClassName}
+                    value={repaymentType}
+                    onChange={(e) => setRepaymentType(e.target.value as 'FULL_DEDUCTION' | 'INSTALLMENT')}
+                  >
+                    <option value="FULL_DEDUCTION">Full Deduction</option>
+                    <option value="INSTALLMENT">Installment</option>
+                  </select>
+                </div>
+                {repaymentType === 'INSTALLMENT' && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="edit-advance-installment-amount">Scheduled Installment Amount</Label>
+                    <Input
+                      id="edit-advance-installment-amount"
+                      inputMode="decimal"
+                      value={scheduledInstallmentAmount}
+                      onChange={(e) => setScheduledInstallmentAmount(e.target.value)}
+                      placeholder="e.g. 3000"
+                    />
+                  </div>
+                )}
+              </>
             )}
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="edit-advance-notes">Notes</Label>
@@ -358,6 +411,70 @@ function EditAdvanceModal({
               </Button>
               <Button type="submit" disabled={updateAdvance.isPending}>
                 {updateAdvance.isPending ? 'Saving…' : 'Save'}
+              </Button>
+            </ModalFooter>
+          </form>
+        </ModalContent>
+      )}
+    </Modal>
+  );
+}
+
+/** The non-destructive correction for a mistakenly-recorded Advance (Section G) — a status
+ * transition (`CANCELLED`), never a delete; this schema has no delete path for `Advance` at all
+ * (see `advances.service.ts`'s `cancelAdvance` doc comment). Works identically whether or not any
+ * deduction has yet materialized — the backend reverses a still-Draft deduction first if one exists,
+ * and never touches released history either way. */
+function CancelAdvanceModal({
+  advance,
+  onOpenChange,
+}: {
+  advance: Advance | undefined;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const cancelAdvance = useCancelAdvance();
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    if (!advance) setReason('');
+  }, [advance]);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!advance) return;
+    try {
+      await cancelAdvance.mutateAsync({ id: advance.id, input: { reason } });
+      toast.success('Advance cancelled');
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Failed to cancel advance');
+    }
+  }
+
+  return (
+    <Modal open={Boolean(advance)} onOpenChange={(next) => !cancelAdvance.isPending && onOpenChange(next)}>
+      {advance && (
+        <ModalContent title={`Cancel ${typeLabel(advance.type)} — ${advance.employee.name}`} widthClassName="max-w-[480px]">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
+            <p className="text-xs text-text-muted">
+              This stops any further deduction and marks the Advance Cancelled. Any deduction still
+              sitting in the current Draft cycle is reversed automatically. Any deduction already paid
+              through released payroll is preserved and never modified.
+            </p>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="cancel-advance-reason">Reason</Label>
+              <Input id="cancel-advance-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
+            </div>
+            <ModalFooter>
+              <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={cancelAdvance.isPending}>
+                Back
+              </Button>
+              <Button
+                type="submit"
+                className="bg-danger hover:brightness-110"
+                disabled={cancelAdvance.isPending || !reason.trim()}
+              >
+                {cancelAdvance.isPending ? 'Cancelling…' : 'Confirm Cancel'}
               </Button>
             </ModalFooter>
           </form>
@@ -494,11 +611,12 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
   const [isRecordOpen, setIsRecordOpen] = useState(false);
   const [editingAdvance, setEditingAdvance] = useState<Advance | undefined>(undefined);
   const [deferringAdvance, setDeferringAdvance] = useState<Advance | undefined>(undefined);
+  const [cancellingAdvance, setCancellingAdvance] = useState<Advance | undefined>(undefined);
 
   const advances = useAdvances({
     siteId: selectedSiteIds.length === 1 ? selectedSiteIds[0] : undefined,
     type: (typeFilter || undefined) as 'LOAN' | 'EID_ADVANCE' | undefined,
-    status: (statusFilter || undefined) as 'ACTIVE' | 'PAID_OFF' | undefined,
+    status: (statusFilter || undefined) as 'ACTIVE' | 'PAID_OFF' | 'CANCELLED' | undefined,
   });
 
   const siteOptions = useMemo(
@@ -552,6 +670,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                 <option value="">All statuses</option>
                 <option value="ACTIVE">Active</option>
                 <option value="PAID_OFF">Paid Off</option>
+                <option value="CANCELLED">Cancelled</option>
               </select>
             </FilterField>
             <div className="ml-auto">
@@ -617,9 +736,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                         {advance.repaymentType === 'FULL_DEDUCTION' ? 'Full Deduction' : 'Installment'}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <Badge tone={advance.status === 'ACTIVE' ? 'green' : 'gray'}>
-                          {advance.status === 'ACTIVE' ? 'Active' : 'Paid Off'}
-                        </Badge>
+                        <Badge tone={statusTone(advance.status)}>{statusLabel(advance.status)}</Badge>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{periodLabel(advance.currentScheduledPeriod)}</TableCell>
                       <TableCell className="whitespace-nowrap">
@@ -628,9 +745,19 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                             Edit
                           </Button>
                           {advance.status === 'ACTIVE' && (
-                            <Button size="sm" variant="secondary" onClick={() => setDeferringAdvance(advance)}>
-                              Defer
-                            </Button>
+                            <>
+                              <Button size="sm" variant="secondary" onClick={() => setDeferringAdvance(advance)}>
+                                Defer
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="text-danger hover:border-danger"
+                                onClick={() => setCancellingAdvance(advance)}
+                              >
+                                Cancel
+                              </Button>
+                            </>
                           )}
                         </div>
                       </TableCell>
@@ -646,6 +773,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
       <RecordAdvanceModal open={isRecordOpen} onOpenChange={setIsRecordOpen} />
       <EditAdvanceModal advance={editingAdvance} onOpenChange={(open) => !open && setEditingAdvance(undefined)} />
       <DeferAdvanceModal advance={deferringAdvance} onOpenChange={(open) => !open && setDeferringAdvance(undefined)} />
+      <CancelAdvanceModal advance={cancellingAdvance} onOpenChange={(open) => !open && setCancellingAdvance(undefined)} />
     </AppShell>
   );
 }

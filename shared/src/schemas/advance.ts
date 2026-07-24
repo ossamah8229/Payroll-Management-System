@@ -12,8 +12,11 @@ export const advanceRepaymentTypeSchema = z.enum(['FULL_DEDUCTION', 'INSTALLMENT
 export type AdvanceRepaymentType = z.infer<typeof advanceRepaymentTypeSchema>;
 
 /** Mirrors Prisma's `AdvanceStatus` enum — `PAID_OFF` is reached only when `outstandingBalance`
- * decrements to zero; never set directly by a user action. */
-export const advanceStatusSchema = z.enum(['ACTIVE', 'PAID_OFF']);
+ * decrements to zero; never set directly by a user action. `CANCELLED` (Operational Stabilization
+ * Checkpoint, 2026-07-24) is the non-destructive correction for a mistakenly-recorded Advance — see
+ * `cancelAdvanceSchema` below and `database/advances.md §15`'s "no hard delete" convention. Neither
+ * `PAID_OFF` nor `CANCELLED` is ever set directly by a plain field edit (`updateAdvanceSchema`). */
+export const advanceStatusSchema = z.enum(['ACTIVE', 'PAID_OFF', 'CANCELLED']);
 export type AdvanceStatus = z.infer<typeof advanceStatusSchema>;
 
 /**
@@ -44,17 +47,39 @@ export const createAdvanceSchema = z.object({
 
 export type CreateAdvanceInput = z.infer<typeof createAdvanceSchema>;
 
-/** Ordinary field edits to an already-created Advance — deliberately narrow. `totalAmount`,
- * `outstandingBalance`, `type`, `status`, and every scheduled-period field are never directly
- * editable here: they only ever change through the system actions that own them (materialization,
- * deferral) — editing them as plain fields would let history be silently rewritten. */
+/** Ordinary field edits to an already-created Advance (Operational Stabilization Checkpoint,
+ * 2026-07-24 — widened from the original Phase 4 Checkpoint 5 shape to add `totalAmount`, per the
+ * lifecycle-aware editability review). `outstandingBalance`, `type`, `status`, and every
+ * scheduled-period field are still never directly editable here — they only ever change through the
+ * system actions that own them (materialization, deferral, cancellation): editing them as plain
+ * fields would let history be silently rewritten. `totalAmount` IS editable here, but the service
+ * layer enforces it can never drop below what has already been repaid (`totalAmount -
+ * outstandingBalance`) and rejects the edit entirely once `status` is `PAID_OFF`/`CANCELLED` — see
+ * `advances.service.ts`'s `updateAdvance` for the full lifecycle-aware editability matrix. The
+ * Advance's own "deduction start cycle" is deliberately still not editable through this endpoint at
+ * any lifecycle stage — correct it via Cancel (pre-materialization) or Defer (post-materialization)
+ * instead, never a silent field edit (see `cancelAdvanceSchema` and `deferAdvanceScheduleSchema`). */
 export const updateAdvanceSchema = z.object({
+  totalAmount: decimalString.optional(),
   repaymentType: advanceRepaymentTypeSchema.optional(),
   scheduledInstallmentAmount: z.preprocess(emptyToNull, decimalString.nullable().optional()),
   notes: optionalTrimmedString(2000),
 });
 
 export type UpdateAdvanceInput = z.infer<typeof updateAdvanceSchema>;
+
+/**
+ * Cancels (voids) an Advance — the non-destructive correction for one entered by mistake
+ * (Operational Stabilization Checkpoint, 2026-07-24, `database/advances.md §15`). Only ever
+ * transitions an `ACTIVE` Advance; a `PAID_OFF` or already-`CANCELLED` one has nothing to cancel.
+ * `reason` is mandatory, matching this schema's existing convention for every other
+ * financial-history-affecting action (`deferAdvanceScheduleSchema`, `BalanceAdjustment`).
+ */
+export const cancelAdvanceSchema = z.object({
+  reason: z.string().trim().min(1, 'A reason is required'),
+});
+
+export type CancelAdvanceInput = z.infer<typeof cancelAdvanceSchema>;
 
 /**
  * Defers an Advance's currently-materialized deduction to a future Draft-eligible payroll period

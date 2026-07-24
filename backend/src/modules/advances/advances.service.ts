@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import type {
+  CancelAdvanceInput,
   CreateAdvanceInput,
   DeferAdvanceScheduleInput,
   ListAdvancesQuery,
@@ -323,6 +324,31 @@ export async function createAdvance(
 /** Ordinary field edit — deliberately narrow (see `updateAdvanceSchema`'s own doc comment).
  * `totalAmount`/`outstandingBalance`/`type`/`status`/scheduled-period fields never move through
  * this path; they only ever change via the system actions that own them. */
+/**
+ * Ordinary field edits — lifecycle-aware (Operational Stabilization Checkpoint, 2026-07-24; widened
+ * from the original Phase 4 Checkpoint 5 shape, which allowed only `repaymentType`/
+ * `scheduledInstallmentAmount`/`notes`). The full editability matrix:
+ *
+ * - `notes`: always editable, at any lifecycle stage, including `PAID_OFF`/`CANCELLED`.
+ * - `repaymentType`, `scheduledInstallmentAmount`: editable while `status = 'ACTIVE'`; rejected once
+ *   `PAID_OFF`/`CANCELLED` (nothing left to schedule).
+ * - `totalAmount`: editable while `status = 'ACTIVE'`, bounded below by what has already been repaid
+ *   (`totalAmount - outstandingBalance`, computed from THIS advance's own already-materialized
+ *   deductions) — `outstandingBalance` is adjusted by the exact same delta so it always stays
+ *   internally consistent (`newOutstanding = newTotalAmount - alreadyRepaid`), never independently
+ *   recalculated. Rejected once `PAID_OFF`/`CANCELLED` — reopening a closed Advance is out of this
+ *   checkpoint's scope (`status` stays a system-managed field either way; see `cancelAdvance` for the
+ *   one user-facing status transition this module exposes).
+ * - the deduction start cycle (`originalScheduledPeriodId`/`currentScheduledPeriodId`): never
+ *   editable here, at any lifecycle stage. Before materialization, correct it by cancelling this
+ *   Advance and recording a fresh one (`cancelAdvance`, below) — never a silent field edit, and never
+ *   a hard delete (this schema's own "no hard-deletable financial/master record" convention, see the
+ *   `Advance` model's doc comment). After materialization, `deferAdvanceSchedule` is the sanctioned
+ *   path, and only that path may write an audited `AdvanceScheduleChange` row (its `payrollEntryId`
+ *   column is `NOT NULL` by design — there never was, and still isn't, a "reschedule before it ever
+ *   lands" mechanism, matching that function's own doc comment).
+ * - `type`, `status`: always system-managed only, never a plain field edit.
+ */
 export async function updateAdvance(
   currentUser: SessionUser,
   id: string,
@@ -332,17 +358,103 @@ export async function updateAdvance(
   const advance = await getAdvanceOrThrow(id);
   assertSiteAccess(currentUser, advance.employee.siteId);
 
-  const data: Prisma.AdvanceUncheckedUpdateInput = {
-    ...(input.repaymentType !== undefined && { repaymentType: input.repaymentType }),
-    ...(input.scheduledInstallmentAmount !== undefined && {
-      scheduledInstallmentAmount: input.scheduledInstallmentAmount,
-    }),
-    ...(input.notes !== undefined && { notes: input.notes }),
-  };
+  const isFinancialEdit = input.totalAmount !== undefined || input.repaymentType !== undefined || input.scheduledInstallmentAmount !== undefined;
+  if (isFinancialEdit && advance.status !== 'ACTIVE') {
+    throw badRequest(
+      `This Advance is ${advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — only its notes can still be edited`,
+    );
+  }
 
-  const changes = diffFields(advance as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
+  // Does this edit actually change a value that affects what should be deducted this cycle? A
+  // same-value resubmission (e.g. saving the modal after only touching `notes`, which the frontend
+  // always submits totalAmount/repaymentType/scheduledInstallmentAmount alongside for an ACTIVE
+  // advance) must not needlessly reverse-and-recalculate an already-correct live Draft deduction —
+  // that would bump the entry's `version` and write audit noise for a no-op.
+  const scheduledInstallmentChanged =
+    input.scheduledInstallmentAmount !== undefined &&
+    (input.scheduledInstallmentAmount === null
+      ? advance.scheduledInstallmentAmount !== null
+      : advance.scheduledInstallmentAmount === null ||
+        !advance.scheduledInstallmentAmount.equals(input.scheduledInstallmentAmount));
+  const financialValueChanged =
+    (input.totalAmount !== undefined && !advance.totalAmount.equals(input.totalAmount)) ||
+    (input.repaymentType !== undefined && input.repaymentType !== advance.repaymentType) ||
+    scheduledInstallmentChanged;
+
+  const isLoan = advance.type === 'LOAN';
 
   return prisma.$transaction(async (tx) => {
+    /**
+     * The live, still-Draft (unreleased) entry currently carrying this Advance's materialized
+     * deduction, if any — same lookup `cancelAdvance` uses. **Root-cause fix (post-review, this
+     * checkpoint):** a prior version of this function only ever wrote `Advance.totalAmount`/
+     * `outstandingBalance` on edit — it never touched an already-materialized Draft deduction, which
+     * meant editing `totalAmount`/`repaymentType`/`scheduledInstallmentAmount` on an Advance that
+     * already had a live (unreleased) Draft deduction silently left that Draft figure stale under
+     * the OLD rules. Fixed by reversing that deduction first (the identical math `cancelAdvance` and
+     * `deferAdvanceSchedule` already use) and re-materializing it under the NEW rules, in the same
+     * transaction, via the same shared `materializeOneAdvanceDeduction` helper every other
+     * materialization path uses — never a second, independent recalculation. A RELEASED entry is
+     * never returned by this query (`released: false`) and is therefore never reversed or touched,
+     * regardless of what this edit changes (Principle 9).
+     */
+    const liveEntry = financialValueChanged
+      ? await tx.payrollEntry.findFirst({
+          where: isLoan ? { advanceId: advance.id, released: false } : { eidAdvanceId: advance.id, released: false },
+          include: { cycle: true },
+        })
+      : null;
+
+    let effectiveTotalAmount = advance.totalAmount;
+    let effectiveOutstandingBalance = advance.outstandingBalance;
+    let reversedAmount: Prisma.Decimal | null = null;
+
+    if (liveEntry) {
+      assertEntryEditable(liveEntry);
+      const deductedAmount = isLoan ? liveEntry.advanceDeduction : liveEntry.eidAdvanceDeduction;
+      if (deductedAmount.greaterThan(0)) {
+        const guarded = await tx.payrollEntry.updateMany({
+          where: { id: liveEntry.id, version: liveEntry.version },
+          data: isLoan
+            ? { advanceDeduction: '0', advanceId: null, version: { increment: 1 } }
+            : { eidAdvanceDeduction: '0', eidAdvanceId: null, version: { increment: 1 } },
+        });
+        if (guarded.count === 0) {
+          throw conflict('This payroll entry was changed by someone else — reload and try again');
+        }
+        reversedAmount = deductedAmount;
+        // The true, permanent floor for a `totalAmount` reduction is what has been repaid via
+        // RELEASED payroll only — restoring this cycle's still-reversible live deduction back onto
+        // the balance here (before the `totalAmount` floor check below) is what excludes it
+        // correctly, rather than treating a not-yet-released figure as if it were locked in.
+        effectiveOutstandingBalance = advance.outstandingBalance.plus(deductedAmount);
+      }
+    }
+
+    if (input.totalAmount !== undefined) {
+      const newTotalAmount = new Prisma.Decimal(input.totalAmount);
+      const alreadyRepaid = effectiveTotalAmount.minus(effectiveOutstandingBalance);
+      if (newTotalAmount.lessThan(alreadyRepaid)) {
+        throw badRequest(
+          `Total amount cannot be reduced below the ${alreadyRepaid.toFixed(2)} already repaid against this Advance`,
+        );
+      }
+      effectiveOutstandingBalance = newTotalAmount.minus(alreadyRepaid);
+      effectiveTotalAmount = newTotalAmount;
+    }
+
+    const data: Prisma.AdvanceUncheckedUpdateInput = {
+      ...(input.repaymentType !== undefined && { repaymentType: input.repaymentType }),
+      ...(input.scheduledInstallmentAmount !== undefined && {
+        scheduledInstallmentAmount: input.scheduledInstallmentAmount,
+      }),
+      ...(input.notes !== undefined && { notes: input.notes }),
+      ...(input.totalAmount !== undefined && { totalAmount: effectiveTotalAmount }),
+      ...((input.totalAmount !== undefined || reversedAmount) && { outstandingBalance: effectiveOutstandingBalance }),
+    };
+
+    const changes = diffFields(advance as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
+
     const updated = await tx.advance.update({ where: { id }, data });
 
     if (Object.keys(changes).length > 0) {
@@ -360,7 +472,151 @@ export async function updateAdvance(
       );
     }
 
-    return updated;
+    if (liveEntry && reversedAmount) {
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'payroll_entry.advance_edit_reversed',
+          entityType: 'PayrollEntry',
+          entityId: liveEntry.id,
+          metadata: { advanceId: id, reversedAmount: reversedAmount.toFixed(2) },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+
+      // Re-materializes the SAME cycle's deduction under the NEW rules — exactly once, via the one
+      // shared calculation every other materialization path uses (never a second, independent one).
+      await materializeOneAdvanceDeduction(tx, {
+        advance: { ...updated, id: updated.id },
+        entryId: liveEntry.id,
+        cycleId: liveEntry.cycle.id,
+        cycleYear: liveEntry.cycle.year,
+        cycleMonth: liveEntry.cycle.month,
+        actorUserId: currentUser.id,
+        requestMeta,
+      });
+    }
+
+    return tx.advance.findUniqueOrThrow({ where: { id } });
+  });
+}
+
+/**
+ * Cancels (voids) an Advance — the non-destructive, auditable correction for one entered by mistake
+ * (Operational Stabilization Checkpoint, 2026-07-24, `database/advances.md §15`, Section G). Applies
+ * uniformly whether or not any deduction has yet materialized: an Advance with zero history is
+ * cancelled exactly the same way as one with a partial deduction already sitting in the current
+ * Draft cycle — the only difference is whether there is a live Draft deduction to reverse first.
+ *
+ * **Never touches a RELEASED deduction** — if this Advance's only materialized history is already
+ * released payroll, cancellation simply stops any further deduction (clears the live schedule
+ * pointer) without altering that released `PayrollEntry` in any way (Principle 9). If a still-Draft
+ * (unreleased) deduction currently carries this Advance's linkage, it is reversed first — the exact
+ * same zero-the-entry-fields-and-restore-the-balance step `deferAdvanceSchedule` already performs —
+ * so no dangling deduction is left referencing a cancelled Advance.
+ *
+ * Deliberately a status transition, never a delete: this schema has no delete path for `Advance` at
+ * all (see the model's own doc comment) — the same non-destructive convention already governs every
+ * other permanent financial/master record in this system (Employee's departure instead of deletion
+ * being the direct precedent).
+ */
+export async function cancelAdvance(
+  currentUser: SessionUser,
+  id: string,
+  input: CancelAdvanceInput,
+  requestMeta: RequestMeta,
+) {
+  const advance = await getAdvanceOrThrow(id);
+  assertSiteAccess(currentUser, advance.employee.siteId);
+
+  if (advance.status !== 'ACTIVE') {
+    throw badRequest(
+      `This Advance is already ${advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — there is nothing to cancel`,
+    );
+  }
+
+  const reason = input.reason.trim();
+  if (reason.length === 0) {
+    throw badRequest('A reason is required');
+  }
+
+  const isLoan = advance.type === 'LOAN';
+
+  return prisma.$transaction(async (tx) => {
+    // The live, still-Draft (unreleased) entry currently carrying this Advance's deduction, if any —
+    // at most one can exist at a time (an already-released cycle's own linked entry is excluded by
+    // `released: false`, and `currentScheduledPeriodId` only ever points at one live target).
+    const liveEntry = await tx.payrollEntry.findFirst({
+      where: isLoan ? { advanceId: advance.id, released: false } : { eidAdvanceId: advance.id, released: false },
+      include: { cycle: true },
+    });
+
+    let restoredAmount: Prisma.Decimal | null = null;
+    let outstandingAfterReversal = advance.outstandingBalance;
+
+    if (liveEntry) {
+      assertEntryEditable(liveEntry);
+      const deductedAmount = isLoan ? liveEntry.advanceDeduction : liveEntry.eidAdvanceDeduction;
+      if (deductedAmount.greaterThan(0)) {
+        const guarded = await tx.payrollEntry.updateMany({
+          where: { id: liveEntry.id, version: liveEntry.version },
+          data: isLoan
+            ? { advanceDeduction: '0', advanceId: null, version: { increment: 1 } }
+            : { eidAdvanceDeduction: '0', eidAdvanceId: null, version: { increment: 1 } },
+        });
+        if (guarded.count === 0) {
+          throw conflict('This payroll entry was changed by someone else — reload and try again');
+        }
+        restoredAmount = deductedAmount;
+        outstandingAfterReversal = advance.outstandingBalance.plus(deductedAmount);
+      }
+    }
+
+    const cancelled = await tx.advance.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+        outstandingBalance: outstandingAfterReversal,
+        currentScheduledPeriodId: null,
+      },
+    });
+
+    await recordAuditLog(
+      {
+        actorUserId: currentUser.id,
+        action: 'advance.cancelled',
+        entityType: 'Advance',
+        entityId: id,
+        metadata: {
+          reason,
+          reversedPayrollEntryId: liveEntry?.id ?? null,
+          reversedAmount: restoredAmount ? restoredAmount.toFixed(2) : null,
+          outstandingBalanceAfter: outstandingAfterReversal.toFixed(2),
+        },
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+      },
+      tx,
+    );
+
+    if (liveEntry && restoredAmount) {
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'payroll_entry.advance_cancelled',
+          entityType: 'PayrollEntry',
+          entityId: liveEntry.id,
+          metadata: { advanceId: id, reason, reversedAmount: restoredAmount.toFixed(2) },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    }
+
+    return cancelled;
   });
 }
 

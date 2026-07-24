@@ -3,17 +3,25 @@ import type {
   AdvanceRepaymentType,
   AdvanceStatus,
   AdvanceType,
+  CancelAdvanceInput,
   CreateAdvanceInput,
   DeferAdvanceScheduleInput,
   UpdateAdvanceInput,
 } from '@payroll/shared';
 import { apiRequest } from '@/lib/api-client';
 
-/** A newly-created Advance can immediately materialize a deduction into the current Draft cycle's
- * `PayrollEntry` (Operational Stabilization Checkpoint, 2026-07-24, Section E) — invalidating this
- * query too, not just Advances' own, is what makes an already-open Payroll Entry page reflect it
- * without a manual refresh. Broad (no cycle id) since this hook has no reliable way to know which
- * cycle was actually touched; only the currently-mounted query, if any, actually refetches. */
+/** Any Advance mutation that can change a `PayrollEntry`'s own `advanceDeduction`/
+ * `eidAdvanceDeduction`/linked-balance display (create's own immediate current-Draft
+ * materialization, defer's reversal, cancel's reversal, and a `totalAmount` edit changing the
+ * balance the grid's own "Bal: ..." indicator shows) must invalidate Payroll Entry's query cache
+ * too — not just Advances' own (Operational Stabilization Checkpoint, 2026-07-24, Section E: "the
+ * affected Payroll Entry becomes current immediately through the appropriate
+ * mutation/refetch/materialization mechanism"). Broad (no cycle id) rather than narrow: this hook
+ * has no reliable way to know which cycle's entries were actually touched, and Payroll Entry's own
+ * query key is cheap to invalidate wholesale (`['payroll-entries', cycleId]` — invalidating the
+ * bare `['payroll-entries']` prefix matches every cycle's query, and only the currently-mounted one,
+ * if any, actually refetches).
+ */
 const PAYROLL_ENTRIES_QUERY_KEY = ['payroll-entries'] as const;
 
 export interface ScheduledPayrollPeriod {
@@ -98,6 +106,7 @@ export function useUpdateAdvance() {
       apiRequest<{ advance: Advance }>(`/api/v1/advances/${id}`, { method: 'PATCH', body: input }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ADVANCES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: PAYROLL_ENTRIES_QUERY_KEY });
     },
   });
 }
@@ -109,6 +118,19 @@ export function useDeferAdvanceSchedule() {
       apiRequest<{ advance: Advance }>(`/api/v1/advances/${id}/defer`, { method: 'POST', body: input }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ADVANCES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: PAYROLL_ENTRIES_QUERY_KEY });
+    },
+  });
+}
+
+export function useCancelAdvance() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: CancelAdvanceInput }) =>
+      apiRequest<{ advance: Advance }>(`/api/v1/advances/${id}/cancel`, { method: 'POST', body: input }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ADVANCES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: PAYROLL_ENTRIES_QUERY_KEY });
     },
   });
 }
