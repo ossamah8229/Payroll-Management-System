@@ -69,6 +69,7 @@ interface EntryRow {
   employeeId: string;
   siteId: string;
   site: { id: string; name: string };
+  employee: { id: string; name: string; employeeCode: string | null };
 }
 
 /** Disambiguates the `PayrollCycleStatusBadge` span from the cycle `<select>`'s own option text
@@ -86,7 +87,29 @@ async function findCorrectableEntry(context: import('@playwright/test').BrowserC
   const entry = entries.body.entries?.[0];
   if (!entry) return null;
 
-  return { cycleId: archived.id, entryId: entry.id, siteId: entry.siteId, siteName: entry.site.name };
+  return {
+    cycleId: archived.id,
+    entryId: entry.id,
+    siteId: entry.siteId,
+    siteName: entry.site.name,
+    employeeName: entry.employee.name,
+  };
+}
+
+/**
+ * Drives the EmployeeLookup combobox (Corrections/RBAC completion checkpoint — replaced the
+ * previous plain `<select id="correction-entry">`, which `.selectOption()` could target directly).
+ * Types enough of the employee's own name to surface exactly one match, then clicks it — the same
+ * interaction a real user performs, not a shortcut around the real search.
+ */
+async function pickEmployeeInLookup(modal: import('@playwright/test').Locator, employeeName: string) {
+  const input = modal.locator('#correction-entry');
+  await input.fill(employeeName);
+  // The lookup's own search is debounced (300ms) against a real backend call — wait for the
+  // matching option to actually render, not just for the keystroke to register.
+  const option = modal.getByRole('option', { name: new RegExp(employeeName) });
+  await expect(option.first()).toBeVisible({ timeout: 5000 });
+  await option.first().click();
 }
 
 test.describe('Corrections workflow', () => {
@@ -110,7 +133,7 @@ test.describe('Corrections workflow', () => {
     // ALLOWANCE, not GROSS_PAY: this fixture's own work line has `days: 0` (never edited through
     // the UI), and `calcNet`'s own earnedAmount = dailyRate * days — a GROSS_PAY change against a
     // zero-days line moves nothing. ALLOWANCE is a flat addition, unaffected by days.
-    await requestModal.locator('#correction-entry').selectOption({ index: 1 });
+    await pickEmployeeInLookup(requestModal, target.employeeName);
     await requestModal.locator('#correction-field').selectOption('ALLOWANCE');
     await requestModal.locator('#correction-adjustment-type').selectOption({ index: 1 });
     await requestModal.locator('#correction-proposed-value').fill('5000');
@@ -156,7 +179,7 @@ test.describe('Corrections workflow', () => {
     await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
     await page.getByRole('button', { name: 'Request Correction' }).click();
     const requestModal = page.getByRole('dialog');
-    await requestModal.locator('#correction-entry').selectOption({ index: 1 });
+    await pickEmployeeInLookup(requestModal, target.employeeName);
     await requestModal.locator('#correction-field').selectOption('ALLOWANCE');
     await requestModal.locator('#correction-adjustment-type').selectOption({ index: 1 });
     await requestModal.locator('#correction-proposed-value').fill('1000');
@@ -188,7 +211,7 @@ test.describe('Corrections workflow', () => {
     await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
     await page.getByRole('button', { name: 'Request Correction' }).click();
     const requestModal = page.getByRole('dialog');
-    await requestModal.locator('#correction-entry').selectOption({ index: 1 });
+    await pickEmployeeInLookup(requestModal, target.employeeName);
     await requestModal.locator('#correction-field').selectOption('ALLOWANCE');
     await requestModal.locator('#correction-adjustment-type').selectOption({ index: 1 });
     await requestModal.locator('#correction-proposed-value').fill('0');
@@ -300,7 +323,7 @@ test.describe('Corrections workflow', () => {
     await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
     await page.getByRole('button', { name: 'Request Correction' }).click();
     const requestModal = page.getByRole('dialog');
-    await requestModal.locator('#correction-entry').selectOption({ index: 1 });
+    await pickEmployeeInLookup(requestModal, target.employeeName);
     await requestModal.locator('#correction-field').selectOption('ALLOWANCE');
     await requestModal.locator('#correction-adjustment-type').selectOption({ index: 1 });
     await requestModal.locator('#correction-proposed-value').fill('500');

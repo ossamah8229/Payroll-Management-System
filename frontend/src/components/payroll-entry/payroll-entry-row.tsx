@@ -1,7 +1,15 @@
 import { memo, useEffect, useState } from 'react';
+import { MoreHorizontal } from 'lucide-react';
 import { formatMoney, pluralize } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 import { ToggleSwitch } from '@/components/ui/toggle-switch';
+import { Badge } from '@/components/ui/badge';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { Bank } from '@/hooks/use-banks';
 import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
@@ -27,6 +35,12 @@ interface PayrollEntryRowProps {
    * header/totals row on the exact same computation, never a second, possibly-stale copy. */
   gridTemplateColumns: string;
   style: React.CSSProperties;
+  /** Whether this session may create a correction for a released entry (`payroll:entry`,
+   * usability-layer only — the backend independently enforces it). Omitted entirely if the row
+   * shouldn't offer the action at all (matches every other permission-gated control in this app). */
+  canCorrect: boolean;
+  onCreateCorrection: (entry: PayrollEntry) => void;
+  onViewCorrectionHistory: (entry: PayrollEntry) => void;
 }
 
 function PayrollEntryRowImpl({
@@ -38,6 +52,9 @@ function PayrollEntryRowImpl({
   liveTotalsStore,
   gridTemplateColumns,
   style,
+  canCorrect,
+  onCreateCorrection,
+  onViewCorrectionHistory,
 }: PayrollEntryRowProps) {
   const editor = usePayrollEntryEditor(entry, cycleId, cycleStatus);
   const { effectiveEntry, effectiveLine, cycleDaysInputValue, calc, status, errorMessage, editable } = editor;
@@ -109,6 +126,39 @@ function PayrollEntryRowImpl({
           onReload={editor.reload}
         />
         <span className="tabular-nums text-text-muted">{rowIndex + 1}</span>
+      </div>
+
+      {/* Released status + Correction/History actions (Corrections workflow completion) — a
+          released entry is immutable (every input above is `disabled`), so this is the row's own
+          entry point into the correction workflow instead of a single page-wide toolbar button with
+          no per-row indication of *which* rows it even applies to. */}
+      <div role="cell" className="flex items-center justify-center gap-1">
+        {entry.released ? (
+          <>
+            <Badge tone="blue">Released</Badge>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+                  aria-label={`Released payroll actions for ${entry.employee.name}`}
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {canCorrect && (
+                  <DropdownMenuItem onSelect={() => onCreateCorrection(entry)}>Create Correction</DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => onViewCorrectionHistory(entry)}>
+                  View Correction History
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        ) : (
+          <span className="text-[10px] text-text-faint">—</span>
+        )}
       </div>
 
       {/* Employee Code is a business-critical identifier under the permanent Layout Integrity
@@ -392,6 +442,12 @@ export const PayrollEntryRow = memo(PayrollEntryRowImpl, (prev, next) => {
     prev.rowIndex === next.rowIndex &&
     prev.cycleStatus === next.cycleStatus &&
     prev.banks === next.banks &&
+    prev.canCorrect === next.canCorrect &&
+    // The grid passes stable (useCallback'd) handler references, so a strict-equality check here
+    // still skips a re-render for every row unaffected by the actual change that triggered the
+    // parent's own re-render, same as every other prop below.
+    prev.onCreateCorrection === next.onCreateCorrection &&
+    prev.onViewCorrectionHistory === next.onViewCorrectionHistory &&
     // The shared grid template changes whenever any loaded value (on any row) needs a wider
     // column than before — every mounted row must re-render to stay pixel-aligned when it does.
     prev.gridTemplateColumns === next.gridTemplateColumns &&

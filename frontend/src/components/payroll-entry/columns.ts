@@ -41,6 +41,11 @@ export interface ResolvedPayrollColumnDef extends PayrollColumnDef {
 export const PAYROLL_COLUMNS: PayrollColumnDef[] = [
   // Fixed: a status icon + row number, not loaded text content.
   { id: 'serial', label: '#', align: 'center', fixedWidth: 60 },
+  // Fixed: a Released badge + Correction/History actions, not loaded text content (Corrections
+  // workflow completion, System-Wide RBAC Consistency remediation follow-up) — placed right after
+  // the serial column so a released row's locked status and its available actions are visible
+  // without scrolling right in an otherwise very wide grid.
+  { id: 'status', label: 'Status', align: 'center', fixedWidth: 150 },
   { id: 'employeeCode', label: 'Code', minWidth: 70 },
   { id: 'employeeName', label: 'Employee', minWidth: 110 },
   { id: 'designation', label: 'Designation', minWidth: 100 },

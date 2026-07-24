@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Download, FileEdit, Lock, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
-import { PERMISSIONS } from '@payroll/shared';
+import { calcNet, formatMoney, PERMISSIONS } from '@payroll/shared';
+import { buildCalcInput } from '@/components/payroll-entry/calc-input';
 import { AppShell } from '@/components/layout/app-shell';
 import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -11,14 +12,19 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ApiError } from '@/lib/api-client';
 import { canRequestCorrection } from '@/lib/permissions';
 import { useBanks } from '@/hooks/use-banks';
-import { useProjectSites } from '@/hooks/use-project-sites';
+import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import {
   downloadPayrollEntryExport,
+  downloadPayrollEntryImportTemplate,
   usePayrollEntries,
   useImportPayrollEntries,
   type PayrollEntry,
@@ -28,6 +34,7 @@ import { PayrollEntryGrid } from '@/components/payroll-entry/payroll-entry-grid'
 import { NewCycleModal } from '@/components/payroll-entry/new-cycle-modal';
 import { CopyToAllToolbar } from '@/components/payroll-entry/copy-to-all-toolbar';
 import { RequestCorrectionModal } from '@/components/corrections/request-correction-modal';
+import { CorrectionHistoryModal } from '@/components/corrections/correction-history-modal';
 
 function GridLoadingState() {
   return (
@@ -152,17 +159,18 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   } = useSelectedPayrollCycle('payroll-entry');
   const hasAnyCycle = cycles.length > 0;
   const isArchived = cycle?.status === 'ARCHIVED';
-  // Phase 6 Checkpoint 6 — corrections apply only to a Released/Archived cycle's own already-
-  // recorded figures (never the still-editable Draft), matching `assertEntryIsReleased` server-side.
-  const isCorrectable = cycle?.status === 'RELEASED' || cycle?.status === 'ARCHIVED';
   const [requestCorrectionOpen, setRequestCorrectionOpen] = useState(false);
+  const [correctingEntryId, setCorrectingEntryId] = useState<string | undefined>(undefined);
+  const [historyEntry, setHistoryEntry] = useState<PayrollEntry | undefined>(undefined);
   const {
     data: entries,
     isLoading: entriesLoading,
     error: entriesError,
   } = usePayrollEntries(cycleId);
   const banks = useBanks();
-  const sites = useProjectSites();
+  // Scoped to this user's own accessible sites (System-Wide RBAC Consistency remediation) — Payroll
+  // Entry stays a strictly site-scoped operational domain; holding sites:manage does not widen it.
+  const sites = useAccessibleProjectSites(user);
   const [newCycleOpen, setNewCycleOpen] = useState(false);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [importResult, setImportResult] = useState<PayrollEntryImportResult | undefined>(undefined);
@@ -176,6 +184,26 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
     () => filterEntriesBySite(entries ?? [], selectedSiteIds),
     [entries, selectedSiteIds],
   );
+
+  // Release status of the *individual* Payroll Entry determines correction eligibility — never the
+  // cycle's own status alone (Corrections workflow completion). A cycle can still be nominally
+  // DRAFT/RELEASED while some of its entries are already released (a per-Unit "Late Entry" release,
+  // docs/architecture/database/release.md §12b) — those entries are just as correctable as any
+  // entry in a fully RELEASED/ARCHIVED cycle, and the reverse also holds: an ARCHIVED cycle whose
+  // entries somehow aren't released (shouldn't happen in practice, but the entry's own flag is the
+  // only thing this page trusts) offers no correction action. Matches the backend's own
+  // `assertEntryIsReleased`/`assertEntryEditable` model (`payroll-entry.service.ts`) exactly.
+  const correctableEntries = useMemo(() => filteredEntries.filter((entry) => entry.released), [filteredEntries]);
+  const hasReleasedEntries = correctableEntries.length > 0;
+
+  const handleCreateCorrection = useCallback((entry: PayrollEntry) => {
+    setCorrectingEntryId(entry.id);
+    setRequestCorrectionOpen(true);
+  }, []);
+
+  const handleViewCorrectionHistory = useCallback((entry: PayrollEntry) => {
+    setHistoryEntry(entry);
+  }, []);
 
   // Communicates Option C's approved limitation (Phase 3 Checkpoint 5): the flat import/export
   // format represents only an entry's primary work line, so a currently-filtered split employee's
@@ -225,6 +253,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
               hasAnyCycle &&
               cycleId && (
                 <>
+                  <PrintButton />
                   <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export CSV
@@ -233,14 +262,24 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export Excel
                   </Button>
-                  {isCorrectable && canRequestCorrection(user) && (
-                    <Button variant="secondary" onClick={() => setRequestCorrectionOpen(true)}>
+                  {hasReleasedEntries && canRequestCorrection(user) && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setCorrectingEntryId(undefined);
+                        setRequestCorrectionOpen(true);
+                      }}
+                    >
                       <FileEdit className="h-3.5 w-3.5" aria-hidden />
                       Request Correction
                     </Button>
                   )}
                   {!isArchived && (
                     <>
+                      <Button variant="secondary" onClick={() => downloadPayrollEntryImportTemplate()}>
+                        <Download className="h-3.5 w-3.5" aria-hidden />
+                        Download Import Template
+                      </Button>
                       <Button
                         variant="secondary"
                         onClick={() => fileInputRef.current?.click()}
@@ -264,6 +303,9 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           />
         </CardHeader>
         <CardContent>
+          {cycle && (
+            <PrintContextHeader title="Payroll Entry" context={`${formatCycleLabel(cycle)} · ${cycle.status}`} />
+          )}
           {cycleError && <GridErrorState message={cycleError.message} />}
           {!cycleError && isLoading && <GridLoadingState />}
           {!cycleError && !isLoading && !cycleId && !hasAnyCycle && (
@@ -283,7 +325,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           {!cycleError && !isLoading && cycleId && !entriesError && entries && entries.length > 0 && (
             <div className="flex flex-col gap-3">
               {isArchived && <ArchivedReadOnlyBanner />}
-              <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-wrap items-end gap-3 print:hidden">
                 <MultiSelectFilter
                   id="payroll-entry-site-filter"
                   label="Site"
@@ -293,7 +335,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                 />
               </div>
               {splitEntryCount > 0 && (
-                <p className="text-xs text-text-muted">
+                <p className="text-xs text-text-muted print:hidden">
                   {splitEntryCount} employee{splitEntryCount === 1 ? '' : 's'} {splitEntryCount === 1 ? 'has' : 'have'} attendance
                   split across more than one location this cycle — CSV/Excel import and export only cover each
                   employee's primary line. Review or edit the full split directly in the grid via each row's Split
@@ -301,7 +343,9 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                 </p>
               )}
               {!isArchived && cycle && (
-                <CopyToAllToolbar cycleId={cycle.id} siteIds={selectedSiteIds} />
+                <div className="print:hidden">
+                  <CopyToAllToolbar cycleId={cycle.id} siteIds={selectedSiteIds} />
+                </div>
               )}
               {filteredEntries.length === 0 ? (
                 <div className="flex flex-col items-center gap-1 py-14 text-center">
@@ -309,7 +353,65 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                   <p className="text-xs text-text-muted">Clear the filter to see every employee in this cycle.</p>
                 </div>
               ) : cycle ? (
-                <PayrollEntryGrid cycle={cycle} entries={filteredEntries} banks={banks.data ?? []} />
+                <>
+                  {/* The interactive grid is virtualized (@tanstack/react-virtual) — only the rows
+                      currently scrolled into view exist in the DOM at any moment, so it can never
+                      print correctly on its own (whatever happened to be on screen when Print was
+                      clicked, silently missing the rest). Hidden from print entirely; the plain,
+                      fully-rendered table below (every row, always) is what actually prints. */}
+                  <div className="print:hidden">
+                    <PayrollEntryGrid
+                      cycle={cycle}
+                      entries={filteredEntries}
+                      banks={banks.data ?? []}
+                      canCorrect={canRequestCorrection(user)}
+                      onCreateCorrection={handleCreateCorrection}
+                      onViewCorrectionHistory={handleViewCorrectionHistory}
+                    />
+                  </div>
+                  <div className="hidden print:block">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Code</TableHead>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Site</TableHead>
+                          <TableHead className="text-right">Gross Pay</TableHead>
+                          <TableHead className="text-right">Days</TableHead>
+                          <TableHead className="text-right">OT Hours</TableHead>
+                          <TableHead className="text-right">Allowance</TableHead>
+                          <TableHead className="text-right">Deductions</TableHead>
+                          <TableHead className="text-right">Net Salary</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredEntries.map((entry) => {
+                          const deductions =
+                            Number(entry.eobiAmount) +
+                            Number(entry.advanceDeduction) +
+                            Number(entry.eidAdvanceDeduction) +
+                            Number(entry.fine);
+                          const netSalary = calcNet(buildCalcInput(entry)).netSalary;
+                          return (
+                            <TableRow key={entry.id}>
+                              <TableCell>{entry.employee.employeeCode ?? '—'}</TableCell>
+                              <TableCell>{entry.employee.name}</TableCell>
+                              <TableCell>{entry.site.name}</TableCell>
+                              <TableCell className="text-right tabular-nums">{formatMoney(entry.grossPay)}</TableCell>
+                              <TableCell className="text-right tabular-nums">{entry.workLines[0]?.days ?? '—'}</TableCell>
+                              <TableCell className="text-right tabular-nums">{entry.workLines[0]?.otHours ?? '—'}</TableCell>
+                              <TableCell className="text-right tabular-nums">{formatMoney(entry.allowance)}</TableCell>
+                              <TableCell className="text-right tabular-nums">{formatMoney(deductions.toFixed(2))}</TableCell>
+                              <TableCell className="text-right tabular-nums font-semibold">
+                                {formatMoney(netSalary)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
               ) : null}
             </div>
           )}
@@ -324,13 +426,22 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           result={importResult}
         />
       )}
-      {isCorrectable && (
+      {hasReleasedEntries && (
         <RequestCorrectionModal
           open={requestCorrectionOpen}
-          onOpenChange={setRequestCorrectionOpen}
-          entries={filteredEntries}
+          onOpenChange={(next) => {
+            setRequestCorrectionOpen(next);
+            if (!next) setCorrectingEntryId(undefined);
+          }}
+          entries={correctableEntries}
+          initialEntryId={correctingEntryId}
         />
       )}
+      <CorrectionHistoryModal
+        open={Boolean(historyEntry)}
+        onOpenChange={(next) => !next && setHistoryEntry(undefined)}
+        entry={historyEntry}
+      />
     </AppShell>
   );
 }

@@ -69,6 +69,40 @@ Everything below — the baseline-reconstruction algorithm, standardized Adjustm
 Automatic Settlement Workflow, Bank Sheet/Payslip representation — applies identically to a
 `Correction` regardless of which of the two paths produced it.
 
+### Entry-point completion (Corrections Workflow Redesign checkpoint)
+
+The full workflow this document describes — create → review → approve/reject → ledger → outstanding
+balance — was already fully implemented and exhaustively tested (`backend/tests/corrections-*.test.ts`,
+nine files) well before this checkpoint. What this checkpoint fixed was purely the **frontend
+discoverability** of the creation step: `RequestCorrectionModal` (`frontend/src/components/
+corrections/request-correction-modal.tsx`) previously opened only from a single, page-wide
+"Request Correction" toolbar button on Payroll Entry, scoped to every entry in the current filtered
+view with no indication of *which* rows it actually applied to — and that button's own visibility
+was gated on the payroll *cycle's* status (`RELEASED`/`ARCHIVED`), inconsistent with the backend's
+own model, where editability and correctability are driven entirely by the individual
+`PayrollEntry.released` flag (`assertEntryEditable`/`assertEntryIsReleased`,
+`payroll-entry.service.ts`) — a per-Unit "Late Entry" release can leave a cycle nominally `DRAFT`
+while some of its entries are already released and correctable.
+
+Fixed by:
+- `payroll-entry-row.tsx` now renders a **Released** badge and a per-row actions menu (**Create
+  Correction**, **View Correction History**) directly on any row whose own `entry.released` is
+  `true` — an unreleased row shows neither, matching its still-directly-editable state.
+- **Create Correction** opens the same `RequestCorrectionModal`, now accepting an optional
+  `initialEntryId` that pre-selects and locks the Employee field to the exact row clicked — no
+  separate search/select step when the intent is already unambiguous.
+- **View Correction History** opens a new `CorrectionHistoryModal`
+  (`components/corrections/correction-history-modal.tsx`), reusing the existing entry-scoped
+  `GET /payroll-entries/:entryId/correction-requests` endpoint (`useCorrectionRequests({
+  payrollEntryId })`) — every request ever filed against that entry, pending/approved/rejected
+  alike, not just its approved `Correction` history.
+- The page-wide toolbar button (still useful for a bulk/no-particular-row-in-mind case) is now
+  gated on `filteredEntries.some(e => e.released)` — any released entry in the current view —
+  instead of the cycle's own status, closing the frontend/backend model mismatch.
+
+No backend change was needed for any of this — `assertEntryEditable`'s per-entry model was already
+correct; only the UI needed to catch up to it.
+
 ## The rule
 
 1. **Never regenerate the employee's full salary once the trigger condition above applies.** The

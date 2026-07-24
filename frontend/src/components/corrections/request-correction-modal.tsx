@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
+import { EmployeeLookup } from '@/components/ui/employee-lookup';
 import { ApiError } from '@/lib/api-client';
 import { useAdjustmentTypes } from '@/hooks/use-adjustment-types';
 import { useCreateCorrectionRequest, usePreviewCorrection } from '@/hooks/use-correction-requests';
@@ -35,10 +36,15 @@ export function RequestCorrectionModal({
   open,
   onOpenChange,
   entries,
+  initialEntryId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   entries: PayrollEntry[];
+  /** Pre-selects (and locks) the Employee field — set when this modal is opened contextually from
+   * one specific Payroll Entry row's own "Create Correction" action, rather than the page-wide
+   * toolbar button, so the request is unambiguously about the row the user actually clicked. */
+  initialEntryId?: string;
 }) {
   const navigate = useNavigate();
   const adjustmentTypes = useAdjustmentTypes();
@@ -59,8 +65,12 @@ export function RequestCorrectionModal({
       setProposedNewValue('');
       setAdjustmentTypeId('');
       setReason('');
+    } else if (initialEntryId) {
+      setEntryId(initialEntryId);
     }
-  }, [open]);
+  }, [open, initialEntryId]);
+
+  const isEntryLocked = Boolean(initialEntryId);
 
   // Debounced, race-safe preview: fired on every field/value change, cancelling/ignoring any
   // still-in-flight older call rather than letting it clobber a newer response (Checkpoint 6's own
@@ -112,20 +122,21 @@ export function RequestCorrectionModal({
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="correction-entry">Employee</Label>
-            <select
+            {/* Searches the real Employee Registry (code/CNIC/account/IBAN/name/site/branch) but
+                restricted to this cycle's own released entries — the only legitimate correction
+                targets — never a plain org-wide lookup that could resolve to an employee with no
+                released entry at all here (System-Wide RBAC Consistency / Corrections completion). */}
+            <EmployeeLookup
               id="correction-entry"
-              className={selectClassName}
-              value={entryId}
-              onChange={(e) => setEntryId(e.target.value)}
+              value={selectedEntry?.employee.id ?? ''}
+              onChange={(employeeId) => {
+                const matchingEntry = entries.find((entry) => entry.employee.id === employeeId);
+                setEntryId(matchingEntry?.id ?? '');
+              }}
+              restrictToEmployeeIds={entries.map((entry) => entry.employee.id)}
+              disabled={isEntryLocked}
               required
-            >
-              <option value="">Select an employee…</option>
-              {entries.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.employee.name} {entry.employee.employeeCode ? `(${entry.employee.employeeCode})` : ''}
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
