@@ -56,7 +56,7 @@ export function Topbar({
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-2 px-7">
+    <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-2 px-7 print:hidden">
       <div>
         <div className="text-[15px] font-semibold text-text">{title}</div>
         {subtitle && <div className="text-xs text-text-muted">{subtitle}</div>}

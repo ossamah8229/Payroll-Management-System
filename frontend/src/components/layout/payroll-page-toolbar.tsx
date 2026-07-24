@@ -46,10 +46,12 @@ export function PayrollPageToolbar({
             {badge}
           </div>
         </div>
-        {filters}
+        {/* print:hidden (Standard Print Support checkpoint) — filters describe how the on-screen
+            view is narrowed, not something a printed page needs to show alongside its data. */}
+        <div className="contents print:hidden">{filters}</div>
       </div>
       {actions && (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5 print:hidden">
           <Label aria-hidden className="invisible select-none">
             spacer
           </Label>

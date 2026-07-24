@@ -19,7 +19,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
     .toUpperCase();
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col bg-accent">
+    <aside className="fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col bg-accent print:hidden">
       <div className="border-b border-white/10 px-4 pb-4 pt-5">
         <div className="text-[13px] font-bold leading-tight text-white">
           Payroll Management

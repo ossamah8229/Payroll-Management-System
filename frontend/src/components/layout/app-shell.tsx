@@ -16,11 +16,16 @@ export function AppShell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-screen overflow-hidden bg-bg">
+    // print:block/print:ml-0/print:overflow-visible (Standard Print Support checkpoint) — every
+    // page in the app shares this one shell, so hiding navigation chrome and letting the printed
+    // content flow across pages (rather than stay clipped to the on-screen viewport) is fixed once
+    // here rather than per-page. `<main>`'s own overflow-y-auto is what would otherwise clip a
+    // page's content to the screen's scrollable height when printed.
+    <div className="flex h-screen overflow-hidden bg-bg print:block print:h-auto print:overflow-visible">
       <Sidebar user={user} />
-      <div className="ml-[220px] flex flex-1 flex-col overflow-hidden">
+      <div className="ml-[220px] flex flex-1 flex-col overflow-hidden print:ml-0 print:block print:overflow-visible">
         <Topbar title={title} subtitle={subtitle} user={user} />
-        <main className="flex-1 overflow-y-auto p-7">{children}</main>
+        <main className="flex-1 overflow-y-auto p-7 print:overflow-visible print:p-0">{children}</main>
       </div>
     </div>
   );

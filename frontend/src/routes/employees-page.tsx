@@ -15,6 +15,8 @@ import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 import { FilterField } from '@/components/ui/filter-field';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +30,7 @@ import { SiteUnitSelect } from '@/components/ui/site-unit-select';
 import {
   checkCnicAvailability,
   downloadEmployeeExport,
+  downloadEmployeeImportTemplate,
   useCreateEmployee,
   useEmployee,
   useEmployees,
@@ -258,7 +261,7 @@ function EmployeeFormModal({
                         )}
                       </>
                     ) : (
-                      'This CNIC is already registered to an employee outside your assigned sites — contact a Master Admin.'
+                      'This CNIC is already registered to an employee outside your assigned sites — contact a Master User.'
                     )}
                   </div>
                 )}
@@ -758,7 +761,8 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
       <Card>
         <CardHeader>
           <CardTitle>All Employees</CardTitle>
-          <div className="flex gap-2">
+          <div className="flex gap-2 print:hidden">
+            <PrintButton />
             <Button size="sm" variant="secondary" onClick={() => downloadEmployeeExport('csv')}>
               <Download className="h-3.5 w-3.5" aria-hidden />
               Export CSV
@@ -769,6 +773,10 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
             </Button>
             {canCreate && (
               <>
+                <Button size="sm" variant="secondary" onClick={() => downloadEmployeeImportTemplate()}>
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  Download Import Template
+                </Button>
                 <Button
                   size="sm"
                   variant="secondary"
@@ -794,7 +802,8 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="mb-4 flex flex-wrap items-end gap-3">
+          <PrintContextHeader title="Employee Registry" />
+          <div className="mb-4 flex flex-wrap items-end gap-3 print:hidden">
             <FilterField id="filter-site" label="Site">
               <select
                 id="filter-site"
@@ -854,7 +863,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
           )}
 
           {!isLoading && employees && employees.length > 0 && (
-            <div className="-mx-[18px] overflow-x-auto">
+            <div className="print-flow -mx-[18px] overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

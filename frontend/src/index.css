@@ -79,3 +79,31 @@
     @apply bg-bg text-text font-sans antialiased;
   }
 }
+
+/*
+ * Standard Print Support checkpoint — A4, repeated table headers, no clipped/scroll-bound content.
+ * Navigation (Sidebar/Topbar), filters, and action toolbars are hidden per-component via Tailwind's
+ * `print:hidden` (AppShell, PayrollPageToolbar, and each print-enabled page's own filter row) —
+ * this block covers only what those per-component utilities can't: page geometry, and the handful
+ * of `overflow-x-auto`/fixed-`max-h` wrapper divs several table-heavy pages use for their on-screen
+ * scroll region, which must become unconstrained so a table's full row count actually prints
+ * instead of being clipped to whatever fit the screen's scrollable viewport.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  /* A real <table>'s <thead> already repeats on every printed page in every modern browser by
+     default — this only guarantees it for this app's own shared Table component specifically,
+     in case a future change to it ever introduces a non-<thead> grouping element. */
+  table thead {
+    display: table-header-group;
+  }
+
+  .print-flow {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+}
