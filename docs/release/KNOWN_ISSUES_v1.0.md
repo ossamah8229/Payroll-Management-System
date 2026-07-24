@@ -314,6 +314,20 @@ during RC1 preparation (2026-07-19/20), not assumed.
   all three batch shapes instead of one, reducing but not eliminating the ~5-10% recurrence rate
   seen in reproduction. Not weakened (the exact-equality assertion is unchanged); left open as a
   separate, lower-priority follow-up.
+- **A second symptom of the same root cause, observed 2026-07-24 (Corrections Workflow Redesign /
+  RBAC Consistency Completion checkpoint)**: two consecutive clean, uncontended full-suite runs both
+  showed 11-12 batch-endpoint failures (`Expected: 200, Received: 400`), all from
+  `POST /payroll-cycles/:cycleId/payslips/batch`'s own canary-render guard
+  (`payslips.routes.ts:250-259` — the *first* employee's PDF render is attempted before any
+  response is streamed; if it throws, the whole batch 400s rather than partially succeeding, by
+  design) — not a timeout this time, but the same underlying cause: Puppeteer's PDF render failing
+  under real host resource contention (25 concurrent Chrome-family processes were observed on the
+  host at the time, `vm_stat` showing ~1.4GB free). Confirmed non-code-related: `payslips.test.ts`
+  run in complete isolation passed 47/47 both times, immediately after each contended full-suite
+  run, with no code change in between. Not caused by, or related to, any change this checkpoint
+  made (Employee Lookup, print support, import templates, and the RBAC module migration touch
+  entirely different code paths) — recorded here since it's the same documented root cause, a new
+  observed symptom of it.
 
 ---
 

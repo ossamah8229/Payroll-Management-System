@@ -27,10 +27,12 @@ test.describe('Application startup and authentication', () => {
   });
 
   test('logout succeeds and returns to a genuinely unauthenticated state', async ({ authenticatedPage: page }) => {
-    // "MA" — the Master Admin seed account's own initials, rendered both in the sidebar's own
-    // (non-interactive) footer and the topbar's avatar dropdown trigger — `getByRole('button', ...)`
-    // is the one of the two that's actually clickable.
-    await page.getByRole('button', { name: 'MA' }).click();
+    // "MU" — the seeded Master User account's own initials (Terminology audit, Corrections
+    // Workflow Redesign / RBAC Consistency Completion checkpoint: the seeded display name changed
+    // from "Master Admin" to "Master User"), rendered both in the sidebar's own (non-interactive)
+    // footer and the topbar's avatar dropdown trigger — `getByRole('button', ...)` is the one of
+    // the two that's actually clickable.
+    await page.getByRole('button', { name: 'MU' }).click();
     await page.getByText('Log out').click();
 
     await page.waitForURL((url) => url.pathname === '/login');

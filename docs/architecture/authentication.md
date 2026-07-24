@@ -606,16 +606,14 @@ See `backend/tests/employees.test.ts`'s "a custom role holding sites:manage AND 
 block and `tests/e2e/specs/10-site-visibility.spec.ts`'s "Employee Registry visibility (UAT Defect
 3)" describe block.
 
-**Deliberately not fixed in this pass:** `corrections-page.tsx`, `salary-release-page.tsx`,
+**Resolved (RBAC Consistency Completion checkpoint):** `corrections-page.tsx` (`ReviewQueueTab`/
+`CorrectionsLedgerTab`, threaded `user` through as a new prop), `salary-release-page.tsx`,
 `payslips-page.tsx`, `payroll-entry-page.tsx`, `bank-sheet-page.tsx`, `advances-page.tsx`, and
-`cash-receiving-page.tsx` all independently call the raw `useProjectSites()` for their own site
-filters, and share the identical latent inconsistency for the same dual-permission persona (a
-`sites:manage` holder also holding one of those modules' own site-scoped permissions would see more
-sites in that filter than the module's own backend scope would return data for). None of these were
-part of the reported UAT defects, and several (`corrections-page.tsx`'s `ReviewQueueTab`/
-`CorrectionsLedgerTab`) would need `user` prop-threading through sub-components that don't currently
-receive it. Recorded here as a known, scoped-out remaining inconsistency — the same
-`useAccessibleProjectSites` hook already exists and is the correct fix when this is picked up.
+`cash-receiving-page.tsx` all now call `useAccessibleProjectSites(user)` instead of the raw,
+`sites:manage`-aware `useProjectSites()` for their own site filters — every module in this system
+that filters by site now follows the identical scope rule, with no remaining exceptions beyond the
+two pages that genuinely want the unrestricted list (Project Sites administration, and the Users
+module's own site-assignment picker).
 
 ### Fix 3 — Tasks: `tasks:manage` is now consistently global (found proactively, not reported)
 
@@ -659,9 +657,75 @@ none newly introduced by this remediation:
 - `users-page.tsx` — role-code-based UI showing/hiding the site-assignment field for a literally-
   Master-Admin-coded user (unchanged; a data-shape question, not an authorization substitute).
 
-No occurrence of the literal string `"Master Admin"` gates any behavior — the two matches found
-(`prisma/seed.ts`'s display-name constant and an unrelated CNIC-collision hint's plain-English
-"contact a Master Admin") are both cosmetic text, not authorization.
+No occurrence of the literal string `"Master Admin"` gates any behavior — every match found across
+this system is cosmetic text, not authorization. **This is a stronger guarantee than a previous
+version of this section claimed ("the two matches found")** — a full terminology audit (Corrections
+Workflow Redesign / RBAC Consistency Completion checkpoint) found the live UI actually mixed
+"Master Admin" and "Master User" across several pages, and that `prisma/seed.ts`'s own seeded
+display name had never actually been updated to "Master User" despite this section's own
+documentation of the 2026-07-05 rename. See that checkpoint's own terminology-audit note below for
+the full fix — the point stands regardless: neither string was ever compared against for an
+authorization decision, only rendered as display text.
+
+## Corrections Workflow Redesign / RBAC Consistency Completion checkpoint
+
+Two objectives, addressed together since the second grew directly out of auditing the first:
+finishing the previous checkpoint's RBAC module migration, and completing the Corrections workflow
+so creating a correction has a real, discoverable entry point (see
+`docs/architecture/workflows/corrections-and-balance-adjustments.md`'s own "Entry-point completion"
+section for the full detail — the backend workflow was already complete and exhaustively tested;
+only the frontend discoverability needed fixing).
+
+### Terminology audit — "Master User" is now the live, seeded display name
+
+A full grep found this was a live, user-visible inconsistency, not settled documentation: the
+seeded `Role.name`/`User.name` for the Master Admin role/account still said "Master Admin"
+(`prisma/seed.ts`'s `ROLE_DISPLAY_NAMES` was never actually updated despite this file's own
+"renamed 2026-07-05" claim), rendered directly in the sidebar footer and Settings → Roles table —
+while four scattered frontend help/empty-state strings already said "Master User"
+(`corrections-page.tsx`, `salary-release-page.tsx` ×2, `payroll-entry-page.tsx`) and four others
+still said "Master Admin" (`access-denied.tsx`, `settings-page.tsx`, `payslips-page.tsx`,
+`employees-page.tsx`). Fixed: `seed.ts`'s `ROLE_DISPLAY_NAMES` and the seeded account's `name` now
+say "Master User" (for every fresh install); a new data-only migration
+(`20260723120000_master_user_terminology`) updates the same values on any database seeded before
+this fix, scoped to rows that still hold the exact literal default (an administrator who already
+renamed their own Master role/account is never silently overwritten); the four remaining "Master
+Admin" strings were changed to "Master User" for consistency. `Role.code` (`MASTER_ADMIN`) is
+unchanged everywhere, as is every role-code-based authorization check this file documents above —
+this was a display-text-only fix.
+
+### Reusable Employee Lookup
+
+`frontend/src/components/ui/employee-lookup.tsx` — a searchable combobox replacing the plain,
+unsearchable `<select>` every "pick one employee" surface previously used (Advances' Record Advance
+modal, Corrections' Request Correction modal), neither of which stays usable at this system's own
+stated design floor (~10,000 employees). Searches the real `GET /api/v1/employees?search=...`
+(`employees.service.ts`'s `listEmployees`, extended this checkpoint to also match Account Number,
+IBAN, Site name, and Unit/Branch name — previously Name/CNIC/Code only) — introduces no new
+authorization decision of its own; the backend's existing site-scoping remains the sole authority.
+Corrections' own usage additionally passes `restrictToEmployeeIds`, narrowing results client-side
+to the current cycle's own released entries — the only legitimate correction targets — while still
+searching through the same real backend endpoint every other consumer uses.
+
+### Standard print support
+
+`AppShell`'s `print:` utility classes (`sidebar.tsx`/`topbar.tsx` hidden; `<main>`'s scroll
+constraint lifted) plus a new `PrintButton`/`PrintContextHeader` pair, wired into all eight pages
+the checkpoint named (Payroll Entry, Salary Release, Bank Sheet, Cash Receiving, Payslips,
+Corrections, Employee Registry, Advances). Payroll Entry's own interactive grid is virtualized
+(`@tanstack/react-virtual` — only on-screen rows exist in the DOM at any moment) and so can never
+print correctly on its own; it is hidden from print entirely in favor of a plain, fully-rendered
+`<table>` covering every currently-filtered entry, shown only under print media.
+
+### Downloadable import templates
+
+`GET /api/v1/employees/import-template` and `GET /api/v1/payroll-entries/import-template` — a
+blank workbook with the exact required header row, one fully-filled sample row, and an
+"Instructions" sheet documenting which columns are required vs. optional (Employees) or that the
+import is update-only and never creates a new row (Payroll Entry). Bank Sheet, Cash Receiving,
+Sites/Units, and Users have no import functionality at all today (export-only or plain CRUD) — a
+template for a nonexistent import feature would document nothing real, so none was added for those;
+building real import support for them is a separate, larger undertaking, not attempted here.
 
 ## CSRF Protection
 

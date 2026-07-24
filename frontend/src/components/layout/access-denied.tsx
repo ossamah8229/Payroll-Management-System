@@ -29,7 +29,7 @@ export function AccessDeniedPage({ user }: { user: SessionUser }) {
           <ShieldAlert className="h-8 w-8 text-text-faint" aria-hidden />
           <h1 className="text-sm font-semibold text-text">You do not have permission to access this page.</h1>
           <p className="max-w-[420px] text-xs text-text-muted">
-            If you believe this is a mistake, contact a Master Admin to review your account's permissions.
+            If you believe this is a mistake, contact a Master User to review your account's permissions.
           </p>
           <Button asChild size="sm" className="mt-2">
             <Link to="/">Back to Dashboard</Link>

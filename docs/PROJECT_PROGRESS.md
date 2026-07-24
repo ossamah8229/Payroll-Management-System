@@ -5708,6 +5708,61 @@ section for the full permission/scope matrix and every role-code check audited, 
 
 ---
 
+### Corrections Workflow Redesign / RBAC Consistency Completion (2026-07-24)
+
+Two objectives: finish migrating the remaining site-scoped modules to the centralized RBAC helpers
+the previous checkpoint introduced, and complete the Corrections workflow so creating a correction
+has a real, discoverable entry point.
+
+**RBAC completion**: all 7 remaining modules the previous checkpoint's own audit flagged as a known,
+scoped-out remainder (Corrections, Salary Release, Payslips, Payroll Entry, Bank Sheet, Cash
+Receiving, Advances) now call `useAccessibleProjectSites(user)` instead of the raw,
+`sites:manage`-aware `useProjectSites()` for their own site filters — `corrections-page.tsx`'s
+`ReviewQueueTab`/`CorrectionsLedgerTab` needed `user` prop-threading added, the rest were direct
+swaps. No module in this system now follows a different site-scope rule than any other, beyond the
+two pages that genuinely want the unrestricted list (Project Sites administration, Users' own
+site-assignment picker).
+
+**Corrections workflow**: the backend workflow (create → review → approve/reject → ledger →
+outstanding balance) was already fully implemented and exhaustively tested (nine dedicated test
+files) — the actual gap, confirmed by direct investigation against the real code before any change,
+was frontend discoverability: `RequestCorrectionModal` opened only from a single, page-wide toolbar
+button gated on the payroll *cycle's* status, inconsistent with the backend's own per-entry
+`released` model (a per-Unit "Late Entry" release can leave a cycle nominally Draft while some
+entries are already released and correctable). Fixed: `payroll-entry-row.tsx` now shows a Released
+badge and a per-row actions menu (Create Correction, View Correction History) on any released row;
+the toolbar button is now gated on "any released entry in view," not cycle status; a new
+`CorrectionHistoryModal` surfaces every correction request ever filed against one entry, reusing an
+already-existing endpoint. No backend change was needed — `assertEntryEditable`'s per-entry model
+was already correct.
+
+**Also delivered**: a reusable, searchable `EmployeeLookup` component (replacing the plain
+unsearchable `<select>` in Advances/Corrections; employee search extended to cover Account Number/
+IBAN/Site/Branch, not just Name/CNIC/Code); standard print support across all 8 named pages
+(`PrintButton`/`PrintContextHeader`, `AppShell`'s `print:` utilities, a non-virtualized print-only
+table for Payroll Entry's own virtualized grid); downloadable import templates for Employees and
+Payroll Entry (the two modules with real import — Bank Sheet/Cash Receiving/Sites/Users have no
+import to template); a terminology audit that found "Master User" was never actually seeded (only
+documented) — `prisma/seed.ts` and a new data-only migration
+(`20260723120000_master_user_terminology`) now make it the live, seeded display name everywhere,
+with four scattered "Master Admin" UI strings corrected to match.
+
+**Verification**: backend typecheck/lint/build/Prisma-validate clean; two independent clean,
+uncontended full-suite runs both passed 881/892 and 880/892 respectively, with every failure
+confined to `payslips.test.ts`'s Puppeteer-dependent batch tests (confirmed via isolated rerun —
+47/47 both times — the pre-existing, documented KI-10 load-sensitivity pattern, not a regression;
+see KI-10's own updated entry for the new evidence). Frontend typecheck/lint/test/build clean
+throughout. New backend tests: `project-units.test.ts`/`employees.test.ts`/`tasks.test.ts` (carried
+over from the previous checkpoint's own commits), `employees-import-export.test.ts` and
+`payroll-entry-import-export.test.ts` (import template endpoints), `employees.test.ts` (extended
+search), `roles.test.ts` (seeded terminology). New E2E spec
+`tests/e2e/specs/12-corrections-completion.spec.ts` covering the per-row Released actions, the
+Employee Lookup search-and-select flow, print support, and import template downloads.
+
+**Not pushed, not deployed**, per this checkpoint's explicit instruction.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

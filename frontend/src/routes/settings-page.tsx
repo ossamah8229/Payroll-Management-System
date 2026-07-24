@@ -101,7 +101,7 @@ function CompanyDetailsTab({ user }: { user: SessionUser }) {
           description="Used on payslips, bank sheets, and other printed documents."
         />
         <div className="rounded border border-border bg-bg px-3.5 py-3 text-xs text-text-muted">
-          Only Master Admin can edit company details. Showing the current values.
+          Only Master User can edit company details. Showing the current values.
         </div>
         <dl className="flex flex-col gap-2.5 text-xs">
           <div className="flex justify-between border-b border-border pb-2.5">

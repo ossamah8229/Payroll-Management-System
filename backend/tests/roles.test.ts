@@ -832,5 +832,34 @@ describe('Role Administration', () => {
       expect(stillThere).not.toBeNull();
       expect(stillThere!.name).toBe('Test Seed Survives Role');
     }, 30000);
+
+    // Terminology audit (Corrections/RBAC completion checkpoint) — "Master User" is this system's
+    // live, user-facing display name for the MASTER_ADMIN role/account (docs/architecture/
+    // authentication.md: renamed 2026-07-05), but the rename never reached seed.ts until this
+    // checkpoint — every database seeded before it still showed "Master Admin" in Settings ->
+    // Roles, the sidebar footer, and anywhere else Role.name/User.name renders. Never the role
+    // CODE, which stays MASTER_ADMIN everywhere and grants no authorization based on either name.
+    it('seeds the Master Admin role and account with the "Master User" display name, never the role code', async () => {
+      const masterRole = await prisma.role.findUniqueOrThrow({ where: { code: ROLE_CODES.MASTER_ADMIN } });
+      expect(masterRole.name).toBe('Master User');
+      expect(masterRole.code).toBe('MASTER_ADMIN');
+
+      const masterUser = await prisma.user.findFirstOrThrow({ where: { roleId: masterRole.id } });
+      expect(masterUser.name).toBe('Master User');
+    });
+
+    it('re-running seed does not revert an administrator-renamed Master role back to "Master User"', async () => {
+      const masterRole = await prisma.role.findUniqueOrThrow({ where: { code: ROLE_CODES.MASTER_ADMIN } });
+      await prisma.role.update({ where: { id: masterRole.id }, data: { name: 'Chief Administrator' } });
+
+      execSync('npx prisma db seed', { cwd: `${__dirname}/..`, stdio: 'pipe' });
+
+      const reloaded = await prisma.role.findUniqueOrThrow({ where: { id: masterRole.id } });
+      expect(reloaded.name).toBe('Chief Administrator');
+
+      // Restore, so this test doesn't leave the shared dev database's Master role permanently
+      // renamed for whatever runs next.
+      await prisma.role.update({ where: { id: masterRole.id }, data: { name: 'Master User' } });
+    }, 30000);
   });
 });

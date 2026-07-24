@@ -19,8 +19,12 @@ const BANKS = [
   { code: CASH_BANK_CODE, name: 'Cash' },
 ];
 
+// "Master User" is this system's live, user-facing display name for the MASTER_ADMIN role/account
+// (docs/architecture/authentication.md: renamed 2026-07-05, "same role, no functional change") —
+// ROLE_CODES.MASTER_ADMIN itself is never renamed (a stable internal identifier authorization logic
+// compares against, common/authz-policy.ts's isMasterAdmin), only this seeded display text.
 const ROLE_DISPLAY_NAMES: Record<string, string> = {
-  [ROLE_CODES.MASTER_ADMIN]: 'Master Admin',
+  [ROLE_CODES.MASTER_ADMIN]: 'Master User',
   [ROLE_CODES.PAYROLL_STAFF]: 'Payroll Staff',
   [ROLE_CODES.FINANCE]: 'Finance',
 };
@@ -87,7 +91,7 @@ async function main() {
     });
   }
 
-  console.log('Seeding Master Admin account...');
+  console.log('Seeding Master User account...');
   const masterAdminRole = await prisma.role.findUniqueOrThrow({
     where: { code: ROLE_CODES.MASTER_ADMIN },
   });
@@ -101,12 +105,12 @@ async function main() {
     await prisma.user.create({
       data: {
         roleId: masterAdminRole.id,
-        name: 'Master Admin',
+        name: 'Master User',
         email: seedEmail,
         passwordHash,
       },
     });
-    console.log(`Created Master Admin account: ${seedEmail}`);
+    console.log(`Created Master User account: ${seedEmail}`);
     if (!process.env.SEED_MASTER_ADMIN_PASSWORD) {
       console.log(
         `  Using default password "${seedPassword}" — override via SEED_MASTER_ADMIN_PASSWORD ` +
@@ -114,7 +118,7 @@ async function main() {
       );
     }
   } else {
-    console.log(`Master Admin account already exists: ${seedEmail}`);
+    console.log(`Master User account already exists: ${seedEmail}`);
   }
 
   console.log('Seeding banks...');

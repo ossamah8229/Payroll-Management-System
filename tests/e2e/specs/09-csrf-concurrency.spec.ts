@@ -100,7 +100,7 @@ test.describe('CSRF concurrency and token rotation, real browser (Checkpoint 4D)
   }) => {
     const tokenWhileLoggedIn = await getCsrfToken(page.context());
 
-    await page.getByRole('button', { name: 'MA' }).click();
+    await page.getByRole('button', { name: 'MU' }).click();
     await page.getByText('Log out').click();
     await page.waitForURL((url) => url.pathname === '/login');
 
@@ -114,7 +114,7 @@ test.describe('CSRF concurrency and token rotation, real browser (Checkpoint 4D)
     expect(tokenAfterSecondLogin).not.toBe(tokenAfterLogout);
 
     // The rotated token actually works for a further authenticated mutation, not just present.
-    await page.getByRole('button', { name: 'MA' }).click();
+    await page.getByRole('button', { name: 'MU' }).click();
     await page.getByText('Log out').click();
     await page.waitForURL((url) => url.pathname === '/login');
   });

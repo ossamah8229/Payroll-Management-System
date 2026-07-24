@@ -323,7 +323,7 @@ test.describe('Role & Permission Administration', () => {
     authenticatedPage: page,
   }) => {
     const context = page.context();
-    const rolesRes = await apiGet<{ roles: { id: string; name: string; assignedUserCount: number }[] }>(context, '/api/v1/roles');
+    const rolesRes = await apiGet<{ roles: { id: string; code: string; name: string; assignedUserCount: number }[] }>(context, '/api/v1/roles');
     // Note the trailing space in the prefix — this spec's own roles are named "E2E <Team Role>
     // Tester/Reviewer/Viewer/Auditor ...", deliberately distinct from 07-corrections.spec.ts's own
     // unrelated "E2E_CORRECTIONS_REVIEWER" fixture role name (an underscore, no space), which would
@@ -348,9 +348,12 @@ test.describe('Role & Permission Administration', () => {
       }
     }
 
-    // Final-administrator safeguard, from the UI: attempt to deactivate the Master Admin role.
-    const masterRole = rolesRes.body.roles.find((r) => r.name === 'Master Admin');
-    test.skip(!masterRole, 'Master Admin role not found.');
+    // Final-administrator safeguard, from the UI: attempt to deactivate the Master User role.
+    // Matched by role code, not display name (Terminology audit) — Role.name is administrator-
+    // editable and, as of this checkpoint, seeded as "Master User," not "Master Admin"; the code
+    // is the one stable identity this lookup should ever depend on.
+    const masterRole = rolesRes.body.roles.find((r) => r.code === 'MASTER_ADMIN');
+    test.skip(!masterRole, 'Master Admin (MASTER_ADMIN) role not found.');
     if (masterRole) {
       const res = await apiPatch<{ error: { message: string } }>(context, `/api/v1/roles/${masterRole.id}`, { isActive: false });
       expect(res.status).toBe(400);
