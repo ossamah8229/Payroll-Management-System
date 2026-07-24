@@ -89,10 +89,140 @@ export async function getAdvance(currentUser: SessionUser, id: string) {
 }
 
 /**
+ * The earliest payroll period a new Advance's deduction may be scheduled against (Operational
+ * Stabilization Checkpoint, 2026-07-24 — BR-ADV-007, closing the gap where the original create form
+ * accepted an unconstrained arbitrary `(year, month)`, including an already-past one that could
+ * never be picked up by any materialization sweep). The current Draft cycle, if one exists — the
+ * earliest a deduction could actually land, per BR-ADV-002's own "future Draft payroll cycle" floor
+ * for deferrals; the exact same floor applies to a brand-new Advance's *first* schedule. If no cycle
+ * is currently Draft (the narrow window between Finalize and the next rollover, or true first-run),
+ * there is no real cycle to anchor against — falling back to today's real calendar month (never an
+ * invented cycle) still rejects a genuinely stale past date without pretending a Draft exists.
+ */
+async function resolveEarliestEligiblePeriodKey(tx: PrismaTransactionClient): Promise<number> {
+  const draftCycle = await tx.payrollCycle.findFirst({ where: { status: 'DRAFT' } });
+  if (draftCycle) {
+    return draftCycle.year * 12 + draftCycle.month;
+  }
+  const now = new Date();
+  return now.getUTCFullYear() * 12 + (now.getUTCMonth() + 1);
+}
+
+function assertPeriodAtOrAfterFloor(period: { year: number; month: number }, floorKey: number): void {
+  const periodKey = period.year * 12 + period.month;
+  if (periodKey < floorKey) {
+    throw badRequest(
+      'The deduction start cycle cannot be earlier than the current Draft payroll cycle — a past period can never be picked up for deduction',
+    );
+  }
+}
+
+/**
+ * The single-Advance materialization step (Operational Stabilization Checkpoint, 2026-07-24) —
+ * extracted from `materializeScheduledAdvanceDeductions`'s own per-advance loop body so both the
+ * cycle-bootstrap bulk sweep (below) and `createAdvance`'s new immediate-materialization step (also
+ * below, Defect D/E's root-cause fix) share the exact one calculation, never two copies that could
+ * drift. Applies `advance`'s next due amount onto `entryId` and advances/clears
+ * `currentScheduledPeriodId` exactly as the bulk sweep already did — see that function's own doc
+ * comment for the FULL_DEDUCTION/INSTALLMENT amount rule. Returns `true` if a deduction was actually
+ * applied (`false` for the "no standing INSTALLMENT schedule yet" no-op case, matching the bulk
+ * sweep's own `continue`).
+ */
+async function materializeOneAdvanceDeduction(
+  tx: PrismaTransactionClient,
+  params: {
+    advance: { id: string; type: 'LOAN' | 'EID_ADVANCE'; repaymentType: 'FULL_DEDUCTION' | 'INSTALLMENT'; outstandingBalance: Prisma.Decimal; scheduledInstallmentAmount: Prisma.Decimal | null };
+    entryId: string;
+    cycleId: string;
+    cycleYear: number;
+    cycleMonth: number;
+    actorUserId: string;
+    requestMeta: RequestMeta;
+  },
+): Promise<boolean> {
+  const { advance, entryId, cycleId, cycleYear, cycleMonth, actorUserId, requestMeta } = params;
+
+  let amount: Prisma.Decimal;
+  if (advance.repaymentType === 'FULL_DEDUCTION') {
+    amount = advance.outstandingBalance;
+  } else {
+    if (!advance.scheduledInstallmentAmount || advance.scheduledInstallmentAmount.lessThanOrEqualTo(0)) {
+      return false; // No standing schedule set yet — nothing to auto-apply.
+    }
+    amount = Prisma.Decimal.min(advance.scheduledInstallmentAmount, advance.outstandingBalance);
+  }
+
+  const newOutstanding = advance.outstandingBalance.minus(amount);
+  const isPaidOff = newOutstanding.lessThanOrEqualTo(0);
+
+  await tx.payrollEntry.update({
+    where: { id: entryId },
+    data:
+      advance.type === 'LOAN'
+        ? { advanceDeduction: amount, advanceId: advance.id, version: { increment: 1 } }
+        : { eidAdvanceDeduction: amount, eidAdvanceId: advance.id, version: { increment: 1 } },
+  });
+
+  let nextPeriodId: string | null = null;
+  if (!isPaidOff) {
+    const nextYear = cycleMonth === 12 ? cycleYear + 1 : cycleYear;
+    const nextMonthNum = cycleMonth === 12 ? 1 : cycleMonth + 1;
+    const next = await findOrCreateScheduledPayrollPeriod(nextYear, nextMonthNum, tx);
+    nextPeriodId = next.id;
+  }
+
+  await tx.advance.update({
+    where: { id: advance.id },
+    data: {
+      outstandingBalance: isPaidOff ? new Prisma.Decimal(0) : newOutstanding,
+      status: isPaidOff ? 'PAID_OFF' : 'ACTIVE',
+      currentScheduledPeriodId: isPaidOff ? null : nextPeriodId,
+      paidOffAt: isPaidOff ? new Date() : null,
+    },
+  });
+
+  await recordAuditLog(
+    {
+      actorUserId,
+      action: 'advance.schedule_materialized',
+      entityType: 'Advance',
+      entityId: advance.id,
+      metadata: {
+        cycleId,
+        payrollEntryId: entryId,
+        amount: amount.toFixed(2),
+        outstandingBalanceBefore: advance.outstandingBalance.toFixed(2),
+        outstandingBalanceAfter: newOutstanding.lessThanOrEqualTo(0) ? '0.00' : newOutstanding.toFixed(2),
+        status: isPaidOff ? 'PAID_OFF' : 'ACTIVE',
+      },
+      ipAddress: requestMeta.ipAddress,
+      userAgent: requestMeta.userAgent,
+    },
+    tx,
+  );
+
+  return true;
+}
+
+/**
  * Records a new Advance. `originalPeriod` resolves (find-or-create, never a direct write — see
  * `findOrCreateScheduledPayrollPeriod`) into the `ScheduledPayrollPeriod` both
  * `originalScheduledPeriodId` (immutable forever after, BR-ADV-001) and `currentScheduledPeriodId`
  * (the live pointer) are set to.
+ *
+ * **Root-cause fix, Operational Stabilization Checkpoint 2026-07-24 (Defect D/E):** production
+ * observed an Advance recorded against the current Draft cycle not appearing as a deduction in that
+ * cycle's Payroll Entry at all, requiring no code change to "wait it out" — because there wasn't one:
+ * `materializeScheduledAdvanceDeductions` only ever runs at cycle *bootstrap*
+ * (`payroll-processing.service.ts`'s `createPayrollCycle`/`archiveAndCreateNextPayrollCycle`), a
+ * moment that, for any Advance recorded after the current Draft cycle already exists (the ordinary
+ * case), has already happened. There was no path that re-materialized a deduction into an
+ * *already-open* Draft cycle's existing `PayrollEntry` — not a frontend caching issue, a genuine
+ * missing backend step. Fixed the same way `syncEmployeeIntoCurrentDraftCycle`
+ * (`payroll-processing.service.ts`) closed the analogous gap for newly-created employees: if the
+ * resolved period is the current Draft cycle and this employee already has a still-editable entry in
+ * it, materialize immediately, in the same transaction as the Advance's own creation — no separate
+ * mutation, no client-side refetch race, no cycle recreation required.
  */
 export async function createAdvance(
   currentUser: SessionUser,
@@ -115,6 +245,9 @@ export async function createAdvance(
   }
 
   return prisma.$transaction(async (tx) => {
+    const floorKey = await resolveEarliestEligiblePeriodKey(tx);
+    assertPeriodAtOrAfterFloor(input.originalPeriod, floorKey);
+
     const period = await findOrCreateScheduledPayrollPeriod(
       input.originalPeriod.year,
       input.originalPeriod.month,
@@ -156,7 +289,34 @@ export async function createAdvance(
       tx,
     );
 
-    return advance;
+    // Immediate materialization (Defect D/E root-cause fix, doc comment above) — only when the
+    // resolved period IS the current Draft cycle and this employee already has a still-editable
+    // (not released) entry in it. Any other case (a genuinely future period, no Draft cycle yet, or
+    // this employee's entry in the current Draft already individually released via a per-Unit Late
+    // Entry release) is deliberately left unmaterialized here, exactly as it already was: a future
+    // period is picked up at that cycle's own bootstrap, same as before, and an already-released
+    // entry is never retroactively modified (Principle 9) — the Advance still exists and its
+    // `currentScheduledPeriodId` still points at this period, so it surfaces on the Advances list for
+    // manual attention rather than silently vanishing.
+    const draftCycle = await tx.payrollCycle.findFirst({ where: { status: 'DRAFT' } });
+    if (draftCycle && draftCycle.year === input.originalPeriod.year && draftCycle.month === input.originalPeriod.month) {
+      const entry = await tx.payrollEntry.findUnique({
+        where: { cycleId_employeeId: { cycleId: draftCycle.id, employeeId: input.employeeId } },
+      });
+      if (entry && !entry.released) {
+        await materializeOneAdvanceDeduction(tx, {
+          advance,
+          entryId: entry.id,
+          cycleId: draftCycle.id,
+          cycleYear: draftCycle.year,
+          cycleMonth: draftCycle.month,
+          actorUserId: currentUser.id,
+          requestMeta,
+        });
+      }
+    }
+
+    return tx.advance.findUniqueOrThrow({ where: { id: advance.id } });
   });
 }
 
@@ -400,69 +560,21 @@ export async function materializeScheduledAdvanceDeductions(
       continue;
     }
 
-    let amount: Prisma.Decimal;
-    if (advance.repaymentType === 'FULL_DEDUCTION') {
-      amount = advance.outstandingBalance;
-    } else {
-      if (!advance.scheduledInstallmentAmount || advance.scheduledInstallmentAmount.lessThanOrEqualTo(0)) {
-        continue; // No standing schedule set yet — nothing to auto-apply.
-      }
-      amount = Prisma.Decimal.min(advance.scheduledInstallmentAmount, advance.outstandingBalance);
-    }
-
-    const newOutstanding = advance.outstandingBalance.minus(amount);
-    const isPaidOff = newOutstanding.lessThanOrEqualTo(0);
-
-    await tx.payrollEntry.update({
-      where: { id: entryId },
-      data:
-        advance.type === 'LOAN'
-          ? { advanceDeduction: amount, advanceId: advance.id, version: { increment: 1 } }
-          : { eidAdvanceDeduction: amount, eidAdvanceId: advance.id, version: { increment: 1 } },
+    // Shared with `createAdvance`'s own immediate-materialization step — see that function's helper
+    // doc comment for why this is now one calculation, not two (Operational Stabilization
+    // Checkpoint, 2026-07-24).
+    const materialized = await materializeOneAdvanceDeduction(tx, {
+      advance,
+      entryId,
+      cycleId,
+      cycleYear,
+      cycleMonth,
+      actorUserId,
+      requestMeta,
     });
-
-    let nextPeriodId: string | null = null;
-    if (!isPaidOff) {
-      // Advances automatically to the calendar month immediately following this cycle, as the new
-      // default target — the ordinary, no-deferral-involved case (docs/architecture/database/
-      // advances.md §15).
-      const nextYear = cycleMonth === 12 ? cycleYear + 1 : cycleYear;
-      const nextMonthNum = cycleMonth === 12 ? 1 : cycleMonth + 1;
-      const next = await findOrCreateScheduledPayrollPeriod(nextYear, nextMonthNum, tx);
-      nextPeriodId = next.id;
+    if (materialized) {
+      materializedCount += 1;
     }
-
-    await tx.advance.update({
-      where: { id: advance.id },
-      data: {
-        outstandingBalance: isPaidOff ? new Prisma.Decimal(0) : newOutstanding,
-        status: isPaidOff ? 'PAID_OFF' : 'ACTIVE',
-        currentScheduledPeriodId: isPaidOff ? null : nextPeriodId,
-        paidOffAt: isPaidOff ? new Date() : null,
-      },
-    });
-
-    await recordAuditLog(
-      {
-        actorUserId,
-        action: 'advance.schedule_materialized',
-        entityType: 'Advance',
-        entityId: advance.id,
-        metadata: {
-          cycleId,
-          payrollEntryId: entryId,
-          amount: amount.toFixed(2),
-          outstandingBalanceBefore: advance.outstandingBalance.toFixed(2),
-          outstandingBalanceAfter: newOutstanding.lessThanOrEqualTo(0) ? '0.00' : newOutstanding.toFixed(2),
-          status: isPaidOff ? 'PAID_OFF' : 'ACTIVE',
-        },
-        ipAddress: requestMeta.ipAddress,
-        userAgent: requestMeta.userAgent,
-      },
-      tx,
-    );
-
-    materializedCount += 1;
   }
 
   return materializedCount;

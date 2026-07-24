@@ -36,13 +36,18 @@ function typeLabel(type: string): string {
   return type === 'LOAN' ? 'Advance' : 'Eid Advance';
 }
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+function formatYearMonth(year: number, month: number): string {
+  return `${MONTH_NAMES[month - 1]} ${year}`;
+}
+
 function periodLabel(period: Advance['currentScheduledPeriod']): string {
   if (!period) return '—';
-  const MONTH_NAMES = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-  ];
-  return `${MONTH_NAMES[period.month - 1]} ${period.year}`;
+  return formatYearMonth(period.year, period.month);
 }
 
 function RecordAdvanceModal({
@@ -62,15 +67,29 @@ function RecordAdvanceModal({
   const [repaymentType, setRepaymentType] = useState<'FULL_DEDUCTION' | 'INSTALLMENT'>('FULL_DEDUCTION');
   const [scheduledInstallmentAmount, setScheduledInstallmentAmount] = useState('');
   const [notes, setNotes] = useState('');
-  const [originalYear, setOriginalYear] = useState(() => cycle?.year ?? new Date().getFullYear());
-  const [originalMonth, setOriginalMonth] = useState(() => cycle?.month ?? new Date().getMonth() + 1);
+  // The deduction start cycle now defaults to, and stays pinned to, the current Draft cycle unless
+  // the user explicitly opts into "Future Cycle" (Section D's frozen business rule: "Earliest
+  // deduction cycle = current Draft payroll cycle... If the business wants to delay deduction until
+  // the next cycle, that must be an explicit user choice"). Raw, unconstrained year/month number
+  // inputs only appear once that explicit choice is made — there is no way to land on an
+  // arbitrary/past period by accident.
+  const [scheduleMode, setScheduleMode] = useState<'CURRENT_DRAFT' | 'FUTURE'>('CURRENT_DRAFT');
+  const today = new Date();
+  const floorYear = cycle?.year ?? today.getFullYear();
+  const floorMonth = cycle?.month ?? today.getMonth() + 1;
+  const [futureYear, setFutureYear] = useState(floorMonth === 12 ? floorYear + 1 : floorYear);
+  const [futureMonthNum, setFutureMonthNum] = useState(floorMonth === 12 ? 1 : floorMonth + 1);
 
   useEffect(() => {
-    if (open && cycle) {
-      setOriginalYear(cycle.year);
-      setOriginalMonth(cycle.month);
+    if (open) {
+      setScheduleMode(cycle ? 'CURRENT_DRAFT' : 'FUTURE');
+      const nextYear = (cycle?.year ?? today.getFullYear()) + ((cycle?.month ?? today.getMonth() + 1) === 12 ? 1 : 0);
+      const nextMonth = (cycle?.month ?? today.getMonth() + 1) === 12 ? 1 : (cycle?.month ?? today.getMonth() + 1) + 1;
+      setFutureYear(nextYear);
+      setFutureMonthNum(nextMonth);
     }
-  }, [open, cycle]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cycle?.id]);
 
   useEffect(() => {
     if (!open) {
@@ -83,6 +102,9 @@ function RecordAdvanceModal({
       setNotes('');
     }
   }, [open]);
+
+  const originalYear = scheduleMode === 'CURRENT_DRAFT' ? floorYear : futureYear;
+  const originalMonth = scheduleMode === 'CURRENT_DRAFT' ? floorMonth : futureMonthNum;
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -183,27 +205,55 @@ function RecordAdvanceModal({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="advance-original-year">First Deduction Year</Label>
-              <Input
-                id="advance-original-year"
-                type="number"
-                value={originalYear}
-                onChange={(e) => setOriginalYear(Number(e.target.value))}
-              />
+          <div className="flex flex-col gap-1.5">
+            <Label>First Deduction Cycle</Label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!cycle}
+                onClick={() => setScheduleMode('CURRENT_DRAFT')}
+                className={`h-9 flex-1 rounded border px-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${scheduleMode === 'CURRENT_DRAFT' ? 'border-accent-mid bg-accent-light text-accent' : 'border-border bg-surface text-text-muted hover:text-text'}`}
+              >
+                {cycle ? `Current Draft — ${formatYearMonth(cycle.year, cycle.month)}` : 'No Draft cycle open'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setScheduleMode('FUTURE')}
+                className={`h-9 flex-1 rounded border px-3 text-xs font-medium transition-colors ${scheduleMode === 'FUTURE' ? 'border-accent-mid bg-accent-light text-accent' : 'border-border bg-surface text-text-muted hover:text-text'}`}
+              >
+                Future Cycle
+              </button>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="advance-original-month">First Deduction Month</Label>
-              <Input
-                id="advance-original-month"
-                type="number"
-                min={1}
-                max={12}
-                value={originalMonth}
-                onChange={(e) => setOriginalMonth(Number(e.target.value))}
-              />
-            </div>
+            {!cycle && (
+              <p className="text-[11px] text-text-muted">
+                No payroll cycle is currently open — choose the payroll period this deduction should
+                first target. It cannot be earlier than {formatYearMonth(floorYear, floorMonth)}.
+              </p>
+            )}
+            {scheduleMode === 'FUTURE' && (
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="advance-original-year">Year</Label>
+                  <Input
+                    id="advance-original-year"
+                    type="number"
+                    value={futureYear}
+                    onChange={(e) => setFutureYear(Number(e.target.value))}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="advance-original-month">Month</Label>
+                  <Input
+                    id="advance-original-month"
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={futureMonthNum}
+                    onChange={(e) => setFutureMonthNum(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">

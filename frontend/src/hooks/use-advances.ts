@@ -9,6 +9,13 @@ import type {
 } from '@payroll/shared';
 import { apiRequest } from '@/lib/api-client';
 
+/** A newly-created Advance can immediately materialize a deduction into the current Draft cycle's
+ * `PayrollEntry` (Operational Stabilization Checkpoint, 2026-07-24, Section E) — invalidating this
+ * query too, not just Advances' own, is what makes an already-open Payroll Entry page reflect it
+ * without a manual refresh. Broad (no cycle id) since this hook has no reliable way to know which
+ * cycle was actually touched; only the currently-mounted query, if any, actually refetches. */
+const PAYROLL_ENTRIES_QUERY_KEY = ['payroll-entries'] as const;
+
 export interface ScheduledPayrollPeriod {
   id: string;
   year: number;
@@ -79,6 +86,7 @@ export function useCreateAdvance() {
       apiRequest<{ advance: Advance }>('/api/v1/advances', { method: 'POST', body: input }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ADVANCES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: PAYROLL_ENTRIES_QUERY_KEY });
     },
   });
 }
