@@ -6397,6 +6397,109 @@ only, per the user's own explicit instruction not to execute the production clea
 
 ---
 
+### Payroll Entry Status Column Final Stabilization Checkpoint — IMPLEMENTED, 2026-07-25 (NOT committed, per explicit instruction to stop before commit/push/deploy)
+
+A focused follow-up to the checkpoint immediately above: the `e9c22fc` grid-track fix centered the
+Released badge *relative to its own actions button*, but never addressed the actual root cause —
+the header row applied no per-column text alignment at all, so the "STATUS" label always rendered
+left-aligned regardless of `PAYROLL_COLUMNS`' own `align: 'center'`, while the badge sat centered
+underneath a left-aligned header. The two were never sharing one measurement. This checkpoint
+removes the row-level actions control entirely (per explicit instruction) and fixes the header/body
+alignment mismatch structurally.
+
+**1. Removed the "..." actions control from the Status cell.** Before removing it, inspected what it
+exposed: "Create Correction" (opens `RequestCorrectionModal` pre-scoped to that one entry) and "View
+Correction History" (that entry's own correction-request history, any submitter). Investigation
+found "Create Correction" is fully redundant with the existing page-level "Request Correction"
+toolbar button, whose own `EmployeeLookup` field can already search and select any released entry —
+no capability lost. "View Correction History" has no exact equivalent for a `payroll:entry`-only
+(non-approver) user: the closest substitute, Corrections' "My Requests" tab, is backend-scoped to
+requests *that user themselves submitted*, not every request filed against a given entry by anyone.
+Reported this gap to the user explicitly before proceeding (a per-entry "who else requested a
+correction on this employee" visibility loss for non-approvers, reviewers unaffected since their own
+Review Queue already shows everything) — user confirmed removal as specified. `payroll-entry-row.tsx`'s
+Status cell now renders only the `Badge`/`—` placeholder; `MoreHorizontal`/`DropdownMenu*` imports,
+the `canCorrect`/`onCreateCorrection`/`onViewCorrectionHistory` prop chain (row → grid → page), and
+the now-fully-orphaned `correction-history-modal.tsx` component (zero remaining importers after the
+row wiring was removed) were all deleted rather than left as dead code. The page-level "Request
+Correction" toolbar flow is untouched and still fully functional.
+
+**2. Centered Status header and body from the canonical column definition, no per-status special
+case.** Root cause fix: `payroll-entry-grid.tsx` now builds `COLUMN_ALIGN_BY_ID` (a `Map` from
+`PAYROLL_COLUMNS` itself) and applies `text-center`/`text-right` to each header cell based on its own
+`align` field — the field already existed on `PayrollColumnDef` but was never consumed by any
+renderer until now. This also corrects the same latent header/body mismatch for every other
+`align: 'center'` column (`serial`, `units`, `eobiApplicable`, `hold`), not just Status. With the
+actions button gone, the Status body cell no longer needs the previous `grid-cols-[1fr_auto_1fr]`
+three-track layout — it's now a plain `flex items-center justify-center` box, the same convention
+every other center-aligned column's body cell already uses. No margin/translateX/absolute offset, no
+Released-only special case anywhere in the stack.
+
+**3/4. Employee count / column order — already correct, verified and locked in with new tests.**
+`PAYROLL_COLUMNS`' order (`serial`, `status`, `employeeCode`, `employeeName`, ...) and
+`payroll-entry-totals-row.tsx`'s `employeeName`-keyed employee count already matched the target
+layout (both were fixed by the immediately-preceding checkpoint's Issues 1/2) — confirmed by reading
+the current code, not assumed. Narrowed the Status column's `fixedWidth` from 150 to 90
+(`columns.ts`) now that it only has to fit the "Released" badge itself, not badge + button + its
+hover target and icon — still a true fixed-width UI-control column per the Layout Integrity Rule,
+never guessed against a screenshot.
+
+**5. Production smoke-test employee (`ZZZ SMOKETEST DeployCheck`) — re-confirmed, still NOT
+executed.** No new investigation was needed: the immediately-preceding checkpoint's own Issue 5 entry
+already fully investigated and documented the exact remediation (Mark as Left via the existing
+Employee Registry workflow, then remove only its current-Draft-cycle `PayrollEntry` if one exists via
+the existing `DELETE /api/v1/payroll-entries/:id` endpoint, never touching a Released/Archived entry
+or hard-deleting the `Employee` row). Re-verified this session that no production database
+credentials, API token, or deployed-instance access exist in this sandboxed environment — confirmed
+by checking for any reachable non-localhost `DATABASE_URL`/Render credentials and finding none, and by
+confirming (`grep`) the codebase's own seed/migration scripts never reference this name, so it exists
+only as live production data this environment cannot reach. **Not falsely reported as removed.**
+Employee hard-delete was, again, deliberately not introduced.
+
+**6. Regression tests.** `payroll-entry-alignment.test.tsx`: rewrote the previous grid-track-specific
+test into two — the Released cell contains only the badge (`flex items-center justify-center`, no
+`button`, no `[role="menu"]`, no margin/translate hack), and the unreleased `—` placeholder uses the
+identical cell structure; added an explicit `Σ` serial-footer assertion alongside the existing
+employee-count-under-`employeeName` test. `payroll-entry-grid.test.tsx`: two new tests assert the
+Status header carries `text-center` (deriving from `PAYROLL_COLUMNS`, not a Status-only hardcode) and
+that a non-center column (Employee) does not. All pre-existing header/body/totals `PAYROLL_COLUMNS`-
+order tests pass unchanged. **Real-browser-verified** (Chromium/Playwright, driving real dev servers
+against a freshly seeded, disposable local database via the project's own committed `tests/e2e`
+harness — never production, never the developer's own local DB): a throwaway verification script
+(written to `tests/e2e/_manual-visual-check.ts`, run once, deleted immediately after, never committed)
+created a site/unit/two employees (one long-named, to prove width-driven correctness), released one
+through the real Salary Release UI, and measured actual `getBoundingClientRect()` centers in both the
+unreleased and released state: Status header center, body-cell center, and (when released) the
+Released badge's own center were pixel-identical (`373 === 373 === 373`) in both states, with no
+`<button>`/`[role="menu"]` present in the Status cell either time; the totals row's `Σ`/`"2 employees"`
+footer cells were confirmed present and the Employee footer cell's bounding box fell within the
+Employee header's own horizontal span.
+
+**Testing**: frontend `payroll-entry-alignment.test.tsx` (12/12), `payroll-entry-grid.test.tsx`
+(6/6, 2 new), `columns.test.ts` (unchanged, re-run) — 20/20 in the payroll-entry directory; full
+`payroll-entry`/`corrections`/`routes` test directories re-run together, 50/50. `tsc -b --noEmit`
+clean across the workspace. `eslint` clean on every changed file. Full regression suite deliberately
+not run, matching this checkpoint's own explicit instruction.
+
+**Files changed**: `frontend/src/components/payroll-entry/payroll-entry-row.tsx`,
+`frontend/src/components/payroll-entry/payroll-entry-grid.tsx`,
+`frontend/src/components/payroll-entry/columns.ts`,
+`frontend/src/components/payroll-entry/payroll-entry-alignment.test.tsx`,
+`frontend/src/components/payroll-entry/payroll-entry-grid.test.tsx`,
+`frontend/src/routes/payroll-entry-page.tsx`; deleted
+`frontend/src/components/corrections/correction-history-modal.tsx`.
+
+**Documentation updated**: this entry; §5 below (next-session pointer); `docs/SESSION_HANDOFF.md` §15.
+**Commits: NONE.** Per explicit instruction, this checkpoint stops before commit/push/deploy — every
+change above is implemented and verified in the working tree only, on `main`, not staged, not
+committed. **Employee hard-delete was NOT introduced. No Released/Archived `PayrollEntry` was
+touched — none exists in this session's disposable E2E database in the first place, and the
+production remediation recipe (unchanged from the preceding checkpoint's own Issue 5) explicitly
+excludes it by construction (`deletePayrollEntry`'s own `assertEntryEditable` guard refuses once
+released). Phase 7 remains Not Started; this checkpoint does not begin it.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -6739,8 +6842,26 @@ only, per the user's own explicit instruction not to execute the production clea
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-25 (latest) — Post-Deployment UI & Corrections Workflow Stabilization Checkpoint:
-Issues 1–4 are COMPLETE and COMMITTED LOCALLY on `main`, Issue 5 is documented-only.** Three commits
+**Updated 2026-07-25 (latest) — Payroll Entry Status Column Final Stabilization Checkpoint:
+IMPLEMENTED, NOT committed.** See §1's own entry (immediately above §2) for the full record. The
+"..." actions control is removed from the Payroll Entry Status cell entirely (Create Correction
+remains reachable via the page-level "Request Correction" toolbar button; View Correction History
+has no exact substitute for non-approvers — reported to and confirmed by the user before proceeding).
+Status header/body/placeholder alignment now derives from `PAYROLL_COLUMNS`' own `align: 'center'`
+field via a new `COLUMN_ALIGN_BY_ID`-driven header alignment class — the actual root cause of the
+prior "STATUS misaligned" defect (the header never applied per-column alignment at all). Real-
+browser-verified (Chromium/Playwright against a disposable local E2E stack): header/body/badge
+centers pixel-identical in both released and unreleased states. **Next session must first `git
+status`/`git diff` to review these uncommitted working-tree changes, then get the user's explicit
+go-ahead before `git add`/`git commit`/push/deploy — nothing above has been committed.** The
+`ZZZ SMOKETEST DeployCheck` production remediation remains fully documented (§1, this entry and the
+one immediately above it) but **not executed** — still no production database/API access from this
+environment; it is a separate operator action requiring its own go-ahead. **Phase 7 remains Not
+Started; do not begin it.**
+
+**Updated 2026-07-25 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Post-Deployment UI & Corrections Workflow Stabilization Checkpoint: Issues 1–4 are
+COMPLETE and COMMITTED LOCALLY on `main`, Issue 5 is documented-only.** Three commits
 `341f65b`/`e9c22fc`/`92bc4c0` — see §1's own entry (immediately above §2) for the full record. Status
 badge centering and totals-row Employee-column alignment fixed structurally (canonical grid track /
 `PAYROLL_COLUMNS` id, not a pixel nudge); Corrections list/detail widened to `payroll:entry` OR

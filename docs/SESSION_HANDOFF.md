@@ -2110,3 +2110,55 @@ Issue 5 recipe against synthetic data mirroring the real scenario.
 **Push/deploy record**: none — these three commits are local-only on `main`, awaiting the user's own
 separate go-ahead, same standing practice as every other checkpoint in this file.
 
+## 16. Addendum, 2026-07-25 (latest) — Payroll Entry Status Column Final Stabilization Checkpoint
+
+A focused follow-up to §15: `e9c22fc`'s grid-track fix centered the Released badge relative to its
+own trailing actions button, but never fixed the actual root cause — the header row applied no
+per-column alignment at all, so "STATUS" rendered left-aligned regardless of
+`PAYROLL_COLUMNS`' `align: 'center'`. Full detail in `docs/PROJECT_PROGRESS.md` §1's own dated entry
+("Payroll Entry Status Column Final Stabilization Checkpoint"); this is only the next-session
+pointer.
+
+**IMPLEMENTED, NOT COMMITTED** — every change below is in the working tree on `main` only. Per
+explicit instruction, this checkpoint stops before `git add`/`commit`/push/deploy.
+
+- **Removed the Status cell's "..." actions control entirely** (not hidden with CSS). Before
+  removing it, inspected what it exposed — Create Correction (redundant with the existing
+  page-level "Request Correction" toolbar button, whose own Employee search field covers the same
+  capability) and View Correction History (no exact substitute for a `payroll:entry`-only,
+  non-approver user — the closest alternative, "My Requests," is scoped to that user's own
+  submissions, not every request against a given entry). **Reported this gap to the user before
+  proceeding; user confirmed removal as specified.** Deleted the now-fully-orphaned
+  `correction-history-modal.tsx` and the `canCorrect`/`onCreateCorrection`/`onViewCorrectionHistory`
+  prop chain (row → grid → page) along with it, rather than leaving dead code.
+- **Status header/body alignment now derives from `PAYROLL_COLUMNS`' own `align` field** — a new
+  `COLUMN_ALIGN_BY_ID` map in `payroll-entry-grid.tsx` applies `text-center`/`text-right` to each
+  header cell, a field that existed on `PayrollColumnDef` but no renderer had ever actually
+  consumed. The Status body cell is now a plain `flex items-center justify-center` box (no more
+  `grid-cols-[1fr_auto_1fr]`, unnecessary now that nothing else shares the cell) — the same
+  convention every other center-aligned column already uses. No margin/translateX/absolute offset
+  anywhere in the stack.
+- **Status column `fixedWidth` narrowed 150 → 90** (`columns.ts`) now that it only needs to fit the
+  "Released" badge, not badge + button + hover target.
+- **Employee count / column order** — already correct as of §15's own fixes; verified by reading the
+  current code (not assumed) and locked in with two new structural tests.
+- **`ZZZ SMOKETEST DeployCheck`**: re-confirmed, still not executed. No production database, API
+  token, or deployed-instance credentials exist in this sandboxed environment — re-verified this
+  session, not just carried over from §15. The remediation recipe is unchanged from §15's own list
+  above.
+
+**Verification**: frontend `payroll-entry-alignment.test.tsx` (12/12), `payroll-entry-grid.test.tsx`
+(6/6, 2 new), full `payroll-entry`/`corrections`/`routes` test directories (50/50). `tsc -b --noEmit`
+and `eslint` both clean on every changed file. **Real-browser-verified** (Chromium/Playwright, via
+the project's own committed `tests/e2e` harness — a disposable local database and dev-server stack,
+never production): a throwaway script created a site/two employees (one long-named), released one
+through the real Salary Release UI, and measured `getBoundingClientRect()` centers directly —
+Status header center, body-cell center, and the Released badge's own center were pixel-identical in
+both the unreleased and released states, with no button/menu present either time; totals-row
+`Σ`/employee-count footer cells confirmed present and correctly positioned. Script deleted
+immediately after use, never committed.
+
+**Push/deploy record**: none — nothing from this checkpoint has even been committed yet, let alone
+pushed. Next session should `git status`/`git diff` these working-tree changes and get the user's
+explicit go-ahead before committing.
+
