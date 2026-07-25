@@ -2162,3 +2162,90 @@ immediately after use, never committed.
 pushed. Next session should `git status`/`git diff` these working-tree changes and get the user's
 explicit go-ahead before committing.
 
+## 17. Addendum, 2026-07-25 (latest) — RBAC Creator Ownership & Professional Printing Checkpoint
+
+Full record: `docs/PROJECT_PROGRESS.md` §1's own dated entry ("RBAC Creator Ownership &
+Professional Printing Checkpoint"); this is the push/deploy/post-deploy-verification pointer.
+
+**Part A (RBAC).** `createProjectSite` never wrote a `UserSiteAssignment` for its own creator —
+`sites:manage` is a global administrative permission, never operational, so a scoped creator with
+no pre-existing assignment could create a Project Site but couldn't then use it anywhere until a
+Master Admin manually assigned it back. Fixed atomically (one `prisma.$transaction`, idempotent
+`upsert`) via a general, reusable invariant (`common/creator-access.ts`), not a one-off — Master
+Admin unaffected, `sites:manage` still grants no operational access to any other site. Full
+resource-by-resource audit found Project Sites is the only resource needing this; Project
+Units/Employees already inherit through their parent Site, financial/workflow records are
+explicitly excluded. New nullable `ProjectSite.createdById` (migration
+`20260725100000_project_site_creator`) is audit provenance only. **No historical backfill** — no
+creator-identity column existed before this checkpoint, so old sites' creators aren't reliably
+recoverable.
+
+**Part B (Printing).** Replaced `PrintButton`'s bare `window.print()` with a shared
+`PrintSettingsDialog`/`useTriggerPrint` architecture (Auto/Portrait/Landscape, Fit to page/Normal
+size). Auto is fully deterministic — resolves to each page's own `recommendedOrientation`, never
+delegated to the browser. Fit-to-page scales table *width* only via `table-layout: fixed`, never
+forces row count onto one sheet. A4 stays the baseline; the native print dialog remains final
+authority. Payroll Entry's print table (already non-virtualized, kept and extended) gained Deputed
+Branch, a non-overflowing Advance/Eid balance note, and a totals row. Every one of the 8
+`PrintButton` pages was individually audited; two real defects fixed (Payslips' checkbox/Actions
+columns, Advances' Actions header) — Bank Sheet/Cash Receiving/Corrections had no screen-only-control
+leak and were left unchanged (PASS). Every page's `recommendedOrientation` is now a deliberate
+choice, not a silently-inherited Portrait default.
+
+**Testing**: frontend full suite 127/127; backend focused 52/52 (project-sites 29, project-units
+11, users 12); Chromium/Playwright 6/6 (`tests/e2e/specs/13-print-architecture.spec.ts` — Payroll
+Entry Landscape, Salary Release Portrait, Bank Sheet + Cash Receiving added during the final
+verification pass). Full backend/frontend/E2E regression suites deliberately not run — no shared
+authorization/query primitive changed beyond the new, singly-consumed `creator-access.ts` helper.
+
+**Commits** (`main`, in order): `cc16b6c` (RBAC), `08ee1ff` (shared print architecture), `4f2ca2e`
+(Payroll Entry print), `1d0d5ca` (remaining pages standardised), `0be145c` (Chromium print e2e
+spec), plus this documentation commit.
+
+**Push/deploy record**: pushed to `origin/main` this same session immediately after the 5 code
+commits above — `origin/main` confirmed at `0be145c` (local `main` and `origin/main` resolved to
+the identical SHA via `git fetch` + `git rev-parse`). Render auto-deployed from this push with no
+build/migration/startup failure visible through available service behavior — both
+`https://payroll-management-api-wlic.onrender.com/health` (`{"status":"ok"}`, HTTP 200, checked
+repeatedly across the whole verification window with no interruption) and
+`https://payroll-management-app-qa3x.onrender.com/` (root HTTP 200) and `/login` (HTTP 200,
+renders the real login form, `<title>Payroll Management System</title>`) confirmed live.
+
+**New-bundle confirmation took real investigation, recorded here in full rather than glossed
+over.** The deployed frontend's main JS entry chunk (`/assets/index-DIYkpnKI.js`) kept the *same*
+filename/hash before and after this deploy, which on its own would look like the new build never
+went live. Root cause: this app code-splits by route (`React.lazy` per page, `App.tsx`) — the
+print/RBAC changes live inside `PrintButton`/`payroll-entry-page.tsx`/etc.'s own separately-hashed
+lazy chunks, never referenced directly in `index.html`, so an unchanged *entry* chunk hash proves
+nothing either way about those files. The deployed CSS bundle (`/assets/index-DjuAUycg.css` — a
+single, non-code-split Tailwind/PostCSS output covering the whole app) is the file that actually
+proves it: fetched directly and grepped for `print-fit` and `A4 portrait` — both this checkpoint's
+own new, literal strings (`frontend/src/index.css`) — present in the live deployed CSS. That is
+direct content evidence the new build is live, not an inference from a hash that turned out to be
+the wrong artifact to check.
+
+One unrelated environmental note from this same verification window: this sandbox's own local DNS
+resolver was intermittently unable to resolve `payroll-management-app-qa3x.onrender.com`
+specifically for a few minutes mid-verification (confirmed, via a public DNS-over-HTTPS query
+against Cloudflare, that the DNS record itself was fine throughout) — worked around with curl's
+`--resolve` flag pinned to the resolved IP. A sandbox networking hiccup, not a Render-side issue,
+and not a discrepancy in the deployment itself.
+
+**Post-deploy verification performed vs. not possible this session:**
+- **Confirmed via HTTP evidence** (above): backend health, frontend availability, login page
+  rendering, and the new build's actual presence (CSS content match).
+- **NOT possible this session — no authenticated production credentials or Render dashboard/API
+  access exist in this sandboxed environment** (re-confirmed, consistent with every prior
+  checkpoint's own same finding): authenticated production RBAC UAT (a real Payroll Manager
+  creating a Project Site and confirming immediate access) and authenticated production print UAT
+  (opening the Print settings dialog, generating a real PDF, on a live authenticated page). **Both
+  were already verified locally** — RBAC via 52 focused backend integration tests exercising the
+  real transaction/assignment path, printing via 6 real-Chromium Playwright tests exercising the
+  real dialog/`@page`/fit-to-page/dataset-completeness behavior — but neither was re-verified
+  against the live production deployment itself. **Requires normal user UAT** with real production
+  credentials before this checkpoint is considered fully closed end-to-end.
+- **No historical Project Site creator-assignment backfill was performed** — production or
+  otherwise, per the checkpoint's own explicit instruction not to.
+
+**Phase 7 remains Not Started; this checkpoint does not begin it.**
+

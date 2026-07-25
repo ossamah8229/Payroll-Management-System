@@ -6500,6 +6500,132 @@ released). Phase 7 remains Not Started; this checkpoint does not begin it.**
 
 ---
 
+### RBAC Creator Ownership & Professional Printing Checkpoint — COMPLETE, COMMITTED, 2026-07-25
+
+Two independent issues, addressed together per the user's own checkpoint brief: (A) a Project Site
+creator wasn't automatically granted access to the site they had just created; (B) `window.print()`
+printed the live screen DOM with no orientation/fit control and, on several pages, unhidden
+screen-only controls.
+
+**Part A — RBAC.** Root cause: `createProjectSite` (`project-sites.service.ts`) never read the
+authenticated user's identity and never wrote a `UserSiteAssignment` row — `sites:manage` is
+deliberately a global *administrative* permission (create/edit/delete the Site entity list), never
+an *operational* one, so a scoped creator with no pre-existing assignment could create a site but
+then couldn't use it in any operational module (Employees, Payroll Entry, Advances, ...) until a
+Master Admin manually assigned it back. Fixed with a general, reusable creator-access invariant
+(`backend/src/common/creator-access.ts`'s `ensureCreatorSiteAssignment`), not a Project-Site-only
+hack: `createProjectSite` now creates the site and the creator's own `UserSiteAssignment`
+atomically in one `prisma.$transaction`, idempotent (`upsert` on the `[userId, siteId]` unique
+constraint), skipped entirely for Master Admin (unrestricted access already, no assignment row
+needed — unchanged, `sites:manage` still grants **zero** operational access to any *other* site).
+A new nullable `ProjectSite.createdById` column (migration `20260725100000_project_site_creator`)
+records provenance only — no access decision anywhere reads it. A full resource-by-resource audit
+(Project Sites, Units, Employees, Payroll Cycles/Entries, Advances, Corrections, Bank Sheets, Cash
+Receiving, Users, Roles) found this is the **only** resource with the "explicit assignment table +
+creation permission that doesn't imply prior access" shape — Project Units and Employees already
+inherit access through their parent Site's own assignment (confirmed via an *existing* test, not a
+new ownership concept); every financial/workflow record (Payroll Cycles/Entries, Advances,
+Corrections, Bank Sheets, Cash Receiving) is explicitly excluded from the invariant even where it
+carries a `createdBy` field. **No historical backfill was performed** — `ProjectSite` had no
+creator-identity column at all before this checkpoint, so pre-existing sites' creators are not
+reliably recoverable (only a nullable, ageable `AuditLog.actorUserId` trace exists); inventing
+historical ownership was explicitly out of scope. Full record: `docs/architecture/
+rbac-creator-access.md`. Backend tests: 8 new cases in `project-sites.test.ts` (creator gains
+access to only the site created; no leak to an unrelated site; no leak to another user; idempotent
+across repeated creation; permission still enforced; Master Admin unaffected; a distinct
+`project-site.creator_assigned` audit entry) — **29/29** in that file, **11/11** `project-units.test.ts`
+(confirms the Unit inherits-via-Site relationship rather than needing its own), **12/12**
+`users.test.ts`. Committed as `cc16b6c`.
+
+**Part B — Professional Printing.** Root cause: `PrintButton` was `onClick={() => window.print()}`
+— no orientation choice, one static `@page { size: A4; }`, and only Payroll Entry had dedicated
+print-only markup (required because its grid is virtualized). Every other print page printed its
+live on-screen `<table>`, and at least one page (Employees) had a confirmed pre-existing leak (its
+row-actions dropdown column had no `print:hidden` at all).
+
+New shared architecture (`frontend/src/components/print/`: `print-types.ts`,
+`print-settings-dialog.tsx`, `use-print.ts`) — `PrintButton` now opens a shared
+`PrintSettingsDialog` (Orientation: Auto/Portrait/Landscape; Fit: Fit to page/Normal size) instead
+of printing immediately. **Auto is fully deterministic, not a browser-delegated fallback**:
+`resolveOrientation('auto', recommended) → recommended`, always called, always resolved before the
+`@page` rule is injected — there is no code path where Auto skips resolution. Orientation is
+applied by injecting a `<style>` element containing the resolved `@page { size: A4 <orientation>;
+}` into `<head>` immediately before `window.print()` (the only valid way to parameterize `@page`,
+since it cannot be scoped by a class selector), removed afterward on `afterprint` with a timeout
+fallback. Fit-to-page uses `table-layout: fixed; width: 100%` plus compact typography under a
+`print-fit` class — scoped to page **width** only, never forces a dataset's row count onto one
+physical sheet. A4 stays the fixed baseline. The native browser print dialog remains the final
+authority — this only sets what the app recommends it start from (documented explicitly, since
+that's a real limitation, not a gap). Committed as `08ee1ff`.
+
+Payroll Entry's existing non-virtualized print table (kept, not replaced) was extended: added
+Deputed Branch and a non-overflowing Advance/Eid balance note, added a totals row (employee count
+under the Employee column, matching the on-screen grid's own established convention), and set
+`recommendedOrientation="landscape"`. The print column set is a deliberate, documented subset —
+bank details, workflow-only Status/Hold, and reference-only rate/leave columns are omitted with
+inline justification, not shrunk to illegibility. Committed as `4f2ca2e`.
+
+Every one of the 8 `PrintButton` pages (Bank Sheet, Cash Receiving, Payslips, Advances,
+Corrections, Salary Release, Employees, Payroll Entry) was individually audited against the shared
+baseline (screen-only controls excluded, no horizontal clipping, orientation applies, useful
+context remains). Two real defects found and fixed: **Payslips'** selection-checkbox and
+Preview/Download Actions columns had no `print:hidden` at all and printed live (fixed, header +
+body); **Advances'** Actions column body cell was already hidden but its header cell wasn't,
+printing a stray "Actions" label over an empty column (fixed, and consolidated onto the
+`<TableCell>` itself). Bank Sheet, Cash Receiving, and Corrections were verified (Chromium for the
+first two, code inspection for the third) to have **no** screen-only-control leak at all — none of
+the three has a row-actions column, dropdown, or checkbox — and were deliberately left unchanged
+(**PASS**, no dedicated print-only rewrite). Every page's `recommendedOrientation` was audited for
+whether it was a deliberate choice or a silently-inherited Portrait default: Bank Sheet (11
+columns), Cash Receiving (9 + a signature column), Advances (7), and Corrections (up to 8) now
+explicitly recommend Landscape; Salary Release, Payslips, and Employees keep the Portrait default,
+confirmed appropriate for their narrower column counts. Committed as `1d0d5ca`. Full record:
+`docs/architecture/print-architecture.md`.
+
+**Testing.** Frontend: `print-types.test.ts` (pure `resolveOrientation` logic) and
+`print-button.test.tsx` (jsdom/RTL — dialog opens instead of an immediate `window.print()`;
+Landscape + Fit to page injects the right `@page` rule and toggles `print-fit`; Auto resolves to
+the page's own recommendation; Normal size skips the fit-to-page class); full frontend suite
+**127/127** (re-run after every edit in this checkpoint, justified since `PrintButton` is shared
+across all 8 pages). Backend focused: **52/52** (29 project-sites + 11 project-units + 12 users).
+Chromium/Playwright (`tests/e2e/specs/13-print-architecture.spec.ts`, committed as `0be145c`):
+**4/4** at initial approval (Payroll Entry Landscape — dialog, injected `@page` rule, `print-fit`
+class, the print table showing a complete 60-employee dataset while the virtualized grid is hidden
+under real `@media print`, no horizontal overflow, a real `page.pdf()` generation, a rendered-height
+proxy for multi-page output; Salary Release Portrait — dialog defaults, screen-only actions
+hidden), extended to **6/6** during the final verification pass (added Bank Sheet and Cash
+Receiving cases — Auto's Landscape hint, sidebar/toolbar hidden under real print media, `print-fit`
+actually applied after confirming the dialog rather than just reading its hint text, no horizontal
+overflow on either's 9-11 column table). One real test-infrastructure bug found and fixed during
+this work: headless Chromium fires `beforeprint`/`afterprint` synchronously as if a print instantly
+completed, which was tripping this architecture's own `afterprint` cleanup before assertions could
+run — fixed by stubbing `window.print` at the page level in these specs (`page.addInitScript`).
+**Full backend/frontend/E2E regression suites were deliberately not run** — no shared authorization
+primitive or shared query/access primitive was modified beyond the new, single-call-site
+`creator-access.ts` helper (directly covered by its own focused tests), and the shared print
+infrastructure change was verified via the full (but fast, ~4s) frontend suite rather than a
+narrower slice, which was judged sufficient escalation given `PrintButton`'s 8 call sites.
+
+**Files changed**: see the 5 commits above for the exact per-commit file lists (RBAC:
+`schema.prisma`, migration, `common/creator-access.ts`, `project-sites.{routes,service}.ts`,
+`project-sites.test.ts`; print architecture: `components/print/*`, `print-button.tsx`,
+`print-button.test.tsx`, `index.css`; Payroll Entry: `payroll-entry-page.tsx`; remaining pages:
+`salary-release-page.tsx`, `employees-page.tsx`, `payslips-page.tsx`, `advances-page.tsx`,
+`bank-sheet-page.tsx`, `cash-receiving-page.tsx`, `corrections-page.tsx`; e2e:
+`tests/e2e/specs/13-print-architecture.spec.ts`).
+
+**Documentation updated**: `docs/architecture/rbac-creator-access.md` (new),
+`docs/architecture/print-architecture.md` (new, extended with the final verification pass's
+findings), this entry, §5 below (next-session pointer), `docs/SESSION_HANDOFF.md` §17.
+
+**Commits: `cc16b6c`, `08ee1ff`, `4f2ca2e`, `1d0d5ca`, `0be145c`** (code/tests), plus this
+documentation commit. **Pushed to `origin/main` and deployed via Render's existing auto-deploy —
+see `docs/SESSION_HANDOFF.md` §17 for the exact push/deploy/post-deploy-verification record.** No
+historical site-assignment backfill was performed (see Part A above). Phase 7 remains Not Started;
+this checkpoint does not begin it.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -6842,8 +6968,28 @@ released). Phase 7 remains Not Started; this checkpoint does not begin it.**
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-25 (latest) — Payroll Entry Status Column Final Stabilization Checkpoint:
-IMPLEMENTED, NOT committed.** See §1's own entry (immediately above §2) for the full record. The
+**Updated 2026-07-25 (latest) — RBAC Creator Ownership & Professional Printing Checkpoint:
+COMPLETE, COMMITTED, and pushed/deployed.** See §1's own entry (immediately above §2) for the full
+record and `docs/SESSION_HANDOFF.md` §17 for the exact push/deploy/post-deploy-verification outcome.
+Project Site creation now atomically assigns the creator their own `UserSiteAssignment`
+(`common/creator-access.ts`'s general invariant, not a one-off); `sites:manage` still grants no
+operational access to any other site; no historical creator-assignment backfill was performed. A
+shared print-settings architecture (Auto/Portrait/Landscape, Fit to page/Normal size, deterministic
+Auto resolution) replaced every page's bare `window.print()`; Payroll Entry's print table gained
+Deputed Branch/balance/totals; two real print defects (Payslips, Advances) were found and fixed
+during a final verification pass across all 8 print-enabled pages. Committed as `cc16b6c` /
+`08ee1ff` / `4f2ca2e` / `1d0d5ca` / `0be145c`, plus a documentation commit. **Phase 7 remains Not
+Started; do not begin it.**
+
+**Updated 2026-07-25 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Payroll Entry Status Column Final Stabilization Checkpoint: IMPLEMENTED, NOT
+committed at the time this entry was originally written. Correction: this was committed in a prior
+session, before the RBAC/Printing checkpoint above began — `d368440` (header/badge alignment),
+`9183dd1` (Status-cell actions removal), `ef08a78` (its own documentation commit), all already on
+`main` at the start of the session that did the work above. This entry's own "NOT committed"/"next
+session must get go-ahead before committing" language below is stale as of that commit and is kept
+only for its historical record of the implementation itself, not as current status.** See §1's own
+entry (immediately above §2) for the full record. The
 "..." actions control is removed from the Payroll Entry Status cell entirely (Create Correction
 remains reachable via the page-level "Request Correction" toolbar button; View Correction History
 has no exact substitute for non-approvers — reported to and confirmed by the user before proceeding).
