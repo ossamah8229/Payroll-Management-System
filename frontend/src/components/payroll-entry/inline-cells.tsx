@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { formatMoney } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 
 /** Shared keyboard-navigation addressing — every editable cell carries its grid position so the
@@ -170,4 +171,17 @@ export function ReadOnlyCell({
       {children}
     </div>
   );
+}
+
+/**
+ * Secondary monetary line under a primary editable value — currently the linked Advance/Eid
+ * Advance balance under `advanceDeduction`/`eidAdvanceDeduction` (Presentation & Workflow
+ * Stabilization Checkpoint, 2026-07-25), and the reusable presentation for any future
+ * Balance/Remaining-style secondary figure elsewhere in this grid. Never wraps or clips — the
+ * column hosting it is measured to already fit this text (`columns.ts`'s `BALANCE_LABEL_COLUMN_IDS`
+ * / `extractBalanceLabelValue`, the single place that width decision is made), so `whitespace-nowrap`
+ * here is a guarantee, not a truncation risk.
+ */
+export function BalanceLabel({ amount }: { amount: string }) {
+  return <p className="mt-0.5 whitespace-nowrap text-center text-[10px] text-text-faint">Bal: {formatMoney(amount)}</p>;
 }

@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { Fragment, memo, useEffect, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { formatMoney, pluralize } from '@payroll/shared';
 import { cn } from '@/lib/cn';
@@ -13,7 +13,8 @@ import {
 import type { Bank } from '@/hooks/use-banks';
 import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { gridNavProps, InlineNumberCell, InlineSelectCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
+import { PAYROLL_COLUMNS, type PayrollColumnId } from './columns';
+import { BalanceLabel, gridNavProps, InlineNumberCell, InlineSelectCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
 import { SaveStatusIndicator } from './save-status-indicator';
 import { SplitWorkLinesModal } from './split-work-lines-modal';
 import { toNumberOrNull, type LiveTotalsStore } from './live-totals-store';
@@ -108,16 +109,15 @@ function PayrollEntryRowImpl({
   const disabled = !editable || status === 'conflict';
   const nav = (col: string) => gridNavProps(rowIndex, col);
 
-  return (
-    <>
-    <div
-      role="row"
-      style={{ ...style, gridTemplateColumns }}
-      className={cn(
-        'grid items-center border-b border-border text-xs',
-        status === 'conflict' && 'bg-danger-light/40',
-      )}
-    >
+  // One cell per `PAYROLL_COLUMNS` entry, keyed by column id (Presentation & Workflow
+  // Stabilization Checkpoint, 2026-07-25) — the row used to be a hand-written JSX list that had to
+  // be kept in the exact same order as `PAYROLL_COLUMNS` by eye, the same class of drift that once
+  // broke the totals row (see that component's own history). `Record<PayrollColumnId, ReactNode>`
+  // makes that structurally impossible here too: TypeScript rejects this object literal if a
+  // column is missing a cell or an unknown column id is present, and render order below comes from
+  // iterating the canonical array, never from the order these properties happen to be written in.
+  const cells: Record<PayrollColumnId, React.ReactNode> = {
+    serial: (
       <div role="cell" data-col-id="serial" className="flex items-center justify-center gap-1 px-1.5 py-1">
         <SaveStatusIndicator
           status={status}
@@ -127,11 +127,13 @@ function PayrollEntryRowImpl({
         />
         <span className="tabular-nums text-text-muted">{rowIndex + 1}</span>
       </div>
+    ),
 
-      {/* Released status + Correction/History actions (Corrections workflow completion) — a
-          released entry is immutable (every input above is `disabled`), so this is the row's own
-          entry point into the correction workflow instead of a single page-wide toolbar button with
-          no per-row indication of *which* rows it even applies to. */}
+    // Released status + Correction/History actions (Corrections workflow completion) — a
+    // released entry is immutable (every input below is `disabled`), so this is the row's own
+    // entry point into the correction workflow instead of a single page-wide toolbar button with
+    // no per-row indication of *which* rows it even applies to.
+    status: (
       <div role="cell" data-col-id="status" className="flex items-center justify-center gap-1">
         {entry.released ? (
           <>
@@ -160,15 +162,23 @@ function PayrollEntryRowImpl({
           <span className="text-[10px] text-text-faint">—</span>
         )}
       </div>
+    ),
 
-      {/* Employee Code is a business-critical identifier under the permanent Layout Integrity
-          Rule — never ellipsis-clipped, even though every other read-only cell in this row still
-          truncates by default. */}
-      <ReadOnlyCell colId="employeeCode" truncate={false}>{entry.employee.employeeCode ?? '—'}</ReadOnlyCell>
+    // Employee Code is a business-critical identifier under the permanent Layout Integrity
+    // Rule — never ellipsis-clipped, even though every other read-only cell in this row still
+    // truncates by default.
+    employeeCode: (
+      <ReadOnlyCell colId="employeeCode" truncate={false}>
+        {entry.employee.employeeCode ?? '—'}
+      </ReadOnlyCell>
+    ),
+    employeeName: (
       <ReadOnlyCell colId="employeeName" muted={false}>
         <span className="font-medium">{entry.employee.name}</span>
       </ReadOnlyCell>
+    ),
 
+    designation: (
       <div role="cell" data-col-id="designation">
         <InlineTextCell
           value={effectiveEntry.designation}
@@ -179,15 +189,17 @@ function PayrollEntryRowImpl({
           ariaLabel={`Designation for ${entry.employee.name}`}
         />
       </div>
+    ),
 
-      <ReadOnlyCell colId="site">{entry.site.name}</ReadOnlyCell>
-      {/* "Deputed Branch" — the deputed branch/site code for this entry's primary work line, its
-          own `unit` relation. Never `entry.employee.unit` (the employee's *current* default unit,
-          which would silently rewrite a released entry's historical branch). Labeled "Deputed
-          Branch" rather than "Branch Code" to avoid colliding with the unrelated bank Branch Code
-          column below. */}
-      <ReadOnlyCell colId="unitCode">{entry.workLines[0]?.unit.code ?? '—'}</ReadOnlyCell>
+    site: <ReadOnlyCell colId="site">{entry.site.name}</ReadOnlyCell>,
+    // "Deputed Branch" — the deputed branch/site code for this entry's primary work line, its
+    // own `unit` relation. Never `entry.employee.unit` (the employee's *current* default unit,
+    // which would silently rewrite a released entry's historical branch). Labeled "Deputed
+    // Branch" rather than "Branch Code" to avoid colliding with the unrelated bank Branch Code
+    // column below.
+    unitCode: <ReadOnlyCell colId="unitCode">{entry.workLines[0]?.unit.code ?? '—'}</ReadOnlyCell>,
 
+    bankId: (
       <div role="cell" data-col-id="bankId">
         <InlineSelectCell
           value={effectiveEntry.bankId ?? ''}
@@ -207,6 +219,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Bank for ${entry.employee.name}`}
         />
       </div>
+    ),
+    branchCode: (
       <div role="cell" data-col-id="branchCode">
         <InlineTextCell
           value={effectiveEntry.branchCode ?? ''}
@@ -217,6 +231,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Branch code for ${entry.employee.name}`}
         />
       </div>
+    ),
+    accountNumber: (
       <div role="cell" data-col-id="accountNumber">
         <InlineTextCell
           value={effectiveEntry.accountNumber ?? ''}
@@ -227,6 +243,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Account number for ${entry.employee.name}`}
         />
       </div>
+    ),
+    iban: (
       <div role="cell" data-col-id="iban">
         <InlineTextCell
           value={effectiveEntry.iban ?? ''}
@@ -240,7 +258,9 @@ function PayrollEntryRowImpl({
           ariaLabel={`IBAN for ${entry.employee.name}`}
         />
       </div>
+    ),
 
+    grossPay: (
       <div role="cell" data-col-id="grossPay">
         <InlineNumberCell
           value={effectiveEntry.grossPay}
@@ -251,6 +271,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Gross pay for ${entry.employee.name}`}
         />
       </div>
+    ),
+    units: (
       <div role="cell" data-col-id="units" className="flex items-center justify-center">
         <button
           type="button"
@@ -263,7 +285,9 @@ function PayrollEntryRowImpl({
           {unitCount} {unitCount === 1 ? unitLabel : pluralize(unitLabel)}
         </button>
       </div>
+    ),
 
+    days: (
       <div role="cell" data-col-id="days">
         <InlineNumberCell
           value={effectiveLine.days}
@@ -274,6 +298,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Working days for ${entry.employee.name}`}
         />
       </div>
+    ),
+    otHours: (
       <div role="cell" data-col-id="otHours">
         <InlineNumberCell
           value={effectiveLine.otHours}
@@ -284,6 +310,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`OT hours for ${entry.employee.name}`}
         />
       </div>
+    ),
+    otRate: (
       <div role="cell" data-col-id="otRate">
         <InlineNumberCell
           value={effectiveLine.otRate ?? ''}
@@ -295,6 +323,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`OT rate for ${entry.employee.name}`}
         />
       </div>
+    ),
+    cycleDays: (
       <div role="cell" data-col-id="cycleDays">
         <InlineNumberCell
           value={cycleDaysInputValue}
@@ -305,6 +335,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Cycle days for ${entry.employee.name}`}
         />
       </div>
+    ),
+    leaveDays: (
       <div role="cell" data-col-id="leaveDays">
         <InlineNumberCell
           value={effectiveEntry.leaveDays}
@@ -315,6 +347,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Leave days for ${entry.employee.name}`}
         />
       </div>
+    ),
+    leaveRate: (
       <div role="cell" data-col-id="leaveRate">
         <InlineNumberCell
           value={effectiveEntry.leaveRate ?? ''}
@@ -326,6 +360,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`Leave rate for ${entry.employee.name}`}
         />
       </div>
+    ),
+    allowance: (
       <div role="cell" data-col-id="allowance">
         <InlineNumberCell
           value={effectiveEntry.allowance}
@@ -336,7 +372,9 @@ function PayrollEntryRowImpl({
           ariaLabel={`Allowance for ${entry.employee.name}`}
         />
       </div>
+    ),
 
+    eobiAmount: (
       <div role="cell" data-col-id="eobiAmount">
         <InlineNumberCell
           value={effectiveEntry.eobiAmount}
@@ -347,6 +385,8 @@ function PayrollEntryRowImpl({
           ariaLabel={`EOBI amount for ${entry.employee.name}`}
         />
       </div>
+    ),
+    eobiApplicable: (
       <div role="cell" data-col-id="eobiApplicable" className="flex justify-center">
         <ToggleSwitch
           checked={effectiveEntry.eobiApplicable}
@@ -356,7 +396,9 @@ function PayrollEntryRowImpl({
           {...nav('eobiApplicable')}
         />
       </div>
+    ),
 
+    advanceDeduction: (
       <div role="cell" data-col-id="advanceDeduction">
         <InlineNumberCell
           value={effectiveEntry.advanceDeduction}
@@ -369,13 +411,13 @@ function PayrollEntryRowImpl({
         />
         {/* Phase 4 Checkpoint 5 (Advances) — small linked-balance indicator, PROJECT_SPEC.md's own
             requirement ("visible... in Payroll Entry, small balance indicator under the advance/eid
-            input"). Read-only here; managed from the Advances page. */}
-        {entry.advance && (
-          <p className="mt-0.5 text-center text-[10px] text-text-faint">
-            Bal: {formatMoney(entry.advance.outstandingBalance)}
-          </p>
-        )}
+            input"). Read-only here; managed from the Advances page. The column is measured to
+            already fit this label (`columns.ts`'s `BALANCE_LABEL_COLUMN_IDS`), so it never
+            overflows the cell. */}
+        {entry.advance && <BalanceLabel amount={entry.advance.outstandingBalance} />}
       </div>
+    ),
+    eidAdvanceDeduction: (
       <div role="cell" data-col-id="eidAdvanceDeduction">
         <InlineNumberCell
           value={effectiveEntry.eidAdvanceDeduction}
@@ -386,12 +428,10 @@ function PayrollEntryRowImpl({
           nav={nav('eidAdvanceDeduction')}
           ariaLabel={`Eid advance deduction for ${entry.employee.name}`}
         />
-        {entry.eidAdvance && (
-          <p className="mt-0.5 text-center text-[10px] text-text-faint">
-            Bal: {formatMoney(entry.eidAdvance.outstandingBalance)}
-          </p>
-        )}
+        {entry.eidAdvance && <BalanceLabel amount={entry.eidAdvance.outstandingBalance} />}
       </div>
+    ),
+    fine: (
       <div role="cell" data-col-id="fine">
         <InlineNumberCell
           value={effectiveEntry.fine}
@@ -403,7 +443,9 @@ function PayrollEntryRowImpl({
           ariaLabel={`Fine for ${entry.employee.name}`}
         />
       </div>
+    ),
 
+    hold: (
       <div role="cell" data-col-id="hold" className="flex justify-center">
         <ToggleSwitch
           checked={effectiveEntry.hold}
@@ -413,7 +455,9 @@ function PayrollEntryRowImpl({
           {...nav('hold')}
         />
       </div>
+    ),
 
+    remarks: (
       <div role="cell" data-col-id="remarks">
         <InlineTextCell
           value={effectiveEntry.remarks ?? ''}
@@ -424,12 +468,30 @@ function PayrollEntryRowImpl({
           ariaLabel={`Remarks for ${entry.employee.name}`}
         />
       </div>
+    ),
 
+    netSalary: (
       <ReadOnlyCell colId="netSalary" align="right" muted={false}>
         <span className={cn('font-semibold', Number(calc.netSalary) < 0 ? 'text-danger' : 'text-success')}>
           {formatMoney(calc.netSalary)}
         </span>
       </ReadOnlyCell>
+    ),
+  };
+
+  return (
+    <>
+    <div
+      role="row"
+      style={{ ...style, gridTemplateColumns }}
+      className={cn(
+        'grid items-center border-b border-border text-xs',
+        status === 'conflict' && 'bg-danger-light/40',
+      )}
+    >
+      {PAYROLL_COLUMNS.map((column) => (
+        <Fragment key={column.id}>{cells[column.id]}</Fragment>
+      ))}
     </div>
     <SplitWorkLinesModal
       open={isSplitOpen}

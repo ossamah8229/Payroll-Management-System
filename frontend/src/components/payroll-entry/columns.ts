@@ -37,8 +37,14 @@ export interface ResolvedPayrollColumnDef extends PayrollColumnDef {
  * *resolved* array (`computeColumnWidths`, below), so there is exactly one place column widths are
  * decided, and it is content-driven, not a hardcoded guess (permanent Layout Integrity Rule,
  * corrected 2026-07-13 — a fixed-pixel guess is exactly the defect this correction removes).
+ *
+ * Declared `as const satisfies` (rather than a plain `PayrollColumnDef[]`) so `PayrollColumnId`
+ * below is a literal union, not `string` — this is what lets `payroll-entry-row.tsx`'s per-column
+ * cell map be checked for completeness at compile time (Presentation & Workflow Stabilization
+ * Checkpoint, 2026-07-25): adding a column here without adding its cell renderer, or misspelling a
+ * column id there, is a type error, not a runtime/visual drift only a test could catch.
  */
-export const PAYROLL_COLUMNS: PayrollColumnDef[] = [
+export const PAYROLL_COLUMNS = [
   // Fixed: a status icon + row number, not loaded text content.
   { id: 'serial', label: '#', align: 'center', fixedWidth: 60 },
   // Fixed: a Released badge + Correction/History actions, not loaded text content (Corrections
@@ -82,7 +88,12 @@ export const PAYROLL_COLUMNS: PayrollColumnDef[] = [
   { id: 'hold', label: 'Hold', align: 'center', fixedWidth: 70 },
   { id: 'remarks', label: 'Remarks', minWidth: 120 },
   { id: 'netSalary', label: 'Net Salary', align: 'right', minWidth: 90 },
-];
+] as const satisfies PayrollColumnDef[];
+
+/** The literal union of every column id — `Record<PayrollColumnId, ...>` (used by
+ * `payroll-entry-row.tsx`'s per-column cell map) is what turns "every column has exactly one cell,
+ * in canonical order" from a convention into a compile-time guarantee. */
+export type PayrollColumnId = (typeof PAYROLL_COLUMNS)[number]['id'];
 
 /** One column's rendered text for a given entry — must match exactly what `payroll-entry-row.tsx`
  * actually displays for that cell, or the measured width would silently drift from reality. Reads
@@ -145,6 +156,18 @@ function extractColumnValue(columnId: string, entry: PayrollEntry, bankCodeById:
   }
 }
 
+/** Column ids that stack a secondary "Bal: PKR X" balance label beneath their primary input
+ * (`BalanceLabel` in `inline-cells.tsx`) — the balance line's own text must factor into the
+ * column's measured width too, or it overflows the cell exactly the way a too-narrow
+ * `advanceDeduction` column did before this checkpoint. Single source of truth for which columns
+ * carry a balance label, reused by both `extractBalanceLabelValue` below and the row renderer. */
+export const BALANCE_LABEL_COLUMN_IDS = new Set<PayrollColumnId>(['advanceDeduction', 'eidAdvanceDeduction']);
+
+function extractBalanceLabelValue(columnId: string, entry: PayrollEntry): string {
+  const advance = columnId === 'advanceDeduction' ? entry.advance : columnId === 'eidAdvanceDeduction' ? entry.eidAdvance : null;
+  return advance ? `Bal: ${formatMoney(advance.outstandingBalance)}` : '';
+}
+
 /**
  * Resolves every column's real width from the full loaded `entries` array — not just whichever
  * rows the virtualizer currently has mounted (Layout Integrity Rule, corrected 2026-07-13: "the
@@ -155,11 +178,22 @@ function extractColumnValue(columnId: string, entry: PayrollEntry, bankCodeById:
  */
 export function computeColumnWidths(entries: PayrollEntry[], banks: Bank[]): ResolvedPayrollColumnDef[] {
   const bankCodeById = new Map(banks.map((b) => [b.id, b.code]));
-  return PAYROLL_COLUMNS.map((column) => {
+  // Annotated as the wider `PayrollColumnDef` (rather than letting TS infer `PAYROLL_COLUMNS`'s own
+  // narrow per-element literal union) — `fixedWidth`/`minWidth` are optional on that interface, so
+  // every column can be handled by one shared branch below regardless of which literal member of
+  // the `as const` union it actually is.
+  return PAYROLL_COLUMNS.map((column: PayrollColumnDef) => {
     if (column.fixedWidth !== undefined) {
       return { ...column, width: column.fixedWidth };
     }
     const values = entries.map((entry) => extractColumnValue(column.id, entry, bankCodeById));
+    // The balance label renders at a smaller font (10px) than the primary value it sits under
+    // (12px, `measureColumnWidth`'s own "body" weights) — measuring it with the larger body
+    // weights is a deliberate, safe overestimate rather than a second, unverified font-size
+    // constant table, and guarantees the column is never narrower than the label needs.
+    if (BALANCE_LABEL_COLUMN_IDS.has(column.id as PayrollColumnId)) {
+      values.push(...entries.map((entry) => extractBalanceLabelValue(column.id, entry)));
+    }
     const width = measureColumnWidth({ header: column.label, values, minimumPx: column.minWidth });
     return { ...column, width };
   });
