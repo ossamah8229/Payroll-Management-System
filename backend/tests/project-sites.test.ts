@@ -337,6 +337,180 @@ describe('Project Sites', () => {
     });
   });
 
+  // --- RBAC Creator Ownership checkpoint (2026-07-25) ---------------------------------------------
+  //
+  // Root cause: `createProjectSite` (project-sites.service.ts) never created a `UserSiteAssignment`
+  // row for the creator. `sites:manage` is deliberately a global *administrative* permission
+  // (create/edit/delete the site entity list) — it never widens a site-scoped *operational*
+  // permission (`employees:create`, `payroll:entry`, ...), which is exactly why a scoped Payroll
+  // Manager who created a site still couldn't do anything operational with it until a Master Admin
+  // manually assigned it back. Fixed by `ensureCreatorSiteAssignment` (common/creator-access.ts),
+  // called inside the same transaction as the site's own creation.
+  describe('Creator auto-assignment on Project Site creation (RBAC Creator Ownership checkpoint)', () => {
+    async function scopedPayrollManagerAgent(email: string, siteIds: string[] = []) {
+      return createAuthenticatedAgent(app, {
+        email,
+        password: PASSWORD,
+        roleCode: 'TEST_CREATOR_OWNERSHIP_MANAGER',
+        permissionKeys: [PERMISSIONS.SITES_MANAGE, PERMISSIONS.EMPLOYEES_CREATE],
+        siteIds,
+      });
+    }
+
+    it('a scoped Payroll Manager who creates Site A automatically receives a UserSiteAssignment for it', async () => {
+      const { agent, csrfToken, userId } = await scopedPayrollManagerAgent('creator-owns-site-a@test.local');
+
+      const createRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Creator Owns A' });
+      expect(createRes.status).toBe(201);
+      const siteId = createRes.body.site.id;
+
+      const assignment = await prisma.userSiteAssignment.findUnique({
+        where: { userId_siteId: { userId, siteId } },
+      });
+      expect(assignment).not.toBeNull();
+
+      expect(createRes.body.site.createdById).toBe(userId);
+    });
+
+    it('does not grant access to an unrelated Site B', async () => {
+      const managerA = await scopedPayrollManagerAgent('creator-no-leak-a@test.local');
+      const managerB = await scopedPayrollManagerAgent('creator-no-leak-b@test.local');
+
+      await managerA.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', managerA.csrfToken)
+        .send({ name: 'Test Site No Leak Own' });
+      const siteBRes = await managerB.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', managerB.csrfToken)
+        .send({ name: 'Test Site No Leak Other' });
+
+      const leaked = await prisma.userSiteAssignment.findUnique({
+        where: { userId_siteId: { userId: managerA.userId, siteId: siteBRes.body.site.id } },
+      });
+      expect(leaked).toBeNull();
+    });
+
+    it('another scoped user does not gain access merely because someone else created a site', async () => {
+      const creator = await scopedPayrollManagerAgent('creator-owns-c@test.local');
+      const bystander = await scopedPayrollManagerAgent('creator-bystander@test.local');
+
+      const siteRes = await creator.agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', creator.csrfToken)
+        .send({ name: 'Test Site Creator Owns C' });
+
+      const bystanderAssignment = await prisma.userSiteAssignment.findUnique({
+        where: { userId_siteId: { userId: bystander.userId, siteId: siteRes.body.site.id } },
+      });
+      expect(bystanderAssignment).toBeNull();
+    });
+
+    it('the creator can immediately use the new site through the same accessible-site path operational modules use (create an Employee at it)', async () => {
+      const { agent, csrfToken } = await scopedPayrollManagerAgent('creator-operational-use@test.local');
+
+      const siteRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Operational Use' });
+      const siteId = siteRes.body.site.id;
+
+      const unit = await prisma.projectUnit.create({ data: { siteId, name: 'Creator Ownership Test Unit' } });
+
+      // No re-login between site creation and this request — `attachUser` reloads `siteIds` fresh
+      // from the database on every request (attach-user.ts), so this proves the fix takes effect
+      // within the same session immediately, with no Master Admin intervention.
+      const employeeRes = await agent
+        .post('/api/v1/employees')
+        .set('x-csrf-token', csrfToken)
+        .send({
+          name: 'Creator Ownership Test Employee',
+          designation: 'Guard',
+          siteId,
+          unitId: unit.id,
+          grossPay: '30000.00',
+        });
+
+      expect(employeeRes.status).toBe(201);
+
+      // `createEmployee` (employees.service.ts) syncs new employees into whatever Draft cycle is
+      // currently open (`syncEmployeeIntoCurrentDraftCycle`, payroll-processing.service.ts) —
+      // real, expected behavior, not scoped by this suite's own fake year>=2900 convention since
+      // it depends on whatever cycle already exists in the database. Cleaned up explicitly here so
+      // it can never block a later test's `cleanTestData()` (`Employee`/`PayrollEntry`'s RESTRICT
+      // FK), independent of that convention.
+      await prisma.payrollEntry.deleteMany({ where: { employeeId: employeeRes.body.employee.id } });
+    });
+
+    it('creating a site twice for the same user never produces a duplicate UserSiteAssignment row for either site', async () => {
+      const { agent, csrfToken, userId } = await scopedPayrollManagerAgent('creator-idempotent@test.local');
+
+      const siteOneRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Idempotent One' });
+      const siteTwoRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Idempotent Two' });
+
+      const assignments = await prisma.userSiteAssignment.findMany({
+        where: { userId, siteId: { in: [siteOneRes.body.site.id, siteTwoRes.body.site.id] } },
+      });
+      expect(assignments).toHaveLength(2);
+    });
+
+    it('a user without sites:manage still cannot create a site, regardless of this fix', async () => {
+      const { agent, csrfToken } = await createAuthenticatedAgent(app, {
+        email: 'creator-no-permission@test.local',
+        password: PASSWORD,
+        roleCode: 'TEST_CREATOR_OWNERSHIP_NO_PERMISSION',
+        permissionKeys: [PERMISSIONS.EMPLOYEES_CREATE],
+      });
+
+      const res = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Should Still Not Exist Creator Check' });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('Master Admin creating a site gets no UserSiteAssignment row — unrestricted access remains implicit, never row-backed', async () => {
+      const { agent, csrfToken } = await masterAdminAgent('creator-master-admin@test.local');
+
+      const siteRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Master Admin Creator' });
+
+      const masterUser = await prisma.user.findUniqueOrThrow({ where: { email: 'creator-master-admin@test.local' } });
+      const assignment = await prisma.userSiteAssignment.findUnique({
+        where: { userId_siteId: { userId: masterUser.id, siteId: siteRes.body.site.id } },
+      });
+      expect(assignment).toBeNull();
+      expect(siteRes.body.site.createdById).toBe(masterUser.id);
+    });
+
+    it('records a distinct project-site.creator_assigned audit entry, separate from project-site.created', async () => {
+      const { agent, csrfToken, userId } = await scopedPayrollManagerAgent('creator-audit@test.local');
+
+      const siteRes = await agent
+        .post('/api/v1/sites')
+        .set('x-csrf-token', csrfToken)
+        .send({ name: 'Test Site Creator Audit' });
+
+      const entries = await prisma.auditLog.findMany({
+        where: { entityId: siteRes.body.site.id, action: 'project-site.creator_assigned' },
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.actorUserId).toBe(userId);
+    });
+  });
+
   // --- Site-lookup read authorization (Post-Phase-5 Stabilization Checkpoint 4B remediation) -------
   //
   // GET /sites and GET /sites/:id previously carried no permission gate at all (any authenticated

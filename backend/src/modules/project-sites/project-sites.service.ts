@@ -2,6 +2,8 @@ import type { CreateProjectSiteInput, SessionUser, UpdateProjectSiteInput } from
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
+import { isMasterAdmin } from '../../common/authz-policy';
+import { ensureCreatorSiteAssignment } from '../../common/creator-access';
 
 /**
  * UAT Defect 1 correction (Post-Phase-5 Stabilization Checkpoint 4D correction) — `sites:manage`
@@ -45,13 +47,43 @@ export async function getProjectSite(id: string) {
   return site;
 }
 
-export async function createProjectSite(input: CreateProjectSiteInput) {
-  return prisma.projectSite.create({
-    data: {
-      name: input.name,
-      address: input.address ?? null,
-      ...(input.unitLabel !== undefined && { unitLabel: input.unitLabel }),
-    },
+/**
+ * RBAC Creator Ownership checkpoint (2026-07-25) — a scoped user (e.g. a custom "Payroll Manager"
+ * role holding only `sites:manage`, no pre-existing `UserSiteAssignment` rows) could previously
+ * create a Project Site and then immediately lose the ability to use it: `sites:manage` is
+ * deliberately a global *administrative* permission (create/edit/delete the site entity), never an
+ * *operational* one (`authz-policy.ts`'s doc comment) — every operational module (Employees,
+ * Payroll Entry, Advances, ...) still gates on `UserSiteAssignment`, which nothing populated for
+ * the site the creator had just made. A Master Admin had to manually assign it back.
+ *
+ * Fixed by the general creator-access invariant (`common/creator-access.ts`): creation and the
+ * creator's own assignment happen atomically, in the same transaction, so the two can never
+ * observably diverge (a crash between them could otherwise leave a site with no assignment even
+ * for its own creator). `ensureCreatorSiteAssignment` is idempotent and skips Master Admin
+ * (unconditional access already, no assignment row needed) — this never widens the creator's
+ * access to any site other than the one just created, and never assigns anyone else.
+ *
+ * `createdById` itself is audit provenance only (nullable — see the schema comment); no access
+ * decision anywhere in the codebase reads it.
+ */
+export async function createProjectSite(currentUser: SessionUser, input: CreateProjectSiteInput) {
+  return prisma.$transaction(async (tx) => {
+    const site = await tx.projectSite.create({
+      data: {
+        name: input.name,
+        address: input.address ?? null,
+        createdById: currentUser.id,
+        ...(input.unitLabel !== undefined && { unitLabel: input.unitLabel }),
+      },
+    });
+
+    await ensureCreatorSiteAssignment(tx, {
+      creatorIsMasterAdmin: isMasterAdmin(currentUser),
+      userId: currentUser.id,
+      siteId: site.id,
+    });
+
+    return site;
   });
 }
 

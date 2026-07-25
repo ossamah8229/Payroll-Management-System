@@ -3,6 +3,7 @@ import { createProjectSiteSchema, PERMISSIONS, updateProjectSiteSchema } from '@
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
+import { isMasterAdmin } from '../../common/authz-policy';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import {
   createProjectSite,
@@ -74,7 +75,7 @@ projectSitesRouter.get('/:id', requirePermission(SITE_LOOKUP_PERMISSIONS), async
 projectSitesRouter.post('/', requirePermission(PERMISSIONS.SITES_MANAGE), async (req, res, next) => {
   try {
     const input = createProjectSiteSchema.parse(req.body);
-    const site = await createProjectSite(input);
+    const site = await createProjectSite(req.currentUser!, input);
 
     await recordAuditLog({
       actorUserId: req.currentUser!.id,
@@ -85,6 +86,22 @@ projectSitesRouter.post('/', requirePermission(PERMISSIONS.SITES_MANAGE), async 
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });
+
+    // RBAC Creator Ownership checkpoint — distinct from `user.sites_changed` (a Master User
+    // manually editing someone's site list): this entry exists so the audit trail can tell the two
+    // apart. `createProjectSite` (project-sites.service.ts) already skipped this assignment for a
+    // Master Admin creator, who has no `UserSiteAssignment` rows by design.
+    if (!isMasterAdmin(req.currentUser!)) {
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: 'project-site.creator_assigned',
+        entityType: 'ProjectSite',
+        entityId: site.id,
+        metadata: { userId: req.currentUser!.id, reason: 'auto-assigned to creator on site creation' },
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+    }
 
     res.status(201).json({ site });
   } catch (error) {

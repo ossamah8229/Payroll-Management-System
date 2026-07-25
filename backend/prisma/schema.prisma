@@ -155,6 +155,7 @@ model User {
 
   role                        Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
   siteAssignments             UserSiteAssignment[]
+  projectSitesCreated         ProjectSite[]             @relation("ProjectSiteCreatedBy")
   auditLogEntries             AuditLog[]
   companySettingsUpdates      CompanySettings[]
   employeeTransfers           EmployeeTransferHistory[]
@@ -213,9 +214,17 @@ model ProjectSite {
   /// (Principle 8). Added 2026-07-03 — see docs/architecture/database/sites-and-units.md §8.
   unitLabel String   @default("Branch") @db.VarChar(40)
   isActive  Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  /// Who created this site — nullable because every site created before this column existed has
+  /// no recoverable creator identity (see docs/architecture/rbac-creator-access.md's existing-data
+  /// finding; `AuditLog` entries for `project-site.created` are the only trace for those rows, and
+  /// are not backfilled into this column automatically). Populated going forward by
+  /// `createProjectSite` for audit provenance only — access control itself is driven by
+  /// `UserSiteAssignment`, never by this column.
+  createdById String?  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
 
+  createdBy       User?                     @relation("ProjectSiteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   userAssignments UserSiteAssignment[]
   employees       Employee[]
   units           ProjectUnit[]
