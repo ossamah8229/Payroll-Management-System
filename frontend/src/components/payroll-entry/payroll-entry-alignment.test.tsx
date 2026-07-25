@@ -289,4 +289,49 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     expect(employeeCodeCell?.textContent).toBe('');
   });
 
+  /**
+   * Presentation & Workflow Stabilization Checkpoint, 2026-07-25, Issue 1 — regression guard for
+   * the Released badge being centered as part of a `[Badge, actions button]` flex group (which
+   * visibly pulls the badge off the column's true center) instead of independently, in its own
+   * grid track. Asserts the structural mechanism (badge and actions button occupy separate,
+   * explicitly-placed grid columns of the status cell) rather than measuring pixel positions,
+   * which jsdom doesn't lay out anyway.
+   */
+  it('the Released status cell centers the badge independently of the actions button via an explicit grid track', () => {
+    const releasedEntry = makeEntry({ released: true, releasedAt: '2026-07-01T00:00:00.000Z' });
+    const resolved = computeColumnWidths([releasedEntry], [testBank]);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={releasedEntry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          canCorrect
+          onCreateCorrection={() => {}}
+          onViewCorrectionHistory={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    const statusCell = container.querySelector('[data-col-id="status"]') as HTMLElement;
+    expect(statusCell.className).toContain('grid-cols-[1fr_auto_1fr]');
+
+    const badge = statusCell.querySelector('span') as HTMLElement;
+    expect(badge.textContent).toBe('Released');
+    expect(badge.className).toMatch(/\bcol-start-2\b/);
+    // Not centered as part of a flex group with the actions button — the button lives in its own
+    // trailing grid track (col-start-3), never sharing the badge's own centered track.
+    expect(badge.className).not.toMatch(/\bcol-start-3\b/);
+
+    const actionsButton = statusCell.querySelector('button[aria-label^="Released payroll actions"]') as HTMLElement;
+    expect(actionsButton.className).toMatch(/\bcol-start-3\b/);
+    expect(actionsButton.className).toMatch(/\bjustify-self-end\b/);
+  });
 });

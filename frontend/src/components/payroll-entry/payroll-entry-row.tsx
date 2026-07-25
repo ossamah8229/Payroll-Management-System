@@ -133,16 +133,30 @@ function PayrollEntryRowImpl({
     // released entry is immutable (every input below is `disabled`), so this is the row's own
     // entry point into the correction workflow instead of a single page-wide toolbar button with
     // no per-row indication of *which* rows it even applies to.
+    //
+    // A three-track `[1fr_auto_1fr]` grid, not a centered flex row — the status content (the
+    // badge, or the `—` placeholder) sits in the fixed-width middle track, which two equal `1fr`
+    // tracks flank on either side. That keeps the status content itself precisely centered in the
+    // column regardless of the column's own width and regardless of whether a trailing actions
+    // control is present at all: a flex `justify-center` on [badge, actions button] would center
+    // that *pair* instead, visibly pulling the badge off-center by roughly half the actions
+    // button's own width (Presentation & Workflow Stabilization Checkpoint, 2026-07-25 — the
+    // reported "Released badge not centred" defect). The actions control (when present) lives in
+    // the third track, pinned to the column's trailing edge via `justify-self-end` — its width
+    // never participates in centering the middle track. No pixel offset, no per-status special
+    // case: any future status content placed in the middle track is centered the same way.
     status: (
-      <div role="cell" data-col-id="status" className="flex items-center justify-center gap-1">
+      <div role="cell" data-col-id="status" className="grid grid-cols-[1fr_auto_1fr] items-center">
         {entry.released ? (
           <>
-            <Badge tone="blue">Released</Badge>
+            <Badge tone="blue" className="col-start-2">
+              Released
+            </Badge>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+                  className="col-start-3 justify-self-end rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
                   aria-label={`Released payroll actions for ${entry.employee.name}`}
                 >
                   <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
@@ -159,7 +173,7 @@ function PayrollEntryRowImpl({
             </DropdownMenu>
           </>
         ) : (
-          <span className="text-[10px] text-text-faint">—</span>
+          <span className="col-start-2 text-center text-[10px] text-text-faint">—</span>
         )}
       </div>
     ),
