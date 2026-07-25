@@ -63,10 +63,16 @@ function ModalContent({
 
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/40" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/40 print:hidden" />
       <DialogPrimitive.Content
         className={cn(
-          'fixed left-1/2 top-1/2 z-[60] flex max-h-[85vh] w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border bg-surface-2 shadow-md',
+          // print:hidden (Production Print Defect fix) — no modal, of any kind, is ever
+          // printable content; this Portal renders directly into document.body, a sibling of
+          // the app root, never a wrapper around it, so this can never hide the report a page
+          // underneath is printing. Defense in depth only — the real fix is lifecycle-level
+          // (PrintButton's flushSync-ordered close-then-print), this just guarantees the same
+          // outcome even if a future regression leaves a dialog mounted at print time.
+          'fixed left-1/2 top-1/2 z-[60] flex max-h-[85vh] w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border bg-surface-2 shadow-md print:hidden',
           widthClassName,
           className,
         )}

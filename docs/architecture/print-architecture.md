@@ -44,10 +44,94 @@ frontend/src/components/ui/
 ```
 
 `PrintButton` no longer calls `window.print()` directly. Clicking it opens `PrintSettingsDialog`;
-that dialog's own "Print" action calls `useTriggerPrint`'s returned function, which applies the
-resolved layout, then calls `window.print()`. The browser's native print dialog remains the final
-step and the final authority on paper size/orientation — this application only sets what it
-*recommends* the browser start from.
+that dialog's own "Print" action reports the chosen settings back to `PrintButton`, which then
+synchronously closes the dialog and triggers the actual print (see "Print lifecycle" below). The
+browser's native print dialog remains the final step and the final authority on paper size/
+orientation — this application only sets what it *recommends* the browser start from.
+
+### Print lifecycle — the settings UI must be gone before `window.print()` runs
+
+**Invariant: print configuration UI must be unmounted (or otherwise excluded from print) before
+browser print capture. Shared print CSS independently excludes the configuration surface as
+defense in depth.** Neither half is optional — see the incident and the CSS mechanism below.
+
+**Production Print Defect (2026-07-25).** The dialog's own confirm button originally did:
+
+```tsx
+onClick={() => {
+  onConfirm({ orientation, fit }); // triggerPrint — calls window.print() synchronously, inside
+  onOpenChange(false);             // never reached until after window.print() has already run
+}}
+```
+
+`window.print()` captures the DOM at the exact synchronous instant it's called. Because
+`onConfirm` ran first and called it *before* `onOpenChange(false)` even executed, the browser
+captured a DOM that still had the settings dialog fully mounted — production users saw the Print
+Settings dialog itself in their print preview, on every page, instead of the report.
+
+**Reordering the two calls would not have fixed it.** React 18 batches state updates queued inside
+an event handler and does not commit them to the DOM synchronously within that same handler — so
+even `onOpenChange(false)` followed by `onConfirm(...)` would still run the print trigger before
+the dialog's removal had actually been committed to the DOM. The fix has to force that commit,
+not just request it earlier.
+
+**Fix — `PrintButton` owns the sequencing, forced synchronous with `flushSync`:**
+
+```tsx
+function handleConfirm(settings: PrintSettings) {
+  flushSync(() => {
+    setSettingsOpen(false);
+  });
+  triggerPrint(settings);
+}
+```
+
+`PrintSettingsDialog`'s confirm button now only calls `onConfirm(settings)` — it no longer closes
+itself; that responsibility moved to the caller so the caller can guarantee the ordering.
+`flushSync` (from `react-dom`) forces React to synchronously apply and commit the `setSettingsOpen(false)`
+update — including unmounting the dialog's Radix `Portal` content — before `handleConfirm`
+continues to the next line. Only once that commit is guaranteed does `triggerPrint` run
+(`applyPrintLayout`, then `window.print()`). This is React's own documented use case for
+`flushSync`: forcing a DOM update to commit before an immediate imperative browser action that
+depends on the DOM's current state.
+
+The corrected lifecycle:
+
+```
+User opens Print Settings
+        ↓
+User chooses settings
+        ↓
+User clicks Print → PrintSettingsDialog reports settings via onConfirm (does not close itself)
+        ↓
+PrintButton: flushSync(() => setSettingsOpen(false))   — synchronous commit, dialog unmounted for real
+        ↓
+PrintButton: triggerPrint(settings)
+        ↓
+        resolve orientation + fit → applyPrintLayout (inject @page style, toggle print-fit)
+        ↓
+        window.print()   — DOM is now guaranteed clean of the settings dialog
+        ↓
+Native browser print preview
+        ↓
+afterprint cleanup
+```
+
+No arbitrary timeout (`setTimeout(..., 500)` or similar) is used or was considered adequate — a
+timeout is not deterministic against a real device's render pipeline. `flushSync` is: the dialog's
+removal is either committed or `flushSync` has not yet returned: there is no third state.
+
+**Why this is in the shared architecture, not a per-page fix.** All 8 `PrintButton` call sites
+share this exact component and hook — the fix lives once, in `PrintButton`/`PrintSettingsDialog`,
+and applies to every page automatically. No page-level code changes were needed or made.
+
+**Defense in depth — CSS.** Independent of the lifecycle fix, `frontend/src/components/ui/modal.tsx`
+(the shared `ModalContent`, underlying *every* dialog in the app, not just print settings) now
+carries `print:hidden` on both its `DialogPrimitive.Overlay` and `DialogPrimitive.Content`. Even if
+a future regression left a dialog mounted at the moment of print capture, it still could not appear
+on paper. This is safe for the report content specifically because Radix's `Portal` renders
+directly into `document.body` — a sibling of the app's root, never a wrapper around it — so hiding
+the modal's own overlay/content can never hide a report a page underneath is printing.
 
 ### Print settings UX
 
@@ -216,22 +300,38 @@ page's own current form. No decorative content was added.
 - `frontend/src/components/ui/print-button.test.tsx` — jsdom/RTL: dialog opens instead of an
   immediate `window.print()`; confirming Landscape + Fit to page injects the right `@page` rule and
   toggles `print-fit`; Auto resolves to the page's own recommendation; Normal size skips the
-  fit-to-page class.
+  fit-to-page class; **REGRESSION (Production Print Defect)** — captures DOM state *synchronously,
+  inside the `window.print()` mock itself* (not in a later, separate assertion) and confirms the
+  settings dialog is absent and a sibling "report" element is present at that exact moment. Verified
+  to fail against the pre-fix implementation (confirmed by temporarily reverting the fix and
+  re-running) and pass against the fix.
 - `tests/e2e/specs/13-print-architecture.spec.ts` — real Chromium (Playwright): Payroll Entry in
-  Landscape (dialog, injected `@page` rule, `print-fit` class, the print table showing the complete
-  60+-employee dataset while the virtualized grid is hidden under `@media print`, no horizontal
-  overflow, a real `page.pdf()` generation, and a rendered-height proxy for "this needs more than
-  one physical page"); Salary Release in Portrait (dialog defaults, screen-only Release actions
-  hidden under `@media print`) as the reusability proof; Bank Sheet and Cash Receiving (final
-  verification pass) confirming Auto's Landscape hint, sidebar/toolbar hidden under real
-  `@media print`, `print-fit` actually applied after confirming the dialog (not just read from its
-  hint text), and no horizontal overflow on either's 9-11 column table.
+  Landscape (dialog, the print table showing the complete 60+-employee dataset while the
+  virtualized grid is hidden under `@media print`, no horizontal overflow, a real `page.pdf()`
+  generation whose bytes were checked not to contain "Print settings", and a rendered-height proxy
+  for "this needs more than one physical page"); Salary Release in Portrait (dialog defaults,
+  screen-only Release actions hidden under `@media print`) as the reusability proof; Bank Sheet and
+  Cash Receiving confirming Auto's Landscape hint, sidebar/toolbar hidden under real
+  `@media print`, and no horizontal overflow on either's 9-11 column table.
 
-  `window.print()` is stubbed via `page.addInitScript` in these specs — real headless Chromium
-  fires `beforeprint`/`afterprint` synchronously as if a print instantly completed, which would
-  otherwise trigger this architecture's own `afterprint` cleanup and remove the `@page` style tag/
-  `print-fit` class before the test could ever inspect them. The native print dialog itself has no
-  Playwright/CDP-accessible API regardless — out of scope for an automated check.
+  **REGRESSION (Production Print Defect) — `stubWindowPrintWithCapture`.** Every test above that
+  triggers a real print now stubs `window.print` to capture DOM/CSS state *synchronously, inside
+  the stub itself* — `dialogPresent`, `printSettingsTextPresent`, `reportPresent` (a per-page
+  selector for the actual report content), `printFitApplied`, and the injected `@page` style
+  content — the same instant a real browser's print engine would capture, with no grace period.
+  This is a deliberate change from the original version of this spec, which stubbed
+  `window.print` as a bare no-op and only asserted DOM/CSS state via a *later*, separate
+  `page.evaluate()` call after the confirm click's own `await ...click()` had resolved — by which
+  point React had already flushed the (buggy) pending close, so those assertions could never have
+  caught the real production defect. **Confirmed**: the new assertions fail against the pre-fix
+  code (verified directly, by temporarily reverting the fix and re-running this spec) and pass
+  against the fix, for both Payroll Entry (dedicated print table) and Bank Sheet/Cash Receiving
+  (live-DOM report) — proving the shared lifecycle fix generalizes across both print
+  architectures, not just one. Every test also asserts `page.getByRole('dialog')` has zero matches
+  under real `@media print` emulation, independently confirming the CSS defense-in-depth.
+
+  The native print dialog itself has no Playwright/CDP-accessible API — out of scope for an
+  automated check regardless.
 
 ## Print is not export
 

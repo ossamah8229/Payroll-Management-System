@@ -19,6 +19,18 @@ const FIT_OPTIONS: { value: PrintFitMode; label: string; description: string }[]
  * `PrintButton` opens this instead of calling `window.print()` directly. It controls the
  * printable *layout* only (orientation, fit); the browser's own native print dialog remains the
  * final step and the final authority on paper size/orientation.
+ *
+ * **Production Print Defect fix** — this component's own confirm button used to both call
+ * `onConfirm` (which synchronously invokes `window.print()`, inside `useTriggerPrint`) *and* close
+ * itself (`onOpenChange(false)`) in the same click handler. `window.print()` ran first, capturing
+ * the DOM at that exact synchronous instant — while this dialog was still fully mounted — so the
+ * printed output was this settings UI, not the underlying report. Reordering those two calls
+ * would not have fixed it either: React 18 batches the state update behind `onOpenChange(false)`
+ * and does not commit it to the DOM synchronously within the same handler, so `window.print()`
+ * would still run before the dialog was actually removed. This component therefore only reports
+ * the chosen settings now (`onConfirm`); the caller (`PrintButton`) owns closing the dialog with a
+ * `flushSync`-forced synchronous commit *before* triggering the actual print, so `window.print()`
+ * is guaranteed to see a DOM with this dialog already gone.
  */
 export function PrintSettingsDialog({
   open,
@@ -87,13 +99,7 @@ export function PrintSettingsDialog({
           <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            size="sm"
-            onClick={() => {
-              onConfirm({ orientation, fit });
-              onOpenChange(false);
-            }}
-          >
+          <Button size="sm" onClick={() => onConfirm({ orientation, fit })}>
             Print
           </Button>
         </ModalFooter>
