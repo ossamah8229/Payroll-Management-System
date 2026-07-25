@@ -6122,6 +6122,156 @@ Stabilization/Advances-Cancel checkpoints above existed), then cleanly rebased o
 push and Render auto-deploy this same session — see `docs/SESSION_HANDOFF.md` for the push/deploy
 record.** **Phase 7 remains Not Started; this checkpoint does not begin it.**
 
+### Payroll Presentation & Workflow Stabilization Checkpoint — COMPLETE, 2026-07-25 (COMMITTED as `4fa3554`/`4eb5dfe`/`623daff`/`50887ee`/`397c333`, doc-only follow-up below)
+
+A user-reported checkpoint covering seven distinct Payroll Entry/Salary Release/Advances/Corrections
+presentation and workflow defects, each root-caused individually rather than patched at the symptom.
+Two review rounds: an initial implementation pass, then an explicit "final verification" pass (a
+broadened placeholder audit plus focused lifecycle-transition tests) before approval. Phase 7
+untouched throughout.
+
+**1. Salary Release status not reflected in Payroll Entry.** Root cause: never a backend
+inconsistency — `releaseProjectUnit` (`payroll-release.service.ts`) already flips
+`PayrollEntry.released=true` atomically, and Payslips read that same column live (no separate
+Payslip table). The defect was a frontend cache-invalidation gap: `useReleaseProjectUnit`'s
+`onSuccess` (`use-payroll-release.ts`) invalidated only the Salary Release page's own
+`['payroll-unit-release-status', ...]` query, never Payroll Entry's own `['payroll-entries',
+cycleId]` query (`staleTime: Infinity`). Fixed by also invalidating `payrollEntriesQueryKey(cycleId)`
+(and, once Issue 5 below existed, the Advances list query too, since a release can now settle a
+Advance to `PAID_OFF`). `PayrollEntry.released` remains the single, only source of truth — the fix
+closes a notification gap, not a data-source split. **Browser-verified**: released a Unit from
+Salary Release, navigated back to Payroll Entry within the same SPA session (no page reload) — the
+status cell flipped from `—` to `Released` immediately.
+
+**2/3. Payroll Entry table architecture / totals alignment.** The header and totals row already
+derived from one canonical `PAYROLL_COLUMNS` array (a prior checkpoint's own fix, above); the body
+row (`payroll-entry-row.tsx`) was still ~430 lines of hand-ordered JSX that had to match that array's
+order by convention, checked only by a runtime test. `columns.ts` now declares `PAYROLL_COLUMNS`
+`as const satisfies PayrollColumnDef[]`, exporting a literal `PayrollColumnId` union; the row renders
+from a `Record<PayrollColumnId, ReactNode>` map iterated in `PAYROLL_COLUMNS` order, so a missing or
+misspelled column id is now a **compile error**, not a possible visual drift only a test could catch.
+Totals row is unchanged (already correct): Σ in the first column, live employee count under
+Employee, every monetary total under its own canonical monetary column, driven by the same shared
+`gridTemplateColumns` every layer already consumed.
+
+**4. Advance Balance overflow.** Root cause: `measureColumnWidth` only ever measured the primary
+editable value's width for `advanceDeduction`/`eidAdvanceDeduction`, never the "Bal: PKR X" secondary
+label stacked beneath it, so a large balance could overflow into the neighboring column. `columns.ts`
+now feeds the balance label into the same measurement pass (`BALANCE_LABEL_COLUMN_IDS`); extracted a
+reusable `BalanceLabel` component (`inline-cells.tsx`).
+
+**5. Advance lifecycle — new `RESERVED` status.** Root cause: `materializeOneAdvanceDeduction` set
+`status: 'PAID_OFF'` the instant a Draft deduction reached zero balance — before that payroll was
+ever actually paid to anyone. Fixed by splitting the transition in two, mirroring the identical
+"reservation becomes final only at the entry's own release" pattern
+`consumeMaterializationsForReleasedEntries` already established for Correction `BalanceAdjustment`s
+(Phase 6 Checkpoint 7): a Draft deduction reaching zero now sets `RESERVED` (committed/held against
+this cycle, but reversible — reverts to `ACTIVE` if edited/deferred/cancelled before release, exactly
+like a partial deduction already did); a new `settleAdvancesForReleasedEntries`
+(`advances.service.ts`), called from `releaseProjectUnit` in the same transaction as the entries
+actually flipping `released: true`, is now the **only** place `RESERVED` advances to `PAID_OFF` and
+`paidOffAt` is ever set. The full lifecycle is now `ACTIVE → RESERVED → PAID_OFF` (or `→ CANCELLED`
+from `ACTIVE`/`RESERVED` at any point pre-release). `cancelAdvance`, `deferAdvanceSchedule`, and the
+Advances UI's Defer/Cancel actions extended to operate on `RESERVED` too (still reversible
+pre-release — editing/deferring/cancelling a `RESERVED` advance safely reverses the live Draft
+deduction and restores the balance, the same math these paths already used); `createAdvance`'s
+at-most-one-Advance-per-employee-per-type check, and its backing partial unique index, both extended
+to also block on `RESERVED`. Released payroll is never rewritten by any of this — every reversal path
+already excluded `released: true` entries before this checkpoint and still does. Two additive
+migrations, `20260725090000_advance_reserved_status` (enum value only) and
+`20260725091000_advance_reserved_constraints` (widens the partial unique index and the
+paidoff/no-scheduled-period check constraint) — split because Postgres disallows referencing a
+newly-added enum value in the same transaction that added it; both verified applying cleanly on a
+fresh database. `docs/architecture/database/advances.md` fully updated (lifecycle diagram, field
+table, constraints, editability matrix). **A second, later "final verification" pass** added three
+more focused tests plus one strengthened assertion, explicitly proving all four lifecycle
+transitions end-to-end: editing `totalAmount` while a live Draft deduction exists recalculates
+correctly, exactly once, no duplicate/stale value; cancelling a `RESERVED` advance removes the Draft
+deduction with no orphan (`currentScheduledPeriodId` cleared, entry's `advanceId` cleared); a
+genuinely `PAID_OFF` (via real release) advance rejects further edits; and a deferred deduction
+actually materializes in its named target period, exactly once, once that cycle is later created
+(two rollovers deep, proven via a real finalize/archive-and-create-next chain), with no stale copy
+left in either the source or an intervening cycle. `advances.test.ts` is **34/34**. **Browser-
+verified**: recording a `FULL_DEDUCTION` advance into the Draft cycle showed amber "Reserved (pending
+release)" immediately; releasing the Unit flipped the same row to "Paid Off" with no other action, at
+both the API and UI layers.
+
+**6. Internal company references (commercial placeholder audit — two passes).** First pass fixed the
+obvious, explicitly-named leaks: `project-sites-page.tsx`'s "e.g. ABL City Region Lahore" → "e.g.
+Downtown Regional Office"; `settings-page.tsx`'s bank examples "MCB"/"MCB Bank Limited" → "ACB"/"Acme
+Commercial Bank"; `roles-page.tsx`'s "e.g. Lahore Payroll Officer" → "e.g. Regional Payroll Officer".
+**Second, broadened pass** (final verification, searching ABL/Brooms/Packages/Demo/Sample/Example/
+Test/Dummy/Placeholder/ABC/XYZ/Acme/city-neighborhood names across every UI-visible surface — form
+placeholders, helper text, default values, validation examples, and downloadable generated
+documents) found two more: a Project Unit form's placeholder named a real Lahore neighborhood
+("e.g. Model Town {unitLabel}" → "e.g. North {unitLabel}"), and — the more significant one — the
+**downloadable Employee Import Template** (`employees-import-export.service.ts`, a real `.xlsx` file
+every deployment's users can download) had a hardcoded sample row naming the real client's actual
+site ("Model Town Site") and, spelled out in full this time, its bank ("Allied Bank Limited" — the
+same "ABL" already fixed as placeholder text elsewhere, but still present verbatim in this generated
+file) → neutralized to "Downtown Regional Office" / "Acme Commercial Bank". **Deliberately left
+unchanged, both passes**: seeded bank rows (ABL/HBL/MCB, `seed.ts`), the default seed admin email,
+and the default seed company name (`Broom Services Private Limited`) — all three are documented,
+environment-variable-overridable deployment defaults (`docs/release/CONFIGURATION_REFERENCE.md`
+already instructs operators to override them before a real deployment), not instructional UI
+placeholders, and the company name in particular has a prior, explicit project decision on record to
+keep it as-is. **A final project-wide sweep for `ABL`, `Broom`, and `Model Town` across all
+frontend/backend source, after both passes, found zero remaining hits.** No remaining user-facing
+instructional placeholders containing internal company references were found.
+
+**7. Request Correction employee lookup.** Root cause: not a data-source bug — `correctableEntries`
+is deliberately filtered to `entry.released === true` from the *same* canonical `usePayrollEntries`
+data Payroll Entry itself renders (corrections may only target already-released payroll, by design;
+this is one canonical eligibility source, not two). The actual defect: a real, existing employee
+excluded only by that rule was indistinguishable in the UI from "no such employee," reading as a
+broken search. `EmployeeLookup` (`employee-lookup.tsx`) now distinguishes "the backend found nothing"
+from "the backend found real employees, but `restrictToEmployeeIds` excluded all of them," rendering
+a specific, caller-supplied message in the latter case; Request Correction's message: "Matches were
+found, but none have a released Payroll Entry in this cycle yet — corrections can only be requested
+for already-released payroll." (For the specific "Adil Masih" case originally reported, this was very
+likely the same underlying bug as Issue 1 — Payroll Entry's stale cache meant `correctableEntries`
+never saw him as released either; Issue 1's fix resolves that concrete case structurally, and Issue
+7's fix additionally makes the *remaining legitimate* case — a genuinely still-Draft employee —
+self-explanatory instead of confusing.) **Browser-verified**: searching a real, unreleased employee
+showed the specific restricted-eligibility message; searching a released employee showed him as a
+normal selectable match.
+
+**Testing** (both passes combined): `advances.test.ts` **34/34** (31 baseline + 3 new lifecycle-
+verification tests, 1 strengthened); `payroll-release.test.ts` + `corrections-release-consumption.
+test.ts` + `payroll-cycle-rollover.test.ts` + `payroll-entry-performance.test.ts` +
+`employees-import-export.test.ts` **68/68**; frontend `payroll-entry` suite + new
+`employee-lookup.test.tsx` + `payroll-entry-page.test.tsx` **37/37**. Typecheck clean for
+shared/backend/frontend (one pre-existing, untouched-by-this-work e2e typecheck error in
+`tests/e2e/specs/08-role-administration.spec.ts`, confirmed via `git status` to have zero diff from
+this checkpoint). Lint: 0 errors, 6 pre-existing warnings. Build: succeeds across all three
+workspaces. **Full regression suite deliberately not run for either pass** — this checkpoint's
+implementation touched release orchestration and shared schema/infrastructure (crossing that
+specific bar), so the *first* pass did run the full backend suite twice (once against the pre-
+existing shared sandbox database, once against a freshly-provisioned dedicated one) as a one-time
+broader check: both runs showed ~550 failures, every one a generic login-401 error in files never
+touched by this checkpoint (`settings.test.ts`, `malformed-uuid-handling.test.ts`, performance
+tests), reproducing identically on a database nothing else had ever touched — confirmed a
+pre-existing sandbox characteristic of running the full ~920-test suite in one process, not a
+regression. The *second* ("final verification") pass touched no additional shared payroll
+calculation, release orchestration, or RBAC primitive beyond what the first pass already covered, so
+it ran only the focused suites listed above, per its own explicit instruction.
+
+**Real-browser verification** (Chromium via Playwright, driving real dev servers against a freshly
+seeded, dedicated local database — full detail in the checkpoint's own report): Payroll Entry grid
+column/totals alignment; Advance Ded. column showing "15000 / Bal: PKR 0.00" cleanly stacked, no
+overflow; a Unit release flipping Payroll Entry's status cell to "Released" within the same SPA
+session, no reload; the same release settling a `RESERVED` Advance to "Paid Off"; Request
+Correction's employee lookup showing the specific restricted-eligibility message for a real,
+unreleased employee and a normal match for a released one.
+
+**Documentation updated**: `docs/architecture/database/advances.md` (lifecycle, constraints,
+editability matrix), this entry, and `docs/SESSION_HANDOFF.md` §14.
+**Commits**: `4fa3554` (Payroll Entry column-model refactor), `4eb5dfe` (placeholder text, both
+passes' worth), `623daff` (Request Correction lookup), `50887ee` (Advances `RESERVED` lifecycle,
+including both passes' tests), `397c333` (Salary Release cache invalidation) — approved for push and
+Render auto-deploy this same session; see `docs/SESSION_HANDOFF.md` for the push/deploy record.
+**Phase 7 remains Not Started; this checkpoint does not begin it.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)

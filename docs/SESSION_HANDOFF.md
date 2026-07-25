@@ -2005,3 +2005,53 @@ Master User) confirmed the new code is live:
 No discrepancies found beyond the two explicitly-noted, expected limitations above (both a direct
 consequence of "do not create unnecessary production financial/test records," not a code defect).
 
+## 14. Addendum, 2026-07-25 — Payroll Presentation & Workflow Stabilization Checkpoint
+
+Seven user-reported Payroll Entry/Salary Release/Advances/Corrections presentation and workflow
+defects, each root-caused individually. Two review rounds (initial implementation, then an explicit
+"final verification" pass — a broadened placeholder audit plus focused lifecycle-transition tests)
+before approval. Full detail in `docs/PROJECT_PROGRESS.md` §1's own dated entry; this is only the
+next-session pointer.
+
+**Committed** (`4fa3554`/`4eb5dfe`/`623daff`/`50887ee`/`397c333`, directly on `main`):
+
+- **Salary Release → Payroll Entry desync**: `useReleaseProjectUnit`'s `onSuccess` now also
+  invalidates Payroll Entry's own query cache (previously only invalidated Salary Release's own
+  query) — `PayrollEntry.released` was always the single source of truth; this closed a frontend
+  notification gap, not a backend inconsistency.
+- **Payroll Entry column architecture**: the body row now renders from a compiler-enforced
+  `Record<PayrollColumnId, ReactNode>` map iterated in the canonical `PAYROLL_COLUMNS` order (header
+  and totals already did) — a missing/misspelled column is now a type error, not a possible visual
+  drift. Advance/Eid Advance balance labels are now included in dynamic column-width measurement, so
+  they can no longer overflow into a neighboring column.
+- **Advance lifecycle**: new `RESERVED` status between `ACTIVE` and `PAID_OFF` — a Draft deduction
+  reaching zero balance is only *reserved*, not *paid off*, until the `PayrollEntry` carrying it is
+  actually Released (`settleAdvancesForReleasedEntries`, called from `releaseProjectUnit`, the one
+  and only place `PAID_OFF`/`paidOffAt` is ever set). Two additive migrations
+  (`20260725090000_advance_reserved_status`, `20260725091000_advance_reserved_constraints`).
+  Editing/deferring/cancelling a `RESERVED` advance still safely reverses the live Draft deduction;
+  released payroll is never rewritten.
+- **Request Correction employee lookup**: now explains *why* a real, visible employee doesn't match
+  (no released Payroll Entry yet this cycle) instead of reporting "no employees match" as if the
+  employee didn't exist — the eligibility rule itself (released-only) is unchanged and correct.
+- **Commercial placeholder audit** (two passes): removed internal client-specific instructional
+  examples from UI placeholders and, more significantly, from the downloadable Employee Import
+  Template's sample row (previously named the real client's actual site and spelled out its bank's
+  full legal name). Seed data and documented environment-variable-overridable deployment defaults
+  (seeded banks, default admin email, default company name) were deliberately left unchanged — a
+  final project-wide sweep found no remaining user-facing instructional placeholders containing
+  internal company references.
+
+**Verification**: `advances.test.ts` 34/34 (3 new lifecycle-verification tests + 1 strengthened,
+explicitly proving all four RESERVED-lifecycle transitions end-to-end); 68/68 across
+`payroll-release`/`corrections-release-consumption`/`payroll-cycle-rollover`/
+`payroll-entry-performance`/`employees-import-export`; frontend 37/37. Typecheck/lint/build clean
+across shared/backend/frontend (one pre-existing, unrelated e2e typecheck error left untouched).
+Full regression suite run once during the first pass only (this checkpoint touched release
+orchestration and shared schema) — confirmed pre-existing sandbox flakiness unrelated to this work,
+not a regression; the second pass needed no broader run. Real-browser verification (Chromium/
+Playwright) performed for every issue against a freshly seeded, dedicated local database.
+
+**Push/deploy record**: see this session's final report for the confirmed `origin/main` SHA and
+Render health-check result (not duplicated here to avoid a second, easily-stale copy).
+
