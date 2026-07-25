@@ -2055,3 +2055,58 @@ Playwright) performed for every issue against a freshly seeded, dedicated local 
 **Push/deploy record**: see this session's final report for the confirmed `origin/main` SHA and
 Render health-check result (not duplicated here to avoid a second, easily-stale copy).
 
+## 15. Addendum, 2026-07-25 (later) — Post-Deployment UI & Corrections Workflow Stabilization Checkpoint
+
+A separate, later same-day checkpoint against a fresh post-deployment report — five issues, distinct
+from §14's "Payroll Presentation & Workflow Stabilization Checkpoint" despite the similar name. Full
+detail in `docs/PROJECT_PROGRESS.md` §1's own dated entry ("Post-Deployment UI & Corrections Workflow
+Stabilization Checkpoint"); this is only the next-session pointer.
+
+**Committed LOCALLY only** (`341f65b`/`e9c22fc`/`92bc4c0`, directly on `main`, **NOT pushed, NOT
+deployed**):
+
+- **Status badge centering (Payroll Entry, Status column)**: the Released badge was centered together
+  with its trailing actions button in one flex group, which centers the pair, not the badge. Replaced
+  with a `grid-cols-[1fr_auto_1fr]` layout — the badge sits in the fixed middle track, flanked by two
+  equal spacer tracks, so it centers regardless of column width or what the trailing track holds; the
+  actions button lives in its own trailing track. No pixel offsets, no per-status special case.
+- **Totals-row Employee-column alignment**: the "N employees" summary was keyed to the `employeeCode`
+  ("Code") column instead of `employeeName` ("Employee") — a one-token mismatch, not a structural
+  regression. Corrected; still fully derived from `PAYROLL_COLUMNS`, no hardcoded indexes.
+- **Corrections requester-visible workflow / RBAC separation**: a Payroll Manager (`payroll:entry`
+  only) submitting a correction request was unconditionally redirected to a detail page gated to
+  `corrections:approve` only — an immediate 403 on their own submission, with no page anywhere they
+  could see it afterward. Fixed by widening correction-request list/detail to `payroll:entry` OR
+  `corrections:approve`, with a non-approver's list/detail server-side scoped to requests *they
+  themselves submitted* — never another submitter's. **Approve/reject remain hard-gated to
+  `corrections:approve`, enforced per-route independent of the widened list/detail gate — no approval
+  right was widened.** New "My Requests" Corrections tab; the submission modal now routes an approver
+  straight to the request, and everyone else back into Corrections (My Requests).
+
+**Not committed — investigated and documented only, per the user's own explicit instruction not to
+execute the production cleanup yet:**
+
+- **`ZZZ SMOKETEST DeployCheck` (production smoke-test employee)**: confirms the 2026-07-24
+  Operational Stabilization Checkpoint's own finding (not hard-coded anywhere, no name-based
+  protection) and extends it — **employee hard-delete was deliberately not introduced**; every
+  `Employee` row remains permanent by design. The production remediation, verified end-to-end against
+  synthetic data (not production) but **not yet executed against the real record**:
+  1. Mark `ZZZ SMOKETEST DeployCheck` as Left via the existing Employee Registry workflow.
+  2. Remove only its existing `PayrollEntry` from the currently-open Draft cycle, if one exists, via
+     the existing (API-only) delete action — no UI button exists for this specific step.
+  3. Never delete or modify a Released/Archived `PayrollEntry`, or any other historical financial or
+     audit record — the delete path itself already refuses once released.
+
+**Verification**: frontend `payroll-entry-alignment.test.tsx` 10/10 (2 new), `permissions.test.ts`
+updated (2 tests for the new default tab, 1 new for `canViewOwnCorrectionRequests`); backend
+`corrections-service.test.ts` 53/53 (6 new integration tests covering own-only listing,
+approver-sees-all, own-detail-allowed, another-submitter's-detail-rejected, approve/reject-still-
+rejected-for-a-non-approver, and Finance still rejected outright). Typecheck/lint/build clean across
+shared/backend/frontend (one pre-existing, unrelated e2e typecheck error confirmed via `git stash` to
+reproduce on baseline `main`). Full regression suite deliberately not run, per this checkpoint's own
+scope. Real-browser verification (Chromium/Playwright) performed for every issue, including the
+Issue 5 recipe against synthetic data mirroring the real scenario.
+
+**Push/deploy record**: none — these three commits are local-only on `main`, awaiting the user's own
+separate go-ahead, same standing practice as every other checkpoint in this file.
+

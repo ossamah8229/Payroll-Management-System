@@ -503,3 +503,30 @@ What changes is only what happens *after* approval: instead of quietly folding t
 month's ordinary payroll fields, the system creates an explicit, clearly-labeled balance transaction
 that is settled (paid or recovered, immediately or across one or more future cycles as of 2026-07-05)
 as its own traceable item.
+
+## Scope note, Post-Deployment UI & Corrections Workflow Stabilization Checkpoint (2026-07-25) — requester-visible list/detail
+
+Checkpoint 6's own scope note (above) described `correctionRequestsRouter`'s Review Queue as
+"`corrections:approve`-gated" without qualification — accurate at the time, but it left a requester
+(`payroll:entry` only, holding no `corrections:approve`) with nowhere to see the `CorrectionRequest`
+they themselves had just submitted: the submission flow redirected to that same router's detail
+route, which then 403'd immediately. Fixed by applying this document's own established "view vs.
+decide" split (already used by `ENTRY_VIEW_PERMISSIONS`/`BALANCE_VIEW_PERMISSIONS` elsewhere in this
+router) to `correctionRequestsRouter` itself:
+
+- `GET /correction-requests` (list) and `GET /correction-requests/:id` (detail) now accept
+  `payroll:entry` **or** `corrections:approve` — but a caller holding only `payroll:entry` is scoped
+  server-side to the requests *they themselves submitted* (`requestedById`), never another
+  submitter's site-wide queue. An approver's list remains unrestricted (site-scoped as before, or
+  fully unrestricted for Master Admin).
+- `POST /correction-requests/:id/approve` and `/:id/reject` remain **exclusively**
+  `corrections:approve`-gated, now enforced by an explicit per-route check rather than relying solely
+  on the router-level middleware — this is deliberate defense-in-depth once the router-level gate
+  itself widened, not a redundant leftover. **No approval right was widened by this change.**
+
+A new frontend "My Requests" tab (`corrections-page.tsx`) is the requester-facing surface for this —
+reusing the exact same `GET /correction-requests` query the Review Queue already used, never a second
+data source. This does not change who may approve/reject, add a new permission key, or touch the
+schema — it only lets a legitimate submitter see their own request's lifecycle (`PENDING` → shown as
+"Awaiting Approval" → `APPROVED`/`REJECTED`) without being redirected into a page their own
+permissions were never meant to unlock.

@@ -6274,6 +6274,129 @@ Render auto-deploy this same session; see `docs/SESSION_HANDOFF.md` for the push
 
 ---
 
+### Post-Deployment UI & Corrections Workflow Stabilization Checkpoint — COMPLETE, 2026-07-25 (COMMITTED locally as `341f65b`/`e9c22fc`/`92bc4c0`, NOT pushed)
+
+A separate, later same-day checkpoint against a fresh post-deployment report — five issues, distinct
+from the "Payroll Presentation & Workflow Stabilization Checkpoint" immediately above despite the
+similar name. Issues 1–4 fixed and committed (locally only, pending the user's own separate push/
+deploy go-ahead, per this project's standing practice); Issue 5 investigated and documented, with the
+production remediation explicitly **not executed** from this environment (no production database
+access, and — independently — an intentionally out-of-band step: see below).
+
+**1. Status badge not centred in the Status column** (`341f65b` for Issue 2 below carries the shared
+test-file scaffold; the badge fix itself is `e9c22fc`). Root cause: the Status cell centered the
+Released badge *together with* its trailing "..." actions button in one `flex justify-center` group —
+that centers the pair, not the badge; the button's own width visibly pulled the badge off the
+column's true center. `PayrollColumnDef.align: 'center'` existed on `PAYROLL_COLUMNS` but was never
+actually consumed by any renderer (header/body/totals each hardcoded per-column-id classes
+independently). Fixed structurally, not with a pixel nudge: the Status cell is now a
+`grid-cols-[1fr_auto_1fr]` layout — the badge (or the `—` placeholder) sits in the fixed-width middle
+track, flanked by two equal `1fr` spacer tracks, so it is centered regardless of the column's width
+and regardless of what the trailing track holds; the actions button lives in its own track
+(`col-start-3`, `justify-self-end`), never participating in centering. No pixel offsets, no
+per-status special case — any future badge in this column centers the same way. New regression test
+(`payroll-entry-alignment.test.tsx`) asserts the grid-track structure directly. **Browser-verified**:
+both rows' Released badges render centered in the Status column, actions button pinned to the
+trailing edge.
+
+**2. Totals row's employee count visually detached from the Employee column** (`341f65b`). Root
+cause: `payroll-entry-totals-row.tsx` attached the `"N employees"` summary to `columnId ===
+'employeeCode'` (the "Code" column) instead of `'employeeName'` (the "Employee" column) — a
+one-token mismatch, not a structural regression (the row was, and remains, fully derived from
+`PAYROLL_COLUMNS` with no hardcoded indexes). Corrected both the content and className branches to
+key off `employeeName`. New regression test asserts by `data-col-id`, not DOM position. **Browser-
+verified**: "N employees" now renders directly beneath "Employee"; Σ remains under `#`; every
+monetary total remains under its own column.
+
+**3/4. Corrections routing crash and lost visibility for a Payroll Manager** (`92bc4c0`). Root cause:
+after submitting a correction request, `request-correction-modal.tsx` unconditionally navigated to
+`/corrections/requests/:id` — a route (and the entire `correctionRequestsRouter`) gated to
+`corrections:approve` only. A Payroll Manager (`payroll:entry` only, the permission that already lets
+them submit) hit an immediate 403 on their own just-submitted request, with no page anywhere they
+could instead see it. **RBAC separation, not a widened approval grant**: list/detail on
+`correction-requests` now accept `payroll:entry` OR `corrections:approve` — the same "view vs.
+decide" split this router already used elsewhere (`ENTRY_VIEW_PERMISSIONS`/
+`BALANCE_VIEW_PERMISSIONS`) — but a non-approver's list/detail is scoped server-side to requests
+*they themselves submitted* (`requestedById`), never another submitter's. Approve/reject remain
+hard-gated to `corrections:approve` via an explicit **per-route** check, independent of the now-
+widened router-level gate — verified by a dedicated test that a `payroll:entry`-only requester still
+gets 403 attempting to approve or reject their own, now-visible request. New "My Requests" tab
+(Corrections page) shows a submitter's own requests, whatever their status, with `PENDING` labeled
+"Awaiting Approval" — reusing the existing `useCorrectionRequests` source, no duplicate data source.
+The modal now routes an approver straight to the request they can act on, and routes everyone else
+back into Corrections (My Requests), where the new request appears immediately via the existing
+query invalidation. 6 new backend integration tests: own-only listing, approver-sees-all,
+own-detail-allowed, another-submitter's-detail-rejected, approve/reject-still-rejected-for-a-
+non-approver, and Finance (neither permission) still rejected outright. **Browser-verified**: a
+Payroll Manager persona submitted a correction, landed on My Requests with the new request showing
+"Awaiting Approval," opened its detail page cleanly (no crash), while a Master Admin persona's
+Review Queue view was confirmed unchanged.
+
+**5. Production smoke-test employee (`ZZZ SMOKETEST DeployCheck`) — investigated, documented, NOT
+executed.** Confirms and extends the "Payroll Entry & Advances Operational Stabilization Checkpoint
+(2026-07-24)" §C finding above: not hard-coded anywhere, no name-based or flag-based protection in
+code, and **employee hard-delete was deliberately not introduced** — every `Employee` row remains
+permanent by design, matching every other record in this schema; `markEmployeeLeft` (departure) is
+the only retirement mechanism, and that boundary was not touched. A follow-up audit found one real
+gap in relying on "Mark as Left" alone: it excludes an employee from every *future* Draft-cycle
+sync and from every shared active-employee lookup (Employee Registry, Advances, Corrections) — all of
+which already default to `activeOnly`/an equivalent filter — but does **not** retroactively remove a
+`PayrollEntry` the employee already holds in the *current, still-open* Draft cycle at the moment
+they're marked left; that row stays fully visible/editable and would flow straight through to Salary
+Release with no exclusion anywhere in that path. Verified end-to-end against synthetic data mirroring
+the real scenario (not production): after (1) Mark as Left via the existing Employee Registry UI and
+(2) removing the one Draft-cycle entry via the existing (UI-less, but already-implemented,
+permission-gated, version-checked, audit-logged) `DELETE /api/v1/payroll-entries/:id` endpoint, the
+synthetic employee disappeared from Payroll Entry, the Employee Registry active roster, and the
+Advances employee lookup, while remaining visible (with a "Left" badge) once the registry's "Active
+employees only" toggle is unchecked — historical/inactive visibility, referential integrity, and
+audit history all intact; no released/historical `PayrollEntry` was touched (the delete path itself
+refuses once released).
+
+**Production remediation for the real `ZZZ SMOKETEST DeployCheck` record (documented here, explicitly
+NOT executed — no production database access from this environment, and this is an operator action
+requiring its own separate go-ahead regardless):**
+
+1. Mark `ZZZ SMOKETEST DeployCheck` as Left using the existing Employee Registry workflow (row's
+   "..." menu → "Mark as left"), dated to the original deployment-verification date.
+2. Remove only its existing `PayrollEntry` from the currently-open Draft cycle, if one exists, via
+   the existing (API-only) delete action. If it has no Draft-cycle entry, this step is unnecessary.
+3. Never delete or modify a Released/Archived `PayrollEntry`, or any other historical financial or
+   audit record, for this or any employee — the delete path already refuses once released; this is a
+   hard boundary, not a discretionary choice.
+
+**Testing**: frontend `payroll-entry-alignment.test.tsx` (10/10, 2 new), `columns.test.ts` (unchanged,
+re-run), `permissions.test.ts` (unchanged tests re-verified, 2 updated for the new `'mine'` tab
+default, 1 new for `canViewOwnCorrectionRequests`) — 44/44 combined before the corrections work, full
+frontend suite not re-run since no other file changed. Backend `corrections-service.test.ts` — 53/53
+(6 new; one unrelated, independently-reproduced-on-baseline-`main` concurrent-approval timing flake
+observed once under full-suite load, confirmed to pass reliably in isolation both before and after
+this checkpoint's changes — not a regression); `corrections-repository.test.ts` +
+`corrections-schema.test.ts` — 57/57 unchanged. Typecheck clean across shared/backend/frontend/e2e
+except one pre-existing e2e type error (`08-role-administration.spec.ts`) confirmed via `git stash` to
+reproduce identically on baseline `main`, untouched by this checkpoint. Lint: 0 errors, 6 pre-existing
+warnings in untouched files. Build: succeeds across all three workspaces. **Full regression suite
+deliberately not run**, per this checkpoint's own explicit instruction — only the surfaces listed
+above were touched.
+
+**Real-browser verification** (Chromium via Playwright, driving real dev servers against a freshly
+seeded, dedicated local database — not production): Payroll Entry grid Status-badge centering and
+totals-row Employee-column alignment; the full Payroll-Manager correction-submission-to-My-Requests
+flow with no crash; Master Admin's unchanged Review Queue view; the Issue 5 synthetic-data
+Mark-as-Left-plus-Draft-entry-delete recipe across Employee Registry (active and "show inactive"
+views), Payroll Entry, and the Advances employee lookup.
+
+**Documentation updated**: this entry; §5 below (next-session pointer); `docs/SESSION_HANDOFF.md` §15;
+`docs/architecture/workflows/corrections-and-balance-adjustments.md` (new scope note on the list/
+detail RBAC widening).
+**Commits**: `341f65b` (totals-row Employee-column fix), `e9c22fc` (Status badge grid-track fix),
+`92bc4c0` (Corrections requester-visible list/detail + My Requests tab) — **committed locally on
+`main` only; NOT pushed, NOT deployed.** Issue 5 produced no commit — investigation and documentation
+only, per the user's own explicit instruction not to execute the production cleanup yet.
+**Phase 7 remains Not Started; this checkpoint does not begin it.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -6616,7 +6739,22 @@ Render auto-deploy this same session; see `docs/SESSION_HANDOFF.md` for the push
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-24 (latest) — Advances/Corrections Operational Stabilization AND Payroll Entry
+**Updated 2026-07-25 (latest) — Post-Deployment UI & Corrections Workflow Stabilization Checkpoint:
+Issues 1–4 are COMPLETE and COMMITTED LOCALLY on `main`, Issue 5 is documented-only.** Three commits
+`341f65b`/`e9c22fc`/`92bc4c0` — see §1's own entry (immediately above §2) for the full record. Status
+badge centering and totals-row Employee-column alignment fixed structurally (canonical grid track /
+`PAYROLL_COLUMNS` id, not a pixel nudge); Corrections list/detail widened to `payroll:entry` OR
+`corrections:approve` with server-side self-scoping for non-approvers, approve/reject still
+hard-gated to `corrections:approve` per-route — a Payroll Manager can now see their own submitted
+requests without ever gaining approval rights. **NOT pushed, NOT deployed — awaiting the user's own
+separate go-ahead.** Issue 5 (`ZZZ SMOKETEST DeployCheck`): employee hard-delete deliberately NOT
+introduced; the production remediation (Mark as Left, then remove only its Draft-cycle `PayrollEntry`
+if one exists, never touching Released/Archived history) is fully documented in §1's own entry but
+**explicitly not executed** — no production database access from this environment, and it is an
+operator action awaiting its own separate go-ahead. **Phase 7 remains Not Started; do not begin it.**
+
+**Updated 2026-07-24 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Advances/Corrections Operational Stabilization AND Payroll Entry
 Sorting/Deputed Branch/Import Removal are both COMPLETE and COMMITTED on `main`** (five commits
 `fb13204`/`9086e87`/`1d1e811`/`3647b77`/`1229916` plus `89af663` — see §1's own two entries for the
 full record of each). Approved together this session for integration, push, and Render auto-deploy.
