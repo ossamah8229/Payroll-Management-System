@@ -6626,6 +6626,86 @@ this checkpoint does not begin it.
 
 ---
 
+### Production Print Defect — Print Settings Captured in Printed Output — FIXED, COMMITTED, 2026-07-25
+
+Live production UAT of the RBAC/Printing checkpoint immediately above exposed a critical defect
+this session: after configuring Print Settings and clicking Print, Chrome's native print preview
+showed the **Print Settings dialog itself**, not the underlying report — reproduced on every one of
+the 8 `PrintButton` pages, since all of them share the same print architecture.
+
+**Root cause.** `PrintSettingsDialog`'s confirm button called `onConfirm(settings)` — which
+synchronously invokes `window.print()` inside `useTriggerPrint` — *before* calling
+`onOpenChange(false)`. `window.print()` captures the DOM at the exact synchronous instant it runs;
+since the dialog's close hadn't even been requested yet at that point, the browser captured a DOM
+that still had the settings dialog fully mounted. Simply reordering the two calls would not have
+fixed it: React 18 batches state updates queued inside an event handler and does not commit them
+to the DOM synchronously within that same handler, so the print trigger would still run before the
+dialog's removal had actually committed.
+
+**Fix — shared lifecycle, forced synchronous with `flushSync`.** `PrintSettingsDialog`'s confirm
+button now only reports the chosen settings (`onConfirm(settings)`) — it no longer closes itself.
+`PrintButton` owns the sequencing:
+
+```
+settings selected → flushSync close/unmount → apply print layout → window.print() → afterprint cleanup
+```
+
+`flushSync` (from `react-dom`) forces React to synchronously apply and commit the dialog's close
+— actually unmounting its Radix `Portal` content — before the function continues to
+`applyPrintLayout` and `window.print()`. This is React's own documented use case for `flushSync`:
+forcing a DOM update to commit before an immediate imperative browser action that depends on the
+DOM's current state. No arbitrary timeout was used or considered adequate.
+
+**Defense in depth — CSS.** `frontend/src/components/ui/modal.tsx`'s shared `ModalContent` (every
+dialog in the app, not just print settings) now carries `print:hidden` on both its
+`DialogPrimitive.Overlay` and `DialogPrimitive.Content` — even a future lifecycle regression that
+left a dialog mounted at print time still could not print it. Safe for report content specifically
+because Radix's `Portal` renders directly into `document.body`, a sibling of the app root, never a
+wrapper around it.
+
+**Print configuration UI must never be printable — the invariant this checkpoint establishes and
+documents** (`docs/architecture/print-architecture.md`'s new "Print lifecycle" section).
+
+**Why the previous Chromium tests missed this in the first place.** They stubbed `window.print` as
+a bare no-op and asserted DOM/CSS state via a *separate*, later `page.evaluate()` call after the
+confirm click's own `await ...click()` had already resolved — enough time for React to flush the
+(buggy) pending close before the test ever looked, masking the defect entirely. Both the unit and
+Chromium regression tests were rewritten to capture DOM/CSS state *synchronously, inside the
+`window.print()` stub itself* — the same instant a real browser's print engine actually captures.
+**Both were verified to fail against the pre-fix implementation (confirmed directly, by temporarily
+reverting the fix and re-running each) and pass against the fix** — this is not a theoretical
+regression test, it reproduced the exact production race in real Chromium.
+
+**Verification**: `frontend/src/components/ui/print-button.test.tsx` — full suite **128/128**
+(127 prior + 1 new regression, jsdom/RTL, capturing dialog-absent/report-present state inside the
+mocked `window.print()`). `tests/e2e/specs/13-print-architecture.spec.ts` — **4/4** real Chromium:
+Payroll Entry (dedicated print table) and Salary Release unchanged from the prior checkpoint's own
+verification, plus Bank Sheet and Cash Receiving (live-DOM report architecture) rewritten with the
+same capture-at-invocation strategy — proving the fix generalizes across both print architectures,
+not just one. Every test also asserts zero `role="dialog"` matches under real `@media print`
+emulation, independently confirming the CSS defense-in-depth. Frontend typecheck/lint clean.
+**No backend changes** — backend tests deliberately not run. No broad regression suite run — the
+one shared-infrastructure touch (`modal.tsx`) was covered by the full frontend unit suite (128/128);
+no other test file in the repository exercises `Modal`, confirmed by search.
+
+**Files changed**: `frontend/src/components/ui/print-button.tsx` (lifecycle fix),
+`frontend/src/components/print/print-settings-dialog.tsx` (confirm no longer self-closes),
+`frontend/src/components/ui/modal.tsx` (`print:hidden` defense-in-depth),
+`frontend/src/components/ui/print-button.test.tsx` (new regression test),
+`tests/e2e/specs/13-print-architecture.spec.ts` (capture-at-invocation strategy, all 4 tests).
+
+**Documentation updated**: `docs/architecture/print-architecture.md` (new "Print lifecycle"
+section, updated Testing section — already committed alongside the fix itself), this entry, §5
+below (next-session pointer), `docs/SESSION_HANDOFF.md` §18.
+
+**Commits: `469ce8e`** (lifecycle + Modal CSS fix), **`78bc15c`** (regression tests), plus this
+documentation commit. **Pushed to `origin/main` and deployed via Render's existing auto-deploy** —
+see `docs/SESSION_HANDOFF.md` §18 for the exact push/deploy/post-deploy-verification record. No
+schema/migration change, no backend change. Phase 7 remains Not Started; this checkpoint does not
+begin it.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -6968,18 +7048,32 @@ this checkpoint does not begin it.
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-25 (latest) — RBAC Creator Ownership & Professional Printing Checkpoint:
-COMPLETE, COMMITTED, and pushed/deployed.** See §1's own entry (immediately above §2) for the full
-record and `docs/SESSION_HANDOFF.md` §17 for the exact push/deploy/post-deploy-verification outcome.
-Project Site creation now atomically assigns the creator their own `UserSiteAssignment`
+**Updated 2026-07-25 (latest) — Production Print Defect (Print Settings captured in printed
+output): FIXED, COMMITTED, and pushed/deployed.** See §1's own entry (immediately above §2) for the
+full record and `docs/SESSION_HANDOFF.md` §18 for the exact push/deploy/post-deploy-verification
+outcome. Root cause: `window.print()` ran synchronously before the settings dialog's close had
+committed to the DOM (React 18 batches state updates — reordering the two calls would not have
+fixed it). Fixed via `flushSync`-forced synchronous close in `PrintButton`, plus `print:hidden`
+defense-in-depth on the shared `Modal` component. Regression tests (unit + Chromium) rewritten to
+capture DOM state synchronously inside the `window.print()` mock, confirmed to fail against the
+pre-fix code and pass against the fix. No backend/schema change. **Phase 7 remains Not Started; do
+not begin it.**
+
+**Updated 2026-07-25 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — RBAC Creator Ownership & Professional Printing Checkpoint: COMPLETE, COMMITTED,
+and pushed/deployed.** See §1's own entry (immediately above §2) for the full record and
+`docs/SESSION_HANDOFF.md` §17 for the exact push/deploy/post-deploy-verification outcome. Project
+Site creation now atomically assigns the creator their own `UserSiteAssignment`
 (`common/creator-access.ts`'s general invariant, not a one-off); `sites:manage` still grants no
 operational access to any other site; no historical creator-assignment backfill was performed. A
 shared print-settings architecture (Auto/Portrait/Landscape, Fit to page/Normal size, deterministic
 Auto resolution) replaced every page's bare `window.print()`; Payroll Entry's print table gained
 Deputed Branch/balance/totals; two real print defects (Payslips, Advances) were found and fixed
 during a final verification pass across all 8 print-enabled pages. Committed as `cc16b6c` /
-`08ee1ff` / `4f2ca2e` / `1d0d5ca` / `0be145c`, plus a documentation commit. **Phase 7 remains Not
-Started; do not begin it.**
+`08ee1ff` / `4f2ca2e` / `1d0d5ca` / `0be145c`, plus a documentation commit. **This checkpoint's own
+print architecture shipped with the critical print-capture defect described in the entry above —
+superseded here, not retracted, since the RBAC half and the overall print architecture direction
+remain correct; only the lifecycle ordering needed the follow-up fix.**
 
 **Updated 2026-07-25 (superseded by the entry above for status purposes, kept for its own still-
 useful record) — Payroll Entry Status Column Final Stabilization Checkpoint: IMPLEMENTED, NOT

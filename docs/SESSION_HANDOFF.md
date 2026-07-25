@@ -2249,3 +2249,96 @@ and not a discrepancy in the deployment itself.
 
 **Phase 7 remains Not Started; this checkpoint does not begin it.**
 
+## 18. Addendum, 2026-07-25 (latest) — Production Print Defect: Print Settings Captured in Printed Output
+
+Full record: `docs/PROJECT_PROGRESS.md` §1's own dated entry ("Production Print Defect — Print
+Settings Captured in Printed Output"); this is the push/deploy/post-deploy-verification pointer.
+
+**What production UAT exposed**: after configuring Print Settings and clicking Print, Chrome's
+native print preview showed the Print Settings dialog itself, not the underlying report — on
+every one of the 8 `PrintButton` pages (all share the same architecture).
+
+**Root cause**: `PrintSettingsDialog`'s confirm button called `onConfirm(settings)` (which
+synchronously invokes `window.print()`) *before* `onOpenChange(false)`. `window.print()` captures
+the DOM at the exact synchronous instant it runs, so the dialog was still mounted. Reordering the
+two calls would not have fixed it — React 18 batches the state update behind `onOpenChange(false)`
+and does not commit it to the DOM synchronously within the same handler.
+
+**Fix — shared lifecycle**:
+
+```
+settings selected → flushSync close/unmount → apply print layout → window.print() → afterprint cleanup
+```
+
+`PrintSettingsDialog` now only reports settings via `onConfirm`; `PrintButton` forces the dialog's
+close to commit synchronously via `flushSync` (React's own documented use case for this exact
+scenario — a DOM-dependent imperative browser action right after a state change) before triggering
+the actual print. **Defense in depth**: the shared `Modal`'s `Overlay`/`Content` now carry
+`print:hidden` — every dialog in the app, not just print settings — so even a future lifecycle
+regression could never make a mounted dialog printable. **Invariant now documented**
+(`docs/architecture/print-architecture.md`): print configuration UI must never be printable.
+
+**Why the previous tests missed it**: they stubbed `window.print` as a no-op and asserted DOM/CSS
+state via a *later*, separate `page.evaluate()` — enough time for React to flush the buggy pending
+close before the test looked. Both the unit test and the Chromium spec were rewritten to capture
+DOM state *synchronously, inside the `window.print()` mock itself* — the same instant a real
+browser's print engine captures. **Confirmed to fail against the pre-fix code and pass against the
+fix** (verified directly: temporarily reverted the fix, re-ran both, saw them fail; restored the
+fix, re-ran, saw them pass) — for both Payroll Entry (dedicated print table) and Bank
+Sheet/Cash Receiving (live-DOM report), proving the fix generalizes across both print
+architectures.
+
+**Testing**: frontend full suite 128/128 (127 prior + 1 new regression); Chromium 4/4
+(`tests/e2e/specs/13-print-architecture.spec.ts`). No backend changes — backend tests not run. No
+broad regression suite run — the one shared-infrastructure touch (`modal.tsx`) is covered by the
+full frontend unit suite; no other file exercises `Modal`.
+
+**Commits** (`main`, in order): `469ce8e` (lifecycle + Modal CSS fix), `78bc15c` (regression
+tests), plus this documentation commit.
+
+**Push/deploy record**: pushed to `origin/main` this same session immediately after the 2 code
+commits above — `origin/main` confirmed at `78bc15c` (local `main` and `origin/main` resolved to
+the identical SHA via `git fetch` + `git rev-parse`). Render auto-deployed from this push:
+`https://payroll-management-api-wlic.onrender.com/health` returned `{"status":"ok"}`/HTTP 200, and
+`https://payroll-management-app-qa3x.onrender.com/` (root) and `/login` (renders the real login
+form) both returned HTTP 200.
+
+**Deployment/bundle evidence for this push, honestly qualified.** Unlike the previous checkpoint
+(which added new, literal CSS strings this deploy's frontend build could be grepped for), this
+fix is pure JS lifecycle-ordering logic with no new static string to search for in a built bundle.
+The frontend's main entry JS/CSS bundle hashes did **not** change across this verification window
+— consistent with, not contradicted by, this app's route-level code-splitting (`React.lazy` per
+page, confirmed in the immediately preceding checkpoint's own deploy verification): `PrintButton`'s
+logic lives inside per-page lazy chunks never referenced directly in `index.html`, so a fix
+confined to it is not expected to change the *entry* bundle's own hash. What **was** confirmed:
+the entry JS asset's own `last-modified`/`ETag` headers were fresh — timestamped *after* this
+push's commits — and served with `cf-cache-status: MISS` (fetched fresh from Render's origin, not
+Cloudflare's edge cache), directly evidencing a real rebuild happened at/after push time, not
+merely an assumption from elapsed time. This is weaker evidence than a direct bundle-content match
+(the previous checkpoint's stronger standard) — stated plainly rather than overstated.
+
+One environmental repeat from the previous checkpoint: this sandbox's own local DNS resolver was
+again intermittently unable to resolve both production hostnames for a few checks mid-verification
+(confirmed via a public DNS-over-HTTPS query that both DNS records were fine throughout — same
+Cloudflare-fronted IPs as before); worked around with curl's `--resolve` flag. A sandbox networking
+hiccup, not a Render-side issue.
+
+**Post-deploy print verification performed vs. not possible this session:**
+- **Confirmed via HTTP evidence** (above): backend health, frontend availability, login page
+  rendering, and evidence of a fresh rebuild at/after push time.
+- **NOT possible this session — no authenticated production credentials or Render dashboard/API
+  access exist in this sandboxed environment** (re-confirmed, consistent with every prior
+  checkpoint's own same finding): an authenticated production print UAT (opening Print Settings on
+  a live authenticated Payroll Entry or Bank Sheet/Cash Receiving page, choosing Auto (Landscape) +
+  Fit to Page, clicking Print, and confirming the native preview shows the report and not the
+  settings dialog). **The fix has already passed, locally, before this push**: the frontend unit
+  regression test (`print-button.test.tsx`, capturing DOM state synchronously inside the mocked
+  `window.print()`) and 4 real-Chromium Playwright tests (`13-print-architecture.spec.ts`, the same
+  capture-at-invocation strategy, covering both Payroll Entry's dedicated print table and Bank
+  Sheet/Cash Receiving's live-DOM report) — both confirmed to fail against the pre-fix code and
+  pass against the fix. **Requires normal user UAT** with real production credentials to close the
+  loop end-to-end in production specifically.
+- No production payroll data was created or modified.
+
+**Phase 7 remains Not Started; this checkpoint does not begin it.**
+
