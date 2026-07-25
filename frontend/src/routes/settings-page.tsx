@@ -337,7 +337,7 @@ function BankFormModal({
               value={code}
               disabled={codeLocked}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="e.g. MCB"
+              placeholder="e.g. ACB"
             />
             {codeLocked && (
               <p className="text-[11px] text-text-muted">
@@ -354,7 +354,7 @@ function BankFormModal({
               maxLength={120}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. MCB Bank Limited"
+              placeholder="e.g. Acme Commercial Bank"
             />
           </div>
           <ModalFooter>

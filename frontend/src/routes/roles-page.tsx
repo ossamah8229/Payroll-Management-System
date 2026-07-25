@@ -70,7 +70,7 @@ function CreateRoleModal({ open, onOpenChange }: { open: boolean; onOpenChange: 
               id="role-name"
               required
               maxLength={80}
-              placeholder="e.g. Lahore Payroll Officer"
+              placeholder="e.g. Regional Payroll Officer"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />

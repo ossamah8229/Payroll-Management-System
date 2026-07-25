@@ -163,7 +163,7 @@ export async function generateEmployeeImportTemplate(): Promise<Buffer> {
   templateSheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
   templateSheet.addRow([
     '1',
-    'Model Town Site',
+    'Downtown Regional Office',
     'EMP-0001',
     'Islam',
     'Muhammad Ali',
@@ -177,7 +177,7 @@ export async function generateEmployeeImportTemplate(): Promise<Buffer> {
     'Main Branch',
     'MB-01',
     'Main Branch',
-    'Allied Bank Limited',
+    'Acme Commercial Bank',
     '0470',
     '01234567890123',
     '35000.00',

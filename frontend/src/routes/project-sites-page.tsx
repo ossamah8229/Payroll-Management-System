@@ -106,7 +106,7 @@ function SiteFormModal({
               onChange={(event) => setName(event.target.value)}
               required
               maxLength={160}
-              placeholder="e.g. ABL City Region Lahore"
+              placeholder="e.g. Downtown Regional Office"
             />
           </div>
 
@@ -397,7 +397,7 @@ function ManageUnitsModal({
                 onChange={(event) => setName(event.target.value)}
                 required
                 maxLength={160}
-                placeholder={`e.g. Model Town ${site.unitLabel}`}
+                placeholder={`e.g. North ${site.unitLabel}`}
                 autoFocus
               />
             </div>
