@@ -47,11 +47,13 @@ export interface ResolvedPayrollColumnDef extends PayrollColumnDef {
 export const PAYROLL_COLUMNS = [
   // Fixed: a status icon + row number, not loaded text content.
   { id: 'serial', label: '#', align: 'center', fixedWidth: 60 },
-  // Fixed: a Released badge + Correction/History actions, not loaded text content (Corrections
-  // workflow completion, System-Wide RBAC Consistency remediation follow-up) — placed right after
-  // the serial column so a released row's locked status and its available actions are visible
-  // without scrolling right in an otherwise very wide grid.
-  { id: 'status', label: 'Status', align: 'center', fixedWidth: 150 },
+  // Fixed: a Released badge (or the "—" unreleased placeholder), not loaded text content — placed
+  // right after the serial column so a released row's locked status is visible without scrolling
+  // right in an otherwise very wide grid. Narrowed from 150 to 90 (Presentation & Workflow
+  // Stabilization Checkpoint, 2026-07-25) after the row-level Correction/History actions button
+  // that used to share this cell was removed — the column only has to fit the "Released" badge
+  // itself now, not badge + button + its hover target and icon.
+  { id: 'status', label: 'Status', align: 'center', fixedWidth: 90 },
   { id: 'employeeCode', label: 'Code', minWidth: 70 },
   { id: 'employeeName', label: 'Employee', minWidth: 110 },
   { id: 'designation', label: 'Designation', minWidth: 100 },

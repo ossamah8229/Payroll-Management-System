@@ -2,10 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createColumnHelper, getCoreRowModel, useReactTable, flexRender } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
+import { cn } from '@/lib/cn';
 import type { PayrollCycle } from '@/hooks/use-payroll-cycles';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import type { Bank } from '@/hooks/use-banks';
-import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, totalGridWidth, type ResolvedPayrollColumnDef } from './columns';
+import {
+  PAYROLL_COLUMNS,
+  computeColumnWidths,
+  gridTemplateColumns,
+  totalGridWidth,
+  type PayrollColumnDef,
+  type ResolvedPayrollColumnDef,
+} from './columns';
 import { PayrollEntryRow, ROW_HEIGHT } from './payroll-entry-row';
 import { PayrollEntryTotalsRow } from './payroll-entry-totals-row';
 import { LiveTotalsStore } from './live-totals-store';
@@ -16,6 +24,24 @@ import { isSortableColumnId, sortPayrollEntries, type SortableColumnId, type Sor
 const columnHelper = createColumnHelper<PayrollEntry>();
 const GROUP_ROW_HEIGHT = 22;
 const HEADER_ROW_HEIGHT = 30;
+
+/** `PAYROLL_COLUMNS`'s own `align` field, keyed by column id — the canonical source the header
+ * row reads to decide its own text alignment (below), rather than a header-only guess that could
+ * silently drift from the alignment a column's body cells actually use. Before this, the header
+ * row applied no per-column alignment at all: every header label rendered left-aligned regardless
+ * of `align`, so a center-aligned column's body content (e.g. the Released badge under Status) sat
+ * centered under a left-aligned header — the two never shared one measurement (Presentation &
+ * Workflow Stabilization Checkpoint, 2026-07-25, "STATUS misaligned" root cause). */
+const COLUMN_ALIGN_BY_ID = new Map<string, PayrollColumnDef['align']>(
+  PAYROLL_COLUMNS.map((c: PayrollColumnDef) => [c.id, c.align]),
+);
+
+function headerAlignClassName(columnId: string): string {
+  const align = COLUMN_ALIGN_BY_ID.get(columnId);
+  if (align === 'center') return 'text-center';
+  if (align === 'right') return 'text-right';
+  return '';
+}
 
 /** Contiguous grouped header spans ("Bank Details", "EOBI") computed once from the *resolved*
  * (already width-measured) column array — a lighter-weight approach than TanStack Table's
@@ -180,7 +206,10 @@ export function PayrollEntryGrid({
                     key={header.id}
                     data-col-id={header.column.id}
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : sortable ? 'none' : undefined}
-                    className="truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted"
+                    className={cn(
+                      'truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted',
+                      headerAlignClassName(header.column.id),
+                    )}
                   >
                     {sortable ? (
                       <button
