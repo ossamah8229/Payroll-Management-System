@@ -1171,10 +1171,18 @@ enum AdvanceRepaymentType {
   INSTALLMENT
 }
 
-/// Closed, code-coupled set — an Advance's lifecycle. `PAID_OFF` is reached only when
-/// `outstandingBalance` decrements to zero; never set directly by a user action.
+/// Closed, code-coupled set — an Advance's lifecycle. `PAID_OFF` is reached only once the
+/// `PayrollEntry` whose deduction zeroed `outstandingBalance` is actually Released — never set
+/// directly by a user action, and never set merely because a Draft deduction reached zero (see
+/// `RESERVED`, and the `Advance` model's own doc comment for the full lifecycle).
 enum AdvanceStatus {
   ACTIVE
+  /// Added Presentation & Workflow Stabilization Checkpoint, 2026-07-25 — `outstandingBalance` has
+  /// reached zero from a deduction materialized into a still-Draft (unreleased) `PayrollEntry`, but
+  /// that entry has not yet Released, so the reservation is not yet final. Reverts to `ACTIVE` if
+  /// that deduction is reversed (edit/defer/cancel) before release; advances to `PAID_OFF` the
+  /// moment the entry actually releases (`settleAdvancesForReleasedEntries`, advances.service.ts).
+  RESERVED
   PAID_OFF
   /// Added Operational Stabilization Checkpoint, 2026-07-24 — see the `Advance` model's own doc
   /// comment for the full rationale (a non-destructive correction for a mistaken Advance).
@@ -1182,10 +1190,11 @@ enum AdvanceStatus {
 }
 
 /// A record of a loan or Eid advance given to an employee, and its remaining balance (Phase 4
-/// Checkpoint 5, docs/architecture/database/advances.md §15). At most one `ACTIVE` Advance may
-/// exist per employee per type at any time (approved, frozen architecture decision) — enforced by
-/// a partial unique index (raw SQL in the migration; Prisma's schema DSL cannot express a
-/// conditional unique index) and re-checked at the application layer before every create.
+/// Checkpoint 5, docs/architecture/database/advances.md §15). At most one `ACTIVE`-or-`RESERVED`
+/// Advance may exist per employee per type at any time (approved, frozen architecture decision,
+/// widened for `RESERVED` at the Presentation & Workflow Stabilization Checkpoint, 2026-07-25) —
+/// enforced by a partial unique index (raw SQL in the migration; Prisma's schema DSL cannot express
+/// a conditional unique index) and re-checked at the application layer before every create.
 ///
 /// **`scheduledInstallmentAmount`** is an additive field beyond docs/architecture/database/
 /// advances.md §15's original column list — anticipated by name in docs/IMPLEMENTATION_PLAN.md's
@@ -1198,7 +1207,8 @@ enum AdvanceStatus {
 ///
 /// **`paidOffAt`** is likewise additive beyond §15's original column list — required permanent
 /// history ("paid-off date, when applicable") this checkpoint's own requirements call for; set once,
-/// the instant `status` transitions to `PAID_OFF`, never cleared or changed again.
+/// the instant `status` transitions to `PAID_OFF` at actual Payroll Release (never at the earlier
+/// `RESERVED` stage — see `AdvanceStatus`), never cleared or changed again.
 ///
 /// Never hard-deletable — no delete path exists at the application layer, matching this schema's
 /// established convention for every other permanent financial/master record (Employee, Bank's
@@ -1224,8 +1234,9 @@ model Advance {
   type                       AdvanceType
   totalAmount                Decimal              @db.Decimal(12, 2)
   /// Decremented as matching `PayrollEntry` deductions materialize; reaching zero flips `status`
-  /// to `PAID_OFF`. The only two paths that ever change this: the automatic cycle-bootstrap
-  /// materialization below, and (once Phase 6 exists) an approved Correction reconciliation.
+  /// to `RESERVED` (not yet `PAID_OFF` — see `AdvanceStatus`). The only two paths that ever change
+  /// this: the automatic cycle-bootstrap materialization below, and (once Phase 6 exists) an
+  /// approved Correction reconciliation.
   outstandingBalance         Decimal              @db.Decimal(12, 2)
   dateGiven                  DateTime             @db.Date
   repaymentType              AdvanceRepaymentType
@@ -1246,10 +1257,10 @@ model Advance {
   payrollEntriesAsAdvance    PayrollEntry[]          @relation("PayrollEntryAdvance")
   payrollEntriesAsEidAdvance PayrollEntry[]          @relation("PayrollEntryEidAdvance")
 
-  // Partial unique index `(employeeId, type) WHERE status = 'ACTIVE'` and the check constraints
-  // (`totalAmount > 0`, `outstandingBalance >= 0 AND outstandingBalance <= totalAmount`,
-  // `status = 'PAID_OFF' ⇒ currentScheduledPeriodId IS NULL`) are Prisma-DSL-inexpressible and
-  // added by raw SQL in the migration.
+  // Partial unique index `(employeeId, type) WHERE status IN ('ACTIVE', 'RESERVED')` and the check
+  // constraints (`totalAmount > 0`, `outstandingBalance >= 0 AND outstandingBalance <=
+  // totalAmount`, `status IN ('PAID_OFF', 'RESERVED') ⇒ currentScheduledPeriodId IS NULL`) are
+  // Prisma-DSL-inexpressible and added by raw SQL in the migration.
   @@index([employeeId])
   @@index([currentScheduledPeriodId])
 }

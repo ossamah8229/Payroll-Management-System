@@ -6,6 +6,7 @@ import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess } from '../../common/authz-policy';
 import { consumeMaterializationsForReleasedEntries } from '../corrections/corrections.materialization.service';
 import { lockPayrollCycleForUpdate } from '../corrections/corrections.repository';
+import { settleAdvancesForReleasedEntries } from '../advances/advances.service';
 
 /**
  * Salary Release foundation (Phase 4 Checkpoint 2, docs/architecture/database/release.md §12b) —
@@ -117,6 +118,10 @@ export interface ReleaseUnitResult {
    * every release before Checkpoint 5's materialization existed, or when none of the entries this
    * Unit just released happened to carry an active reservation. */
   correctionSettlementsConsumed: number;
+  /** Presentation & Workflow Stabilization Checkpoint, 2026-07-25 (Issue 5) — how many `RESERVED`
+   * Advances this release settled to `PAID_OFF` (`settleAdvancesForReleasedEntries`). `0` when none
+   * of the entries this Unit just released carried a fully-reserved Advance/Eid Advance deduction. */
+  advancesSettled: number;
 }
 
 /**
@@ -262,6 +267,17 @@ export async function releaseProjectUnit(
         tx,
       );
 
+      // Issue 5's own settlement step — same "scoped to exactly the entries that just flipped
+      // `released: true` in this call" rule as the correction consumption immediately above.
+      const advanceSettlement = await settleAdvancesForReleasedEntries(
+        {
+          entryIds: releasedEntryIds,
+          actorUserId: currentUser.id,
+          requestMeta,
+        },
+        tx,
+      );
+
       return {
         release: {
           id: release.id,
@@ -272,6 +288,7 @@ export async function releaseProjectUnit(
         },
         releasedEntryCount,
         correctionSettlementsConsumed: consumption.consumedCount,
+        advancesSettled: advanceSettlement.settledCount,
       };
     },
     { timeout: 30_000 },

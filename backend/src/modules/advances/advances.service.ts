@@ -154,7 +154,12 @@ async function materializeOneAdvanceDeduction(
   }
 
   const newOutstanding = advance.outstandingBalance.minus(amount);
-  const isPaidOff = newOutstanding.lessThanOrEqualTo(0);
+  // Reaching zero here only *reserves* the balance against this still-Draft entry — it does not
+  // mean the Advance is actually paid off yet (Presentation & Workflow Stabilization Checkpoint,
+  // 2026-07-25, Issue 5). `PAID_OFF` is set later, only once this entry actually Releases
+  // (`settleAdvancesForReleasedEntries`, below). If this Draft deduction is itself reversed first
+  // (edit/defer/cancel), `RESERVED` reverts to `ACTIVE` exactly like a partial deduction already did.
+  const isReserved = newOutstanding.lessThanOrEqualTo(0);
 
   await tx.payrollEntry.update({
     where: { id: entryId },
@@ -165,7 +170,7 @@ async function materializeOneAdvanceDeduction(
   });
 
   let nextPeriodId: string | null = null;
-  if (!isPaidOff) {
+  if (!isReserved) {
     const nextYear = cycleMonth === 12 ? cycleYear + 1 : cycleYear;
     const nextMonthNum = cycleMonth === 12 ? 1 : cycleMonth + 1;
     const next = await findOrCreateScheduledPayrollPeriod(nextYear, nextMonthNum, tx);
@@ -175,10 +180,12 @@ async function materializeOneAdvanceDeduction(
   await tx.advance.update({
     where: { id: advance.id },
     data: {
-      outstandingBalance: isPaidOff ? new Prisma.Decimal(0) : newOutstanding,
-      status: isPaidOff ? 'PAID_OFF' : 'ACTIVE',
-      currentScheduledPeriodId: isPaidOff ? null : nextPeriodId,
-      paidOffAt: isPaidOff ? new Date() : null,
+      outstandingBalance: isReserved ? new Prisma.Decimal(0) : newOutstanding,
+      status: isReserved ? 'RESERVED' : 'ACTIVE',
+      currentScheduledPeriodId: isReserved ? null : nextPeriodId,
+      // Never set here — `paidOffAt` is only ever written by `settleAdvancesForReleasedEntries`,
+      // at the moment of actual Release, never at Draft-stage reservation.
+      paidOffAt: null,
     },
   });
 
@@ -194,7 +201,7 @@ async function materializeOneAdvanceDeduction(
         amount: amount.toFixed(2),
         outstandingBalanceBefore: advance.outstandingBalance.toFixed(2),
         outstandingBalanceAfter: newOutstanding.lessThanOrEqualTo(0) ? '0.00' : newOutstanding.toFixed(2),
-        status: isPaidOff ? 'PAID_OFF' : 'ACTIVE',
+        status: isReserved ? 'RESERVED' : 'ACTIVE',
       },
       ipAddress: requestMeta.ipAddress,
       userAgent: requestMeta.userAgent,
@@ -203,6 +210,69 @@ async function materializeOneAdvanceDeduction(
   );
 
   return true;
+}
+
+/**
+ * Settles every `RESERVED` Advance whose reservation is carried by one of `entryIds` — called from
+ * exactly one place, `payroll-release.service.ts`'s `releaseProjectUnit`, at the exact moment those
+ * `PayrollEntry` rows actually flip `released: true` (Presentation & Workflow Stabilization
+ * Checkpoint, 2026-07-25, Issue 5). Mirrors `consumeMaterializationsForReleasedEntries`
+ * (`corrections.materialization.service.ts`) — the same established "reservation becomes final only
+ * at the entry's own release" pattern already used for Correction `BalanceAdjustment`s, applied here
+ * to Advances. A `RESERVED` Advance's `outstandingBalance` is already zero (that is what put it into
+ * `RESERVED` in the first place) and nothing between reservation and release can change it except a
+ * reversal path that would have already moved status back to `ACTIVE` — so this only ever flips
+ * `status`/`paidOffAt`, never touches `outstandingBalance` again.
+ */
+export async function settleAdvancesForReleasedEntries(
+  params: { entryIds: string[]; actorUserId: string; requestMeta: RequestMeta },
+  tx: PrismaTransactionClient,
+): Promise<{ settledCount: number }> {
+  const { entryIds, actorUserId, requestMeta } = params;
+  if (entryIds.length === 0) {
+    return { settledCount: 0 };
+  }
+
+  const releasedEntries = await tx.payrollEntry.findMany({
+    where: { id: { in: entryIds } },
+    select: { advanceId: true, eidAdvanceId: true },
+  });
+
+  const advanceIds = new Set<string>();
+  for (const entry of releasedEntries) {
+    if (entry.advanceId) advanceIds.add(entry.advanceId);
+    if (entry.eidAdvanceId) advanceIds.add(entry.eidAdvanceId);
+  }
+  if (advanceIds.size === 0) {
+    return { settledCount: 0 };
+  }
+
+  const reservedAdvances = await tx.advance.findMany({
+    where: { id: { in: [...advanceIds] }, status: 'RESERVED' },
+  });
+
+  const paidOffAt = new Date();
+  for (const advance of reservedAdvances) {
+    await tx.advance.update({
+      where: { id: advance.id },
+      data: { status: 'PAID_OFF', paidOffAt },
+    });
+
+    await recordAuditLog(
+      {
+        actorUserId,
+        action: 'advance.paid_off',
+        entityType: 'Advance',
+        entityId: advance.id,
+        metadata: { settledViaEntryIds: entryIds },
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+      },
+      tx,
+    );
+  }
+
+  return { settledCount: reservedAdvances.length };
 }
 
 /**
@@ -236,12 +306,20 @@ export async function createAdvance(
   }
   assertSiteAccess(currentUser, employee.siteId);
 
+  // Blocks on RESERVED too, not just ACTIVE (Presentation & Workflow Stabilization Checkpoint,
+  // 2026-07-25) — a RESERVED Advance's balance already reads zero, but it is not yet confirmed
+  // Paid Off (that only happens at actual Release), so a second Advance of the same type still
+  // cannot be recorded until it either releases or is cancelled/reversed.
   const existingActive = await prisma.advance.findFirst({
-    where: { employeeId: input.employeeId, type: input.type, status: 'ACTIVE' },
+    where: { employeeId: input.employeeId, type: input.type, status: { in: ['ACTIVE', 'RESERVED'] } },
   });
   if (existingActive) {
+    const statusDescription =
+      existingActive.status === 'RESERVED'
+        ? 'reserved against the current Draft payroll (not yet released)'
+        : 'ACTIVE';
     throw conflict(
-      `This employee already has an ACTIVE ${input.type === 'LOAN' ? 'Advance' : 'Eid Advance'} — it must be fully paid off before a new one can be recorded`,
+      `This employee already has an ${input.type === 'LOAN' ? 'Advance' : 'Eid Advance'} that is ${statusDescription} — it must be fully paid off before a new one can be recorded`,
     );
   }
 
@@ -360,9 +438,13 @@ export async function updateAdvance(
 
   const isFinancialEdit = input.totalAmount !== undefined || input.repaymentType !== undefined || input.scheduledInstallmentAmount !== undefined;
   if (isFinancialEdit && advance.status !== 'ACTIVE') {
-    throw badRequest(
-      `This Advance is ${advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — only its notes can still be edited`,
-    );
+    const statusDescription =
+      advance.status === 'PAID_OFF'
+        ? 'fully paid off'
+        : advance.status === 'RESERVED'
+          ? 'reserved against the current Draft payroll (not yet released) — cancel it instead if these figures need to change before release'
+          : 'cancelled';
+    throw badRequest(`This Advance is ${statusDescription} — only its notes can still be edited`);
   }
 
   // Does this edit actually change a value that affects what should be deducted this cycle? A
@@ -531,7 +613,11 @@ export async function cancelAdvance(
   const advance = await getAdvanceOrThrow(id);
   assertSiteAccess(currentUser, advance.employee.siteId);
 
-  if (advance.status !== 'ACTIVE') {
+  // RESERVED is cancellable too (Presentation & Workflow Stabilization Checkpoint, 2026-07-25) —
+  // it means a deduction fully covering the balance is sitting on a still-Draft (unreleased) entry,
+  // not that the Advance is actually confirmed Paid Off yet, so voiding it and reversing that Draft
+  // deduction is still meaningful right up until the entry releases.
+  if (advance.status !== 'ACTIVE' && advance.status !== 'RESERVED') {
     throw badRequest(
       `This Advance is already ${advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — there is nothing to cancel`,
     );

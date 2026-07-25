@@ -172,7 +172,24 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     });
     expect(differentType.status).toBe(201);
 
-    // Pay off the first advance directly (simulating materialization) so a new LOAN becomes legal.
+    // RESERVED blocks a new one too (2026-07-25, Issue 5) — reserved-but-unreleased is not yet
+    // final, so it must still be treated as "live" for the at-most-one-per-type rule.
+    await prisma.advance.update({
+      where: { id: first.body.advance.id },
+      data: { status: 'RESERVED', outstandingBalance: '0', currentScheduledPeriodId: null },
+    });
+    const whileReserved = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '5000',
+      dateGiven: '2026-02-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 3 },
+    });
+    expect(whileReserved.status).toBe(409);
+
+    // Pay off the first advance directly (simulating an actual Release settling it) so a new LOAN
+    // becomes legal.
     await prisma.advance.update({
       where: { id: first.body.advance.id },
       data: { status: 'PAID_OFF', outstandingBalance: '0', currentScheduledPeriodId: null, paidOffAt: new Date() },
@@ -191,7 +208,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
 
   // --- Automatic materialization at cycle bootstrap --------------------------------------------
 
-  it('materializes a FULL_DEDUCTION advance automatically when its scheduled cycle is created, and pays it off', async () => {
+  it('materializes a FULL_DEDUCTION advance automatically when its scheduled cycle is created, and reserves it — not yet Paid Off until the entry actually Releases', async () => {
     const admin = await masterAdminAgent('adv-full-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Full');
     const employee = await makeEmployee(site.id, unit.id, 'Full Dedn Employee', '40000');
@@ -215,16 +232,57 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(entry.advanceId).toBe(advanceId);
     expect(Number(entry.advanceDeduction)).toBeCloseTo(12000, 2);
 
+    // Presentation & Workflow Stabilization Checkpoint, 2026-07-25 (Issue 5): a Draft deduction
+    // that zeroes the balance is only RESERVED, never PAID_OFF — the employee's payroll has not
+    // actually been paid to anyone yet.
     const advanceAfter = await admin.agent.get(`/api/v1/advances/${advanceId}`);
     expect(Number(advanceAfter.body.advance.outstandingBalance)).toBeCloseTo(0, 2);
-    expect(advanceAfter.body.advance.status).toBe('PAID_OFF');
-    expect(advanceAfter.body.advance.paidOffAt).not.toBeNull();
+    expect(advanceAfter.body.advance.status).toBe('RESERVED');
+    expect(advanceAfter.body.advance.paidOffAt).toBeNull();
     expect(advanceAfter.body.advance.currentScheduledPeriodId).toBeNull();
 
     const auditEntry = await prisma.auditLog.findFirst({
       where: { action: 'advance.schedule_materialized', entityId: advanceId },
     });
     expect(auditEntry).not.toBeNull();
+
+    // Only once the entry carrying that reservation actually Releases does the Advance become
+    // truly PAID_OFF (`settleAdvancesForReleasedEntries`, called from `releaseProjectUnit`).
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const advanceAfterRelease = await admin.agent.get(`/api/v1/advances/${advanceId}`);
+    expect(advanceAfterRelease.body.advance.status).toBe('PAID_OFF');
+    expect(advanceAfterRelease.body.advance.paidOffAt).not.toBeNull();
+    expect(Number(advanceAfterRelease.body.advance.outstandingBalance)).toBeCloseTo(0, 2);
+
+    const paidOffAudit = await prisma.auditLog.findFirst({
+      where: { action: 'advance.paid_off', entityId: advanceId },
+    });
+    expect(paidOffAudit).not.toBeNull();
+  });
+
+  it('a RESERVED advance that is never released stays RESERVED — settlement only ever happens via an actual release', async () => {
+    const admin = await masterAdminAgent('adv-reserved-unreleased-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Reserved Unreleased');
+    const employee = await makeEmployee(site.id, unit.id, 'Reserved Unreleased Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 6 },
+    });
+    expect(created.status).toBe(201);
+    const advanceId = created.body.advance.id as string;
+
+    await makeDraftCycle(admin, 2900, 6);
+
+    const advanceAfter = await admin.agent.get(`/api/v1/advances/${advanceId}`);
+    expect(advanceAfter.body.advance.status).toBe('RESERVED');
+    expect(advanceAfter.body.advance.paidOffAt).toBeNull();
+    // Never released in this test — status must not have advanced on its own.
   });
 
   it('materializes only an installment amount for an INSTALLMENT advance with a standing schedule, and advances the pointer', async () => {
@@ -280,7 +338,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
 
   // --- Deferral ---------------------------------------------------------------------------------
 
-  it('defers a materialized FULL_DEDUCTION deduction, reversing its PAID_OFF status back to ACTIVE', async () => {
+  it('defers a materialized FULL_DEDUCTION deduction, reversing its RESERVED status back to ACTIVE', async () => {
     const admin = await masterAdminAgent('adv-defer-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Defer');
     const employee = await makeEmployee(site.id, unit.id, 'Defer Employee', '40000');
@@ -300,11 +358,12 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     const entry = entryRes.body.entries[0];
     expect(entry.advanceId).toBe(advanceId);
 
-    // FULL_DEDUCTION materialization already marked the advance PAID_OFF — deferral must still be
-    // able to undo this, since the entry itself hasn't released yet (nothing is final).
-    const paidOffAdvance = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
-    expect(paidOffAdvance.status).toBe('PAID_OFF');
-    expect(Number(paidOffAdvance.outstandingBalance)).toBeCloseTo(0, 2);
+    // FULL_DEDUCTION materialization already marked the advance RESERVED (2026-07-25: not PAID_OFF
+    // — nothing is final until release) — deferral must still be able to undo this, since the
+    // entry itself hasn't released yet.
+    const reservedAdvance = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(reservedAdvance.status).toBe('RESERVED');
+    expect(Number(reservedAdvance.outstandingBalance)).toBeCloseTo(0, 2);
 
     const deferRes = await admin.agent
       .post(`/api/v1/advances/${advanceId}/defer`)
@@ -330,6 +389,109 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
       where: { action: 'payroll_entry.advance_deferred', entityId: entry.id },
     });
     expect(entryAudit).not.toBeNull();
+  });
+
+  /**
+   * Final Verification, RESERVED-lifecycle Case 4 — "RESERVED → Defer → Deduction moves correctly.
+   * No duplicate deduction. No stale deduction." The test above proves the *source* cycle's copy is
+   * cleared; this is the distinct, previously-unverified other half — that the deferred deduction
+   * actually *arrives* at the target period once that cycle is later created, and arrives exactly
+   * once (not duplicated), with the source cycle staying cleared throughout (not stale).
+   */
+  it('a deferred deduction actually materializes in the target period once that cycle is created, exactly once — Case 4', async () => {
+    const admin = await masterAdminAgent('adv-defer-arrives-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Defer Arrives');
+    const employee = await makeEmployee(site.id, unit.id, 'Defer Arrives Employee', '40000');
+
+    // Holds an entry (so it satisfies the finalization precondition while unreleased, same pattern
+    // as `'permits deferring a held, unreleased entry's...'` above) and finalizes+rolls its cycle
+    // over to the immediately-following calendar month — this app's cycles are calendar-month-only
+    // (docs/architecture/database/schema-invariants.md §26 item 5), so reaching a target two months
+    // out requires two rollovers, never a direct jump.
+    async function holdFinalizeAndRollover(cycleId: string, employeeId: string) {
+      const entry = (
+        await admin.agent.get(`/api/v1/payroll-cycles/${cycleId}/entries?employeeId=${employeeId}`)
+      ).body.entries[0];
+      const holdRes = await admin.agent
+        .patch(`/api/v1/payroll-entries/${entry.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ version: entry.version, hold: true });
+      expect(holdRes.status).toBe(200);
+      const finalizeRes = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycleId}/finalize`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({});
+      expect(finalizeRes.status).toBe(200);
+      const rolloverRes = await admin.agent
+        .post(`/api/v1/payroll-cycles/${cycleId}/archive-and-create-next`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({});
+      expect(rolloverRes.status).toBe(201);
+      return rolloverRes.body.newCycle as { id: string; year: number; month: number };
+    }
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '7000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2905, month: 3 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    const sourceCycle = await makeDraftCycle(admin, 2905, 3);
+    const sourceEntry = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${sourceCycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(sourceEntry.advanceId).toBe(advanceId); // RESERVED — fully deducted in the source cycle
+
+    const deferRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/defer`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ payrollEntryId: sourceEntry.id, toPeriod: { year: 2905, month: 5 }, reason: 'Push to a later month' });
+    expect(deferRes.status).toBe(200);
+    expect(deferRes.body.advance.status).toBe('ACTIVE');
+    expect(deferRes.body.advance.currentScheduledPeriodId).not.toBeNull();
+
+    // Source cycle stays cleared — never stale.
+    const sourceEntryAfterDefer = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${sourceCycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(sourceEntryAfterDefer.advanceId).toBeNull();
+    expect(Number(sourceEntryAfterDefer.advanceDeduction)).toBe(0);
+
+    // Roll month 3 -> month 4. An intervening cycle the deferred target does NOT name must not pick
+    // it up either — proves the deduction lands only at its actual named target, never an
+    // intermediate stale copy.
+    const month4Cycle = await holdFinalizeAndRollover(sourceCycle.id, employee.id);
+    expect(month4Cycle.month).toBe(4);
+    const interveningEntry = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${month4Cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(interveningEntry.advanceId).toBeNull();
+
+    // Roll month 4 -> month 5 — the target period finally arrives. The deferred deduction
+    // materializes there, exactly once, for the full remaining balance (7000, untouched since the
+    // source cycle never actually released it).
+    const targetCycle = await holdFinalizeAndRollover(month4Cycle.id, employee.id);
+    expect(targetCycle.month).toBe(5);
+    const targetEntry = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${targetCycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(targetEntry.advanceId).toBe(advanceId);
+    expect(Number(targetEntry.advanceDeduction)).toBeCloseTo(7000, 2);
+
+    const advanceAfterArrival = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(advanceAfterArrival.status).toBe('RESERVED'); // fully deducted again, now in the target cycle
+    expect(Number(advanceAfterArrival.outstandingBalance)).toBeCloseTo(0, 2);
+
+    // Exactly two materializations total for this Advance's whole life — the original (source) and
+    // this one (target) — never a duplicate landing in both, or a third phantom one.
+    const materializationCount = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+    expect(materializationCount).toBe(2);
   });
 
   it('rejects deferring to a past or current period', async () => {
@@ -566,7 +728,8 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     // No separate materialization call, no cycle recreation, no refetch delay — the create response
     // itself already reflects the materialized state.
     expect(Number(created.body.advance.outstandingBalance)).toBeCloseTo(0, 2);
-    expect(created.body.advance.status).toBe('PAID_OFF');
+    // RESERVED, not PAID_OFF (2026-07-25, Issue 5) — this Draft entry has not released yet.
+    expect(created.body.advance.status).toBe('RESERVED');
 
     const entry = (
       await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
@@ -824,6 +987,78 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(cycle1EntryAfter.version).toBe(cycle1EntryBefore.version);
   });
 
+  /**
+   * Final Verification, RESERVED-lifecycle Case 1 — "Record Advance → Draft deduction created →
+   * Edit Total Amount → Draft Payroll Entry recalculates correctly. No duplicate deductions. No
+   * stale values." Distinct from the test above (which edits `scheduledInstallmentAmount`) and from
+   * `'allows editing totalAmount on an untouched ACTIVE Advance...'` (which has no live Draft
+   * deduction to recalculate at all) — this is the one test that edits `totalAmount` specifically
+   * while a real, unreleased Draft deduction already exists, and checks the entry itself, not just
+   * the Advance record's own balance bookkeeping.
+   */
+  it('editing totalAmount while a live Draft deduction exists recalculates the Draft entry correctly, exactly once — Case 1', async () => {
+    const admin = await masterAdminAgent('adv-edit-total-live-recalc-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit Total Live Recalc');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit Total Live Recalc Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '10000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '3000',
+      originalPeriod: { year: 2904, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    // Draft deduction created — an INSTALLMENT advance materializes only the standing installment
+    // (3000), leaving the Advance ACTIVE (not RESERVED) with balance still outstanding, so it stays
+    // editable — the precondition Case 1 describes ("Draft deduction created", not yet fully reserved).
+    const cycle = await makeDraftCycle(admin, 2904, 1);
+    const entryBefore = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(Number(entryBefore.advanceDeduction)).toBeCloseTo(3000, 2);
+    expect(entryBefore.advanceId).toBe(advanceId);
+
+    const advanceBeforeEdit = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(advanceBeforeEdit.status).toBe('ACTIVE');
+    expect(Number(advanceBeforeEdit.outstandingBalance)).toBeCloseTo(7000, 2); // 10000 - 3000
+
+    const materializationCountBefore = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+
+    // Edit Total Amount (not the installment schedule) while the Draft deduction is still live.
+    const editRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '8000' });
+    expect(editRes.status).toBe(200);
+
+    // The Draft Payroll Entry recalculates: the same 3000 installment re-applies against the new
+    // 8000 total (8000 - 0 already-repaid = 8000 outstanding pre-reapply), landing on the correct
+    // new outstandingBalance — never a duplicated or stale deduction left over from before the edit.
+    const entryAfter = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    expect(Number(entryAfter.advanceDeduction)).toBeCloseTo(3000, 2); // no duplicate — still one installment's worth
+    expect(entryAfter.advanceId).toBe(advanceId);
+    expect(entryAfter.version).toBe(entryBefore.version + 2); // exactly one reversal + one re-materialization — no extra, no stale
+
+    const advanceAfterEdit = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(Number(advanceAfterEdit.totalAmount)).toBeCloseTo(8000, 2);
+    expect(Number(advanceAfterEdit.outstandingBalance)).toBeCloseTo(5000, 2); // 8000 - 3000, not stale at the old 7000
+    expect(advanceAfterEdit.status).toBe('ACTIVE');
+
+    // Exactly one new materialization — never a duplicate.
+    const materializationCountAfter = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+    expect(materializationCountAfter).toBe(materializationCountBefore + 1);
+  });
+
   it('a no-op edit (notes only) does not reverse or re-version an already-correct live Draft deduction', async () => {
     const admin = await masterAdminAgent('adv-edit-noop-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit NoOp');
@@ -855,7 +1090,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(Number(entryAfter.advanceDeduction)).toBeCloseTo(4000, 2);
   });
 
-  it('rejects any financial-field edit once an Advance is PAID_OFF, but still allows notes', async () => {
+  it('rejects any financial-field edit once an Advance is RESERVED, but still allows notes', async () => {
     const admin = await masterAdminAgent('adv-edit-paidoff-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit PaidOff');
     const employee = await makeEmployee(site.id, unit.id, 'Edit PaidOff Employee', '40000');
@@ -869,7 +1104,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
       originalPeriod: { year: 2903, month: 9 },
     });
     const advanceId = created.body.advance.id as string;
-    await makeDraftCycle(admin, 2903, 9); // fully materializes and pays off immediately
+    await makeDraftCycle(admin, 2903, 9); // fully materializes and reserves immediately (2026-07-25)
 
     const rejected = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
@@ -883,6 +1118,59 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
       .send({ notes: 'closed out' });
     expect(notesOk.status).toBe(200);
     expect(notesOk.body.advance.notes).toBe('closed out');
+  });
+
+  /**
+   * Final Verification, RESERVED-lifecycle Case 3 — "RESERVED → Payroll Release → PAID_OFF →
+   * Editing correctly blocked. No further lifecycle regression." The test above already proves
+   * editing is blocked while still `RESERVED` (pre-release); this is the distinct case of editing
+   * an Advance that has gone all the way through an actual Release and is genuinely `PAID_OFF` —
+   * proving the same guard (`advance.status !== 'ACTIVE'`) still holds once `RESERVED` has advanced
+   * past it, not just before.
+   */
+  it('rejects any financial-field edit once an Advance is genuinely PAID_OFF via release, but still allows notes — Case 3', async () => {
+    const admin = await masterAdminAgent('adv-edit-real-paidoff-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit Real PaidOff');
+    const employee = await makeEmployee(site.id, unit.id, 'Edit Real PaidOff Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2904, month: 2 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2904, 2); // materializes and reserves immediately
+
+    const reserved = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(reserved.status).toBe('RESERVED');
+
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const paidOff = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(paidOff.status).toBe('PAID_OFF');
+    expect(paidOff.paidOffAt).not.toBeNull();
+
+    const rejected = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '15000' });
+    expect(rejected.status).toBe(400);
+
+    // No lifecycle regression — the rejected edit above must not have moved status backwards.
+    const stillPaidOff = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(stillPaidOff.status).toBe('PAID_OFF');
+    expect(Number(stillPaidOff.totalAmount)).toBeCloseTo(9000, 2);
+
+    const notesOk = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ notes: 'fully settled' });
+    expect(notesOk.status).toBe(200);
+    expect(notesOk.body.advance.notes).toBe('fully settled');
+    expect(notesOk.body.advance.status).toBe('PAID_OFF'); // notes-only edit never touches status
   });
 
   // --- Cancel/Void (Section G) ------------------------------------------------------------------
@@ -1040,6 +1328,67 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
       .set('x-csrf-token', admin.csrfToken)
       .send({ reason: 'Again' });
     expect(second.status).toBe(400);
+  });
+
+  it('allows cancelling a RESERVED advance (reverses the live Draft deduction), but rejects cancelling once actually PAID_OFF via release — Case 2', async () => {
+    const admin = await masterAdminAgent('adv-cancel-reserved-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Cancel Reserved');
+    const employee = await makeEmployee(site.id, unit.id, 'Cancel Reserved Employee', '40000');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 4 },
+    });
+    const advanceId = created.body.advance.id as string;
+    const cycle = await makeDraftCycle(admin, 2900, 4);
+
+    const reserved = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(reserved.status).toBe('RESERVED');
+
+    const cancelWhileReserved = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Employee left before deduction was actually settled' });
+    expect(cancelWhileReserved.status).toBe(200);
+    expect(cancelWhileReserved.body.advance.status).toBe('CANCELLED');
+    expect(Number(cancelWhileReserved.body.advance.outstandingBalance)).toBeCloseTo(9000, 2);
+    // No orphan materialization risk (Final Verification, Case 2): `currentScheduledPeriodId`
+    // cleared means no future cycle-bootstrap sweep (`materializeScheduledAdvanceDeductions`, which
+    // filters `status: 'ACTIVE'` anyway) could ever re-materialize a deduction for this cancelled
+    // Advance against a stale scheduled period.
+    expect(cancelWhileReserved.body.advance.currentScheduledPeriodId).toBeNull();
+
+    const entryAfterCancel = (
+      await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?employeeId=${employee.id}`)
+    ).body.entries[0];
+    // No orphan link back to the cancelled Advance from the Draft entry it used to occupy.
+    expect(entryAfterCancel.advanceId).toBeNull();
+    expect(Number(entryAfterCancel.advanceDeduction)).toBe(0);
+
+    // A second, separate advance that actually gets released must reject cancellation once PAID_OFF.
+    const second = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'EID_ADVANCE',
+      totalAmount: '4000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 4 },
+    });
+    const secondAdvanceId = second.body.advance.id as string;
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const secondAfterRelease = (await admin.agent.get(`/api/v1/advances/${secondAdvanceId}`)).body.advance;
+    expect(secondAfterRelease.status).toBe('PAID_OFF');
+
+    const cancelWhilePaidOff = await admin.agent
+      .post(`/api/v1/advances/${secondAdvanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Too late' });
+    expect(cancelWhilePaidOff.status).toBe(400);
   });
 
   it('rejects a blank cancel reason', async () => {

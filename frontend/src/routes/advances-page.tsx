@@ -51,15 +51,19 @@ function periodLabel(period: Advance['currentScheduledPeriod']): string {
   return formatYearMonth(period.year, period.month);
 }
 
-function statusTone(status: Advance['status']): 'green' | 'gray' | 'red' {
+function statusTone(status: Advance['status']): 'green' | 'gray' | 'red' | 'amber' {
   if (status === 'ACTIVE') return 'green';
   if (status === 'CANCELLED') return 'red';
+  // amber = "pending" (docs/design-system.md §3) — RESERVED is exactly that: the deduction is
+  // fully staged against the current Draft payroll, but not yet confirmed by an actual Release.
+  if (status === 'RESERVED') return 'amber';
   return 'gray';
 }
 
 function statusLabel(status: Advance['status']): string {
   if (status === 'ACTIVE') return 'Active';
   if (status === 'CANCELLED') return 'Cancelled';
+  if (status === 'RESERVED') return 'Reserved (pending release)';
   return 'Paid Off';
 }
 
@@ -355,8 +359,13 @@ function EditAdvanceModal({
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
             {!isActive && (
               <p className="rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted">
-                This Advance is {advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — only
-                its notes can still be edited.
+                This Advance is{' '}
+                {advance.status === 'PAID_OFF'
+                  ? 'fully paid off'
+                  : advance.status === 'RESERVED'
+                    ? 'reserved against the current Draft payroll (not yet released) — cancel it instead if these figures need to change before release'
+                    : 'cancelled'}{' '}
+                — only its notes can still be edited.
               </p>
             )}
             {isActive && (
@@ -616,7 +625,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
   const advances = useAdvances({
     siteId: selectedSiteIds.length === 1 ? selectedSiteIds[0] : undefined,
     type: (typeFilter || undefined) as 'LOAN' | 'EID_ADVANCE' | undefined,
-    status: (statusFilter || undefined) as 'ACTIVE' | 'PAID_OFF' | 'CANCELLED' | undefined,
+    status: (statusFilter || undefined) as 'ACTIVE' | 'RESERVED' | 'PAID_OFF' | 'CANCELLED' | undefined,
   });
 
   const siteOptions = useMemo(
@@ -669,6 +678,7 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
               >
                 <option value="">All statuses</option>
                 <option value="ACTIVE">Active</option>
+                <option value="RESERVED">Reserved (pending release)</option>
                 <option value="PAID_OFF">Paid Off</option>
                 <option value="CANCELLED">Cancelled</option>
               </select>
@@ -744,7 +754,11 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                           <Button size="sm" variant="secondary" onClick={() => setEditingAdvance(advance)}>
                             Edit
                           </Button>
-                          {advance.status === 'ACTIVE' && (
+                          {/* RESERVED is included alongside ACTIVE (Presentation & Workflow
+                              Stabilization Checkpoint, 2026-07-25) — a RESERVED Advance's deduction
+                              still sits on a live, unreleased Draft entry, so it can still be
+                              deferred or cancelled right up until that entry actually releases. */}
+                          {(advance.status === 'ACTIVE' || advance.status === 'RESERVED') && (
                             <>
                               <Button size="sm" variant="secondary" onClick={() => setDeferringAdvance(advance)}>
                                 Defer

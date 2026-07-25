@@ -455,7 +455,10 @@ describe('Phase 5 Checkpoint 3 — Cycle Archiving, Automatic Backup Generation,
     expect(departedEntry.workLines[0]!.cycleDays).toBeLessThanOrEqual(31);
 
     const advanceAfter = await prisma.advance.findUniqueOrThrow({ where: { id: advanceRes.body.advance.id } });
-    expect(advanceAfter.status).toBe('PAID_OFF'); // FULL_DEDUCTION pays it off in one shot
+    // FULL_DEDUCTION reserves the whole balance in one shot, but this new cycle's entry has not
+    // been released yet — RESERVED, not PAID_OFF (Presentation & Workflow Stabilization
+    // Checkpoint, 2026-07-25, Issue 5).
+    expect(advanceAfter.status).toBe('RESERVED');
     expect(Number(advanceAfter.outstandingBalance)).toBe(0);
 
     const materializedAudits = await prisma.auditLog.findMany({
@@ -591,7 +594,9 @@ describe('Phase 5 Checkpoint 3 — Cycle Archiving, Automatic Backup Generation,
     expect(departedEntryCount).toBe(1);
 
     const advanceAfter = await prisma.advance.findUniqueOrThrow({ where: { id: advanceRes.body.advance.id } });
-    expect(advanceAfter.status).toBe('PAID_OFF'); // materialized exactly once, not twice
+    // materialized exactly once, not twice — RESERVED (not PAID_OFF) since this new cycle's entry
+    // has not been released yet (Presentation & Workflow Stabilization Checkpoint, 2026-07-25).
+    expect(advanceAfter.status).toBe('RESERVED');
     expect(Number(advanceAfter.outstandingBalance)).toBe(0);
 
     const materializedAudits = await prisma.auditLog.findMany({

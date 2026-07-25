@@ -11,12 +11,20 @@ export type AdvanceType = z.infer<typeof advanceTypeSchema>;
 export const advanceRepaymentTypeSchema = z.enum(['FULL_DEDUCTION', 'INSTALLMENT']);
 export type AdvanceRepaymentType = z.infer<typeof advanceRepaymentTypeSchema>;
 
-/** Mirrors Prisma's `AdvanceStatus` enum — `PAID_OFF` is reached only when `outstandingBalance`
- * decrements to zero; never set directly by a user action. `CANCELLED` (Operational Stabilization
- * Checkpoint, 2026-07-24) is the non-destructive correction for a mistakenly-recorded Advance — see
- * `cancelAdvanceSchema` below and `database/advances.md §15`'s "no hard delete" convention. Neither
- * `PAID_OFF` nor `CANCELLED` is ever set directly by a plain field edit (`updateAdvanceSchema`). */
-export const advanceStatusSchema = z.enum(['ACTIVE', 'PAID_OFF', 'CANCELLED']);
+/** Mirrors Prisma's `AdvanceStatus` enum. `RESERVED` (Presentation & Workflow Stabilization
+ * Checkpoint, 2026-07-25) is reached the instant a deduction fully covering `outstandingBalance`
+ * materializes into a Draft (unreleased) `PayrollEntry` — the amount is committed/reserved against
+ * that entry, but nothing has actually been paid yet, so the Advance is deliberately *not* yet
+ * `PAID_OFF`. `PAID_OFF` is reached only once the `PayrollEntry` carrying that reservation is
+ * actually Released (`docs/architecture/database/advances.md §15`'s lifecycle section) — never set
+ * directly by a user action, and never set merely because a Draft deduction reached zero. If that
+ * Draft deduction is instead reversed (edited, deferred, or the Advance cancelled) before release,
+ * `RESERVED` reverts back to `ACTIVE`. `CANCELLED` (Operational Stabilization Checkpoint,
+ * 2026-07-24) is the non-destructive correction for a mistakenly-recorded Advance — see
+ * `cancelAdvanceSchema` below and `database/advances.md §15`'s "no hard delete" convention. None of
+ * `RESERVED`, `PAID_OFF`, or `CANCELLED` is ever set directly by a plain field edit
+ * (`updateAdvanceSchema`). */
+export const advanceStatusSchema = z.enum(['ACTIVE', 'RESERVED', 'PAID_OFF', 'CANCELLED']);
 export type AdvanceStatus = z.infer<typeof advanceStatusSchema>;
 
 /**

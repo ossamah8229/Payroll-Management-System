@@ -64,9 +64,42 @@ Advance schedule materialized            (advance.schedule_materialized — writ
         |                                 moment a scheduled deduction actually lands in a real
         |                                 PayrollEntry — distinct from advance.deferred, which only
         |                                 records that the target moved, not that it arrived)
-Advance fully recovered                  (outstandingBalance reaches 0, status → PAID_OFF — one of
-                                           the two existing outstandingBalance-changing events, below)
+Advance fully reserved                   (outstandingBalance reaches 0, status → RESERVED — the
+        ↓                                 deduction is fully staged on a still-Draft PayrollEntry,
+        |                                 but nothing has actually been paid yet)
+Advance actually paid off                (advance.paid_off — written by
+                                           `settleAdvancesForReleasedEntries`, the exact moment the
+                                           PayrollEntry carrying that reservation is Released,
+                                           status RESERVED → PAID_OFF)
 ```
+
+If the Draft deduction that produced `RESERVED` is itself reversed before release — edited
+(`updateAdvance`), deferred (`deferAdvanceSchedule`), or the Advance cancelled (`cancelAdvance`) —
+`status` reverts to `ACTIVE` and `outstandingBalance` is restored, exactly like reversing a partial
+(not-yet-zero) Draft deduction already worked before `RESERVED` existed. `RESERVED` is therefore not
+a new terminal state, only a new *intermediate* one between "fully deducted in a Draft" and
+"actually paid off," matching `PAID_OFF`'s own precondition everywhere else in this document except
+that reaching zero balance alone is no longer sufficient to reach it.
+
+**RESERVED status and Release-time settlement (Presentation & Workflow Stabilization Checkpoint,
+2026-07-25, Issue 5).** Production observed that recording an Advance deduction against the current
+Draft payroll made it read as `PAID_OFF` immediately — before that payroll had actually been paid to
+anyone. Root cause: `materializeOneAdvanceDeduction` flipped `status` straight to `PAID_OFF` the
+instant `outstandingBalance` reached zero, which happens the moment a deduction is *staged* into a
+Draft `PayrollEntry`, not when it is actually *settled*. Fixed by splitting that single transition
+into two: reaching zero balance in a still-Draft entry now sets `status` to the new `RESERVED` value
+(the deduction is committed/held against this cycle, but reversible — see above); `status` only
+advances to `PAID_OFF` (and `paidOffAt` is only ever written) when the specific `PayrollEntry`
+carrying that reservation is actually Released, via the new `settleAdvancesForReleasedEntries`
+(`advances.service.ts`), called from exactly one place — `payroll-release.service.ts`'s
+`releaseProjectUnit`, in the same transaction as the entries themselves flipping `released: true` —
+mirroring the identical "reservation becomes final only at the entry's own release" pattern
+`consumeMaterializationsForReleasedEntries` already established for Correction `BalanceAdjustment`s
+(Phase 6 Checkpoint 7, above this file's own §14 in `balance-adjustments.md`). `RESERVED` behaves
+like `PAID_OFF` for editability (financial fields on `updateAdvance` are rejected) and like `ACTIVE`
+for reversibility (`cancelAdvance`/`deferAdvanceSchedule` both still operate on it, and the "at most
+one live Advance per employee per type" partial unique index now excludes `RESERVED` exactly like
+`ACTIVE`, not just `PAID_OFF`/`CANCELLED`).
 
 `advance.deferred` and `advance.schedule_materialized` are deliberately two different events: the
 first records *intent to move* a not-yet-arrived deduction (BR-ADV-004), the second records *arrival* —
@@ -99,7 +132,9 @@ period resolves at that cycle's own bootstrap; a released entry is never retroac
 
 **Lifecycle-aware Edit (Section F).** `updateAdvance` now also accepts `totalAmount`. Every financial
 field (`totalAmount`, `repaymentType`, `scheduledInstallmentAmount`) is rejected outright once
-`status` is `PAID_OFF`/`CANCELLED`; `notes` remains editable at every lifecycle stage. The deduction
+`status` is anything other than `ACTIVE` — `RESERVED` included, added 2026-07-25: a fully-reserved
+Draft deduction has nothing left to schedule either, until it either releases or is cancelled;
+`notes` remains editable at every lifecycle stage. The deduction
 start cycle (`originalScheduledPeriodId`/`currentScheduledPeriodId`) is still never editable through
 this endpoint, at any stage — `originalScheduledPeriodId` stays permanently immutable (BR-ADV-001);
 correcting a wrong start cycle before materialization means cancelling the mistaken Advance and
@@ -121,7 +156,10 @@ stored) skips this reversal/recalculation entirely, so a notes-only save never b
 
 **Cancel/Void (Section G).** `AdvanceStatus` gains a `CANCELLED` value — a non-destructive correction
 for a mistakenly-recorded Advance, applying uniformly whether or not any deduction has yet
-materialized. This schema already has **no delete path for `Advance` at all** (see the model's own
+materialized. Cancellable from `ACTIVE` or `RESERVED` (2026-07-25 — a `RESERVED` advance's deduction
+is still sitting on a live, unreleased Draft entry, so voiding it and reversing that deduction is
+still meaningful right up until the entry actually releases); rejected once `PAID_OFF` (truly final)
+or already `CANCELLED`. This schema already has **no delete path for `Advance` at all** (see the model's own
 doc comment below) — matching that existing "no hard delete of a permanent financial/master record"
 convention was the deciding factor over adding a narrow hard-delete-if-untouched carve-out. Cancelling
 reverses a still-Draft (unreleased) materialized deduction first, if one currently carries this
@@ -139,9 +177,9 @@ and (when a Draft deduction was reversed) `payroll_entry.advance_cancelled` audi
 | `dateGiven` | date | no | — | |
 | `repaymentType` | `AdvanceRepaymentType` | no | — | informational only, per spec — does not drive auto-calculation |
 | `notes` | text | yes | — | |
-| `status` | `AdvanceStatus` | no | `'ACTIVE'` | flips to `PAID_OFF` when `outstandingBalance` reaches 0; **added 2026-07-24:** may also transition to `CANCELLED` — see "Cancel/Void" below |
+| `status` | `AdvanceStatus` | no | `'ACTIVE'` | flips to `RESERVED` when `outstandingBalance` reaches 0 in a still-Draft `PayrollEntry`, then to `PAID_OFF` only once that entry actually Releases (**added 2026-07-25**, Issue 5 — see "RESERVED status and Release-time settlement" above; reverts to `ACTIVE` if the reservation is reversed before release); **added 2026-07-24:** may also transition to `CANCELLED` — see "Cancel/Void" below |
 | `originalScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (`database/payroll-cycle.md §10a`), `ON DELETE RESTRICT` — **BR-ADV-001.** Set once, the first time this advance's deduction is ever scheduled; immutable forever after, regardless of any later deferral |
-| `currentScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (`database/payroll-cycle.md §10a`), `ON DELETE RESTRICT` — the live "where does the next deduction land" pointer. Exactly one value at a time (**BR-ADV-005** — a deferral overwrites this, never adds a second pointer). Null once `status = PAID_OFF` |
+| `currentScheduledPeriodId` | uuid | yes | — | **Added 2026-07-08.** FK → `ScheduledPayrollPeriod.id` (`database/payroll-cycle.md §10a`), `ON DELETE RESTRICT` — the live "where does the next deduction land" pointer. Exactly one value at a time (**BR-ADV-005** — a deferral overwrites this, never adds a second pointer). Null once `status` is `RESERVED` or `PAID_OFF` |
 | `createdAt` | timestamptz | no | `now()` | |
 | `updatedAt` | timestamptz | no | `now()` | |
 
@@ -156,16 +194,23 @@ against the *correct* advance even if the employee has since paid it off and tak
 the same type — see `docs/architecture/workflows/corrections-and-balance-adjustments.md` ("Interaction
 with Advances").
 
-- **Unique constraints:** partial unique (`employeeId`, `type`) `WHERE status = 'ACTIVE'` — a
-  `CANCELLED` advance (2026-07-24) is excluded exactly like `PAID_OFF`, so a fresh Advance of the same
-  type may be recorded immediately after cancelling a mistaken one
+- **Unique constraints:** partial unique (`employeeId`, `type`) `WHERE status IN ('ACTIVE',
+  'RESERVED')` (widened 2026-07-25 for `RESERVED` — a two-migration change, `ADD VALUE` then the
+  index/constraint update in a later migration, for the same same-transaction-unsafe reason noted
+  below) — a `CANCELLED` advance (2026-07-24) is excluded exactly like `PAID_OFF`, so a fresh Advance
+  of the same type may be recorded immediately after cancelling a mistaken one, but not while the
+  prior one is still `RESERVED` (reserved-but-unreleased is not yet final)
 - **Check constraints:** `totalAmount > 0`; `outstandingBalance >= 0`; `outstandingBalance <=
-  totalAmount`; **added 2026-07-08:** `status = 'PAID_OFF' ⇒ currentScheduledPeriodId IS NULL`
-  (application code applies the identical rule to `CANCELLED`, 2026-07-24, but this specific
-  constraint was not widened to also require it — a deliberate, narrow simplification to avoid a
-  same-transaction-unsafe two-step enum-then-constraint migration for a single-domain, additive
-  change; `materializeScheduledAdvanceDeductions`'s own `status: 'ACTIVE'` filter already excludes
-  `CANCELLED` regardless of this column's value, so no functional correctness depends on it)
+  totalAmount`; **added 2026-07-08, widened 2026-07-25:** `status IN ('PAID_OFF', 'RESERVED') ⇒
+  currentScheduledPeriodId IS NULL` (application code applies the identical rule to `CANCELLED`,
+  2026-07-24, but this specific constraint was not widened to also require it — a deliberate, narrow
+  simplification to avoid enlarging an already-two-migration change further, for a case where
+  `materializeScheduledAdvanceDeductions`'s own `status: 'ACTIVE'` filter already excludes
+  `CANCELLED` regardless of this column's value, so no functional correctness depends on it). Adding
+  a brand-new enum value and referencing it in an index/constraint predicate cannot happen in the
+  same migration transaction (Postgres restriction) — hence the two separate migration files for
+  `RESERVED` (`20260725090000_advance_reserved_status`, `20260725091000_advance_reserved_constraints`),
+  matching how `CANCELLED` itself was added enum-only with no same-migration constraint change.
 - **Indexes:** the partial unique index above (also the primary lookup); (`employeeId`); **added
   2026-07-08:** (`currentScheduledPeriodId`) — the lookup the cycle-bootstrap sweep uses to find every
   `ACTIVE` advance whose schedule resolves to the cycle being created

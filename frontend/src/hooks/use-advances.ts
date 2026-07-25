@@ -53,7 +53,12 @@ export interface Advance {
   updatedAt: string;
 }
 
-const ADVANCES_QUERY_KEY = ['advances'] as const;
+// Exported (Presentation & Workflow Stabilization Checkpoint, 2026-07-25) so `useReleaseProjectUnit`
+// (use-payroll-release.ts) can invalidate this cache too — a per-Unit release can settle a
+// `RESERVED` Advance to `PAID_OFF` (`settleAdvancesForReleasedEntries`, advances.service.ts), and
+// the Advances page's own cache needs telling exactly like Payroll Entry's did (Issue 1's identical
+// fix, same root cause: a mutation elsewhere in the app changing state this query reads).
+export const ADVANCES_QUERY_KEY = ['advances'] as const;
 
 export interface AdvancesFilters {
   employeeId?: string;
