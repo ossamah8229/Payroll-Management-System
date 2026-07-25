@@ -874,7 +874,10 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                     <TableHead>Pay type</TableHead>
                     <TableHead className="text-right">Gross pay</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="w-10" />
+                    {/* Row actions column is screen-only (Professional Printing checkpoint B3) —
+                        previously printed as an empty header cell with a live dropdown trigger
+                        underneath it. */}
+                    <TableHead className="w-10 print:hidden" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -893,7 +896,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                           {employee.dateOfLeaving ? 'Left' : 'Active'}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="print:hidden">
                         {canEdit && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>

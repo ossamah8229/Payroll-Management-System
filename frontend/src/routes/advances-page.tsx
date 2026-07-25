@@ -646,7 +646,10 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
           <div className="flex items-center justify-between gap-2.5">
             <CardTitle>Advances</CardTitle>
             <div className="print:hidden">
-              <PrintButton />
+              {/* 7 printable columns (Actions excluded) of mostly financial figures — Landscape
+                  is the deliberate default (final verification pass), not a silently inherited
+                  Portrait. */}
+              <PrintButton recommendedOrientation="landscape" />
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-3 print:hidden">
@@ -730,7 +733,11 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                     <TableHead className="whitespace-nowrap">Repayment Type</TableHead>
                     <TableHead className="whitespace-nowrap">Status</TableHead>
                     <TableHead className="whitespace-nowrap">Scheduled Period</TableHead>
-                    <TableHead className="whitespace-nowrap">Actions</TableHead>
+                    {/* Row actions are screen-only (Professional Printing checkpoint, final
+                        verification pass) — the body cell below was already print:hidden, but
+                        this header cell wasn't, leaving a stray "Actions" column label over an
+                        empty printed column. */}
+                    <TableHead className="whitespace-nowrap print:hidden">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -749,8 +756,8 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                         <Badge tone={statusTone(advance.status)}>{statusLabel(advance.status)}</Badge>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{periodLabel(advance.currentScheduledPeriod)}</TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <div className="flex gap-2 print:hidden">
+                      <TableCell className="whitespace-nowrap print:hidden">
+                        <div className="flex gap-2">
                           <Button size="sm" variant="secondary" onClick={() => setEditingAdvance(advance)}>
                             Edit
                           </Button>

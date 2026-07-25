@@ -113,7 +113,9 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
             }
             actions={
               <>
-                <PrintButton />
+                {/* 11 columns (Employee Code through Net Salary) — the same "wide ledger" shape
+                    Payroll Entry's own Landscape default addresses (final verification pass). */}
+                <PrintButton recommendedOrientation="landscape" />
                 <Button
                   variant="secondary"
                   onClick={() => handleExport('csv')}

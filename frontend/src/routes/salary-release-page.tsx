@@ -335,7 +335,7 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
             }
             actions={
               <>
-                <PrintButton />
+                <PrintButton recommendedOrientation="portrait" />
                 {cycle && canFinalize && (cycle.status === 'DRAFT' || cycle.status === 'RELEASED') && (
                   <>
                     {cycle.status === 'DRAFT' && (
@@ -432,7 +432,10 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Employees</TableHead>
                       <TableHead>Released</TableHead>
-                      <TableHead className="w-40" />
+                      {/* The Release action column is screen-only (Professional Printing checkpoint
+                          B3) — meaningless on a printed document, so hidden here and on its own
+                          per-row cell below rather than left to print as an empty button gap. */}
+                      <TableHead className="w-40 print:hidden" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -455,7 +458,7 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
                             ? `${formatDateTime(status.releasedAt)} · ${status.releasedBy.name}`
                             : '—'}
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right print:hidden">
                           {!status.released && canRelease && cycle.status === 'DRAFT' && (
                             <Button size="sm" onClick={() => setConfirming(status)}>
                               Release

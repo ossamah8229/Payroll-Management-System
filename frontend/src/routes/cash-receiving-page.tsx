@@ -119,7 +119,10 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
             }
             actions={
               <>
-                <PrintButton />
+                {/* 9 columns plus a reserved 160px signature column — wide enough that Landscape
+                    is the deliberate default (final verification pass), not a silent inherited
+                    Portrait. */}
+                <PrintButton recommendedOrientation="landscape" />
                 <Button
                   variant="secondary"
                   onClick={() => handleExport('csv')}

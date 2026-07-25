@@ -321,7 +321,11 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                 <Table className="min-w-full">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">
+                      {/* Selection checkbox and row actions are screen-only (Professional
+                          Printing checkpoint B3/final verification pass) — hidden on both the
+                          header and body cells below, the same pattern already applied to
+                          Employees/Advances. */}
+                      <TableHead className="w-10 print:hidden">
                         <Checkbox
                           aria-label="Select all currently loaded employees"
                           checked={someLoadedSelected && !allLoadedSelected ? 'indeterminate' : allLoadedSelected}
@@ -332,13 +336,13 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                       <TableHead className="whitespace-nowrap">Employee Name</TableHead>
                       <TableHead className="whitespace-nowrap">Designation</TableHead>
                       <TableHead className="whitespace-nowrap">Site</TableHead>
-                      <TableHead className="whitespace-nowrap text-right">Actions</TableHead>
+                      <TableHead className="whitespace-nowrap text-right print:hidden">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loadedEmployees.map((employee) => (
                       <TableRow key={employee.entryId}>
-                        <TableCell>
+                        <TableCell className="print:hidden">
                           <Checkbox
                             aria-label={`Select ${employee.employeeName}`}
                             checked={selectedEmployeeIds.has(employee.employeeId)}
@@ -349,7 +353,7 @@ export function PayslipsPage({ user }: { user: SessionUser }) {
                         <TableCell className="whitespace-nowrap font-medium">{employee.employeeName}</TableCell>
                         <TableCell className="whitespace-nowrap">{employee.designation}</TableCell>
                         <TableCell className="whitespace-nowrap">{employee.siteName}</TableCell>
-                        <TableCell className="whitespace-nowrap text-right">
+                        <TableCell className="whitespace-nowrap text-right print:hidden">
                           <div className="flex justify-end gap-1.5">
                             <Button size="sm" variant="secondary" onClick={() => handlePreview(employee)}>
                               <Eye className="h-3.5 w-3.5" aria-hidden />

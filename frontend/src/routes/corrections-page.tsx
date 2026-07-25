@@ -505,7 +505,10 @@ export function CorrectionsPage({ user }: { user: SessionUser }) {
           <div className="flex w-full items-center justify-between">
             <CardTitle>Corrections</CardTitle>
             <div className="print:hidden">
-              <PrintButton />
+              {/* Up to 8 columns per tab, several holding longer text (Submitted By/At) —
+                  Landscape is the deliberate default (final verification pass), not a silently
+                  inherited Portrait. */}
+              <PrintButton recommendedOrientation="landscape" />
             </div>
           </div>
           <div className="flex gap-6 print:hidden">
