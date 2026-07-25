@@ -261,4 +261,32 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     expect(rowRoot.className).not.toMatch(/\bsticky\b/);
     expect(rowRoot.className).not.toMatch(/\bfixed\b/);
   });
+
+  /**
+   * Presentation & Workflow Stabilization Checkpoint, 2026-07-25, Issue 2 — regression guard for
+   * "6 employees" rendering under the "Code" column (`employeeCode`) instead of the "Employee"
+   * column (`employeeName`) it actually describes. Asserts by `data-col-id`, not DOM position, so
+   * the test still catches the defect even if `PAYROLL_COLUMNS`'s own column order ever changes.
+   */
+  it('the totals row renders the employee count inside the Employee column, not the Code column', () => {
+    const entries = [makeEntry({ id: 'entry-1' }), makeEntry({ id: 'entry-2' })];
+    const resolved = computeColumnWidths(entries, [testBank]);
+    const store = new LiveTotalsStore();
+    store.setBase(
+      entries.map((entry) => ({
+        id: entry.id,
+        snapshot: { grossPay: 30000, days: 30, otHours: 0, otRate: null, cycleDays: 30, leaveDays: 0, leaveRate: null, allowance: 0, eobiAmount: 400, advanceDeduction: 0, eidAdvanceDeduction: 0, fine: 0, netSalary: 29600 },
+      })),
+    );
+
+    const { container } = render(
+      <PayrollEntryTotalsRow store={store} gridTemplateColumns={gridTemplateColumns(resolved)} />,
+    );
+
+    const employeeNameCell = container.querySelector('[data-col-id="employeeName"]');
+    const employeeCodeCell = container.querySelector('[data-col-id="employeeCode"]');
+    expect(employeeNameCell?.textContent).toBe('2 employees');
+    expect(employeeCodeCell?.textContent).toBe('');
+  });
+
 });

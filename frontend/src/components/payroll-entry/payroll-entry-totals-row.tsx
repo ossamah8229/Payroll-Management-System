@@ -44,7 +44,13 @@ export function PayrollEntryTotalsRow({
 
   function cellContent(columnId: string): React.ReactNode {
     if (columnId === 'serial') return 'Σ';
-    if (columnId === 'employeeCode') return `${store.rowCount} ${store.rowCount === 1 ? 'employee' : 'employees'}`;
+    // The employee count belongs under the "Employee" column (`employeeName`, `columns.ts`) — the
+    // column it's actually counting — not "Code" (`employeeCode`), a distinct column with its own
+    // (empty) total cell. Attaching it to the wrong id was the reported "6 employees visually
+    // detached from the Employee column" defect (Presentation & Workflow Stabilization Checkpoint,
+    // 2026-07-25): the count still rendered somewhere in the row, in `PAYROLL_COLUMNS` order, just
+    // one column left of the one it labels.
+    if (columnId === 'employeeName') return `${store.rowCount} ${store.rowCount === 1 ? 'employee' : 'employees'}`;
     if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId)) {
       const value = totals[columnId as keyof LiveTotals];
       return MONEY_COLUMNS.has(columnId) ? formatMoney(value) : formatNumber(value);
@@ -63,7 +69,7 @@ export function PayrollEntryTotalsRow({
   function cellClassName(columnId: string): string {
     const base = 'overflow-visible px-1.5 py-2';
     if (columnId === 'serial') return cn(base, 'text-center text-text-muted');
-    if (columnId === 'employeeCode') return cn(base, 'text-text');
+    if (columnId === 'employeeName') return cn(base, 'text-text');
     if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId)) {
       return cn(
         base,
