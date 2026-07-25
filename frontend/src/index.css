@@ -82,16 +82,23 @@
 
 /*
  * Standard Print Support checkpoint — A4, repeated table headers, no clipped/scroll-bound content.
- * Navigation (Sidebar/Topbar), filters, and action toolbars are hidden per-component via Tailwind's
- * `print:hidden` (AppShell, PayrollPageToolbar, and each print-enabled page's own filter row) —
- * this block covers only what those per-component utilities can't: page geometry, and the handful
- * of `overflow-x-auto`/fixed-`max-h` wrapper divs several table-heavy pages use for their on-screen
- * scroll region, which must become unconstrained so a table's full row count actually prints
- * instead of being clipped to whatever fit the screen's scrollable viewport.
+ * Extended by the Professional Printing checkpoint (docs/architecture/print-architecture.md) with
+ * the shared fit-to-page/orientation system. Navigation (Sidebar/Topbar), filters, and action
+ * toolbars are hidden per-component via Tailwind's `print:hidden` (AppShell, PayrollPageToolbar,
+ * and each print-enabled page's own filter row) — this block covers only what those per-component
+ * utilities can't: page geometry, and the handful of `overflow-x-auto`/fixed-`max-h` wrapper divs
+ * several table-heavy pages use for their on-screen scroll region, which must become unconstrained
+ * so a table's full row count actually prints instead of being clipped to whatever fit the
+ * screen's scrollable viewport.
  */
 @media print {
+  /* Portrait A4 fallback only — `useTriggerPrint` (components/print/use-print.ts) injects its own
+     `@page` rule into `<head>` immediately before every real print, and (being later in document
+     order, equal specificity) always wins over this one. This rule exists purely so a print
+     triggered by any path other than `PrintButton` (there is none today, but nothing enforces
+     that at the type level) still gets a sane default instead of the browser's own arbitrary one. */
   @page {
-    size: A4;
+    size: A4 portrait;
     margin: 12mm;
   }
 
@@ -102,8 +109,33 @@
     display: table-header-group;
   }
 
+  /* Rows should not be cut awkwardly across a page boundary (checkpoint B4/B7) — supported by
+     Chromium/WebKit; Firefox's print engine has historically ignored `break-inside` on table rows,
+     so this is a best-effort progressive enhancement, not a guarantee on every browser. */
+  table tr {
+    break-inside: avoid;
+  }
+
   .print-flow {
     max-height: none !important;
     overflow: visible !important;
+  }
+
+  /* Fit-to-page mode (`.print-fit`, toggled on <html> by use-print.ts) — compact, evenly-divided
+     column typography so a wide multi-column table (Payroll Entry's print table is the acceptance
+     case) fits the selected orientation's page width with no horizontal clipping. `table-layout:
+     fixed` is what actually enforces the width cap; without it a browser sizes columns from
+     content and ignores `width: 100%` the moment any cell's content is wider than its share. */
+  .print-fit table {
+    width: 100%;
+    table-layout: fixed;
+    font-size: 8.5px;
+  }
+
+  .print-fit th,
+  .print-fit td {
+    padding: 2px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
