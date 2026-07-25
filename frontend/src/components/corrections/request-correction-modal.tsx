@@ -134,6 +134,11 @@ export function RequestCorrectionModal({
                 setEntryId(matchingEntry?.id ?? '');
               }}
               restrictToEmployeeIds={entries.map((entry) => entry.employee.id)}
+              // Issue 7 (Presentation & Workflow Stabilization Checkpoint, 2026-07-25) — a search
+              // like "adil" finding the real employee but excluding him because his entry in this
+              // cycle isn't released yet must say so, not read as a broken search for an employee
+              // who plainly exists elsewhere in the app (e.g. still-Draft Payroll Entry).
+              restrictedEmptyMessage="found, but none have a released Payroll Entry in this cycle yet — corrections can only be requested for already-released payroll"
               disabled={isEntryLocked}
               required
             />

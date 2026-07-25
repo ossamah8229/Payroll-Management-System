@@ -36,6 +36,7 @@ export function EmployeeLookup({
   activeOnly = true,
   siteIds,
   restrictToEmployeeIds,
+  restrictedEmptyMessage = "found, but none are currently eligible here",
   placeholder = 'Search by code, CNIC, account, IBAN, name, site, or branch…',
   disabled,
   required,
@@ -51,6 +52,14 @@ export function EmployeeLookup({
    * other consumer of this component), just filters the response client-side afterward. Omit
    * entirely for an org-wide lookup (Advances' Record Advance modal). */
   restrictToEmployeeIds?: string[];
+  /** Shown instead of the plain "No employees match" message when the backend search actually
+   * found real employee(s) matching the query, but `restrictToEmployeeIds` excluded all of them
+   * (Presentation & Workflow Stabilization Checkpoint, 2026-07-25, Issue 7) — without this
+   * distinction, a genuinely-existing employee excluded only by this caller's own eligibility
+   * rule is indistinguishable from a typo/no-such-employee, which reads as a broken search rather
+   * than an explainable restriction. Fragment of a sentence starting with "Matches were " — e.g.
+   * the default renders "Matches were found, but none are currently eligible here." */
+  restrictedEmptyMessage?: string;
   placeholder?: string;
   disabled?: boolean;
   required?: boolean;
@@ -81,9 +90,12 @@ export function EmployeeLookup({
 
   // Cheap client-side cap — the backend already returns every site-scoped match for the search
   // term, but a 300-item dropdown is its own usability problem regardless of how it got there.
-  const matches = value
-    ? []
-    : (results.data ?? []).filter((employee) => !restrictToSet || restrictToSet.has(employee.id)).slice(0, 25);
+  const rawMatches = value ? [] : (results.data ?? []);
+  const matches = rawMatches.filter((employee) => !restrictToSet || restrictToSet.has(employee.id)).slice(0, 25);
+  // Distinguishes "the backend genuinely found nothing" from "the backend found real employees,
+  // but this caller's own eligibility restriction excluded every one of them" (Issue 7) — the
+  // empty-state message below reads very differently depending on which one actually happened.
+  const excludedByRestriction = restrictToSet !== undefined && matches.length === 0 && rawMatches.length > 0;
 
   const selectedEmployee = selected.data;
 
@@ -190,7 +202,11 @@ export function EmployeeLookup({
             <p className="px-3 py-2.5 text-xs text-text-muted">Searching…</p>
           )}
           {debouncedQuery.trim().length >= MIN_SEARCH_LENGTH && !results.isLoading && matches.length === 0 && (
-            <p className="px-3 py-2.5 text-xs text-text-muted">No employees match "{debouncedQuery.trim()}".</p>
+            <p className="px-3 py-2.5 text-xs text-text-muted">
+              {excludedByRestriction
+                ? `Matches were ${restrictedEmptyMessage}.`
+                : `No employees match "${debouncedQuery.trim()}".`}
+            </p>
           )}
           {matches.map((employee, index) => (
             <button
