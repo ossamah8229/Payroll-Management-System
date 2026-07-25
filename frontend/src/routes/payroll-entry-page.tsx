@@ -178,6 +178,25 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
     [filteredEntries],
   );
 
+  // Print-only totals (Professional Printing checkpoint) — the printed table below is a separate,
+  // fully non-virtualized rendering of `filteredEntries` (see its own comment), so its totals row
+  // is computed independently here rather than reusing the on-screen grid's `LiveTotalsStore`
+  // (which only tracks the interactive grid's own live-edited draft state).
+  const printTotals = useMemo(() => {
+    return filteredEntries.reduce(
+      (acc, entry) => {
+        const deductions =
+          Number(entry.eobiAmount) + Number(entry.advanceDeduction) + Number(entry.eidAdvanceDeduction) + Number(entry.fine);
+        acc.grossPay += Number(entry.grossPay);
+        acc.allowance += Number(entry.allowance);
+        acc.deductions += deductions;
+        acc.netSalary += Number(calcNet(buildCalcInput(entry)).netSalary);
+        return acc;
+      },
+      { grossPay: 0, allowance: 0, deductions: 0, netSalary: 0 },
+    );
+  }, [filteredEntries]);
+
   const siteOptions = useMemo(
     () => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })),
     [sites.data],
@@ -204,7 +223,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
               hasAnyCycle &&
               cycleId && (
                 <>
-                  <PrintButton />
+                  <PrintButton recommendedOrientation="landscape" />
                   <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
                     <Download className="h-3.5 w-3.5" aria-hidden />
                     Export CSV
@@ -288,6 +307,17 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                       banks={banks.data ?? []}
                     />
                   </div>
+                  {/*
+                   * The print column set is a deliberate subset of the on-screen grid's ~25
+                   * columns (Professional Printing checkpoint), not every `PAYROLL_COLUMNS`
+                   * entry shrunk to illegibility: identity (Code/Employee/Site/Deputed Branch),
+                   * pay components, and Net Salary are what a printed distribution/payout sheet
+                   * is actually used for. Omitted as not operationally useful on paper: Bank
+                   * Details (Bank/Branch Code/Account/IBAN — already the Bank Sheet's own
+                   * dedicated print), Designation/Units/OT Rate/Cycle Days/Leave Days/Leave
+                   * Rate/EOBI Applicable/Remarks (reference detail, not payout figures), and
+                   * Status/Hold (screen-only workflow state, meaningless on a static document).
+                   */}
                   <div className="hidden print:block">
                     <Table>
                       <TableHeader>
@@ -295,6 +325,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                           <TableHead>Code</TableHead>
                           <TableHead>Employee</TableHead>
                           <TableHead>Site</TableHead>
+                          <TableHead>Deputed Branch</TableHead>
                           <TableHead className="text-right">Gross Pay</TableHead>
                           <TableHead className="text-right">Days</TableHead>
                           <TableHead className="text-right">OT Hours</TableHead>
@@ -316,11 +347,25 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                               <TableCell>{entry.employee.employeeCode ?? '—'}</TableCell>
                               <TableCell>{entry.employee.name}</TableCell>
                               <TableCell>{entry.site.name}</TableCell>
+                              <TableCell>{entry.workLines[0]?.unit.code ?? '—'}</TableCell>
                               <TableCell className="text-right tabular-nums">{formatMoney(entry.grossPay)}</TableCell>
                               <TableCell className="text-right tabular-nums">{entry.workLines[0]?.days ?? '—'}</TableCell>
                               <TableCell className="text-right tabular-nums">{entry.workLines[0]?.otHours ?? '—'}</TableCell>
                               <TableCell className="text-right tabular-nums">{formatMoney(entry.allowance)}</TableCell>
-                              <TableCell className="text-right tabular-nums">{formatMoney(deductions.toFixed(2))}</TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {formatMoney(deductions.toFixed(2))}
+                                {/* Compact, single-line balance note (never a second row/wrap,
+                                    which is what previously risked overflow) — same source
+                                    (`entry.advance`/`entry.eidAdvance`) as the on-screen grid's
+                                    `BalanceLabel`, just print-typography-scaled here. */}
+                                {(entry.advance || entry.eidAdvance) && (
+                                  <div className="whitespace-nowrap text-[7.5px] font-normal text-text-faint">
+                                    {entry.advance && `Adv Bal: ${formatMoney(entry.advance.outstandingBalance)}`}
+                                    {entry.advance && entry.eidAdvance && ' · '}
+                                    {entry.eidAdvance && `Eid Bal: ${formatMoney(entry.eidAdvance.outstandingBalance)}`}
+                                  </div>
+                                )}
+                              </TableCell>
                               <TableCell className="text-right tabular-nums font-semibold">
                                 {formatMoney(netSalary)}
                               </TableCell>
@@ -328,6 +373,26 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                           );
                         })}
                       </TableBody>
+                      <tfoot>
+                        {/* One cell per header column, in the same order — the employee count sits
+                            under "Employee" specifically (not merged with "Code"), matching the
+                            on-screen grid's own totals row convention (`PayrollEntryTotalsRow`)
+                            after its 2026-07-25 "count detached from its own column" fix. */}
+                        <TableRow className="border-t-2 border-border-strong font-semibold">
+                          <TableCell />
+                          <TableCell>
+                            {filteredEntries.length} {filteredEntries.length === 1 ? 'employee' : 'employees'}
+                          </TableCell>
+                          <TableCell />
+                          <TableCell />
+                          <TableCell className="text-right tabular-nums">{formatMoney(printTotals.grossPay.toFixed(2))}</TableCell>
+                          <TableCell />
+                          <TableCell />
+                          <TableCell className="text-right tabular-nums">{formatMoney(printTotals.allowance.toFixed(2))}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatMoney(printTotals.deductions.toFixed(2))}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatMoney(printTotals.netSalary.toFixed(2))}</TableCell>
+                        </TableRow>
+                      </tfoot>
                     </Table>
                   </div>
                 </>
