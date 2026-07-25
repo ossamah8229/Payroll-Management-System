@@ -73,16 +73,10 @@ export function PayrollEntryGrid({
   cycle,
   entries,
   banks,
-  canCorrect,
-  onCreateCorrection,
-  onViewCorrectionHistory,
 }: {
   cycle: PayrollCycle;
   entries: PayrollEntry[];
   banks: Bank[];
-  canCorrect: boolean;
-  onCreateCorrection: (entry: PayrollEntry) => void;
-  onViewCorrectionHistory: (entry: PayrollEntry) => void;
 }) {
   const liveTotalsStore = useMemo(() => new LiveTotalsStore(), []);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -250,9 +244,6 @@ export function PayrollEntryGrid({
                   banks={banks}
                   liveTotalsStore={liveTotalsStore}
                   gridTemplateColumns={gridTemplate}
-                  canCorrect={canCorrect}
-                  onCreateCorrection={onCreateCorrection}
-                  onViewCorrectionHistory={onViewCorrectionHistory}
                   style={{
                     position: 'absolute',
                     top: 0,

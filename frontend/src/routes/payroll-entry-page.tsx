@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, FileEdit, Lock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
@@ -24,7 +24,6 @@ import { PayrollEntryGrid } from '@/components/payroll-entry/payroll-entry-grid'
 import { NewCycleModal } from '@/components/payroll-entry/new-cycle-modal';
 import { CopyToAllToolbar } from '@/components/payroll-entry/copy-to-all-toolbar';
 import { RequestCorrectionModal } from '@/components/corrections/request-correction-modal';
-import { CorrectionHistoryModal } from '@/components/corrections/correction-history-modal';
 
 function GridLoadingState() {
   return (
@@ -111,8 +110,6 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   const hasAnyCycle = cycles.length > 0;
   const isArchived = cycle?.status === 'ARCHIVED';
   const [requestCorrectionOpen, setRequestCorrectionOpen] = useState(false);
-  const [correctingEntryId, setCorrectingEntryId] = useState<string | undefined>(undefined);
-  const [historyEntry, setHistoryEntry] = useState<PayrollEntry | undefined>(undefined);
   const {
     data: entries,
     isLoading: entriesLoading,
@@ -172,15 +169,6 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   const correctableEntries = useMemo(() => filteredEntries.filter((entry) => entry.released), [filteredEntries]);
   const hasReleasedEntries = correctableEntries.length > 0;
 
-  const handleCreateCorrection = useCallback((entry: PayrollEntry) => {
-    setCorrectingEntryId(entry.id);
-    setRequestCorrectionOpen(true);
-  }, []);
-
-  const handleViewCorrectionHistory = useCallback((entry: PayrollEntry) => {
-    setHistoryEntry(entry);
-  }, []);
-
   // Communicates Option C's approved limitation (Phase 3 Checkpoint 5): the flat export format
   // represents only an entry's primary work line, so a currently-filtered split employee's
   // additional lines aren't in the file — surfaced as UI copy rather than a format change,
@@ -226,13 +214,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                     Export Excel
                   </Button>
                   {hasReleasedEntries && canRequestCorrection(user) && (
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        setCorrectingEntryId(undefined);
-                        setRequestCorrectionOpen(true);
-                      }}
-                    >
+                    <Button variant="secondary" onClick={() => setRequestCorrectionOpen(true)}>
                       <FileEdit className="h-3.5 w-3.5" aria-hidden />
                       Request Correction
                     </Button>
@@ -304,9 +286,6 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                       cycle={cycle}
                       entries={filteredEntries}
                       banks={banks.data ?? []}
-                      canCorrect={canRequestCorrection(user)}
-                      onCreateCorrection={handleCreateCorrection}
-                      onViewCorrectionHistory={handleViewCorrectionHistory}
                     />
                   </div>
                   <div className="hidden print:block">
@@ -362,19 +341,10 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
       {hasReleasedEntries && (
         <RequestCorrectionModal
           open={requestCorrectionOpen}
-          onOpenChange={(next) => {
-            setRequestCorrectionOpen(next);
-            if (!next) setCorrectingEntryId(undefined);
-          }}
+          onOpenChange={setRequestCorrectionOpen}
           entries={correctableEntries}
-          initialEntryId={correctingEntryId}
         />
       )}
-      <CorrectionHistoryModal
-        open={Boolean(historyEntry)}
-        onOpenChange={(next) => !next && setHistoryEntry(undefined)}
-        entry={historyEntry}
-      />
     </AppShell>
   );
 }

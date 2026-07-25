@@ -161,9 +161,6 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
-          canCorrect={false}
-          onCreateCorrection={() => {}}
-          onViewCorrectionHistory={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -187,9 +184,6 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
-          canCorrect
-          onCreateCorrection={() => {}}
-          onViewCorrectionHistory={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -228,9 +222,6 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
-          canCorrect
-          onCreateCorrection={() => {}}
-          onViewCorrectionHistory={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -287,17 +278,26 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     const employeeCodeCell = container.querySelector('[data-col-id="employeeCode"]');
     expect(employeeNameCell?.textContent).toBe('2 employees');
     expect(employeeCodeCell?.textContent).toBe('');
+
+    // Σ stays under the row-number/# column (`serial`) — the two footer anchors specified by the
+    // acceptance target ("Σ under #", "N employees under Employee") both hold in the same render.
+    const serialCell = container.querySelector('[data-col-id="serial"]');
+    expect(serialCell?.textContent).toBe('Σ');
   });
 
   /**
-   * Presentation & Workflow Stabilization Checkpoint, 2026-07-25, Issue 1 — regression guard for
-   * the Released badge being centered as part of a `[Badge, actions button]` flex group (which
-   * visibly pulls the badge off the column's true center) instead of independently, in its own
-   * grid track. Asserts the structural mechanism (badge and actions button occupy separate,
-   * explicitly-placed grid columns of the status cell) rather than measuring pixel positions,
-   * which jsdom doesn't lay out anyway.
+   * Presentation & Workflow Stabilization Checkpoint, 2026-07-25, Issue 1 (final fix) — the
+   * previous architecture centered a `[Badge, actions button]` pair inside a manually-tracked
+   * `[1fr_auto_1fr]` grid, which visibly pulled the badge off the column's true center by roughly
+   * half the button's own width. The row-level actions button (Create Correction / View
+   * Correction History) is now removed from this cell entirely — Create Correction is reachable
+   * from the page-level "Request Correction" toolbar button (its own Employee field can search and
+   * select any released entry), and View Correction History is reachable from the Corrections
+   * page. With nothing else sharing the cell, the Status cell is a single centered box: this test
+   * asserts there is no secondary action element in the cell at all, not just that the badge
+   * happens to be centered.
    */
-  it('the Released status cell centers the badge independently of the actions button via an explicit grid track', () => {
+  it('the Released status cell contains only the badge — no secondary action element shares the cell', () => {
     const releasedEntry = makeEntry({ released: true, releasedAt: '2026-07-01T00:00:00.000Z' });
     const resolved = computeColumnWidths([releasedEntry], [testBank]);
     const queryClient = new QueryClient();
@@ -312,26 +312,54 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
-          canCorrect
-          onCreateCorrection={() => {}}
-          onViewCorrectionHistory={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
     );
 
     const statusCell = container.querySelector('[data-col-id="status"]') as HTMLElement;
-    expect(statusCell.className).toContain('grid-cols-[1fr_auto_1fr]');
+    // Centered via a plain flex box — the same `items-center justify-center` convention every
+    // other `align: 'center'` column in this row uses (serial, units, eobiApplicable, hold) — no
+    // multi-track grid, no per-status special case.
+    expect(statusCell.className).toMatch(/\bflex\b/);
+    expect(statusCell.className).toMatch(/\bitems-center\b/);
+    expect(statusCell.className).toMatch(/\bjustify-center\b/);
+    expect(statusCell.className).not.toMatch(/grid-cols-/);
 
+    expect(statusCell.textContent).toBe('Released');
+    expect(statusCell.querySelector('button')).toBeNull();
+    expect(statusCell.querySelector('[role="menu"]')).toBeNull();
+    // No margin/translate/absolute one-off nudge on the badge itself.
     const badge = statusCell.querySelector('span') as HTMLElement;
-    expect(badge.textContent).toBe('Released');
-    expect(badge.className).toMatch(/\bcol-start-2\b/);
-    // Not centered as part of a flex group with the actions button — the button lives in its own
-    // trailing grid track (col-start-3), never sharing the badge's own centered track.
-    expect(badge.className).not.toMatch(/\bcol-start-3\b/);
+    expect(badge.className).not.toMatch(/\bm[trblxy]?-\d/);
+    expect(badge.className).not.toMatch(/\btranslate-/);
+  });
 
-    const actionsButton = statusCell.querySelector('button[aria-label^="Released payroll actions"]') as HTMLElement;
-    expect(actionsButton.className).toMatch(/\bcol-start-3\b/);
-    expect(actionsButton.className).toMatch(/\bjustify-self-end\b/);
+  it('the unreleased "—" placeholder uses the same centered cell, with no action button either', () => {
+    const unreleasedEntry = makeEntry({ released: false });
+    const resolved = computeColumnWidths([unreleasedEntry], [testBank]);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={unreleasedEntry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    const statusCell = container.querySelector('[data-col-id="status"]') as HTMLElement;
+    expect(statusCell.className).toMatch(/\bflex\b/);
+    expect(statusCell.className).toMatch(/\bitems-center\b/);
+    expect(statusCell.className).toMatch(/\bjustify-center\b/);
+    expect(statusCell.textContent).toBe('—');
+    expect(statusCell.querySelector('button')).toBeNull();
   });
 });

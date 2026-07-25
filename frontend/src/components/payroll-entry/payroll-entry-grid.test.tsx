@@ -150,14 +150,7 @@ function renderGrid(entries: PayrollEntry[]) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <PayrollEntryGrid
-        cycle={testCycle}
-        entries={entries}
-        banks={[testBank]}
-        canCorrect={false}
-        onCreateCorrection={() => {}}
-        onViewCorrectionHistory={() => {}}
-      />
+      <PayrollEntryGrid cycle={testCycle} entries={entries} banks={[testBank]} />
     </QueryClientProvider>,
   );
 }
@@ -224,5 +217,35 @@ describe('PayrollEntryGrid — sortable columns (Payroll Entry usability checkpo
     expect(totalsGrossAfter).toBe(totalsGrossBefore);
     // Sanity check the total is actually the sum, not a coincidental match (e.g. both empty).
     expect(totalsGrossAfter).toBe('PKR 30,000.00');
+  });
+});
+
+describe('PayrollEntryGrid — Status column header alignment (Presentation & Workflow Stabilization Checkpoint, 2026-07-25)', () => {
+  afterEach(() => cleanup());
+
+  /**
+   * Root cause of the reported "STATUS misaligned" defect: the header row applied no per-column
+   * text alignment at all, so a center-aligned column's header label always rendered left-aligned
+   * regardless of what its body cells did — the header and body were never sharing one alignment
+   * decision. The header must now derive its own alignment from `PAYROLL_COLUMNS`' own `align`
+   * field (the same field the column's body cells are centered per), via `data-col-id`, not via a
+   * one-off Status-only class.
+   */
+  it('the Status column header is centered, matching the canonical center-align of the Status column definition', () => {
+    const entry = makeEntry({ id: '1' });
+    renderGrid([entry]);
+
+    const header = document.querySelector('[data-col-id="status"][role="columnheader"]') as HTMLElement;
+    expect(header).toBeTruthy();
+    expect(header.className).toMatch(/\btext-center\b/);
+  });
+
+  it('a non-center-aligned header (Employee) does not get the center-alignment class', () => {
+    const entry = makeEntry({ id: '1' });
+    renderGrid([entry]);
+
+    const header = document.querySelector('[data-col-id="employeeName"][role="columnheader"]') as HTMLElement;
+    expect(header).toBeTruthy();
+    expect(header.className).not.toMatch(/\btext-center\b/);
   });
 });
