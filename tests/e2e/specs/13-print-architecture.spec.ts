@@ -4,25 +4,49 @@ import { createSiteWithEmployee, ensureAnyPayrollCycleExists } from '../helpers/
 
 /**
  * RBAC Creator Ownership & Professional Printing checkpoint — real-browser (Chromium) verification
- * of the shared print-layout architecture (`docs/architecture/print-architecture.md`), the one
- * class of check a jsdom component test can't cover: actual `@media print` rendering, the
- * dynamically-injected `@page` orientation rule, and Payroll Entry's print table rendering its
- * complete (non-virtualized) dataset.
+ * of the shared print-layout architecture (`docs/architecture/print-architecture.md`).
  *
- * `window.print()` opens no real dialog in headless Chromium, but it still fires `beforeprint`/
- * `afterprint` synchronously as if a print had completed instantly — which would immediately
- * trigger `use-print.ts`'s own `afterprint` cleanup and remove the exact `@page` style tag/
- * `print-fit` class these specs need to inspect, before `page.evaluate` ever gets to read them.
- * Stubbed out via `addInitScript` in every test below so the layout side effects
- * (`applyPrintLayout`, which run synchronously *before* the `window.print()` call) stay in the DOM
- * long enough to assert on — the native print dialog itself is out of scope for an automated
- * check regardless (Playwright/CDP has no way to interact with it).
+ * **Production Print Defect (2026-07-25) and why the original version of this file missed it.**
+ * `window.print()` was previously stubbed as a bare no-op (`() => undefined`) via `addInitScript`,
+ * and every assertion about DOM/CSS state ran in a *separate*, later `page.evaluate()` call after
+ * the confirm click's own `await ...click()` had already resolved. That round-trip is exactly
+ * enough time for React to flush a pending state update — so even under the actual production bug
+ * (the settings dialog's confirm handler called `window.print()` *before* requesting its own
+ * close), the dialog had already closed for real by the time this file's own assertions ran,
+ * masking the defect entirely. A real browser's print engine has no such grace period: it captures
+ * the DOM at the exact synchronous instant `window.print()` is called, which is why production
+ * users saw the Print Settings dialog itself in their print preview.
+ *
+ * Fixed here by capturing DOM/CSS state *inside* the `window.print()` stub itself — the same
+ * synchronous instant a real print engine would capture — never in a later, separate evaluate.
  */
+async function stubWindowPrintWithCapture(page: import('@playwright/test').Page, reportSelector: string) {
+  await page.addInitScript((selector) => {
+    (window as unknown as { __printCapture: unknown }).__printCapture = null;
+    window.print = () => {
+      (window as unknown as { __printCapture: unknown }).__printCapture = {
+        dialogPresent: document.querySelector('[role="dialog"]') !== null,
+        printSettingsTextPresent: document.body.innerText.includes('Print settings'),
+        printFitApplied: document.documentElement.classList.contains('print-fit'),
+        pageStyleContent: document.getElementById('app-dynamic-print-page-style')?.textContent ?? '',
+        reportPresent: document.querySelector(selector) !== null,
+      };
+    };
+  }, reportSelector);
+}
 
-async function stubWindowPrint(page: import('@playwright/test').Page) {
-  await page.addInitScript(() => {
-    window.print = () => undefined;
-  });
+interface PrintCapture {
+  dialogPresent: boolean;
+  printSettingsTextPresent: boolean;
+  printFitApplied: boolean;
+  pageStyleContent: string;
+  reportPresent: boolean;
+}
+
+async function getPrintCapture(page: import('@playwright/test').Page): Promise<PrintCapture> {
+  const capture = await page.evaluate(() => (window as unknown as { __printCapture: PrintCapture | null }).__printCapture);
+  if (!capture) throw new Error('window.print() was never invoked — nothing was captured');
+  return capture;
 }
 
 async function openPrintDialogAndConfirm(
@@ -44,12 +68,12 @@ async function openPrintDialogAndConfirm(
 }
 
 test.describe('Professional Printing — shared architecture', () => {
-  test('Payroll Entry (Landscape): print settings dialog, dynamic @page rule, and the complete dataset — not just virtualized rows', async ({
+  test('Payroll Entry (Landscape): the settings dialog is gone and the report is present at the exact moment window.print() is invoked; complete dataset — not just virtualized rows', async ({
     authenticatedPage: page,
   }) => {
     const context = page.context();
     const label = `print-arch-${Date.now()}`;
-    await stubWindowPrint(page);
+    await stubWindowPrintWithCapture(page, '.hidden.print\\:block table');
 
     const { cycleId } = await ensureAnyPayrollCycleExists(context);
 
@@ -89,12 +113,13 @@ test.describe('Professional Printing — shared architecture', () => {
 
     await openPrintDialogAndConfirm(page, { orientation: 'Landscape', fit: 'Fit to page' });
 
-    const pageStyleContent = await page.evaluate(
-      () => document.getElementById('app-dynamic-print-page-style')?.textContent ?? '',
-    );
-    expect(pageStyleContent).toContain('A4 landscape');
-    const hasFitClass = await page.evaluate(() => document.documentElement.classList.contains('print-fit'));
-    expect(hasFitClass).toBe(true);
+    // --- REGRESSION: DOM state at the exact moment window.print() was invoked -------------------
+    const capture = await getPrintCapture(page);
+    expect(capture.dialogPresent).toBe(false);
+    expect(capture.printSettingsTextPresent).toBe(false);
+    expect(capture.reportPresent).toBe(true);
+    expect(capture.printFitApplied).toBe(true);
+    expect(capture.pageStyleContent).toContain('A4 landscape');
 
     // Real print CSS rendering, real Chromium PDF generation (checkpoint's own required
     // verification path) — proves the print-only table actually renders under `@media print`
@@ -103,6 +128,10 @@ test.describe('Professional Printing — shared architecture', () => {
     await page.emulateMedia({ media: 'print' });
     await expect(page.locator('[role="table"][aria-label="Payroll Entry grid"]')).toBeHidden();
     await expect(printTable).toBeVisible();
+    // Defense-in-depth CSS (Production Print Defect fix): even independent of the lifecycle fix
+    // above, a settings dialog left mounted must never be printable — asserted directly here
+    // rather than only inferred from the lifecycle capture.
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     const printRowCountUnderPrintMedia = await printTable.locator('tbody tr').count();
     expect(printRowCountUnderPrintMedia).toBe(printRowCountBeforePrint);
@@ -123,8 +152,12 @@ test.describe('Professional Printing — shared architecture', () => {
     const printTableHeight = await printTable.evaluate((el) => el.getBoundingClientRect().height);
     expect(printTableHeight).toBeGreaterThan(700);
 
+    // Real Chromium PDF generation of the prepared print DOM — content-level confirmation that
+    // the report, not the settings dialog, is what actually gets captured for print.
     const pdf = await page.pdf({ landscape: true });
     expect(pdf.byteLength).toBeGreaterThan(1000);
+    const pdfText = pdf.toString('latin1');
+    expect(pdfText).not.toContain('Print settings');
 
     await page.emulateMedia({ media: 'screen' });
   });
@@ -133,7 +166,7 @@ test.describe('Professional Printing — shared architecture', () => {
     authenticatedPage: page,
   }) => {
     const context = page.context();
-    await stubWindowPrint(page);
+    await stubWindowPrintWithCapture(page, 'table');
     const { cycleId } = await ensureAnyPayrollCycleExists(context);
     await createSiteWithEmployee(context, `print-arch-portrait-${Date.now()}`);
 
@@ -166,16 +199,18 @@ test.describe('Professional Printing — shared architecture', () => {
   // checkbox — every column is plain data. This is the real-Chromium confirmation that the shared
   // `.print-flow`/`print:hidden` CSS alone (unchanged architecture) already produces acceptable
   // print output for both, now with a deliberate `recommendedOrientation="landscape"` default
-  // (previously silently inherited Portrait regardless of their 9-11 column width).
+  // (previously silently inherited Portrait regardless of their 9-11 column width), AND (this
+  // pass) that the shared lifecycle fix applies equally to a live-DOM report, not just Payroll
+  // Entry's dedicated print table.
   for (const { name, path, siteName } of [
     { name: 'Bank Sheet', path: 'bank-sheet', siteName: 'Bank Sheet' },
     { name: 'Cash Receiving', path: 'cash-receiving', siteName: 'Cash Receiving' },
   ]) {
-    test(`${name}: sidebar/filters/actions excluded, Landscape default, Fit to Page keeps the table within the printable width`, async ({
+    test(`${name}: settings dialog is gone and the live-DOM report is present at the exact moment window.print() is invoked; Landscape default; Fit to Page keeps the table within the printable width`, async ({
       authenticatedPage: page,
     }) => {
       const context = page.context();
-      await stubWindowPrint(page);
+      await stubWindowPrintWithCapture(page, '.print-flow table');
       const { cycleId } = await ensureAnyPayrollCycleExists(context);
       const { unitId } = await createSiteWithEmployee(context, `print-arch-${siteName}-${Date.now()}`);
       // Both pages only ever show released payroll ("Bank Sheets are generated only from released
@@ -204,6 +239,14 @@ test.describe('Professional Printing — shared architecture', () => {
       await expect(dialog.getByText('(Landscape)')).toBeVisible();
       await dialog.getByRole('button', { name: 'Print', exact: true }).click();
 
+      // --- REGRESSION: DOM state at the exact moment window.print() was invoked -----------------
+      const capture = await getPrintCapture(page);
+      expect(capture.dialogPresent).toBe(false);
+      expect(capture.printSettingsTextPresent).toBe(false);
+      expect(capture.reportPresent).toBe(true);
+      expect(capture.printFitApplied).toBe(true);
+      expect(capture.pageStyleContent).toContain('A4 landscape');
+
       await page.emulateMedia({ media: 'print' });
 
       // Sidebar/navigation, filter controls, and the toolbar's own action buttons (Print/Export)
@@ -211,9 +254,9 @@ test.describe('Professional Printing — shared architecture', () => {
       // pass, applied here as evidence rather than assumption.
       await expect(page.locator('nav').first()).toBeHidden();
       await expect(page.getByRole('button', { name: 'Print', exact: true })).toBeHidden();
-
-      const hasFitClass = await page.evaluate(() => document.documentElement.classList.contains('print-fit'));
-      expect(hasFitClass).toBe(true);
+      // Defense-in-depth CSS (Production Print Defect fix): a settings dialog, if ever left
+      // mounted by a future lifecycle regression, must still never be printable.
+      await expect(page.getByRole('dialog')).toHaveCount(0);
 
       const table = page.locator('.print-flow table').first();
       await expect(table).toBeVisible();

@@ -81,4 +81,41 @@ describe('PrintButton', () => {
     expect(printSpy).toHaveBeenCalledTimes(1);
     expect(document.documentElement.classList.contains('print-fit')).toBe(false);
   });
+
+  // --- Production Print Defect regression (2026-07-25) ---------------------------------------
+  //
+  // The defect: window.print() ran while the settings dialog was still fully mounted, so the
+  // printed document was the dialog itself, not the report underneath — production evidence,
+  // ALL 8 PrintButton pages. Root cause: the dialog's old confirm handler called `onConfirm`
+  // (which synchronously invokes `window.print()`) *before* `onOpenChange(false)`, so the browser
+  // captured the DOM before the close was even requested, let alone committed. Every existing
+  // test above only ever inspected the DOM *after* the confirm click's fireEvent call had fully
+  // returned — by which point React had already flushed the close, even under the buggy
+  // implementation, so those assertions could never have caught this. This test instead captures
+  // DOM state *synchronously, inside the window.print() stub itself* — the same moment a real
+  // browser's print engine actually captures, with no grace period for a later render to fix it up.
+  it('REGRESSION: the settings dialog is fully unmounted from the DOM before window.print() is invoked, and the report underneath remains present', () => {
+    let dialogPresentAtPrintTime: boolean | undefined;
+    let reportPresentAtPrintTime: boolean | undefined;
+
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {
+      dialogPresentAtPrintTime = screen.queryByText('Print settings') !== null;
+      reportPresentAtPrintTime = screen.queryByTestId('fake-report') !== null;
+    });
+
+    render(
+      <div>
+        <div data-testid="fake-report">Report content</div>
+        <PrintButton />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    expect(printSpy).toHaveBeenCalledTimes(1);
+    expect(dialogPresentAtPrintTime).toBe(false);
+    expect(reportPresentAtPrintTime).toBe(true);
+  });
 });
