@@ -7,10 +7,12 @@ import type {
   RejectCorrectionRequestInput,
   SessionUser,
 } from '@payroll/shared';
+import { PERMISSIONS } from '@payroll/shared';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
+import { assertSiteAccess, hasPermission, isMasterAdmin } from '../../common/authz-policy';
+import { forbidden } from '../../common/http-error';
 import { acquirePayrollEntryLock } from './corrections.lock';
 import {
   assertEntryIsReleased,
@@ -192,14 +194,25 @@ export async function createCorrectionRequest(
 
 // --- Read ----------------------------------------------------------------------------------------
 
+/**
+ * A caller holding only `payroll:entry` (a requester, never a reviewer) is scoped to the requests
+ * they personally submitted — the "My Requests" view — never the full site-scoped queue, which
+ * stays `corrections:approve`-only. This is what actually separates "view my own submitted
+ * requests" from "approve requests" (Presentation & Workflow Stabilization Checkpoint,
+ * 2026-07-25): both share the one `PAYROLL_ENTRY`-or-`CORRECTIONS_APPROVE` route gate
+ * (`corrections.routes.ts`'s `ENTRY_VIEW_PERMISSIONS`), but only an approve-holder's query is
+ * left unrestricted by requester.
+ */
 export async function listCorrectionRequestsForUser(
   currentUser: SessionUser,
   query: ListCorrectionRequestsQuery,
 ): Promise<CorrectionRequestDetail[]> {
+  const canApprove = hasPermission(currentUser, PERMISSIONS.CORRECTIONS_APPROVE);
   return listCorrectionRequests({
     status: query.status,
     payrollEntryId: query.payrollEntryId,
     siteIds: isMasterAdmin(currentUser) ? undefined : currentUser.siteIds,
+    requestedById: canApprove ? undefined : currentUser.id,
   });
 }
 
@@ -212,6 +225,12 @@ export async function getCorrectionRequestDetail(
     throw new CorrectionValidationError({ code: 'REQUEST_NOT_FOUND', message: `CorrectionRequest "${id}" does not exist.` });
   }
   assertSiteAccess(currentUser, request.payrollEntry.siteId);
+  // Same "view my own" vs "approve" separation as the list above: a non-approver may open exactly
+  // the request they themselves submitted (what the post-submission redirect and the "My
+  // Requests" tab both link to), never an arbitrary id belonging to another requester.
+  if (!hasPermission(currentUser, PERMISSIONS.CORRECTIONS_APPROVE) && request.requestedById !== currentUser.id) {
+    throw forbidden('You can only view correction requests you submitted yourself.');
+  }
   return request;
 }
 

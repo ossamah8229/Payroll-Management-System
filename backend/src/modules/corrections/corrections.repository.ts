@@ -161,6 +161,12 @@ export interface ListCorrectionRequestsFilters {
   /** Non-Master-Admin callers are scoped to their own assigned sites — `null`/`undefined` means
    * unrestricted (Master Admin only; enforced by the service layer, never inferred here). */
   siteIds?: string[];
+  /** Restricts the list to requests submitted by this one user — the service layer sets this for
+   * any caller who lacks `corrections:approve` (Presentation & Workflow Stabilization Checkpoint,
+   * 2026-07-25's "My Requests" view: a submitter may monitor their own requests without gaining
+   * visibility into every other submitter's), and leaves it `undefined` for an approver, who still
+   * sees every request within `siteIds`. */
+  requestedById?: string;
 }
 
 export async function listCorrectionRequests(
@@ -172,6 +178,7 @@ export async function listCorrectionRequests(
       ...(filters.status && { status: filters.status }),
       ...(filters.payrollEntryId && { payrollEntryId: filters.payrollEntryId }),
       ...(filters.siteIds && { payrollEntry: { siteId: { in: filters.siteIds } } }),
+      ...(filters.requestedById && { requestedById: filters.requestedById }),
     },
     include: correctionRequestDetailInclude,
     orderBy: { requestedAt: 'desc' },

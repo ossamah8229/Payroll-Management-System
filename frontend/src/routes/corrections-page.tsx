@@ -2,7 +2,13 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatMoney, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
-import { canAccessCorrections, canReviewCorrectionRequests, defaultCorrectionsTab } from '@/lib/permissions';
+import {
+  canAccessCorrections,
+  canReviewCorrectionRequests,
+  canViewOwnCorrectionRequests,
+  defaultCorrectionsTab,
+  type CorrectionsTab,
+} from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PrintButton } from '@/components/ui/print-button';
@@ -178,6 +184,143 @@ function ReviewQueueTab({ user }: { user: SessionUser }) {
   );
 }
 
+// --- My Requests -----------------------------------------------------------------------------
+
+/**
+ * A submitter's own tracking view (Presentation & Workflow Stabilization Checkpoint, 2026-07-25,
+ * Issues 3/4) — everything a Payroll Manager needs to monitor a request they submitted (status,
+ * submission date, submitted values, eventual approval/rejection) without holding
+ * `corrections:approve`. Reads the exact same `useCorrectionRequests` source of truth as
+ * `ReviewQueueTab` (no duplicate data source, per the brief) — the backend itself narrows the
+ * result to "requests I submitted" for any caller who lacks `corrections:approve`
+ * (`listCorrectionRequestsForUser`, `corrections.service.ts`), so this component never needs its
+ * own client-side "is this mine?" filter.
+ */
+function MyCorrectionRequestsTab({ user }: { user: SessionUser }) {
+  const navigate = useNavigate();
+  const sites = useAccessibleProjectSites(user);
+  const [status, setStatus] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | ''>('');
+  const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
+  const [search, setSearch] = useState('');
+
+  const requests = useCorrectionRequests(status ? { status } : {});
+
+  const siteOptions = useMemo(
+    () => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })),
+    [sites.data],
+  );
+
+  const rows = useMemo(() => {
+    const list = requests.data ?? [];
+    return list.filter((request) => {
+      if (selectedSiteIds.length > 0 && !selectedSiteIds.includes(request.payrollEntry.siteId)) return false;
+      if (!matchesSearch(request.payrollEntry.employee.name, request.payrollEntry.employee.employeeCode, search)) return false;
+      return true;
+    });
+  }, [requests.data, selectedSiteIds, search]);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-end gap-3 print:hidden">
+        <FilterField id="mine-status-filter" label="Status">
+          <select
+            id="mine-status-filter"
+            className={selectClassName}
+            value={status}
+            onChange={(e) => setStatus(e.target.value as typeof status)}
+          >
+            <option value="">All statuses</option>
+            <option value="PENDING">Pending</option>
+            <option value="APPROVED">Approved</option>
+            <option value="REJECTED">Rejected</option>
+          </select>
+        </FilterField>
+        <MultiSelectFilter
+          id="mine-site-filter"
+          label="Site"
+          options={siteOptions}
+          selectedIds={selectedSiteIds}
+          onChange={setSelectedSiteIds}
+        />
+        <FilterField id="mine-search" label="Employee">
+          <Input
+            id="mine-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Name or code…"
+            className="w-56"
+          />
+        </FilterField>
+      </div>
+
+      {requests.isLoading && (
+        <div className="flex flex-col gap-2 p-[18px]">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      )}
+
+      {!requests.isLoading && requests.error && (
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-danger">Could not load your correction requests</p>
+          <p className="text-xs text-text-muted">
+            {requests.error instanceof ApiError ? requests.error.message : 'Something went wrong'}
+          </p>
+        </div>
+      )}
+
+      {!requests.isLoading && !requests.error && rows.length === 0 && (
+        <div className="flex flex-col items-center gap-1 py-14 text-center">
+          <p className="text-xs font-medium text-text">You haven't submitted any correction requests yet</p>
+          <p className="text-xs text-text-muted">
+            Requests you submit from a released Payroll Entry will appear here.
+          </p>
+        </div>
+      )}
+
+      {!requests.isLoading && !requests.error && rows.length > 0 && (
+        <div className="print-flow overflow-x-auto">
+          <Table className="min-w-full">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">Employee</TableHead>
+                <TableHead className="whitespace-nowrap">Code</TableHead>
+                <TableHead className="whitespace-nowrap">Payroll Period</TableHead>
+                <TableHead className="whitespace-nowrap">Field</TableHead>
+                <TableHead className="whitespace-nowrap">Proposed Value</TableHead>
+                <TableHead className="whitespace-nowrap">Submitted At</TableHead>
+                <TableHead className="whitespace-nowrap">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((request: CorrectionRequest) => (
+                <TableRow
+                  key={request.id}
+                  className="cursor-pointer hover:bg-bg"
+                  onClick={() => navigate(`/corrections/requests/${request.id}`)}
+                >
+                  <TableCell className="whitespace-nowrap font-medium">{request.payrollEntry.employee.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">{request.payrollEntry.employee.employeeCode ?? '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap">{cyclePeriodLabel(request.payrollEntry.cycle)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{correctionFieldLabel(request.field)}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">{request.proposedNewValue}</TableCell>
+                  <TableCell className="whitespace-nowrap">{new Date(request.requestedAt).toLocaleString()}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge tone={correctionRequestStatusTone(request.status)}>
+                      {request.status === 'PENDING' ? 'Awaiting Approval' : request.status}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </>
+  );
+}
+
 // --- Corrections Ledger ----------------------------------------------------------------------
 
 function CorrectionsLedgerTab({ user }: { user: SessionUser }) {
@@ -324,18 +467,23 @@ function CorrectionsLedgerTab({ user }: { user: SessionUser }) {
 }
 
 /**
- * The Corrections operational hub (Phase 6 Checkpoint 6) — two tabs over the two primary views the
- * checkpoint's own brief specifies: the Review Queue (`corrections:approve` only — the backend's
- * `GET /correction-requests` itself is gated identically, so this tab is hidden rather than shown
- * and then always 403ing) and the Corrections Ledger (either `payroll:entry` or
- * `corrections:approve`, matching `GET /balance-adjustments`'s own `BALANCE_VIEW_PERMISSIONS`).
- * "Request Correction" is deliberately not a third tab here — it opens from an eligible Payroll
- * Entry view instead, per the brief's own information architecture.
+ * The Corrections operational hub (Phase 6 Checkpoint 6; "My Requests" added Presentation &
+ * Workflow Stabilization Checkpoint, 2026-07-25) — three tabs: the Review Queue
+ * (`corrections:approve` only — the backend's `GET /correction-requests` itself is gated to admit
+ * either that or `payroll:entry`, but a non-approver's query is scoped server-side to their own
+ * requests, so this tab specifically is still hidden rather than shown with a misleadingly narrow
+ * result set), My Requests (`payroll:entry` — a submitter's own requests, whatever their status;
+ * see `canViewOwnCorrectionRequests`), and the Corrections Ledger (either permission, matching
+ * `GET /balance-adjustments`'s own `BALANCE_VIEW_PERMISSIONS`). "Request Correction" is
+ * deliberately not its own tab here — it opens from an eligible Payroll Entry view instead, per
+ * the brief's own information architecture; submitting one now returns here (My Requests) rather
+ * than to a Review-Queue-only detail page a submitter may not be able to open.
  */
 export function CorrectionsPage({ user }: { user: SessionUser }) {
   const canApprove = canReviewCorrectionRequests(user);
+  const canViewOwn = canViewOwnCorrectionRequests(user);
   const canView = canAccessCorrections(user);
-  const [tab, setTab] = useState<'queue' | 'ledger'>(defaultCorrectionsTab(user) ?? 'ledger');
+  const [tab, setTab] = useState<CorrectionsTab>(defaultCorrectionsTab(user) ?? 'ledger');
 
   if (!canView) {
     return (
@@ -347,6 +495,8 @@ export function CorrectionsPage({ user }: { user: SessionUser }) {
       </AppShell>
     );
   }
+
+  const tabTitle = tab === 'queue' ? 'Review Queue' : tab === 'mine' ? 'My Requests' : 'Ledger';
 
   return (
     <AppShell user={user} title="Corrections" subtitle="Review Queue and Corrections Ledger">
@@ -364,14 +514,20 @@ export function CorrectionsPage({ user }: { user: SessionUser }) {
                 Review Queue
               </TabButton>
             )}
+            {canViewOwn && (
+              <TabButton active={tab === 'mine'} onClick={() => setTab('mine')}>
+                My Requests
+              </TabButton>
+            )}
             <TabButton active={tab === 'ledger'} onClick={() => setTab('ledger')}>
               Corrections Ledger
             </TabButton>
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 border-t border-border">
-          <PrintContextHeader title={tab === 'queue' ? 'Corrections — Review Queue' : 'Corrections — Ledger'} />
+          <PrintContextHeader title={`Corrections — ${tabTitle}`} />
           {tab === 'queue' && canApprove && <ReviewQueueTab user={user} />}
+          {tab === 'mine' && canViewOwn && <MyCorrectionRequestsTab user={user} />}
           {tab === 'ledger' && <CorrectionsLedgerTab user={user} />}
         </CardContent>
       </Card>

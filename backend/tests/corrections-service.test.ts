@@ -802,6 +802,96 @@ describe('Phase 6 Checkpoint 3 — Correction request/approval/rejection workflo
     });
   });
 
+  // --- List/detail visibility (Presentation & Workflow Stabilization Checkpoint, 2026-07-25) ------
+  //
+  // Issue 3/4: a Payroll Manager (`payroll:entry`, no `corrections:approve`) may now list and open
+  // exactly the correction requests they themselves submitted — the "My Requests" view — but never
+  // another submitter's, and still never approve or reject regardless. These tests are the
+  // regression guard for widening `correctionRequestsRouter`'s router-level gate from
+  // `corrections:approve`-only to `ENTRY_VIEW_PERMISSIONS`.
+
+  describe('List/detail visibility — payroll:entry vs corrections:approve', () => {
+    it('a payroll:entry-only requester listing correction requests sees only their own, never another requester\'s', async () => {
+      const { site, entry, adjustmentType } = await makeFixtures('visibility-list-own');
+      const requester = await payrollStaffAgent('cp3-visibility-list-requester@test.local', [site.id]);
+      const otherStaff = await payrollStaffAgent('cp3-visibility-list-other@test.local', [site.id]);
+
+      const own = await createRequest(requester, entry.id, GROSS_PAY_BODY(adjustmentType.id, '31000'));
+      const other = await createRequest(otherStaff, entry.id, GROSS_PAY_BODY(adjustmentType.id, '32000'));
+      expect(own.status).toBe(201);
+      expect(other.status).toBe(201);
+
+      const res = await requester.agent.get('/api/v1/correction-requests');
+      expect(res.status).toBe(200);
+      const ids = res.body.correctionRequests.map((r: { id: string }) => r.id);
+      expect(ids).toContain(own.body.correctionRequest.id);
+      expect(ids).not.toContain(other.body.correctionRequest.id);
+    });
+
+    it('an approver listing correction requests still sees every request, not just their own', async () => {
+      const { site, entry, admin, adjustmentType } = await makeFixtures('visibility-list-approver');
+      const requester = await payrollStaffAgent('cp3-visibility-list-approver-requester@test.local', [site.id]);
+      const created = await createRequest(requester, entry.id, GROSS_PAY_BODY(adjustmentType.id, '31000'));
+
+      const res = await admin.agent.get('/api/v1/correction-requests');
+      expect(res.status).toBe(200);
+      const ids = res.body.correctionRequests.map((r: { id: string }) => r.id);
+      expect(ids).toContain(created.body.correctionRequest.id);
+    });
+
+    it('a payroll:entry-only requester can open their own request\'s detail page', async () => {
+      const { site, entry, adjustmentType } = await makeFixtures('visibility-detail-own');
+      const requester = await payrollStaffAgent('cp3-visibility-detail-own@test.local', [site.id]);
+      const created = await createRequest(requester, entry.id, GROSS_PAY_BODY(adjustmentType.id, '31000'));
+
+      const res = await requester.agent.get(`/api/v1/correction-requests/${created.body.correctionRequest.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.correctionRequest.id).toBe(created.body.correctionRequest.id);
+    });
+
+    it('a payroll:entry-only requester cannot open another requester\'s detail page (403)', async () => {
+      const { site, entry, adjustmentType } = await makeFixtures('visibility-detail-other');
+      const owner = await payrollStaffAgent('cp3-visibility-detail-other-owner@test.local', [site.id]);
+      const outsider = await payrollStaffAgent('cp3-visibility-detail-other-outsider@test.local', [site.id]);
+      const created = await createRequest(owner, entry.id, GROSS_PAY_BODY(adjustmentType.id, '31000'));
+
+      const res = await outsider.agent.get(`/api/v1/correction-requests/${created.body.correctionRequest.id}`);
+      expect(res.status).toBe(403);
+    });
+
+    it('a payroll:entry-only requester still cannot approve or reject, even their own now-visible request (403)', async () => {
+      const { site, entry, adjustmentType } = await makeFixtures('visibility-no-approve-rights');
+      const requester = await payrollStaffAgent('cp3-visibility-no-approve-requester@test.local', [site.id]);
+      const created = await createRequest(requester, entry.id, GROSS_PAY_BODY(adjustmentType.id, '31000'));
+      const requestId = created.body.correctionRequest.id;
+
+      const approveRes = await requester.agent
+        .post(`/api/v1/correction-requests/${requestId}/approve`)
+        .set('x-csrf-token', requester.csrfToken)
+        .send({});
+      expect(approveRes.status).toBe(403);
+
+      const rejectRes = await requester.agent
+        .post(`/api/v1/correction-requests/${requestId}/reject`)
+        .set('x-csrf-token', requester.csrfToken)
+        .send({ rejectionReason: 'Not applicable' });
+      expect(rejectRes.status).toBe(403);
+    });
+
+    it('Finance (neither payroll:entry nor corrections:approve) still cannot list or open correction requests (403)', async () => {
+      const { site, entry, adjustmentType } = await makeFixtures('visibility-finance-forbidden');
+      const requester = await payrollStaffAgent('cp3-visibility-finance-requester@test.local', [site.id]);
+      const finance = await financeAgent('cp3-visibility-finance@test.local', [site.id]);
+      const created = await createRequest(requester, entry.id, GROSS_PAY_BODY(adjustmentType.id, '31000'));
+
+      const listRes = await finance.agent.get('/api/v1/correction-requests');
+      expect(listRes.status).toBe(403);
+
+      const detailRes = await finance.agent.get(`/api/v1/correction-requests/${created.body.correctionRequest.id}`);
+      expect(detailRes.status).toBe(403);
+    });
+  });
+
   // --- API security ------------------------------------------------------------------------------
 
   describe('API security', () => {

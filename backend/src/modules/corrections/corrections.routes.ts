@@ -122,13 +122,20 @@ payrollEntryCorrectionsRouter.post(
   },
 );
 
-/** Mounted at /api/v1/correction-requests (Phase 6 Checkpoint 3) — the Master User's review
- * queue: list, detail, approve, reject. Every route here is `corrections:approve`-gated, matching
- * the Architecture Review's own route table (Master Admin only, today). */
+/** Mounted at /api/v1/correction-requests (Phase 6 Checkpoint 3; list/detail access widened
+ * Presentation & Workflow Stabilization Checkpoint, 2026-07-25) — list and detail are
+ * `ENTRY_VIEW_PERMISSIONS`-gated (`payroll:entry` or `corrections:approve`), the same "view" vs.
+ * "decide" split every other dual-permission route in this router already uses: a requester
+ * (`payroll:entry` only) may list and open exactly the requests they themselves submitted (the
+ * "My Requests" view — see `listCorrectionRequestsForUser`/`getCorrectionRequestDetail` in
+ * `corrections.service.ts` for the self-scoping this depends on), never anyone else's. Approve and
+ * reject remain `corrections:approve`-only, explicitly re-asserted per-route below rather than
+ * relying on the (now widened) router-level gate — this is the one boundary the brief is explicit
+ * about never widening: "Do not grant approval rights." */
 export const correctionRequestsRouter = Router();
 
 correctionRequestsRouter.use(requireAuth);
-correctionRequestsRouter.use(requirePermission(PERMISSIONS.CORRECTIONS_APPROVE));
+correctionRequestsRouter.use(requirePermission(ENTRY_VIEW_PERMISSIONS));
 
 correctionRequestsRouter.get('/', async (req, res, next) => {
   try {
@@ -153,27 +160,35 @@ correctionRequestsRouter.get('/:id', async (req, res, next) => {
   }
 });
 
-correctionRequestsRouter.post('/:id/approve', async (req, res, next) => {
-  try {
-    const id = requireIdParam(req.params.id);
-    const input = approveCorrectionRequestSchema.parse(req.body);
-    const result = await approveCorrectionRequest(req.currentUser!, id, input, requestMetaFrom(req));
-    res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-});
+correctionRequestsRouter.post(
+  '/:id/approve',
+  requirePermission(PERMISSIONS.CORRECTIONS_APPROVE),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = approveCorrectionRequestSchema.parse(req.body);
+      const result = await approveCorrectionRequest(req.currentUser!, id, input, requestMetaFrom(req));
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
-correctionRequestsRouter.post('/:id/reject', async (req, res, next) => {
-  try {
-    const id = requireIdParam(req.params.id);
-    const input = rejectCorrectionRequestSchema.parse(req.body);
-    const correctionRequest = await rejectCorrectionRequest(req.currentUser!, id, input, requestMetaFrom(req));
-    res.status(200).json({ correctionRequest });
-  } catch (error) {
-    next(error);
-  }
-});
+correctionRequestsRouter.post(
+  '/:id/reject',
+  requirePermission(PERMISSIONS.CORRECTIONS_APPROVE),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = rejectCorrectionRequestSchema.parse(req.body);
+      const correctionRequest = await rejectCorrectionRequest(req.currentUser!, id, input, requestMetaFrom(req));
+      res.status(200).json({ correctionRequest });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 // A viewer (Payroll Staff, `payroll:entry`) may check outstanding-balance detail or preview a
 // settlement; only the Master User (`corrections:approve`) may actually record one — mirroring

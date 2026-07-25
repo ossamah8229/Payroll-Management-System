@@ -5,6 +5,7 @@ import {
   canRequestCorrection,
   canReviewCorrectionRequests,
   canViewCorrectionsLedger,
+  canViewOwnCorrectionRequests,
   defaultCorrectionsTab,
   hasAllPermissions,
   hasAnyPermission,
@@ -161,13 +162,27 @@ describe('canRequestCorrection', () => {
   });
 });
 
+describe('canViewOwnCorrectionRequests', () => {
+  it('is true with payroll:entry — the same permission that lets a user submit a request', () => {
+    expect(canViewOwnCorrectionRequests(fakeUser(['payroll:entry']))).toBe(true);
+  });
+
+  it('is false with corrections:approve alone (an approver with no submit permission has nothing of their own to view)', () => {
+    expect(canViewOwnCorrectionRequests(fakeUser(['corrections:approve']))).toBe(false);
+  });
+});
+
 describe('defaultCorrectionsTab', () => {
   it('lands a reviewer-only user (corrections:approve, no payroll:entry) on the Review Queue', () => {
     expect(defaultCorrectionsTab(fakeUser(['corrections:approve']))).toBe('queue');
   });
 
-  it('lands a payroll-entry-only user on the Corrections Ledger, never the Review Queue', () => {
-    expect(defaultCorrectionsTab(fakeUser(['payroll:entry']))).toBe('ledger');
+  // Presentation & Workflow Stabilization Checkpoint, 2026-07-25 (Issue 3/4): a payroll-entry-only
+  // user (a Payroll Manager) previously defaulted to the Ledger, which never shows a PENDING
+  // request — exactly the "loses visibility after submitting" defect. They now default to "My
+  // Requests" instead, where a just-submitted request actually appears.
+  it('lands a payroll-entry-only user on My Requests, never the Review Queue', () => {
+    expect(defaultCorrectionsTab(fakeUser(['payroll:entry']))).toBe('mine');
   });
 
   it('lands a dual-permission user on the Review Queue (existing intended default)', () => {

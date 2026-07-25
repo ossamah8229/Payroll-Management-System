@@ -11,7 +11,9 @@ import { Badge } from '@/components/ui/badge';
 import { EmployeeLookup } from '@/components/ui/employee-lookup';
 import { ApiError } from '@/lib/api-client';
 import { useAdjustmentTypes } from '@/hooks/use-adjustment-types';
+import { useSession } from '@/hooks/use-session';
 import { useCreateCorrectionRequest, usePreviewCorrection } from '@/hooks/use-correction-requests';
+import { canReviewCorrectionRequests } from '@/lib/permissions';
 import { isBooleanCorrectionField, correctionFieldLabel } from './correction-labels';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 
@@ -47,6 +49,7 @@ export function RequestCorrectionModal({
   initialEntryId?: string;
 }) {
   const navigate = useNavigate();
+  const session = useSession();
   const adjustmentTypes = useAdjustmentTypes();
   const [entryId, setEntryId] = useState('');
   const [field, setField] = useState<CorrectionField>('GROSS_PAY');
@@ -107,7 +110,19 @@ export function RequestCorrectionModal({
       const result = await createRequest.mutateAsync({ field, proposedNewValue, adjustmentTypeId, reason });
       toast.success('Correction request submitted');
       onOpenChange(false);
-      navigate(`/corrections/requests/${result.correctionRequest.id}`);
+      // Unconditionally navigating to the detail page 403'd for a Payroll Manager (`payroll:entry`
+      // only, no `corrections:approve`) immediately after every submission — the exact defect
+      // reported as Issue 3 (Presentation & Workflow Stabilization Checkpoint, 2026-07-25). The
+      // backend's detail route now permits a requester to open their own request, but the required
+      // UX is still to stay within Corrections rather than jump to a single-request detail view:
+      // an approver goes straight to the request they can act on; anyone else lands on Corrections'
+      // own "My Requests" tab (`defaultCorrectionsTab`, `lib/permissions.ts`), where the request
+      // they just created immediately appears — same source of truth, no dead end.
+      if (session.data && canReviewCorrectionRequests(session.data)) {
+        navigate(`/corrections/requests/${result.correctionRequest.id}`);
+      } else {
+        navigate('/corrections');
+      }
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Failed to submit correction request');
     }

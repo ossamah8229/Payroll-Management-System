@@ -66,14 +66,27 @@ export function canRequestCorrection(user: SessionUser): boolean {
   return hasPermission(user, PERMISSIONS.PAYROLL_ENTRY);
 }
 
-export type CorrectionsTab = 'queue' | 'ledger';
+/** Viewing the correction requests *you* submitted is a distinct capability from approving them
+ * (Presentation & Workflow Stabilization Checkpoint, 2026-07-25: "Separate: viewing own submitted
+ * requests / approving requests. These are different permissions. Do not grant approval rights.")
+ * — today it's granted by the same underlying `payroll:entry` key that already lets a user submit
+ * a request in the first place (mirroring `canRequestCorrection`, and the backend's own
+ * `ENTRY_VIEW_PERMISSIONS` "view" vs. "decide" convention), kept as its own named function so call
+ * sites read as "can view own requests," not "happens to also hold the submit permission." */
+export function canViewOwnCorrectionRequests(user: SessionUser): boolean {
+  return hasPermission(user, PERMISSIONS.PAYROLL_ENTRY);
+}
+
+export type CorrectionsTab = 'queue' | 'mine' | 'ledger';
 
 /** The tab a user should land on when opening `/corrections`: Review Queue takes priority when
- * authorized (today's intended default for a dual-permission holder), falling back to the Ledger,
- * or `null` when the user is authorized for neither — the page then shows its own access-denied
+ * authorized, then "My Requests" (a submitter's own pending/approved/rejected requests — the
+ * queue a Payroll Manager, who never sees Review Queue, actually needs), then the Ledger, or
+ * `null` when the user is authorized for none of them — the page then shows its own access-denied
  * state instead of rendering a hidden or unauthorized default tab. */
 export function defaultCorrectionsTab(user: SessionUser): CorrectionsTab | null {
   if (canReviewCorrectionRequests(user)) return 'queue';
+  if (canViewOwnCorrectionRequests(user)) return 'mine';
   if (canViewCorrectionsLedger(user)) return 'ledger';
   return null;
 }
