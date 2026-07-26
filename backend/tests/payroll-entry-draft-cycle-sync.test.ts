@@ -1,6 +1,7 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
+import { EMPLOYEE_TEMPLATE_HEADERS } from '../src/modules/employees/employees-import-export.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 /**
@@ -310,9 +311,23 @@ describe('Draft-cycle employee population lifecycle and RBAC visibility', () => 
     const { site, unit } = await makeSiteWithUnit('Test Site Sync Import');
     const cycle = await makeDraftCycle(admin, 9);
 
+    // Built from the importer's own canonical header set (rather than a hand-typed copy) so this
+    // test can't silently go stale — as a hardcoded 19-column copy previously did — the moment the
+    // Employee Registry template contract gains/loses a column (Import Templates checkpoint).
+    const row: Record<string, string> = Object.fromEntries(EMPLOYEE_TEMPLATE_HEADERS.map((header) => [header, '']));
+    Object.assign(row, {
+      'Sr. No': '1',
+      Project: site.name,
+      Name: 'Import Sync Employee',
+      DOJ: '2026-01-01',
+      Designation: 'Guard',
+      Area: unit.name,
+      'Area/Location': unit.name,
+      'Basic/Gross Pay': '30000',
+    });
     const csv = [
-      'Sr. No,Project,Employee Number/Code,Religion,Name,Father Name,CNIC,DOB,DOJ,DOL,Mobile Number,Designation,Area,Branch Code,Area/Location,Project Bank,Bank Branch Code,Account Number,Basic/Gross Pay',
-      `1,${site.name},,,"Import Sync Employee",,,,2026-01-01,,,Guard,${unit.name},,${unit.name},,,,30000`,
+      EMPLOYEE_TEMPLATE_HEADERS.join(','),
+      EMPLOYEE_TEMPLATE_HEADERS.map((header) => (header === 'Name' ? `"${row[header]}"` : row[header])).join(','),
     ].join('\n');
 
     const res = await admin.agent
