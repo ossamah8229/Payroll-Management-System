@@ -111,8 +111,10 @@ other module's business rules needed.
 ## Required / Optional / Conditional
 
 Three states, not two — some columns are only required in combination with another column (e.g.
-Employees' "Account Number" is required only when "Project Bank" is set; at least one of
-"Area"/"Branch Code"/"Area/Location" is required per row). Presenting that as a flat
+Employees' "Account Number" is required only when "Employee Bank" is a real bank, not "Cash" (see
+[Final refinement](#final-refinement--employee-bank-made-explicitly-required-blank-no-longer-accepted)
+— "Employee Bank" itself is now always required and a blank value is rejected outright);
+at least one of "Area"/"Branch Code"/"Area/Location" is required per row). Presenting that as a flat
 Required/Optional flag would misrepresent the real rule, so a third `Conditional` state exists, with
 its own header fill color and an explanatory note on both the header cell comment and the
 Instructions Column Guide row. Project Sites has no Conditional columns — none of its three fields
@@ -160,7 +162,7 @@ Employees' cross-field rules (unchanged from the Employee-only checkpoint):
 
 | Rule | Class | Where enforced |
 | --- | --- | --- |
-| Account Number required when Project Bank is set | Excel-enforceable | Custom per-row formula, **and** `createEmployeeSchema`'s `superRefine` |
+| Account Number required when Employee Bank is a real bank (not "Cash"/blank) | Excel-enforceable | Custom per-row formula (Cash-aware, see below), **and** `createEmployeeSchema`'s `superRefine` |
 | Area / Area-Location must agree if both given | Excel-enforceable | Custom per-row formula, **and** `resolveRowUnit` |
 | At least one of Area / Branch Code / Area-Location required | Excel-enforceable | Custom per-row formula, **and** `resolveRowUnit` |
 | A row's unit must belong to the row's own site | Server-only (dynamic data) | `resolveRowUnit` (layer 1) → `assertUnitBelongsToSite` (layer 2) → composite FK (layer 3) |
@@ -170,6 +172,83 @@ Employees' cross-field rules (unchanged from the Employee-only checkpoint):
 
 Project Sites has no cross-field rules at all — its only non-trivial validation is uniqueness
 (server-only, dynamic data; see "Duplicate handling").
+
+## Post-deployment UAT correction — Employee Bank dropdown, Cash semantics, and the "Employee Bank" rename
+
+Found and fixed after the checkpoint above shipped to production; recorded here as part of the same
+architecture record, not a separate document.
+
+**Root cause of the blank dropdown entries (confirmed by code inspection, not guessed):**
+`generateEmployeeImportTemplate`'s "Lists" sheet writes the Project Site names and Bank names into
+two columns of one sheet, padding whichever list is shorter with blank cells so both columns reach
+the same row count (needed purely so the sheet-writing loop has one length to iterate). The original
+bug: **both dropdowns' own Excel validation ranges were sized to that same shared, padded row
+count** (`Math.max(siteNames.length, bankNames.length)`), instead of each dropdown's own real
+entry count — so whichever list was shorter had its range extend into the other list's blank
+padding rows, producing visible blank options. Fixed by threading each dropdown's own row count
+through independently (`ImportColumnSpec.buildValidation` now receives an opaque, module-defined
+`listContext` — `{ siteRowCount, bankRowCount }` for Employees — instead of one shared number); see
+that field's own doc comment in `common/import-export.ts` for the full explanation, since a future
+third dropdown on any module is exactly the shape of change that could reintroduce this class of
+bug if not built with its own independent count from the start.
+
+**Cash — confirmed already canonical, represented as `bankId: null`, never a second
+representation.** Investigated before writing any fix: the reserved, protected `Bank` row
+(`code = 'CASH'`, `name = 'Cash'`, seeded automatically) exists in the database, but is
+*deliberately excluded* from `listBanks()`'s default result — the manual Employee create/edit
+form's own Bank `<select>` never offers it as a selectable option either; instead it has its own
+`<option value="">None (cash payment)</option>` sentinel, meaning **this system already represents
+a cash-paid employee as `bankId: null`, not as a reference to the reserved Bank row.** The import
+template's "Employee Bank" dropdown now includes a synthetic `"Cash"` entry (first in the list,
+sourced as a literal string, never queried from `listBanks()`) as the explicit way to spell that
+same blank/`null` meaning — the importer maps a `"Cash"` cell to `bankId: null` (`isCashSentinel`
+check in `importEmployees`). At the time this dropdown was introduced, a genuinely blank cell was
+*also* accepted and treated identically to `"Cash"`; that equivalence was removed in the final
+refinement below — see that section for the current, authoritative rule.
+
+**Employee Bank conditional rules, corrected to match the actual schema (not what the template
+previously, incorrectly, claimed):** `createEmployeeSchema`'s `superRefine` requires Account Number
+only when `bankId` is set — it has **no reverse rule** forcing Account Number/Branch Code/IBAN to
+stay blank for a cash employee. The template's own Instructions/Column Guide previously claimed
+Account Number "must stay blank for a cash employee," which the backend never actually enforced —
+corrected to state the real rule: Account Number is required only for a real bank; Branch Code and
+IBAN are always optional, Cash or not.
+
+**"Project Bank" renamed to "Employee Bank"** (these columns describe the employee's own payment
+details, not a property of the Project) — the canonical header on every newly generated template.
+**`"Project Bank"` is still accepted as a legacy input header alias** (`LEGACY_HEADER_ALIASES` in
+`employees-import-export.service.ts`): a workbook downloaded before this rename still imports
+without modification — the alias is substituted before structural header validation runs, and every
+column is still read positionally against the canonical header set, so no other parsing logic
+needed to change. No database field was renamed — this is a display/import-contract change only.
+
+### Final refinement — Employee Bank made explicitly required (blank no longer accepted)
+
+Found and fixed in a second post-deployment pass, after the UAT correction above had already
+shipped: treating a blank cell as silently equivalent to `"Cash"` let a genuinely omitted value pass
+through unnoticed, with no signal to the importing user that a decision was actually being made on
+their behalf. **Employee Bank is required in import files. Use "Cash" when the employee has no bank
+account. The system stores Cash as `bankId = null` internally.**
+
+Concretely:
+
+- The template's Employee Bank column is now `requirement: 'required'` (amber header fill, `Required`
+  Column Guide row, `allowBlank: false` on the Excel dropdown validation) — the same visual and
+  structural treatment as every other required column (Project, Name, Designation, Basic/Gross Pay).
+- `importEmployees` independently rejects a blank cell server-side (`row.cells['Employee Bank'].trim()`
+  empty) with the readable, column-named error `Employee Bank: Select "Cash" or a valid bank` —
+  Excel's own validation is a convenience for spreadsheet users, never the authority; the backend
+  enforces the rule on its own regardless of how the file was produced or edited. A whitespace-only
+  cell (e.g. `"   "`) is rejected the same way, since the value is trimmed before the emptiness check.
+- The `"Cash"` → `bankId: null` and `<real bank name>` → matching `Bank.id` mappings are unchanged
+  from the UAT correction above; only the *blank* input is newly rejected. Real-bank rows still
+  require Account Number; Branch Code and IBAN remain optional either way — no additional
+  restriction was introduced beyond making the column itself required.
+- The `"Project Bank"` legacy header alias is still accepted — backward compatibility applies to the
+  **header name only**. A workbook using the old `"Project Bank"` header still has its Employee Bank
+  column read correctly, but a blank value under that legacy header is rejected exactly like a blank
+  value under the canonical `"Employee Bank"` header; the alias never grants an exemption from the
+  required-value rule.
 
 ## RBAC
 

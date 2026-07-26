@@ -6931,6 +6931,87 @@ Project Unit bulk importer was introduced. Payroll Entry import remains absent.*
 
 ---
 
+## Employee Import Template — Post-deployment UAT Correction
+
+**Small, focused correction to the Import Template Contract checkpoint above, found
+during normal user UAT after that checkpoint deployed. COMPLETE, COMMITTED, and
+pushed/deployed.** See `docs/SESSION_HANDOFF.md` §20 for the exact push/deploy/
+post-deploy-verification outcome and `docs/architecture/import-template-architecture.md`'s
+own "Post-deployment UAT correction" and "Final refinement" sections for the full
+design record (kept as the authoritative architecture doc — not duplicated here).
+
+**Issue found in production UAT: the Employee Bank dropdown showed blank options.**
+Root-caused by code inspection, not guessed: `generateEmployeeImportTemplate`'s hidden
+"Lists" sheet pads whichever of the Project Sites / Banks lists is shorter with blank
+cells so both columns reach the same row count — purely so the sheet-writing loop has
+one length to iterate. The bug was that **both dropdowns' own Excel validation ranges
+were sized to that same shared, padded row count**
+(`Math.max(siteNames.length, bankNames.length)`) instead of each dropdown's own real
+entry count, so whichever list was shorter had its range extend into the other list's
+blank padding rows. Fixed by threading each dropdown's own row count through
+independently — `ImportColumnSpec.buildValidation` now receives an opaque,
+module-defined `listContext` (`{ siteRowCount, bankRowCount }` for Employees) instead
+of one shared number (`backend/src/common/import-export.ts`). Verified: zero blank
+entries in either dropdown, even when the two lists are different lengths.
+
+**"Project Bank" renamed to "Employee Bank"** (these columns describe the employee's
+own payment details, not a property of the Project) — the canonical header on every
+newly generated template. **`"Project Bank"` is still accepted as a legacy input
+header alias** (`LEGACY_HEADER_ALIASES` in `employees-import-export.service.ts`): a
+workbook downloaded before this rename still imports without modification — the alias
+is substituted before structural header validation runs, and every column is still
+read positionally against the canonical header set. No database field was renamed —
+display/import-contract change only.
+
+**Final refinement: Employee Bank made explicitly required.** A second UAT pass
+identified a remaining ambiguity: the dropdown-fix pass above still let a blank cell
+silently mean the same thing as `"Cash"`, giving no signal that a decision was being
+made on the importing user's behalf. **Employee Bank is required in import files. Use
+"Cash" when the employee has no bank account. The system stores Cash as `bankId =
+null` internally** — this was already the application's own canonical representation
+(confirmed against the manual Employee form's own `"None (cash payment)"` sentinel and
+`listBanks()`'s deliberate exclusion of the reserved `Bank` row with `code = 'CASH'`
+before writing any fix) — no new database representation was introduced. Backend
+validation independently rejects a blank or whitespace-only Employee Bank cell
+(`Employee Bank: Select "Cash" or a valid bank`) regardless of what Excel's own
+`allowBlank: false` dropdown validation already caught, since Excel-side validation is
+advisory, never authoritative. The `"Project Bank"` legacy header alias continues to
+work, but backward compatibility applies to the **header name only** — a blank value
+under the legacy header is rejected exactly like a blank value under the canonical
+header. Conditional rules are unchanged and were not expanded: Account Number is
+required only for a real bank; Bank Branch Code and IBAN remain optional either way.
+
+**Project dropdown — investigated, found already correct, no change made.** Employee
+template Project options are fetched fresh through `listProjectSites(currentUser)` on
+every template download — a newly manually-created or newly bulk-imported Site the
+requesting user has access to appears immediately on the next download, with no
+restart/redeploy/static list involved; an inaccessible Site remains excluded; Master
+Admin retains existing global visibility. Existing RBAC/dynamic-visibility tests were
+preserved and remain passing, not rewritten.
+
+**Test results:** Employee import focused suite (`employees-import-export.test.ts`)
+**57/57**; combined directly-related regression run (that suite plus `employees.test.ts`,
+`project-sites.test.ts`, `project-units.test.ts`, `payroll-entry-draft-cycle-sync.test.ts`)
+**138/138**; backend typecheck and lint clean on every touched file. **No full backend
+regression suite was re-run for this correction, per explicit instruction** — the
+focused/directly-related result above was judged sufficient. No schema/migration
+change.
+
+**Files changed:** `backend/src/common/import-export.ts` (independent per-dropdown
+`listContext`, replacing the shared row-count bug); `backend/src/modules/employees/
+employees-import-export.service.ts` (rename, legacy header alias, required-field
+validation, Instructions prose); `backend/tests/employees-import-export.test.ts` (new
+and updated tests covering the dropdown fix, the rename, the legacy alias, and the
+required-value refinement); `backend/tests/payroll-entry-draft-cycle-sync.test.ts` (one
+fixture row updated to supply an explicit `"Cash"` Employee Bank value, now required);
+`docs/architecture/import-template-architecture.md`.
+
+**Commits:** see `docs/SESSION_HANDOFF.md` §20 for the exact commit list and
+push/deploy record. **Phase 7 remains Not Started; this correction does not begin it.
+Project Site import was not touched. No new Payroll Entry import was introduced.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -7273,7 +7354,26 @@ Project Unit bulk importer was introduced. Payroll Entry import remains absent.*
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-26 (latest) — Import Template Contract checkpoint (Employee Registry
+**Updated 2026-07-26 (latest) — Employee Import Template Post-deployment UAT
+Correction: COMPLETE, COMMITTED, and pushed/deployed.** See the dedicated "Employee
+Import Template — Post-deployment UAT Correction" entry in §1 (immediately above §2)
+for the full record and `docs/SESSION_HANDOFF.md` §20 for the exact
+push/deploy/post-deploy-verification outcome. Small, focused correction found during
+normal user UAT of the checkpoint below: the Employee Bank dropdown showed blank
+options (root cause: both dropdowns shared one padded row count for their Excel
+validation ranges — fixed with an independent count per dropdown); "Project Bank" was
+renamed to "Employee Bank" (legacy header still accepted on upload); and, on a second
+UAT pass, Employee Bank was made explicitly required — a blank/whitespace-only value is
+now rejected server-side rather than silently treated as "Cash". Cash still maps to
+`bankId = null`, the application's pre-existing representation — no new database
+representation was introduced. The Project dropdown was investigated and found already
+correct (RBAC-scoped, fetched fresh on every template download) — no change was made
+there. Employee import focused suite **57/57**; combined directly-related regression
+run **138/138**; no schema/migration change. **Phase 7 remains Not Started; do not
+begin it.**
+
+**Updated 2026-07-26 (superseded by the entry above for status purposes, kept for its
+own still-useful record) — Import Template Contract checkpoint (Employee Registry
 rebuild + Project Site bulk import + initial-Unit/creator-access provisioning):
 COMPLETE, COMMITTED, and pushed/deployed.** See the dedicated "Import Template Contract
 checkpoint" entry in §1 (immediately above §2) for the full record and

@@ -2427,3 +2427,47 @@ dashboard/API-confirmed build logs.
 **Phase 7 remains Not Started; this checkpoint does not begin it. No standalone Project Unit bulk
 importer was introduced. Payroll Entry import remains absent.**
 
+## 20. Addendum, 2026-07-26 (latest) — Employee Import Template Post-deployment UAT Correction
+
+Full record: `docs/PROJECT_PROGRESS.md` §1's own dated entry ("Employee Import Template —
+Post-deployment UAT Correction") and `docs/architecture/import-template-architecture.md`'s own
+"Post-deployment UAT correction" and "Final refinement" sections (the authoritative design record);
+this is the push/deploy/post-deploy-verification pointer.
+
+**What this correction covers, in one line each:**
+- Root-caused and fixed the blank Employee Bank / Project dropdown entries reported in production
+  UAT of §19's checkpoint: both dropdowns shared one padded row count for their Excel validation
+  ranges; each now gets its own independent count (`ImportColumnSpec.buildValidation`'s
+  `listContext`, `backend/src/common/import-export.ts`).
+- Renamed the "Project Bank" header to "Employee Bank" on every newly generated template;
+  "Project Bank" is still accepted as a legacy input header alias on upload.
+- A second UAT pass then found a remaining ambiguity — a blank cell was still silently treated the
+  same as "Cash" — and closed it: **Employee Bank is now required in import files; a blank or
+  whitespace-only cell is rejected server-side, independent of Excel's own `allowBlank: false`
+  validation.** "Cash" still maps to the application's existing `bankId: null` representation; no new
+  database representation was introduced. The legacy "Project Bank" alias still works, but backward
+  compatibility applies to the header name only — a blank value under that header is rejected the
+  same as under the canonical header.
+- Investigated the Project dropdown specifically and found it already correct — RBAC-scoped via
+  `listProjectSites(currentUser)`, fetched fresh on every template download, no restart/redeploy
+  involved. No change was made there; its existing tests were preserved.
+
+**Testing (focused, not a full-suite re-run, per explicit instruction):** Employee import focused
+suite (`employees-import-export.test.ts`) **57/57**; combined directly-related regression run (that
+suite plus `employees.test.ts`, `project-sites.test.ts`, `project-units.test.ts`,
+`payroll-entry-draft-cycle-sync.test.ts`) **138/138**; backend typecheck and lint clean on every
+touched file; no schema/migration change.
+
+**Commits** (`main`, in order): `5ab1da1` (fix — dropdown row-count correction, Employee Bank rename
++ legacy alias, required-value validation), `1ef3b77` (test — Employee Bank import contract and
+dynamic-dropdown coverage, plus the `payroll-entry-draft-cycle-sync.test.ts` fixture fix), plus this
+documentation commit.
+
+**Push/deploy record**: to be filled in immediately after push — see the follow-up doc-only commit
+for the exact push/deploy/post-deploy-verification outcome, matching this project's own established
+two-pass documentation convention (draft first, then a small doc-only commit records the real
+result).
+
+**Phase 7 remains Not Started; this correction does not begin it. Project Site import was not
+touched. No new Payroll Entry import was introduced.**
+
