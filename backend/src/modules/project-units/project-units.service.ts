@@ -1,5 +1,5 @@
 import type { CreateProjectUnitInput, UpdateProjectUnitInput } from '@payroll/shared';
-import { prisma } from '../../lib/prisma';
+import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
 import { getProjectSite } from '../project-sites/project-sites.service';
 
@@ -20,10 +20,25 @@ export async function listProjectUnits(siteId: string) {
   });
 }
 
-export async function createProjectUnit(siteId: string, input: CreateProjectUnitInput) {
-  await getProjectSite(siteId);
+/**
+ * `client` (Import Template Contract checkpoint, Project Site bulk-import extension) — defaults to
+ * the plain singleton for every existing caller (`project-units.routes.ts`'s manual create),
+ * unchanged. Bulk Project Site import passes its own `tx` here so a row's initial Project Unit is
+ * created in the exact same transaction as its Site and creator `UserSiteAssignment` (see
+ * `project-sites-import-export.service.ts`) — the site-existence check below is done directly
+ * against `client` rather than via the plain `getProjectSite()` (which always reads through the
+ * bare `prisma` singleton) specifically so it can see a Site created moments earlier in the same,
+ * not-yet-committed transaction.
+ */
+export async function createProjectUnit(
+  siteId: string,
+  input: CreateProjectUnitInput,
+  client: PrismaTransactionClient = prisma,
+) {
+  const site = await client.projectSite.findUnique({ where: { id: siteId } });
+  if (!site) throw notFound('Project site not found');
 
-  return prisma.projectUnit.create({
+  return client.projectUnit.create({
     data: {
       siteId,
       name: input.name,

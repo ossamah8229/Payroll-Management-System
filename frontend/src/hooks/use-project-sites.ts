@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ROLE_CODES, type CreateProjectSiteInput, type SessionUser, type UpdateProjectSiteInput } from '@payroll/shared';
-import { apiRequest } from '@/lib/api-client';
+import { apiRequest, API_BASE_URL, ApiError, getCsrfToken } from '@/lib/api-client';
 
 /** A pure client/location record — no banking properties, no operational-unit properties of its
  * own (see the schema-level note in backend/prisma/schema.prisma). `unitLabel` is the term this
@@ -80,6 +80,56 @@ export function useDeleteProjectSite() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => apiRequest<void>(`/api/v1/sites/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PROJECT_SITES_QUERY_KEY });
+    },
+  });
+}
+
+/** Import Template Contract checkpoint (Project Site extension) — a blank template with the exact
+ * required header set, one sample row, and an Instructions sheet
+ * (`generateProjectSiteImportTemplate`, backend). Same download mechanics as the Employee
+ * Registry's own `downloadEmployeeImportTemplate` (`use-employees.ts`). */
+export async function downloadProjectSiteImportTemplate(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/sites/import-template`, { credentials: 'include' });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'TEMPLATE_DOWNLOAD_FAILED', 'Failed to download the import template');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'project-site-import-template.xlsx';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export interface ProjectSiteImportResult {
+  created: number;
+  skipped: { row: number; reason: string }[];
+}
+
+export function useImportProjectSites() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const csrfToken = getCsrfToken();
+
+      const response = await fetch(`${API_BASE_URL}/api/v1/sites/import`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfToken ? { 'x-csrf-token': csrfToken } : undefined,
+        body: formData,
+      });
+
+      const payload = await response.json().catch(() => undefined);
+      if (!response.ok) {
+        throw new ApiError(response.status, payload?.error?.code ?? 'IMPORT_FAILED', payload?.error?.message ?? 'Import failed');
+      }
+      return payload as ProjectSiteImportResult;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PROJECT_SITES_QUERY_KEY });
     },

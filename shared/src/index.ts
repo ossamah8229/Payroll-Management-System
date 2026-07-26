@@ -15,7 +15,7 @@ export type { LoginInput } from './schemas/auth';
 export { createBankSchema, updateBankSchema } from './schemas/bank';
 export type { CreateBankInput, UpdateBankInput } from './schemas/bank';
 
-export { createProjectSiteSchema, updateProjectSiteSchema } from './schemas/project-site';
+export { createProjectSiteSchema, PROJECT_SITE_FIELD_LIMITS, updateProjectSiteSchema } from './schemas/project-site';
 export type { CreateProjectSiteInput, UpdateProjectSiteInput } from './schemas/project-site';
 
 export { createProjectUnitSchema, updateProjectUnitSchema } from './schemas/project-unit';

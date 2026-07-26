@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { createProjectSiteSchema, PERMISSIONS, updateProjectSiteSchema } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
@@ -12,11 +13,18 @@ import {
   listProjectSites,
   updateProjectSite,
 } from './project-sites.service';
+import {
+  generateProjectSiteImportTemplate,
+  importProjectSites,
+  parseProjectSiteImportFile,
+} from './project-sites-import-export.service';
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
   return id;
 }
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 export const projectSitesRouter = Router();
 
@@ -62,6 +70,55 @@ projectSitesRouter.get('/', requirePermission(SITE_LOOKUP_PERMISSIONS), async (r
     next(error);
   }
 });
+
+// Import Template Contract checkpoint (Project Site extension) — registered ahead of `GET /:id`,
+// a distinct static path that would otherwise be shadowed by the `:id` param route below (an
+// upload to "/import-template" would resolve as `getProjectSite('import-template')` instead).
+// Gated to `sites:manage` alone (not the broader `SITE_LOOKUP_PERMISSIONS`), the same permission
+// `POST /sites` itself requires — Part 3: a user who cannot create a Project Site through the
+// normal UI must not be able to download the import template or call the import endpoint either.
+projectSitesRouter.get('/import-template', requirePermission(PERMISSIONS.SITES_MANAGE), async (_req, res, next) => {
+  try {
+    const buffer = await generateProjectSiteImportTemplate();
+    res.setHeader('Content-Disposition', 'attachment; filename="project-site-import-template.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+projectSitesRouter.post(
+  '/import',
+  requirePermission(PERMISSIONS.SITES_MANAGE),
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        throw badRequest('No file uploaded — expected a multipart field named "file"');
+      }
+
+      const rows = await parseProjectSiteImportFile(req.file.buffer, req.file.originalname);
+      const result = await importProjectSites(req.currentUser!, rows, {
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+
+      await recordAuditLog({
+        actorUserId: req.currentUser!.id,
+        action: 'project-site.import',
+        entityType: 'ProjectSite',
+        metadata: { created: result.created, skippedCount: result.skipped.length },
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 projectSitesRouter.get('/:id', requirePermission(SITE_LOOKUP_PERMISSIONS), async (req, res, next) => {
   try {

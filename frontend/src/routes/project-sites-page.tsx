@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MoreHorizontal, Plus } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Download, MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { pluralize, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
@@ -26,11 +26,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ApiError } from '@/lib/api-client';
 import {
+  downloadProjectSiteImportTemplate,
   useCreateProjectSite,
   useDeleteProjectSite,
+  useImportProjectSites,
   useProjectSites,
   useUpdateProjectSite,
   type ProjectSite,
+  type ProjectSiteImportResult,
 } from '@/hooks/use-project-sites';
 import {
   useCreateProjectUnit,
@@ -458,22 +461,101 @@ function ManageUnitsModal({
   );
 }
 
+/** Import Template Contract checkpoint (Project Site extension) — same shape/behavior as
+ * `employees-page.tsx`'s own `ImportResultModal`, minus "updated" (Project Site import only ever
+ * creates, per Part 10's default requirement — see `project-sites-import-export.service.ts`). */
+function ImportResultModal({
+  open,
+  onOpenChange,
+  result,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  result: ProjectSiteImportResult;
+}) {
+  return (
+    <Modal open={open} onOpenChange={onOpenChange}>
+      <ModalContent title="Import Results" widthClassName="max-w-[520px] max-h-[75vh]">
+        <div className="flex flex-col gap-3 text-xs">
+          <div className="flex gap-4">
+            <Badge tone="green">{result.created} created</Badge>
+            {result.skipped.length > 0 && <Badge tone="red">{result.skipped.length} skipped</Badge>}
+          </div>
+          {result.skipped.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <p className="font-medium text-text">Skipped rows</p>
+              {result.skipped.map((skip) => (
+                <div key={skip.row} className="rounded border border-border bg-bg px-2.5 py-1.5">
+                  Row {skip.row}: {skip.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <ModalFooter>
+          <Button onClick={() => onOpenChange(false)}>Close</Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 export function ProjectSitesPage({ user }: { user: SessionUser }) {
   const { data: sites, isLoading, error } = useProjectSites();
   const [createOpen, setCreateOpen] = useState(false);
   const [editingSite, setEditingSite] = useState<ProjectSite | undefined>(undefined);
   const [deletingSite, setDeletingSite] = useState<ProjectSite | undefined>(undefined);
   const [managingUnitsSite, setManagingUnitsSite] = useState<ProjectSite | undefined>(undefined);
+  // Bulk import (Import Template Contract checkpoint, Project Site extension) — no additional
+  // `hasPermission` gating here beyond what already applies to "New Site" above: this entire page
+  // is only reachable via App.tsx's `RequirePermission user={user} permission={SITES_MANAGE}`
+  // wrapper, so every visitor already holds the same permission the backend independently
+  // enforces on both `/sites/import-template` and `/sites/import` (Part 3 — server-side is what
+  // actually matters; this page's own established convention is route-level gating, not
+  // per-button checks).
+  const [importResult, setImportResult] = useState<ProjectSiteImportResult | undefined>(undefined);
+  const importSites = useImportProjectSites();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      const result = await importSites.mutateAsync(file);
+      setImportResult(result);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Import failed');
+    }
+  }
 
   return (
     <AppShell user={user} title="Project Sites" subtitle="Client sites employees are deputed to">
       <Card>
         <CardHeader>
           <CardTitle>All Sites</CardTitle>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3.5 w-3.5" aria-hidden />
-            New Site
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => downloadProjectSiteImportTemplate()}>
+              <Download className="h-3.5 w-3.5" aria-hidden />
+              Download Import Template
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={importSites.isPending}>
+              <Upload className="h-3.5 w-3.5" aria-hidden />
+              {importSites.isPending ? 'Importing…' : 'Import'}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx"
+              className="hidden"
+              onChange={handleFileSelected}
+            />
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              New Site
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading && (
@@ -587,6 +669,14 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
           open={Boolean(deletingSite)}
           onOpenChange={(open) => !open && setDeletingSite(undefined)}
           site={deletingSite}
+        />
+      )}
+
+      {importResult && (
+        <ImportResultModal
+          open={Boolean(importResult)}
+          onOpenChange={(open) => !open && setImportResult(undefined)}
+          result={importResult}
         />
       )}
     </AppShell>

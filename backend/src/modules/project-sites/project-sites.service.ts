@@ -1,6 +1,6 @@
 import type { CreateProjectSiteInput, SessionUser, UpdateProjectSiteInput } from '@payroll/shared';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
-import { prisma } from '../../lib/prisma';
+import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
 import { isMasterAdmin } from '../../common/authz-policy';
 import { ensureCreatorSiteAssignment } from '../../common/creator-access';
@@ -65,26 +65,41 @@ export async function getProjectSite(id: string) {
  *
  * `createdById` itself is audit provenance only (nullable — see the schema comment); no access
  * decision anywhere in the codebase reads it.
+ *
+ * The transaction body itself is factored out into `createProjectSiteInTransaction` below
+ * (Import Template Contract checkpoint, Project Site bulk-import extension) so bulk import can
+ * compose it with an *additional* operation (creating the row's initial Project Unit) inside one
+ * shared transaction, without duplicating this function's own site-creation/creator-assignment
+ * logic — `createProjectSite` itself is otherwise unchanged, and manual "New Site" creation still
+ * never creates a Unit, exactly as before.
  */
 export async function createProjectSite(currentUser: SessionUser, input: CreateProjectSiteInput) {
-  return prisma.$transaction(async (tx) => {
-    const site = await tx.projectSite.create({
-      data: {
-        name: input.name,
-        address: input.address ?? null,
-        createdById: currentUser.id,
-        ...(input.unitLabel !== undefined && { unitLabel: input.unitLabel }),
-      },
-    });
+  return prisma.$transaction((tx) => createProjectSiteInTransaction(tx, currentUser, input));
+}
 
-    await ensureCreatorSiteAssignment(tx, {
-      creatorIsMasterAdmin: isMasterAdmin(currentUser),
-      userId: currentUser.id,
-      siteId: site.id,
-    });
-
-    return site;
+/** The actual site-creation + creator-assignment work, parameterized over an already-open
+ * transaction client — see `createProjectSite`'s own doc comment for why this is split out. */
+export async function createProjectSiteInTransaction(
+  tx: PrismaTransactionClient,
+  currentUser: SessionUser,
+  input: CreateProjectSiteInput,
+) {
+  const site = await tx.projectSite.create({
+    data: {
+      name: input.name,
+      address: input.address ?? null,
+      createdById: currentUser.id,
+      ...(input.unitLabel !== undefined && { unitLabel: input.unitLabel }),
+    },
   });
+
+  await ensureCreatorSiteAssignment(tx, {
+    creatorIsMasterAdmin: isMasterAdmin(currentUser),
+    userId: currentUser.id,
+    siteId: site.id,
+  });
+
+  return site;
 }
 
 export async function updateProjectSite(id: string, input: UpdateProjectSiteInput) {
