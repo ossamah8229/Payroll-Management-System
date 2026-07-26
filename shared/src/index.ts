@@ -21,10 +21,20 @@ export type { CreateProjectSiteInput, UpdateProjectSiteInput } from './schemas/p
 export { createProjectUnitSchema, updateProjectUnitSchema } from './schemas/project-unit';
 export type { CreateProjectUnitInput, UpdateProjectUnitInput } from './schemas/project-unit';
 
-export { createEmployeeSchema, markEmployeeLeftSchema, updateEmployeeSchema } from './schemas/employee';
+export {
+  createEmployeeSchema,
+  EMPLOYEE_EOBI_AMOUNT_MAX,
+  EMPLOYEE_FIELD_LIMITS,
+  EMPLOYEE_GROSS_PAY_MAX,
+  markEmployeeLeftSchema,
+  PAY_TYPE_LABELS,
+  PAY_TYPE_VALUES,
+  updateEmployeeSchema,
+} from './schemas/employee';
 export type {
   CreateEmployeeInput,
   MarkEmployeeLeftInput,
+  PayTypeValue,
   UpdateEmployeeInput,
 } from './schemas/employee';
 

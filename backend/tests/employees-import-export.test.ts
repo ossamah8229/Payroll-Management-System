@@ -1,9 +1,24 @@
 import ExcelJS from 'exceljs';
+import request from 'supertest';
 import { stringify as stringifyCsvSync } from 'csv-stringify/sync';
-import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
+import {
+  EMPLOYEE_FIELD_LIMITS,
+  EMPLOYEE_EOBI_AMOUNT_MAX,
+  EMPLOYEE_GROSS_PAY_MAX,
+  PAY_TYPE_LABELS,
+  PAY_TYPE_VALUES,
+  PERMISSIONS,
+  ROLE_CODES,
+} from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { EMPLOYEE_TEMPLATE_HEADERS } from '../src/modules/employees/employees-import-export.service';
+import {
+  EMPLOYEE_TEMPLATE_HEADERS,
+  EMPLOYEE_TEMPLATE_VERSION,
+  EXAMPLE_SHEET_NAME,
+  IMPORT_DATA_SHEET_NAME,
+  INSTRUCTIONS_SHEET_NAME,
+} from '../src/modules/employees/employees-import-export.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
@@ -65,6 +80,9 @@ describe('Employee Registry import/export', () => {
     });
   }
 
+  /** Base row for every column in `EMPLOYEE_TEMPLATE_HEADERS`, including the four fields added by
+   * the Import Templates checkpoint (Pay Type, IBAN, Default EOBI Amount, Default EOBI
+   * Applicable) — all blank/default so a test only needs to override what it's actually testing. */
   function templateRow(overrides: Partial<Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], string>>) {
     const base: Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], string> = {
       'Sr. No': '1',
@@ -86,6 +104,10 @@ describe('Employee Registry import/export', () => {
       'Bank Branch Code': '',
       'Account Number': '',
       'Basic/Gross Pay': '',
+      'Pay Type': '',
+      IBAN: '',
+      'Default EOBI Amount': '',
+      'Default EOBI Applicable': '',
     };
     return { ...base, ...overrides };
   }
@@ -96,6 +118,14 @@ describe('Employee Registry import/export', () => {
       ...rows.map((row) => EMPLOYEE_TEMPLATE_HEADERS.map((header) => row[header] ?? '')),
     ]);
     return Buffer.from(csv, 'utf-8');
+  }
+
+  async function downloadTemplateWorkbook(agent: ReturnType<typeof request.agent>) {
+    const res = await agent.get('/api/v1/employees/import-template').buffer(true).parse(binaryParser);
+    expect(res.status).toBe(200);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.body as Buffer);
+    return { res, workbook };
   }
 
   it('exports employees with the exact official template header row', async () => {
@@ -118,31 +148,241 @@ describe('Employee Registry import/export', () => {
     expect(firstLine).toBe(EMPLOYEE_TEMPLATE_HEADERS.join(','));
   });
 
-  // Import Templates checkpoint — the blank, downloadable template a user fills in before ever
-  // running a real import. Distinct from /export (which requires real employee data to exist and
-  // returns whatever rows match), this endpoint needs no data and no site scope at all.
-  it('serves a downloadable import template with the exact header row, one sample row, and an Instructions sheet', async () => {
-    const { agent } = await masterAdminAgent('import-template@test.local');
-    const res = await agent.get('/api/v1/employees/import-template').buffer(true).parse(binaryParser);
+  // ---------------------------------------------------------------------------------------------
+  // Import Templates checkpoint — TEMPLATE tests (Part K items 1-8)
+  // ---------------------------------------------------------------------------------------------
 
-    expect(res.status).toBe(200);
+  it('serves a workbook with Instructions, Import Data, and Example sheets, each with the correct header row', async () => {
+    const { agent } = await masterAdminAgent('import-template@test.local');
+    const { res, workbook } = await downloadTemplateWorkbook(agent);
+
     expect(res.headers['content-type']).toContain('spreadsheetml');
     expect(res.headers['content-disposition']).toContain('employee-import-template.xlsx');
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(
+      expect.arrayContaining([INSTRUCTIONS_SHEET_NAME, IMPORT_DATA_SHEET_NAME, EXAMPLE_SHEET_NAME]),
+    );
+
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+    const importHeaderRow = importDataSheet.getRow(1).values as unknown[];
+    expect(importHeaderRow.slice(1)).toEqual(EMPLOYEE_TEMPLATE_HEADERS);
+    // No sample/example data on the real data-entry sheet — row 2 onward carries only Excel
+    // validation/text-formatting (so `rowCount` legitimately extends well past 1), never an actual
+    // value (Part B3: an un-deleted example row must never be a thing that can happen here).
+    expect(importDataSheet.getRow(2).values).toEqual([]);
+
+    const exampleSheet = workbook.getWorksheet(EXAMPLE_SHEET_NAME)!;
+    const exampleHeaderRow = exampleSheet.getRow(1).values as unknown[];
+    expect(exampleHeaderRow.slice(1)).toEqual(EMPLOYEE_TEMPLATE_HEADERS);
+    expect(exampleSheet.rowCount).toBe(2); // header + exactly one sample row
+
+    const instructionsSheet = workbook.getWorksheet(INSTRUCTIONS_SHEET_NAME)!;
+    expect(instructionsSheet).toBeDefined();
+  });
+
+  it("Instructions sheet documents the template version and every column's Required/Optional status", async () => {
+    const { agent } = await masterAdminAgent('import-template-instructions@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+
+    const instructionsSheet = workbook.getWorksheet(INSTRUCTIONS_SHEET_NAME)!;
+    const allText = instructionsSheet
+      .getSheetValues()
+      .flat()
+      .filter((value): value is string => typeof value === 'string')
+      .join('\n');
+
+    expect(allText).toContain(`Template Version: ${EMPLOYEE_TEMPLATE_VERSION}`);
+    for (const header of EMPLOYEE_TEMPLATE_HEADERS) {
+      expect(allText).toContain(header);
+    }
+    expect(allText).toContain('Required');
+    expect(allText).toContain('Optional');
+    expect(allText).toContain('Conditional');
+  });
+
+  it("Example sheet's sample row satisfies every application validation rule and imports successfully", async () => {
+    // Site/bank names follow this suite's own `cleanTestData()` cleanup convention ("Test Site "
+    // prefix / "TB" bank-code prefix, see tests/helpers.ts) rather than reusing the template's own
+    // "Downtown Regional Office"/"Acme Commercial Bank" example text verbatim — this test's own
+    // Project/Project Bank column values are overridden below to match, same as Area/Branch Code.
+    const site = await makeSite('Test Site Example Sheet');
+    const bank = await prisma.bank.create({ data: { code: 'TB-EXAMPLE', name: 'Test Bank Example Sheet' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-template-example@test.local');
+
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const exampleSheet = workbook.getWorksheet(EXAMPLE_SHEET_NAME)!;
+    const exampleRow = (exampleSheet.getRow(2).values as unknown[]).slice(1).map((v) => (v === undefined || v === null ? '' : String(v)));
+
+    // The Example sheet references neutral placeholder Project Site/Bank names (Part B3) — this
+    // test creates matching real records first so the sample row can actually be imported and
+    // exercise every validation rule it claims to satisfy (Site, Unit, Bank, CNIC, dates, decimal
+    // amounts, Pay Type, EOBI fields), rather than merely asserting the cell values look plausible.
+    const csv = stringifyCsvSync([
+      EMPLOYEE_TEMPLATE_HEADERS as unknown as string[],
+      exampleRow.map((value, index) => {
+        const header = EMPLOYEE_TEMPLATE_HEADERS[index];
+        if (header === 'Project') return site.name;
+        if (header === 'Area' || header === 'Area/Location') return `${site.name} Unit`;
+        if (header === 'Branch Code') return 'U-1';
+        if (header === 'Project Bank') return bank.name;
+        return value;
+      }),
+    ]);
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', Buffer.from(csv, 'utf-8'), 'example.csv');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.skipped).toHaveLength(0);
+    expect(importRes.body.created).toBe(1);
+
+    const created = await prisma.employee.findFirstOrThrow({ where: { siteId: site.id } });
+    expect(created.bankId).toBe(bank.id);
+    expect(created.payType).toBe('DAILY_WAGE');
+    expect(Number(created.defaultEobiAmount)).toBeCloseTo(400);
+    expect(created.defaultEobiApplicable).toBe(true);
+  });
+
+  it('ignores the Instructions and Example sheets on import even when the Example sheet contains invalid data', async () => {
+    const site = await makeSite('Test Site Ignore Example');
+    const { agent, csrfToken } = await masterAdminAgent('import-ignore-example@test.local');
 
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(res.body as Buffer);
+    const instructions = workbook.addWorksheet(INSTRUCTIONS_SHEET_NAME);
+    instructions.addRow(['This is not employee data']);
+    const example = workbook.addWorksheet(EXAMPLE_SHEET_NAME);
+    example.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
+    example.addRow(Object.values(templateRow({ Project: 'Nonexistent Site', Name: '', Designation: '' }))); // deliberately invalid
+    const importData = workbook.addWorksheet(IMPORT_DATA_SHEET_NAME);
+    importData.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
+    importData.addRow(
+      Object.values(
+        templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Real Row Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+      ),
+    );
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-    const templateSheet = workbook.getWorksheet('Employee Import Template');
-    expect(templateSheet).toBeDefined();
-    const headerRow = templateSheet!.getRow(1).values as unknown[];
-    // ExcelJS rows are 1-indexed with a leading empty slot at index 0.
-    expect(headerRow.slice(1)).toEqual(EMPLOYEE_TEMPLATE_HEADERS);
-    expect(templateSheet!.rowCount).toBe(2); // header + exactly one sample row
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', buffer, 'employees.xlsx');
 
-    const instructionsSheet = workbook.getWorksheet('Instructions');
-    expect(instructionsSheet).toBeDefined();
-    // One instructions row per template column, plus its own header row.
-    expect(instructionsSheet!.rowCount).toBe(EMPLOYEE_TEMPLATE_HEADERS.length + 1);
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.created).toBe(1);
+    expect(importRes.body.skipped).toHaveLength(0); // the invalid Example row was never read at all
+
+    const all = await prisma.employee.findMany();
+    expect(all).toHaveLength(1);
+    expect(all[0]?.name).toBe('Real Row Employee');
+  });
+
+  it("a column marked Required in the template is actually enforced by the importer, and Optional columns aren't", async () => {
+    const site = await makeSite('Test Site Required Contract');
+    const { agent, csrfToken } = await masterAdminAgent('import-required-contract@test.local');
+
+    // Name is Required — blank Name must be rejected.
+    const missingName = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: '', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+    ]);
+    const missingNameRes = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', missingName, 'a.csv');
+    expect(missingNameRes.body.created).toBe(0);
+    expect(missingNameRes.body.skipped).toHaveLength(1);
+    expect(missingNameRes.body.skipped[0].reason).toMatch(/Name/);
+
+    // Religion is Optional — a blank Religion must succeed.
+    const missingReligion = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Optional Field Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000', Religion: '' }),
+    ]);
+    const missingReligionRes = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', missingReligion, 'b.csv');
+    expect(missingReligionRes.body.skipped).toHaveLength(0);
+    expect(missingReligionRes.body.created).toBe(1);
+  });
+
+  it('Import Data sheet max-length Excel validation matches the shared EMPLOYEE_FIELD_LIMITS constants', async () => {
+    const { agent } = await masterAdminAgent('import-template-lengths@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    // Designation (required, column L / 12): textLength between [1, max].
+    const designationCell = importDataSheet.getCell(2, 12);
+    expect(designationCell.dataValidation?.type).toBe('textLength');
+    expect(designationCell.dataValidation?.formulae).toEqual([1, EMPLOYEE_FIELD_LIMITS.designation]);
+
+    // Employee Number/Code (optional, column C / 3): textLength <= max.
+    const codeCell = importDataSheet.getCell(2, 3);
+    expect(codeCell.dataValidation?.type).toBe('textLength');
+    expect(codeCell.dataValidation?.operator).toBe('lessThanOrEqual');
+    expect(codeCell.dataValidation?.formulae).toEqual([EMPLOYEE_FIELD_LIMITS.employeeCode]);
+
+    // IBAN (optional, column U / 21).
+    const ibanCell = importDataSheet.getCell(2, 21);
+    expect(ibanCell.dataValidation?.formulae).toEqual([EMPLOYEE_FIELD_LIMITS.iban]);
+  });
+
+  it('Import Data sheet numeric validation matches EMPLOYEE_GROSS_PAY_MAX / EMPLOYEE_EOBI_AMOUNT_MAX', async () => {
+    const { agent } = await masterAdminAgent('import-template-numeric@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const grossPayCell = importDataSheet.getCell(2, 19); // Basic/Gross Pay
+    expect(grossPayCell.dataValidation?.type).toBe('decimal');
+    expect(grossPayCell.dataValidation?.formulae).toEqual([0, EMPLOYEE_GROSS_PAY_MAX]);
+
+    const eobiAmountCell = importDataSheet.getCell(2, 22); // Default EOBI Amount
+    expect(eobiAmountCell.dataValidation?.type).toBe('decimal');
+    expect(eobiAmountCell.dataValidation?.formulae).toEqual([0, EMPLOYEE_EOBI_AMOUNT_MAX]);
+  });
+
+  it('Import Data sheet enum dropdowns match the application\'s allowed Pay Type / EOBI values', async () => {
+    const { agent } = await masterAdminAgent('import-template-enums@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const payTypeCell = importDataSheet.getCell(2, 20); // Pay Type
+    expect(payTypeCell.dataValidation?.type).toBe('list');
+    expect(String(payTypeCell.dataValidation?.formulae?.[0])).toBe(
+      `"${PAY_TYPE_VALUES.map((value) => PAY_TYPE_LABELS[value]).join(',')}"`,
+    );
+
+    const eobiApplicableCell = importDataSheet.getCell(2, 23); // Default EOBI Applicable
+    expect(eobiApplicableCell.dataValidation?.type).toBe('list');
+    expect(eobiApplicableCell.dataValidation?.formulae).toEqual(['"Yes,No"']);
+  });
+
+  it("Project column's dropdown only lists Project Sites the requesting user can access (RBAC)", async () => {
+    const assignedSite = await makeSite('Test Site RBAC Template Assigned');
+    const outsideSite = await makeSite('Test Site RBAC Template Outside');
+
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'import-template-rbac@test.local',
+      password: PASSWORD,
+      roleCode: ROLE_CODES.PAYROLL_STAFF,
+      permissionKeys: EMPLOYEE_PERMISSIONS,
+      siteIds: [assignedSite.id],
+    });
+
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const listsSheet = workbook.worksheets.find((sheet) => sheet.state === 'veryHidden');
+    expect(listsSheet).toBeDefined();
+    const siteNames = listsSheet!
+      .getColumn(1)
+      .values.slice(2) // skip the undefined index-0 slot and the "Project Sites" header
+      .filter((value): value is string => typeof value === 'string');
+
+    expect(siteNames).toContain(assignedSite.name);
+    expect(siteNames).not.toContain(outsideSite.name);
+  });
+
+  it('preserves leading zeros on code-like columns by formatting them as Excel text', async () => {
+    const { agent } = await masterAdminAgent('import-template-leading-zeros@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    // Employee Number/Code (3), CNIC (7), Branch Code (14), Bank Branch Code (17), Account Number (18).
+    for (const columnIndex of [3, 7, 14, 17, 18]) {
+      expect(importDataSheet.getColumn(columnIndex).numFmt).toBe('@');
+    }
   });
 
   it('rejects a template download from a user without employees:create', async () => {
@@ -161,6 +401,244 @@ describe('Employee Registry import/export', () => {
 
     const res = await agent.get('/api/v1/employees/import-template');
     expect(res.status).toBe(403);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Header structural validation (Part G)
+  // ---------------------------------------------------------------------------------------------
+
+  it('rejects a file missing a required column with a message naming exactly what is missing', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('import-header-missing@test.local');
+    const headers = (EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]).filter((h) => h !== 'Pay Type');
+    const csv = stringifyCsvSync([headers]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', Buffer.from(csv, 'utf-8'), 'bad.csv');
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/missing column\(s\).*"Pay Type"/i);
+  });
+
+  it('rejects a file with an unexpected extra column with a message naming exactly what is unexpected', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('import-header-extra@test.local');
+    const headers = [...(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]), 'Favorite Color'];
+    const csv = stringifyCsvSync([headers]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', Buffer.from(csv, 'utf-8'), 'bad.csv');
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/unexpected column\(s\).*"Favorite Color"/i);
+  });
+
+  it('rejects a file whose columns are all present but reordered', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('import-header-reordered@test.local');
+    const headers = [...(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[])];
+    [headers[0], headers[1]] = [headers[1]!, headers[0]!]; // swap "Sr. No" and "Project"
+    const csv = stringifyCsvSync([headers]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', Buffer.from(csv, 'utf-8'), 'bad.csv');
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/wrong order/i);
+  });
+
+  it('a structurally invalid workbook imports nothing at all (rejected before any row is processed)', async () => {
+    const { agent, csrfToken } = await masterAdminAgent('import-header-no-partial@test.local');
+    const csv = stringifyCsvSync([['Completely', 'Wrong', 'Headers']]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', Buffer.from(csv, 'utf-8'), 'bad.csv');
+    expect(res.status).toBe(400);
+    expect(await prisma.employee.count()).toBe(0);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Readable row-error messages (Part F)
+  // ---------------------------------------------------------------------------------------------
+
+  it('reports an over-length value with a clean, readable message rather than a raw Zod error', async () => {
+    const site = await makeSite('Test Site Over Length');
+    const { agent, csrfToken } = await masterAdminAgent('import-over-length@test.local');
+
+    const overlongDesignation = 'D'.repeat(EMPLOYEE_FIELD_LIMITS.designation + 1);
+    const csv = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Overlong Employee', Designation: overlongDesignation, 'Basic/Gross Pay': '20000' }),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.skipped).toHaveLength(1);
+    const reason: string = res.body.skipped[0].reason;
+    expect(reason).toContain('Designation');
+    expect(reason).not.toContain('{"code"'); // never a raw ZodError JSON dump
+    expect(reason).not.toContain('[{');
+  });
+
+  it('reports the Account-Number-required-when-Bank-set cross-field rule with a clean message', async () => {
+    const site = await makeSite('Test Site Bank Cross Field');
+    await prisma.bank.create({ data: { code: 'TB-XCFB', name: 'Cross Field Bank' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-cross-field@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'No Account Number Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Project Bank': 'Cross Field Bank',
+        'Account Number': '',
+      }),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.skipped).toHaveLength(1);
+    const reason: string = res.body.skipped[0].reason;
+    expect(reason).toContain('Account Number');
+    expect(reason).not.toContain('{"code"');
+  });
+
+  it('rejects an invalid Pay Type value with a clear message listing the allowed values', async () => {
+    const site = await makeSite('Test Site Invalid Pay Type');
+    const { agent, csrfToken } = await masterAdminAgent('import-invalid-paytype@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Bad Pay Type Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Pay Type': 'Weekly',
+      }),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.skipped[0].reason).toMatch(/Pay Type/);
+    expect(res.body.skipped[0].reason).toContain('Daily Wage');
+  });
+
+  it('rejects an unrecognized date with a clear message', async () => {
+    const site = await makeSite('Test Site Bad Date');
+    const { agent, csrfToken } = await masterAdminAgent('import-bad-date@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Bad Date Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000', DOB: 'not-a-date' }),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.skipped[0].reason).toMatch(/date/i);
+  });
+
+  it('rejects an unknown bank name with a clear message', async () => {
+    const site = await makeSite('Test Site Unknown Bank');
+    const { agent, csrfToken } = await masterAdminAgent('import-unknown-bank@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Unknown Bank Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Project Bank': 'Totally Fictional Bank',
+        'Account Number': '12345',
+      }),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.skipped[0].reason).toMatch(/Unknown bank/i);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Duplicate handling (Part K items 15-16)
+  // ---------------------------------------------------------------------------------------------
+
+  it('two rows in the same workbook sharing a CNIC are treated as create-then-update, never two creates', async () => {
+    const site = await makeSite('Test Site Duplicate In Workbook');
+    const { agent, csrfToken } = await masterAdminAgent('import-duplicate-in-file@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, CNIC: '1112223334455', Name: 'First Pass', Designation: 'Guard', 'Basic/Gross Pay': '20000' }),
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, CNIC: '1112223334455', Name: 'Second Pass', Designation: 'Senior Guard', 'Basic/Gross Pay': '21000' }),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(1);
+    expect(res.body.updated).toBe(1);
+    expect(res.body.skipped).toHaveLength(0);
+
+    const all = await prisma.employee.findMany({ where: { cnic: '1112223334455' } });
+    expect(all).toHaveLength(1);
+    expect(all[0]?.name).toBe('Second Pass');
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // New fields: Pay Type / IBAN / EOBI round-trip (Part A/D contract-gap fix)
+  // ---------------------------------------------------------------------------------------------
+
+  it('imports and re-exports Pay Type, IBAN, and Default EOBI fields without loss', async () => {
+    const site = await makeSite('Test Site New Fields Roundtrip');
+    const { agent, csrfToken } = await masterAdminAgent('import-new-fields@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Monthly IBAN Employee',
+        Designation: 'Supervisor',
+        'Basic/Gross Pay': '50000',
+        'Pay Type': 'Monthly',
+        IBAN: 'pk00test0000001234567890',
+        'Default EOBI Amount': '500',
+        'Default EOBI Applicable': 'no',
+      }),
+    ]);
+
+    const importRes = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'employees.csv');
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.skipped).toHaveLength(0);
+    expect(importRes.body.created).toBe(1);
+
+    const created = await prisma.employee.findFirstOrThrow({ where: { name: 'Monthly IBAN Employee' } });
+    expect(created.payType).toBe('MONTHLY');
+    expect(created.iban).toBe('PK00TEST0000001234567890'); // stored uppercase
+    expect(Number(created.defaultEobiAmount)).toBeCloseTo(500);
+    expect(created.defaultEobiApplicable).toBe(false);
+
+    const exportRes = await agent.get('/api/v1/employees/export?format=csv');
+    expect(exportRes.text).toContain('Monthly');
+    expect(exportRes.text).toContain('PK00TEST0000001234567890');
+    expect(exportRes.text).toContain('No');
+  });
+
+  it('imports from an .xlsx workbook', async () => {
+    const site = await makeSite('Test Site Import Xlsx');
+    const { agent, csrfToken } = await masterAdminAgent('import-export-xlsx@test.local');
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Sheet1');
+    sheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
+    sheet.addRow(
+      Object.values(
+        templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Xlsx Employee', Designation: 'Guard', 'Basic/Gross Pay': '18000' }),
+      ),
+    );
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const importRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', buffer, 'employees.xlsx');
+
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.created).toBe(1);
+
+    const created = await prisma.employee.findFirst({ where: { name: 'Xlsx Employee' } });
+    expect(created).not.toBeNull();
   });
 
   it('round-trips: exporting then re-importing the same data updates the existing employee rather than duplicating it', async () => {
@@ -245,32 +723,6 @@ describe('Employee Registry import/export', () => {
     expect(importRes.body.created).toBe(0);
     expect(importRes.body.skipped).toHaveLength(1);
     expect(importRes.body.skipped[0].reason).toMatch(/access/i);
-  });
-
-  it('imports from an .xlsx workbook', async () => {
-    const site = await makeSite('Test Site Import Xlsx');
-    const { agent, csrfToken } = await masterAdminAgent('import-export-xlsx@test.local');
-
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Sheet1');
-    sheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
-    sheet.addRow(
-      Object.values(
-        templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Xlsx Employee', Designation: 'Guard', 'Basic/Gross Pay': '18000' }),
-      ),
-    );
-    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-
-    const importRes = await agent
-      .post('/api/v1/employees/import')
-      .set('x-csrf-token', csrfToken)
-      .attach('file', buffer, 'employees.xlsx');
-
-    expect(importRes.status).toBe(200);
-    expect(importRes.body.created).toBe(1);
-
-    const created = await prisma.employee.findFirst({ where: { name: 'Xlsx Employee' } });
-    expect(created).not.toBeNull();
   });
 
   it('imports rows into a multi-unit site, resolving each row\'s unit by Area name or by Branch Code (Checkpoint 3)', async () => {

@@ -73,9 +73,9 @@ employeesRouter.get('/export', requirePermission(PERMISSIONS.EMPLOYEES_VIEW), as
 employeesRouter.get(
   '/import-template',
   requirePermission(PERMISSIONS.EMPLOYEES_CREATE),
-  async (_req, res, next) => {
+  async (req, res, next) => {
     try {
-      const buffer = await generateEmployeeImportTemplate();
+      const buffer = await generateEmployeeImportTemplate(req.currentUser!);
       res.setHeader('Content-Disposition', 'attachment; filename="employee-import-template.xlsx"');
       res.setHeader(
         'Content-Type',

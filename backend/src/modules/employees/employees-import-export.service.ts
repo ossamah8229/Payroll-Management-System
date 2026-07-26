@@ -1,9 +1,34 @@
 import ExcelJS from 'exceljs';
-import { createEmployeeSchema, formatDate, isoDateToUtcDate, pluralize } from '@payroll/shared';
+import {
+  createEmployeeSchema,
+  EMPLOYEE_EOBI_AMOUNT_MAX,
+  EMPLOYEE_FIELD_LIMITS,
+  EMPLOYEE_GROSS_PAY_MAX,
+  formatDate,
+  isoDateToUtcDate,
+  PAY_TYPE_LABELS,
+  PAY_TYPE_VALUES,
+  pluralize,
+  type PayTypeValue,
+} from '@payroll/shared';
 import type { SessionUser } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest } from '../../common/http-error';
-import { parseTableFromFile, stringifyCsvSafe, type ImportRowError } from '../../common/import-export';
+import {
+  addColumnGuideTable,
+  assertExactHeaderMatch,
+  buildExampleSheet,
+  createInstructionsSheet,
+  formatImportValidationError,
+  parseTableFromFile,
+  STANDARD_EXAMPLE_SHEET_NAME,
+  STANDARD_IMPORT_DATA_SHEET_NAME,
+  STANDARD_INSTRUCTIONS_SHEET_NAME,
+  stringifyCsvSafe,
+  styleImportDataSheet,
+  type ImportColumnSpec,
+  type ImportRowError,
+} from '../../common/import-export';
 import {
   assertUnitBelongsToSite,
   findEmployeeByCnic,
@@ -14,11 +39,16 @@ import {
 } from './employees.service';
 import { assertSiteAccess } from '../../common/authz-policy';
 import { syncEmployeeIntoCurrentDraftCycle } from '../payroll-processing/payroll-processing.service';
+import { listProjectSites } from '../project-sites/project-sites.service';
+import { listBanks } from '../banks/banks.service';
 
 /**
- * The official Employee Registry template header set, in column order, extracted verbatim from
- * real client files (reference/PROJECT_SPEC.md, "Official Data Template") — this exact header set
- * is required, not a house style.
+ * The official Employee Registry template header set, in column order — extracted verbatim from
+ * real client files (reference/PROJECT_SPEC.md, "Official Data Template") for columns 1–19; this
+ * exact set (plus the four fields below) is required, not a house style. The importer maps a row
+ * to `createEmployeeSchema` positionally by this order (`rowsFromTable`), so column order here is
+ * load-bearing, not cosmetic — see `assertExactHeaderMatch`'s structural-mismatch reporting
+ * (`backend/src/common/import-export.ts`, shared with the Project Site importer).
  *
  * **Column mapping finalized in Phase 2.5 Checkpoint 3** (docs/architecture/database/sites-and-units.md
  * §8's revision note: these columns map onto `ProjectUnit` fields, not `ProjectSite` ones):
@@ -30,6 +60,15 @@ import { syncEmployeeIntoCurrentDraftCycle } from '../payroll-processing/payroll
  *   near-duplicate columns are both unit-level; they previously both aliased the site name here.
  * On import, a row's unit is resolved within its named site by `Branch Code` first, then
  * `Area`/`Area/Location`; every provided column must agree on one unit (see importEmployees).
+ *
+ * **Pay Type / IBAN / Default EOBI Amount / Default EOBI Applicable added (Import Templates
+ * checkpoint):** all four are real, user-editable fields on the manual Employee create/edit form
+ * (`frontend/src/routes/employees-page.tsx`) and real optional columns on `Employee` itself, but
+ * were missing from every prior version of this template — a bulk-imported employee could never
+ * be given a Monthly pay type, an IBAN, or a non-default EOBI configuration, only ever created via
+ * the manual form and edited afterwards. Adding them closes that template/application contract gap
+ * (Part D's "the application must not secretly require/support something the template doesn't
+ * present" principle) rather than expanding scope — the field already existed everywhere else.
  */
 export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Sr. No',
@@ -51,13 +90,357 @@ export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Bank Branch Code',
   'Account Number',
   'Basic/Gross Pay',
+  'Pay Type',
+  'IBAN',
+  'Default EOBI Amount',
+  'Default EOBI Applicable',
 ] as const;
+
+/** Bumped whenever `EMPLOYEE_TEMPLATE_HEADERS` changes shape — stamped into the Instructions sheet
+ * purely as a human-readable diagnostic aid (Part G). The importer never reads or enforces this
+ * value: `assertExactHeaderMatch`'s structural comparison against the live header set already
+ * deterministically catches an outdated template (missing/extra/reordered columns) even if a user
+ * hand-edited the workbook and the version stamp went stale or was deleted, so parsing never
+ * depends on it. */
+export const EMPLOYEE_TEMPLATE_VERSION = 2;
+
+export const IMPORT_DATA_SHEET_NAME = STANDARD_IMPORT_DATA_SHEET_NAME;
+export const EXAMPLE_SHEET_NAME = STANDARD_EXAMPLE_SHEET_NAME;
+export const INSTRUCTIONS_SHEET_NAME = STANDARD_INSTRUCTIONS_SHEET_NAME;
+const LISTS_SHEET_NAME = 'Lists';
+
+const REQUIRED_TEXT = (max: number) => `Text, up to ${max} characters`;
+
+/**
+ * Per-column contract for the downloadable Employee import template (Import Templates checkpoint)
+ * — the single source for the Instructions sheet's "Column Guide" table, the Import Data sheet's
+ * required/optional header styling and Excel validation, and the Example sheet's sample row, so
+ * all three (and the importer's own error messages) describe the same 23 columns rather than three
+ * independently hand-maintained copies. Every `maxLength` here is `EMPLOYEE_FIELD_LIMITS`/
+ * `EMPLOYEE_GROSS_PAY_MAX`/`EMPLOYEE_EOBI_AMOUNT_MAX` from `@payroll/shared` — the exact same
+ * constants `createEmployeeSchema` validates against and that mirror `Employee`'s own
+ * `@db.VarChar(n)`/`@db.Decimal(p,s)` column definitions, never a re-typed number.
+ *
+ * Built as a plain array of the shared `ImportColumnSpec` shape (`common/import-export.ts`) — four
+ * columns (Project, Project Bank, Pay Type, Default EOBI Applicable) supply their own
+ * `buildValidation` for a dropdown sourced from the "Lists" sheet below or an inline enum list;
+ * three (Area, Area/Location, Account Number) supply one for a cross-field custom formula
+ * (Part C6's "Excel-enforceable" cross-field rules) — everything else uses the generic
+ * text/number/date default `styleImportDataSheet` falls back to.
+ */
+const EMPLOYEE_TEMPLATE_COLUMNS: readonly ImportColumnSpec[] = [
+  {
+    header: 'Sr. No',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: 'Any',
+    example: '1',
+    notes: 'Not imported — a convenience column for the source file only.',
+  },
+  {
+    header: 'Project',
+    requirement: 'required',
+    dataType: 'enum',
+    allowedFormat: 'Must exactly match an existing Project Site name (see the "Project" dropdown)',
+    example: 'Downtown Regional Office',
+    notes:
+      'Must exactly match an existing Project Site name — matched case-insensitively. The dropdown lists every Project Site you currently have access to; a site created after this template was downloaded will not appear until you download a fresh copy.',
+    schemaField: 'siteId',
+    buildValidation: (listRowCount) => {
+      if (listRowCount === 0) return undefined; // no accessible sites yet — nothing to populate the dropdown with
+      return {
+        type: 'list',
+        allowBlank: false,
+        formulae: [`=${LISTS_SHEET_NAME}!$A$2:$A$${listRowCount + 1}`],
+        showErrorMessage: true,
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Project',
+        error: 'Choose a Project Site from the dropdown list.',
+      };
+    },
+  },
+  {
+    header: 'Employee Number/Code',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.employeeCode),
+    maxLength: EMPLOYEE_FIELD_LIMITS.employeeCode,
+    example: 'EMP-0001',
+    notes: 'Unique if provided; leave blank to let the system leave it unset. Stored as text — leading zeros are preserved.',
+    preserveLeadingZeros: true,
+    schemaField: 'employeeCode',
+  },
+  {
+    header: 'Religion',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.religion),
+    maxLength: EMPLOYEE_FIELD_LIMITS.religion,
+    example: 'Islam',
+    notes: 'Free text.',
+    schemaField: 'religion',
+  },
+  {
+    header: 'Name',
+    requirement: 'required',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.name),
+    maxLength: EMPLOYEE_FIELD_LIMITS.name,
+    example: 'Muhammad Ali',
+    notes: "Employee's full name.",
+    schemaField: 'name',
+  },
+  {
+    header: 'Father Name',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.fatherName),
+    maxLength: EMPLOYEE_FIELD_LIMITS.fatherName,
+    example: 'Ghulam Ali',
+    notes: 'Free text.',
+    schemaField: 'fatherName',
+  },
+  {
+    header: 'CNIC',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: '13 digits (dashes/spaces are stripped automatically)',
+    maxLength: 15,
+    example: '3520112345671',
+    notes:
+      'Exactly 13 digits once dashes/spaces are removed — enforced on upload; the spreadsheet only limits raw length to 15 characters (13 digits plus up to 2 separators). Must be unique across all employees if provided. Stored as text — leading zeros are preserved.',
+    preserveLeadingZeros: true,
+    schemaField: 'cnic',
+  },
+  {
+    header: 'DOB',
+    requirement: 'optional',
+    dataType: 'date',
+    allowedFormat: 'Date — DD-MM-YYYY (YYYY-MM-DD and DD/MM/YYYY are also accepted on upload)',
+    example: '15-01-1990',
+    notes: 'Date of birth.',
+    schemaField: 'dateOfBirth',
+  },
+  {
+    header: 'DOJ',
+    requirement: 'optional',
+    dataType: 'date',
+    allowedFormat: 'Date — DD-MM-YYYY (YYYY-MM-DD and DD/MM/YYYY are also accepted on upload)',
+    example: '01-06-2020',
+    notes: 'Date of joining.',
+    schemaField: 'dateOfJoining',
+  },
+  {
+    header: 'DOL',
+    requirement: 'optional',
+    dataType: 'date',
+    allowedFormat: 'Date — DD-MM-YYYY (YYYY-MM-DD and DD/MM/YYYY are also accepted on upload)',
+    example: '',
+    notes:
+      'Date of leaving — leave blank for an active employee. Updating an existing (departed) employee with a blank DOL reactivates them via the same workflow as the Reactivate action.',
+  },
+  {
+    header: 'Mobile Number',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.mobileNumber),
+    maxLength: EMPLOYEE_FIELD_LIMITS.mobileNumber,
+    example: '03001234567',
+    notes: 'Free text. Stored as text — leading zeros are preserved.',
+    preserveLeadingZeros: true,
+    schemaField: 'mobileNumber',
+  },
+  {
+    header: 'Designation',
+    requirement: 'required',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.designation),
+    maxLength: EMPLOYEE_FIELD_LIMITS.designation,
+    example: 'Security Guard',
+    notes: 'Job title/role.',
+    schemaField: 'designation',
+  },
+  {
+    header: 'Area',
+    requirement: 'conditional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.name),
+    maxLength: 160,
+    example: 'Main Branch',
+    notes:
+      'The Branch/Unit name within the chosen Project Site. At least one of "Area", "Area/Location", or "Branch Code" is required per row; if more than one is given they must all identify the same unit.',
+    // Part C6 "Excel-enforceable" cross-field checks — column letters are load-bearing here
+    // (M=Area, N=Branch Code, O=Area/Location), matching EMPLOYEE_TEMPLATE_HEADERS' fixed order.
+    buildValidation: () => ({
+      type: 'custom',
+      allowBlank: true,
+      formulae: ['=AND(OR($M{row}<>"",$N{row}<>"",$O{row}<>""),LEN($M{row})<=160)'],
+      showErrorMessage: true,
+      errorStyle: 'stop',
+      errorTitle: 'Invalid Area',
+      error: 'Provide at least one of "Area", "Area/Location", or "Branch Code" (max 160 characters).',
+    }),
+  },
+  {
+    header: 'Branch Code',
+    requirement: 'conditional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.unitCode),
+    maxLength: EMPLOYEE_FIELD_LIMITS.unitCode,
+    example: 'MB-01',
+    notes:
+      'The Branch/Unit\'s own code, if your site uses one. At least one of "Area", "Area/Location", or "Branch Code" is required per row. Stored as text — leading zeros are preserved.',
+    preserveLeadingZeros: true,
+  },
+  {
+    header: 'Area/Location',
+    requirement: 'conditional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.name),
+    maxLength: 160,
+    example: 'Main Branch',
+    notes: 'Alias of "Area" — must match it if both are provided. At least one of "Area", "Area/Location", or "Branch Code" is required per row.',
+    buildValidation: () => ({
+      type: 'custom',
+      allowBlank: true,
+      formulae: ['=AND(OR($M{row}="",$O{row}="",LOWER($M{row})=LOWER($O{row})),LEN($O{row})<=160)'],
+      showErrorMessage: true,
+      errorStyle: 'stop',
+      errorTitle: 'Invalid Area/Location',
+      error: '"Area/Location" must match "Area" if both are provided (max 160 characters).',
+    }),
+  },
+  {
+    header: 'Project Bank',
+    requirement: 'optional',
+    dataType: 'enum',
+    allowedFormat: 'Must exactly match an active Bank name (see the "Project Bank" dropdown), or blank for a cash employee',
+    example: 'Acme Commercial Bank',
+    notes: 'Leave every bank column blank for a cash employee.',
+    schemaField: 'bankId',
+    buildValidation: (listRowCount) => ({
+      type: 'list',
+      allowBlank: true,
+      formulae: [`=${LISTS_SHEET_NAME}!$B$2:$B$${listRowCount + 1}`],
+      showErrorMessage: true,
+      errorStyle: 'stop',
+      errorTitle: 'Invalid Project Bank',
+      error: 'Choose a Bank from the dropdown list, or leave blank for a cash employee.',
+    }),
+  },
+  {
+    header: 'Bank Branch Code',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.bankBranchCode),
+    maxLength: EMPLOYEE_FIELD_LIMITS.bankBranchCode,
+    example: '0470',
+    notes: "The employee's own bank branch code (unrelated to \"Branch Code\" above). Stored as text — leading zeros are preserved.",
+    preserveLeadingZeros: true,
+    schemaField: 'branchCode',
+  },
+  {
+    header: 'Account Number',
+    requirement: 'conditional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.accountNumber),
+    maxLength: EMPLOYEE_FIELD_LIMITS.accountNumber,
+    example: '01234567890123',
+    notes: 'Required if "Project Bank" is set; must stay blank for a cash employee. Stored as text — leading zeros are preserved.',
+    preserveLeadingZeros: true,
+    schemaField: 'accountNumber',
+    buildValidation: () => ({
+      type: 'custom',
+      allowBlank: true,
+      formulae: [`=AND(OR($P{row}="",$R{row}<>""),LEN($R{row})<=${EMPLOYEE_FIELD_LIMITS.accountNumber})`],
+      showErrorMessage: true,
+      errorStyle: 'stop',
+      errorTitle: 'Invalid Account Number',
+      error: `Required when "Project Bank" is set (max ${EMPLOYEE_FIELD_LIMITS.accountNumber} characters).`,
+    }),
+  },
+  {
+    header: 'Basic/Gross Pay',
+    requirement: 'required',
+    dataType: 'number',
+    numericRange: { min: 0, max: EMPLOYEE_GROSS_PAY_MAX },
+    allowedFormat: `Positive number, up to 2 decimal places (max ${EMPLOYEE_GROSS_PAY_MAX.toLocaleString('en-US')})`,
+    example: '35000.00',
+    notes: "Numeric, e.g. 35000.00 — the employee's starting gross pay for new payroll cycles.",
+    schemaField: 'grossPay',
+  },
+  {
+    header: 'Pay Type',
+    requirement: 'optional',
+    dataType: 'enum',
+    allowedFormat: `One of: ${PAY_TYPE_VALUES.map((value) => `"${PAY_TYPE_LABELS[value]}"`).join(', ')}`,
+    example: PAY_TYPE_LABELS.DAILY_WAGE,
+    notes: `Defaults to "${PAY_TYPE_LABELS.DAILY_WAGE}" if left blank.`,
+    schemaField: 'payType',
+    buildValidation: () => ({
+      type: 'list',
+      allowBlank: true,
+      formulae: [`"${PAY_TYPE_VALUES.map((value) => PAY_TYPE_LABELS[value]).join(',')}"`],
+      showErrorMessage: true,
+      errorStyle: 'stop',
+      errorTitle: 'Invalid Pay Type',
+      error: `Choose one of: ${PAY_TYPE_VALUES.map((value) => PAY_TYPE_LABELS[value]).join(', ')}.`,
+    }),
+  },
+  {
+    header: 'IBAN',
+    requirement: 'optional',
+    dataType: 'text',
+    allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.iban),
+    maxLength: EMPLOYEE_FIELD_LIMITS.iban,
+    example: '',
+    notes: "Optional; many employees don't provide one. Stored uppercase automatically.",
+    schemaField: 'iban',
+  },
+  {
+    header: 'Default EOBI Amount',
+    requirement: 'optional',
+    dataType: 'number',
+    numericRange: { min: 0, max: EMPLOYEE_EOBI_AMOUNT_MAX },
+    allowedFormat: `Positive number, up to 2 decimal places (max ${EMPLOYEE_EOBI_AMOUNT_MAX.toLocaleString('en-US')})`,
+    example: '400.00',
+    notes: 'Defaults to 400.00 if left blank.',
+    schemaField: 'defaultEobiAmount',
+  },
+  {
+    header: 'Default EOBI Applicable',
+    requirement: 'optional',
+    dataType: 'enum',
+    allowedFormat: 'One of: "Yes", "No"',
+    example: 'Yes',
+    notes: 'Defaults to "Yes" if left blank.',
+    schemaField: 'defaultEobiApplicable',
+    buildValidation: () => ({
+      type: 'list',
+      allowBlank: true,
+      formulae: ['"Yes,No"'],
+      showErrorMessage: true,
+      errorStyle: 'stop',
+      errorTitle: 'Invalid Default EOBI Applicable',
+      error: 'Choose "Yes" or "No".',
+    }),
+  },
+];
+
+/** Reverse lookup from a `createEmployeeSchema` field path (e.g. `"designation"`) to its template
+ * column name (e.g. `"Designation"`) — used so a Zod validation issue reads in terms of the column
+ * the user actually edited, not the API's internal field name
+ * (`formatImportValidationError`, `common/import-export.ts`). */
+const SCHEMA_FIELD_TO_COLUMN = new Map(
+  EMPLOYEE_TEMPLATE_COLUMNS.filter((column) => column.schemaField).map((column) => [column.schemaField!, column.header]),
+);
 
 /**
  * Parses common date representations from real-world spreadsheets (`YYYY-MM-DD`, `DD/MM/YYYY`,
- * `DD-MM-YYYY`) into an ISO date string, or returns null for a blank cell. Throws for anything it
- * can't confidently parse, rather than guessing — an ambiguous date is a row error, not a silent
- * best-effort import.
+ * `DD-MM-YYYY` — the last of which is this application's own canonical display format, per
+ * `shared/src/lib/date.ts`) into an ISO date string, or returns null for a blank cell. Throws for
+ * anything it can't confidently parse, rather than guessing — an ambiguous date is a row error,
+ * not a silent best-effort import.
  */
 function parseImportDate(raw: string): string | null {
   const trimmed = raw.trim();
@@ -72,6 +455,33 @@ function parseImportDate(raw: string): string | null {
   }
 
   throw new Error(`Unrecognized date format: "${raw}"`);
+}
+
+/** "Daily Wage"/"DAILY_WAGE"/"monthly" (any case) -> the enum value `createEmployeeSchema`
+ * expects, or `undefined` for a blank cell (the schema/database default applies). Accepts both the
+ * template's own friendly dropdown label and the raw enum value, so re-uploading this module's own
+ * CSV/XLSX export — which writes the friendly label, see `buildExportRows` — always round-trips. */
+function parsePayType(raw: string): PayTypeValue | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  const byValue = PAY_TYPE_VALUES.find((value) => value.toLowerCase() === trimmed.toLowerCase());
+  if (byValue) return byValue;
+
+  const byLabel = PAY_TYPE_VALUES.find((value) => PAY_TYPE_LABELS[value].toLowerCase() === trimmed.toLowerCase());
+  if (byLabel) return byLabel;
+
+  throw new Error(`Pay Type must be one of: ${PAY_TYPE_VALUES.map((value) => `"${PAY_TYPE_LABELS[value]}"`).join(', ')} (received "${raw}")`);
+}
+
+/** "Yes"/"No" (any case, plus "true"/"false"/"1"/"0") -> boolean, or `undefined` for a blank cell
+ * (the schema/database default applies). */
+function parseYesNo(raw: string, columnName: string): boolean | undefined {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (['yes', 'true', '1'].includes(trimmed)) return true;
+  if (['no', 'false', '0'].includes(trimmed)) return false;
+  throw new Error(`${columnName} must be "Yes" or "No" (received "${raw}")`);
 }
 
 async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
@@ -97,6 +507,10 @@ async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
     employee.branchCode ?? '', // "Bank Branch Code" — the employee's own bank branch code
     employee.accountNumber ?? '',
     employee.grossPay.toString(),
+    PAY_TYPE_LABELS[employee.payType as PayTypeValue],
+    employee.iban ?? '',
+    employee.defaultEobiAmount.toString(),
+    employee.defaultEobiApplicable ? 'Yes' : 'No',
   ]);
 }
 
@@ -120,80 +534,89 @@ export async function exportEmployeesToXlsx(currentUser: SessionUser, siteIds?: 
 }
 
 /**
- * Per-column required/optional/validation documentation for the downloadable Employee import
- * template (Import Templates checkpoint) — kept as data, not just prose, so the "Instructions"
- * sheet below and any future consumer (a future in-app column-hint tooltip, say) share one source
- * rather than a second hand-written copy that could drift from `createEmployeeSchema`
- * (`shared/src/schemas/employee.ts`), the actual authority every one of these notes describes.
+ * A blank, downloadable Employee Registry import template (Import Templates checkpoint):
+ *
+ * - **Instructions** — purpose, file-format/behavior rules, and a full Column Guide table.
+ * - **Import Data** — the exact importer-compatible header row (frozen, filtered, required/
+ *   optional/conditional visually distinguished, Excel data validation on every constrained
+ *   column) with no data rows — this is the only sheet `parseEmployeeImportFile` ever reads.
+ * - **Example** — the same header row plus one fully valid, neutral sample row, kept structurally
+ *   separate from Import Data specifically so an un-deleted example row can never be uploaded as a
+ *   real employee (Part B3) — see `parseEmployeeImportFile`'s explicit sheet targeting.
+ *
+ * `currentUser` scopes the "Project" column's dropdown to only the Project Sites this user can
+ * currently access (`listProjectSites`, the same RBAC-scoped list used everywhere else in this
+ * codebase) — Part H: a downloadable template must never leak a site a user has no access to,
+ * even as a plain dropdown value.
  */
-const EMPLOYEE_TEMPLATE_COLUMN_NOTES: Record<(typeof EMPLOYEE_TEMPLATE_HEADERS)[number], { required: boolean; note: string }> = {
-  'Sr. No': { required: false, note: 'Not imported — a convenience column for the source file only.' },
-  Project: { required: true, note: 'Must exactly match an existing Project Site name.' },
-  'Employee Number/Code': { required: false, note: 'Unique if provided; left blank to let the system leave it unset.' },
-  Religion: { required: false, note: 'Free text.' },
-  Name: { required: true, note: 'Employee full name.' },
-  'Father Name': { required: false, note: 'Free text.' },
-  CNIC: { required: false, note: '13 digits; dashes/spaces are stripped automatically. Must be unique across all employees if provided.' },
-  DOB: { required: false, note: 'Date of birth — YYYY-MM-DD, DD/MM/YYYY, or DD-MM-YYYY.' },
-  DOJ: { required: false, note: 'Date of joining — same accepted formats as DOB.' },
-  DOL: { required: false, note: 'Date of leaving — leave blank for an active employee.' },
-  'Mobile Number': { required: false, note: 'Free text, up to 20 characters.' },
-  Designation: { required: true, note: 'Job title/role.' },
-  Area: { required: true, note: `The employee's Branch/Unit name within their Project Site — must match "Area/Location" and "Branch Code" if both are also provided.` },
-  'Branch Code': { required: false, note: 'The Branch/Unit code, if your site uses one — must identify the same unit as "Area".' },
-  'Area/Location': { required: false, note: 'Alias of "Area" — must match it if both are provided.' },
-  'Project Bank': { required: false, note: 'Bank name — leave every bank column blank for a cash employee.' },
-  'Bank Branch Code': { required: false, note: "The employee's own bank branch code (unrelated to \"Branch Code\" above)." },
-  'Account Number': { required: false, note: 'Required if "Project Bank" is set; must stay blank for a cash employee.' },
-  'Basic/Gross Pay': { required: true, note: 'Numeric, e.g. 35000.00 — the employee\'s starting gross pay for new payroll cycles.' },
-};
+export async function generateEmployeeImportTemplate(currentUser: SessionUser): Promise<Buffer> {
+  const [sites, banks] = await Promise.all([listProjectSites(currentUser), listBanks()]);
+  const siteNames = sites.map((site) => site.name).sort((a, b) => a.localeCompare(b));
+  const bankNames = banks.map((bank) => bank.name).sort((a, b) => a.localeCompare(b));
+  const listRowCount = Math.max(siteNames.length, bankNames.length);
 
-/**
- * A blank, downloadable Employee Registry import template (Import Templates checkpoint) — every
- * required header (`EMPLOYEE_TEMPLATE_HEADERS`, the exact set `parseEmployeeImportFile` validates
- * against), one fully-filled sample row so a real import file's shape is unambiguous, and a second
- * "Instructions" sheet documenting which columns are required vs. optional and any validation
- * rule that isn't obvious from the sample alone. Never queries real employee data — this is a
- * template, not an export, and needs no `currentUser`/site-scope at all.
- */
-export async function generateEmployeeImportTemplate(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Payroll Management System';
+  workbook.created = new Date();
 
-  const templateSheet = workbook.addWorksheet('Employee Import Template');
-  templateSheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
-  templateSheet.addRow([
-    '1',
-    'Downtown Regional Office',
-    'EMP-0001',
-    'Islam',
-    'Muhammad Ali',
-    'Ghulam Ali',
-    '3520112345671',
-    '1990-01-15',
-    '2020-06-01',
-    '',
-    '03001234567',
-    'Security Guard',
-    'Main Branch',
-    'MB-01',
-    'Main Branch',
-    'Acme Commercial Bank',
-    '0470',
-    '01234567890123',
-    '35000.00',
-  ]);
-  templateSheet.getRow(1).font = { bold: true };
-
-  const instructionsSheet = workbook.addWorksheet('Instructions');
-  instructionsSheet.addRow(['Column', 'Required', 'Notes']);
-  instructionsSheet.getRow(1).font = { bold: true };
-  for (const header of EMPLOYEE_TEMPLATE_HEADERS) {
-    const { required, note } = EMPLOYEE_TEMPLATE_COLUMN_NOTES[header];
-    instructionsSheet.addRow([header, required ? 'Required' : 'Optional', note]);
+  // --- Lists sheet: dropdown source data, very hidden — functional for data validation formulas
+  // but never shown as a tab, so it can't be mistaken for a data-entry sheet. ---
+  const listsSheet = workbook.addWorksheet(LISTS_SHEET_NAME, { state: 'veryHidden' });
+  listsSheet.addRow(['Project Sites', 'Banks']);
+  for (let i = 0; i < listRowCount; i += 1) {
+    listsSheet.addRow([siteNames[i] ?? '', bankNames[i] ?? '']);
   }
-  instructionsSheet.getColumn(1).width = 22;
-  instructionsSheet.getColumn(2).width = 12;
-  instructionsSheet.getColumn(3).width = 90;
+
+  // --- Instructions sheet ---
+  const { addTitle, addSubheading, addParagraph, addBullet, sheet: instructionsSheet } = createInstructionsSheet(
+    workbook,
+    INSTRUCTIONS_SHEET_NAME,
+  );
+
+  addTitle('Employee Registry — Import Template');
+  instructionsSheet.addRow([`Template Version: ${EMPLOYEE_TEMPLATE_VERSION}`]).font = { italic: true, size: 9 };
+  instructionsSheet.addRow([`Generated: ${new Date().toISOString().slice(0, 10)}`]).font = { italic: true, size: 9 };
+  instructionsSheet.addRow([]);
+
+  addSubheading('What this import does');
+  addParagraph(
+    'Creates new Employee Registry records, or updates existing ones. A row is matched to an existing employee first by CNIC, then by Employee Number/Code; if neither matches, a new employee is created. Moving an existing employee to a different Project Site/Area on re-import is treated as an official transfer, with its own audit trail — the same as using the Transfer action.',
+  );
+  addParagraph('Accepted file formats: .xlsx (recommended) or .csv.');
+  addParagraph(
+    'Do not rename, add, delete, or reorder the header row on the "Import Data" sheet — the importer matches columns by exact name and position. Downloading a fresh template after your role/site access or the application itself changes is always safe; reusing an old file with a different column layout will be rejected with a description of exactly what differs.',
+  );
+  addParagraph('This "Instructions" sheet and the "Example" sheet are never uploaded as data — only "Import Data" is read.');
+
+  addSubheading('Required vs. Optional vs. Conditional');
+  addBullet('Required — every row must provide this column.');
+  addBullet('Conditional — required only in combination with another column; see that column\'s Notes below.');
+  addBullet('Optional — may be left blank. A blank optional field is stored as empty/unset, or takes its documented default.');
+  addParagraph('On the "Import Data" sheet, Required columns are highlighted amber and Conditional columns blue; hover any header cell for its rule.');
+
+  addSubheading('Formats');
+  addBullet('Dates: DD-MM-YYYY (this application\'s own display format). YYYY-MM-DD and DD/MM/YYYY are also accepted.');
+  addBullet('Numbers (Basic/Gross Pay, Default EOBI Amount): plain numbers, up to 2 decimal places, no currency symbols or thousands separators.');
+  addBullet('Codes and identifiers (Employee Number/Code, CNIC, Branch Code, Bank Branch Code, Account Number) are stored as text — leading zeros are preserved.');
+  addBullet('Project Site, Project Bank, Pay Type, and Default EOBI Applicable values are matched case-insensitively; using the provided dropdown avoids typos entirely.');
+
+  addSubheading('Duplicates, updates, and errors');
+  addBullet('Each row is validated and applied independently — one invalid row is skipped and reported; it never fails the whole file.');
+  addBullet('Import is not all-or-nothing: valid rows in the same file are still created/updated even if other rows are skipped.');
+  addBullet('After upload, you will see exactly how many rows were created, updated, and skipped, with the reason for every skipped row (naming the row number and column).');
+
+  instructionsSheet.addRow([]);
+  addSubheading('Column Guide');
+  addColumnGuideTable(instructionsSheet, EMPLOYEE_TEMPLATE_COLUMNS);
+
+  // --- Import Data sheet: the only sheet the importer reads ---
+  const importDataSheet = workbook.addWorksheet(IMPORT_DATA_SHEET_NAME);
+  importDataSheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
+  styleImportDataSheet(importDataSheet, EMPLOYEE_TEMPLATE_COLUMNS, { listRowCount });
+
+  // --- Example sheet: same columns, one fully valid neutral sample row, structurally separate
+  // from Import Data (Part B3) ---
+  buildExampleSheet(workbook, EXAMPLE_SHEET_NAME, EMPLOYEE_TEMPLATE_HEADERS, EMPLOYEE_TEMPLATE_COLUMNS);
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
@@ -211,12 +634,7 @@ function rowsFromTable(table: string[][]): ParsedRow[] {
 
   const header = table[0]!.map((cell) => cell.trim());
   const expected = EMPLOYEE_TEMPLATE_HEADERS as unknown as string[];
-  const headerMatches = expected.every((column, index) => header[index] === column);
-  if (!headerMatches) {
-    throw badRequest(
-      `Header row does not match the official Employee Registry template. Expected: ${expected.join(', ')}`,
-    );
-  }
+  assertExactHeaderMatch(header, expected, 'Employee Registry import template', 'download a fresh copy from Employees → Download Import Template');
 
   return table.slice(1).map((cells, index) => {
     const record: Record<string, string> = {};
@@ -227,12 +645,23 @@ function rowsFromTable(table: string[][]): ParsedRow[] {
   });
 }
 
-/** Parses an uploaded CSV or XLSX buffer into header-keyed rows, validating the header set first.
+/**
+ * Parses an uploaded CSV or XLSX buffer into header-keyed rows, validating the header set first.
  * The CSV/XLSX-to-table half is shared with every other importer in this codebase
  * (`backend/src/common/import-export.ts`); header validation and column-keying stay here since
- * they're specific to this template. */
+ * they're specific to this template.
+ *
+ * For an .xlsx upload, only a sheet literally named "Import Data" — or, failing that, the first
+ * sheet that isn't named "Instructions"/"Example" — is ever read (Part B3): re-uploading this
+ * module's own generated template can never accidentally import its Example row, and an
+ * ad-hoc/hand-built workbook (a single unnamed sheet, or this module's own plain XLSX export,
+ * "Employee Registry") still imports exactly as before.
+ */
 export async function parseEmployeeImportFile(buffer: Buffer, filename: string): Promise<ParsedRow[]> {
-  const table = await parseTableFromFile(buffer, filename);
+  const table = await parseTableFromFile(buffer, filename, {
+    preferredSheetNames: [IMPORT_DATA_SHEET_NAME],
+    excludeSheetNames: [INSTRUCTIONS_SHEET_NAME, EXAMPLE_SHEET_NAME],
+  });
   return rowsFromTable(table);
 }
 
@@ -330,15 +759,17 @@ function resolveRowUnit(
 /**
  * Imports parsed rows: matches an existing employee by CNIC first, then employee code, otherwise
  * creates a new one. Each row is validated and applied independently — one bad row is skipped and
- * reported, never a whole-file failure (per docs/IMPLEMENTATION_PLAN.md Phase 2 testing strategy).
- * A single summary audit log entry is written for the whole operation rather than one per row, to
- * keep the audit log readable for a bulk action instead of spammed with hundreds of near-identical
- * entries — with one deliberate exception: an update that changes an employee's site/unit is a
- * *transfer* (docs/architecture/database/employee.md §8b/§9, a business event in its own right) and
- * writes its `EmployeeTransferHistory` row plus dedicated `employee.transferred` audit entry via
- * the same shared `recordEmployeeTransfer()` the ordinary update path uses, atomically with the
- * row update. Transfers are never folded into a generic/summary-only path, per the 2026-07-03
- * decision.
+ * reported, never a whole-file failure (per docs/IMPLEMENTATION_PLAN.md Phase 2 testing strategy,
+ * reaffirmed by the Import Templates checkpoint's own error-reporting audit: this per-row-atomic,
+ * whole-file-non-atomic behavior is this importer's explicit, existing product rule, not an
+ * omission — see docs/architecture/import-template-architecture.md). A single summary audit log
+ * entry is written for the whole operation rather than one per row, to keep the audit log readable
+ * for a bulk action instead of spammed with hundreds of near-identical entries — with one
+ * deliberate exception: an update that changes an employee's site/unit is a *transfer*
+ * (docs/architecture/database/employee.md §8b/§9, a business event in its own right) and writes
+ * its `EmployeeTransferHistory` row plus dedicated `employee.transferred` audit entry via the same
+ * shared `recordEmployeeTransfer()` the ordinary update path uses, atomically with the row update.
+ * Transfers are never folded into a generic/summary-only path, per the 2026-07-03 decision.
  *
  * A row's Project Unit is resolved from the template's `Branch Code`/`Area`/`Area/Location`
  * columns via `resolveRowUnit()` (validation layer 1); `assertUnitBelongsToSite()` re-asserts the
@@ -390,10 +821,14 @@ export async function importEmployees(
         siteId: site.id,
         unitId: unit.id,
         dateOfJoining: parseImportDate(row.cells['DOJ']!),
+        payType: parsePayType(row.cells['Pay Type']!),
         grossPay: row.cells['Basic/Gross Pay'],
         bankId: bank?.id ?? null,
         branchCode: row.cells['Bank Branch Code'] || null,
         accountNumber: row.cells['Account Number'] || null,
+        iban: row.cells['IBAN'] || null,
+        defaultEobiAmount: row.cells['Default EOBI Amount'] || undefined,
+        defaultEobiApplicable: parseYesNo(row.cells['Default EOBI Applicable']!, 'Default EOBI Applicable'),
       });
 
       const dateOfLeaving = parseImportDate(row.cells['DOL']!);
@@ -473,7 +908,7 @@ export async function importEmployees(
         created += 1;
       }
     } catch (error) {
-      skipped.push({ row: row.rowNumber, reason: error instanceof Error ? error.message : String(error) });
+      skipped.push({ row: row.rowNumber, reason: formatImportValidationError(error, SCHEMA_FIELD_TO_COLUMN) });
     }
   }
 
