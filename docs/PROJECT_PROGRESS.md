@@ -6922,12 +6922,12 @@ use-project-sites.ts`/`routes/project-sites-page.tsx` (import UX);
 **Commits:** `65764dc` (shared infrastructure), `3343a08` (Employee refactor),
 `5fae5e6` (Project Site import + initial-Unit/creator-access provisioning), `67253eb`
 (payroll-entry test fix), `913ce46` (Project Site import tests), `f57b4f8` (E2E spec),
-plus this documentation commit — see `docs/SESSION_HANDOFF.md` §19 for the exact
-push/deploy/post-deploy-verification record (updated in a small follow-up commit
-immediately after this one, once push and Render verification are actually performed
-this same session). No schema/migration change. **Phase 7 remains Not Started; this
-checkpoint does not begin it. No standalone Project Unit bulk importer was
-introduced. Payroll Entry import remains absent.**
+`1b106fd` (documentation). **Pushed to `origin/main` and deployed via Render's existing
+auto-deploy** — see `docs/SESSION_HANDOFF.md` §19 for the exact push/deploy/
+post-deploy-verification record, including direct proof (not just timing) that the
+live frontend bundle contains this checkpoint's new code. No schema/migration change.
+**Phase 7 remains Not Started; this checkpoint does not begin it. No standalone
+Project Unit bulk importer was introduced. Payroll Entry import remains absent.**
 
 ---
 
@@ -7275,11 +7275,13 @@ introduced. Payroll Entry import remains absent.**
 
 **Updated 2026-07-26 (latest) — Import Template Contract checkpoint (Employee Registry
 rebuild + Project Site bulk import + initial-Unit/creator-access provisioning):
-COMPLETE, COMMITTED; push and Render deploy verification in progress this same
-session.** See the dedicated "Import Template Contract checkpoint" entry in §1
-(immediately above §2) for the full record and `docs/SESSION_HANDOFF.md` §19 for the
-push/deploy/post-deploy-verification outcome (filled in via a small follow-up commit
-immediately after this one). Employees is the only module that had a real spreadsheet import capability
+COMPLETE, COMMITTED, and pushed/deployed.** See the dedicated "Import Template Contract
+checkpoint" entry in §1 (immediately above §2) for the full record and
+`docs/SESSION_HANDOFF.md` §19 for the exact push/deploy/post-deploy-verification
+outcome (direct proof, not just timing, that the live frontend bundle contains this
+checkpoint's new code — no authenticated production credentials exist in this
+environment, so normal user UAT is still required to close the loop end to end).
+Employees is the only module that had a real spreadsheet import capability
 before this checkpoint; its template was rebuilt onto a new shared Instructions/Import
 Data/Example infrastructure (`backend/src/common/import-export.ts`), closing a real
 gap (Pay Type/IBAN/EOBI fields were silently missing) and a real bug (an un-deleted

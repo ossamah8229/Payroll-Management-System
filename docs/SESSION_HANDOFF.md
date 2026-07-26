@@ -2382,8 +2382,47 @@ import refactor), `5fae5e6` (Project Site bulk import + initial-Unit/creator-acc
 had gone stale against the Part B rebuild), `913ce46` (Project Site import test suite), `f57b4f8`
 (Project Site import E2E spec), plus this documentation commit.
 
-**Push/deploy record**: _pending — recorded in a follow-up update to this same section immediately
-after push and Render verification are performed this same session._
+**Push/deploy record**: pushed to `origin/main` immediately after the 7 commits above —
+`origin/main` confirmed at `1b106fd` (local `main` and `origin/main` resolved to the identical SHA
+via `git fetch` + `git rev-parse`; working tree clean; 0 commits behind, exactly 7 ahead of
+`origin/main`'s pre-push SHA `c5b54f1`). Render auto-deployed from this push:
+`https://payroll-management-api-wlic.onrender.com/health` returned `{"status":"ok"}`/HTTP 200 (after
+a ~22s cold start — no startup/migration failure observed; this checkpoint added no migration, so
+`prisma migrate deploy` was a no-op), and `https://payroll-management-app-qa3x.onrender.com/` (root)
+and `/login` both returned HTTP 200.
+
+**Deployment/bundle evidence for this push — the strongest class obtained across any checkpoint to
+date: a direct content match, not just timing.** The frontend's lazy-loaded Project Sites page chunk
+resolved to a filename (`project-sites-page-5SoHM9m5.js`) that did not exist before this push (a
+fresh content hash — Vite hashes are content-derived); fetching it directly confirmed it contains
+the exact new UI strings this checkpoint added ("Download Import Template", "Import Results"),
+proving the live deployment is running this checkpoint's actual code, not merely inferring it from
+timestamps. Corroborating timing evidence: the main entry bundle
+(`index-BaSCNw9m.js`) and this same chunk both carry `last-modified: Sun, 26 Jul 2026 08:25:23 UTC`
+— built together, in the same deploy — with `cf-cache-status: MISS` on the entry bundle (fetched
+fresh from Render's origin, not Cloudflare's edge cache), directly evidencing a real rebuild at push
+time rather than an assumption from elapsed time alone.
+
+**No Render dashboard or API access exists in this sandboxed environment** (consistent with every
+prior checkpoint's own same finding) — all verification above is HTTP-based (`curl`), not
+dashboard/API-confirmed build logs.
+
+**Post-deploy import verification performed vs. not possible this session:**
+- **Confirmed via HTTP + bundle-content evidence** (above): backend health, frontend availability,
+  login page rendering, and direct proof the live frontend bundle contains this checkpoint's new
+  Project Sites import UI code.
+- **NOT possible this session — no authenticated production credentials exist in this sandboxed
+  environment.** Per explicit instruction, no live import UAT was attempted or fabricated. **Normal
+  user UAT is required** to close the loop end-to-end in production specifically: downloading the
+  Project Site import template, confirming its Instructions/Import Data/Example sheets, importing
+  one deliberately temporary/approved test Site as an authorized scoped user, and confirming the
+  Site + its one initial Project Unit were created, the importer immediately has access, no
+  unrelated access was granted, and the results modal reads correctly.
+- **No production data was created, modified, or mutated** — no bulk import, no test Site, no
+  scale test was run against production. The 600-Site scale test was run only against this
+  session's own local/isolated test database (see the focused-test results above), never against
+  production, per explicit instruction not to create hundreds of production Sites or perform a
+  production scale test.
 
 **Phase 7 remains Not Started; this checkpoint does not begin it. No standalone Project Unit bulk
 importer was introduced. Payroll Entry import remains absent.**
