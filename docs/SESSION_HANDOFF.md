@@ -2460,13 +2460,46 @@ touched file; no schema/migration change.
 
 **Commits** (`main`, in order): `5ab1da1` (fix — dropdown row-count correction, Employee Bank rename
 + legacy alias, required-value validation), `1ef3b77` (test — Employee Bank import contract and
-dynamic-dropdown coverage, plus the `payroll-entry-draft-cycle-sync.test.ts` fixture fix), plus this
-documentation commit.
+dynamic-dropdown coverage, plus the `payroll-entry-draft-cycle-sync.test.ts` fixture fix), `00c4567`
+(documentation), plus this doc-only follow-up commit recording the push/deploy outcome below.
 
-**Push/deploy record**: to be filled in immediately after push — see the follow-up doc-only commit
-for the exact push/deploy/post-deploy-verification outcome, matching this project's own established
-two-pass documentation convention (draft first, then a small doc-only commit records the real
-result).
+**Push/deploy record**: pushed to `origin/main` immediately after the 3 commits above —
+`origin/main` confirmed at `00c4567` (local `main` and `origin/main` resolved to the identical SHA
+via `git fetch` + `git rev-parse`; working tree clean; exactly 3 commits ahead of `origin/main`'s
+pre-push SHA `7158d91`). Render auto-deployed from this push:
+`https://payroll-management-api-wlic.onrender.com/health` returned `{"status":"ok"}`/HTTP 200 (after
+a cold start — no startup/migration failure observed; this correction added no migration, so
+`prisma migrate deploy` was a no-op), and `https://payroll-management-app-qa3x.onrender.com/` (root)
+and `/login` both returned HTTP 200.
+
+**Deployment evidence for this push — weaker than prior checkpoints' bundle-content match, reported
+honestly rather than overstated.** This correction touched **zero frontend files** (`git diff
+--name-only` across all three commits confirms it) — it is a backend-only change to the generated
+Employee import `.xlsx` template and its server-side validation. That means the strongest technique
+used in prior checkpoints (fetching a lazy-loaded frontend chunk by its content-hashed filename and
+grepping it for a new UI string) does not apply here, because there is no new frontend string to
+find — the changed code paths (`generateEmployeeImportTemplate`, `importEmployees`) are exercised
+only via authenticated, RBAC-gated endpoints (`GET/POST /api/v1/employees/import-template`,
+`/import`), and **no authenticated production credentials exist in this sandboxed environment**, so
+those endpoints could not be hit directly to prove the live response contains this fix. What *was*
+confirmed: the push succeeded and `origin/main` is at the exact commit containing the fix; the
+backend responded healthy post-push with no startup/migration failure; a cold start was observed
+(consistent with, but not proof of, a fresh deploy — Render can also cold-start an idle instance
+without a new deploy). **No stronger, unauthenticated evidence was available for a backend-only,
+auth-gated change; this is an honest limitation, not a gap that was worked around by inventing
+weaker substitute evidence.**
+
+**No Render dashboard or API access exists in this sandboxed environment** (consistent with every
+prior checkpoint's own same finding) — all verification above is HTTP-based (`curl`), not
+dashboard/API-confirmed build logs.
+
+**Production UAT: not performed, per explicit instruction not to mutate production data merely to
+test this correction, and because no authenticated production credentials exist in this
+environment.** The useful manual UAT for the user, requiring no Employee to actually be imported:
+download a fresh Employee Import Template, open the Import Data sheet, confirm the header reads
+"Employee Bank" (not "Project Bank"), open its dropdown and confirm "Cash" appears exactly once with
+every configured Bank present and no blank entries, then open the Project dropdown and confirm
+currently accessible Sites appear with no blank entries.
 
 **Phase 7 remains Not Started; this correction does not begin it. Project Site import was not
 touched. No new Payroll Entry import was introduced.**
