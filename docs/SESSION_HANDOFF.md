@@ -2342,3 +2342,49 @@ hiccup, not a Render-side issue.
 
 **Phase 7 remains Not Started; this checkpoint does not begin it.**
 
+## 19. Addendum, 2026-07-26 (latest) — Import Template Contract Checkpoint: Employee Registry Rebuild + Project Site Bulk Import
+
+Full record: `docs/PROJECT_PROGRESS.md` §1's own dated entry ("Import Template Contract checkpoint
+— Employee Registry + Project Sites bulk import") and `docs/architecture/import-template
+-architecture.md` (the authoritative design record); this is the push/deploy/post-deploy-
+verification pointer.
+
+**What this checkpoint covers, in one line each:**
+- Audited the whole application and confirmed Employees was the only module with a real
+  spreadsheet import capability; rebuilt its template onto a new Instructions/Import Data/Example
+  workbook standard, fixing a real bug (an un-deleted Example row could previously be imported as
+  real data) and a real gap (Pay Type/IBAN/EOBI fields were silently unimportable).
+- Extended a new Project Site bulk import capability onto the same shared infrastructure — creates
+  new Sites only, Site Name is the uniqueness key, `sites:manage` enforced server-side, no new
+  permission introduced.
+- Every successfully imported Site atomically gets its own Site row, one initial Project Unit
+  (`"Main <Unit Label>"`), and the importer's own `UserSiteAssignment` — one transaction, composed
+  from each module's own canonical creation primitive (`createProjectSiteInTransaction`/
+  `createProjectUnit`), not a parallel implementation. Manual "New Site" creation is unchanged (no
+  auto-created Unit — that invariant is import-specific). No standalone Project Unit bulk importer
+  was built.
+- Payroll Entry import remains removed, not reintroduced.
+
+**Testing (focused, not a full-suite re-run for the final delta, per explicit instruction):**
+Employee + Project Site + Project Unit focused suites **110/110**; Project Site import suite
+**33/33**; `payroll-entry-draft-cycle-sync.test.ts` **10/10**; E2E `14-project-site-import.spec.ts`
+(real Chromium) **3/3**; backend typecheck/lint clean; no schema/migration change. A representative
+600-Project-Site import: 600 Sites, 600 initial Units, 600 creator assignments, 0 duplicates, 0
+orphans, ~5.4s. An earlier full-suite run (983 tests) showed 953/983 passing, with all 30 failures
+isolated to `payslips.test.ts` and independently confirmed via `git stash` against the clean,
+pre-checkpoint baseline to be pre-existing, unrelated flakiness — the same standing
+environment-load-sensitivity this file's own known-issue record already tracks for that suite, not
+a new regression.
+
+**Commits** (`main`, in order): `65764dc` (shared import infrastructure), `3343a08` (Employee
+import refactor), `5fae5e6` (Project Site bulk import + initial-Unit/creator-access provisioning),
+`67253eb` (payroll-entry test fix — a different test file's hardcoded Employee-import CSV header
+had gone stale against the Part B rebuild), `913ce46` (Project Site import test suite), `f57b4f8`
+(Project Site import E2E spec), plus this documentation commit.
+
+**Push/deploy record**: _pending — recorded in a follow-up update to this same section immediately
+after push and Render verification are performed this same session._
+
+**Phase 7 remains Not Started; this checkpoint does not begin it. No standalone Project Unit bulk
+importer was introduced. Payroll Entry import remains absent.**
+

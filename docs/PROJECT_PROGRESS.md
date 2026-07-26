@@ -6706,6 +6706,231 @@ begin it.
 
 ---
 
+## Import Template Contract checkpoint — Employee Registry + Project Sites bulk import
+
+**Two-part checkpoint, extended twice on review, now COMPLETE, COMMITTED, and
+pushed/deployed** — full audit-driven rebuild of the Employee Registry import
+template, plus a new Project Site bulk import capability with automatic initial-Unit
+provisioning and creator-access assignment. See `docs/SESSION_HANDOFF.md` §19 for the
+exact push/deploy/post-deploy-verification outcome and
+`docs/architecture/import-template-architecture.md` for the full design record (kept
+as the authoritative architecture doc — not duplicated here).
+
+**Part A — repository-wide import audit (before any code was written).** Searched the
+entire backend/frontend for every ingestion path (`multer` usage, upload UI, "Download
+Template" actions). Finding: **Employees was the only module with a genuine
+spreadsheet import capability anywhere in the application.** Payroll Entry, Bank
+Sheets, Cash Receiving, and Backup Packages are all export-only; Payroll Entry import
+was confirmed intentionally removed in an earlier checkpoint and was **not
+reintroduced**. Project Sites had no import capability of any kind before this
+checkpoint.
+
+**Part B — Employee Registry import rebuilt.** The existing template's sample row
+lived on the same sheet the importer parsed — an un-deleted example row could be
+uploaded as a real employee. Rebuilt as a standard three-sheet workbook (Instructions
+/ Import Data / Example), the last two structurally separated so the Example sheet can
+never be read as data (the importer explicitly targets the sheet named "Import Data").
+Four real Employee fields the template had silently omitted — Pay Type, IBAN, Default
+EOBI Amount, Default EOBI Applicable — are now importable/exportable columns. Excel
+data validation (required-field text length, numeric ranges, date bounds, RBAC-scoped
+Project Site dropdown, Bank dropdown, three cross-field custom formulas) is sourced
+from the same named constants (`EMPLOYEE_FIELD_LIMITS`, `EMPLOYEE_GROSS_PAY_MAX`,
+`EMPLOYEE_EOBI_AMOUNT_MAX`, `PAY_TYPE_VALUES`) the Zod schema (`createEmployeeSchema`)
+validates against, so template and API cannot silently drift apart. Row-level errors
+are now readable text ("Designation: String must contain at most 80 character(s)")
+instead of a raw JSON-stringified `ZodError`; a header row with extra trailing columns
+is now correctly rejected (previously slipped through undetected — a real bug the new
+tests caught). Both **XLSX and CSV are supported**, with identical server-side
+validation for either. Backend validation remains authoritative throughout — every
+Excel-side rule is advisory and re-checked unconditionally on upload.
+
+**Part C — shared import infrastructure extracted.** Once Project Sites needed the
+same workbook shape, the genuinely module-agnostic mechanism (header-diff/
+exact-match validation, Zod-issue-to-readable-message formatting, the
+Instructions-sheet prose writer, the Column Guide table builder, the generic
+per-column Excel validation defaults, the Example-sheet builder) was factored out into
+`backend/src/common/import-export.ts` as a set of parameterized helpers
+(`ImportColumnSpec`, `createInstructionsSheet`, `addColumnGuideTable`,
+`styleImportDataSheet`, `buildExampleSheet`, `assertExactHeaderMatch`,
+`formatImportValidationError`). Employees was refactored onto this shared
+infrastructure with **zero behavior change** (re-verified: 70/70 Employee tests
+unchanged). What stays module-specific: each module's own column array, any
+dropdown/cross-field `buildValidation` override, the Instructions prose describing
+*that* module's own semantics, and all business-rule enforcement in the importer's own
+row loop — deliberately not one generic "run the whole import" function.
+
+**Part D — Project Site bulk import (new capability).** Investigated the actual
+`ProjectSite` model/schema/service/manual-creation-form before writing any template
+code, per explicit instruction not to guess columns. Finding: `ProjectSite` has
+exactly three user-controlled fields — `name` (required, the table's only `@unique`
+column), `unitLabel` (optional, database default `"Branch"`), `address` (optional).
+`PROJECT_SITE_FIELD_LIMITS` extracted the same way `EMPLOYEE_FIELD_LIMITS` was.
+Template: the same Instructions / Import Data / Example structure, with no hidden
+"Lists" sheet (nothing in the contract needs a dropdown) and no Conditional columns
+(no cross-field rules exist for `ProjectSite`).
+
+**Import creates NEW Sites only — it never updates or upserts an existing one**, per
+this checkpoint's own explicit default requirement, confirmed against the
+architecture (`ProjectSite` has no natural "same real-world site" match key beyond its
+own unique `name`, unlike Employees' CNIC-based rehire workflow). **Site Name is the
+uniqueness key under the current schema** — duplicates are rejected, never silently
+merged: a row naming an already-existing Site is skipped with `Site Name: "X" already
+exists`; a Site Name repeated more than once in the same workbook is skipped for
+*every* row it appears on, each citing the other row number(s)
+(`Site Name: Duplicate value "X" appears more than once in this workbook (also row(s)
+N)`). Both checks are computed once up front (one `findMany` plus one in-memory
+pre-pass), not per row — deliberately scaled for the ~600-branch onboarding case this
+checkpoint was written for. `sites:manage` — the same permission `POST /sites` (manual
+creation) already requires — is enforced **server-side** on both the template download
+and the import endpoint; no new permission was introduced, and a user without it gets
+403 from both regardless of what the frontend renders.
+
+**Project Site creator access.** For every successfully imported Site, **Site +
+initial Project Unit + creator `UserSiteAssignment` + audit provenance are created
+atomically**, in one `prisma.$transaction` — composed from each module's own canonical
+creation primitive (`createProjectSiteInTransaction`, the factored-out body of
+`createProjectSite`; `createProjectUnit`, now accepting an optional transaction
+client) rather than a parallel, ad hoc implementation. If any step fails, nothing for
+that row persists — verified directly (not just inferred) with a test that
+deliberately throws mid-transaction at each stage and confirms no orphaned Site or
+Unit remains. **The importing user receives access only to the Sites they import** —
+verified: an unrelated user gets no assignment, and a pre-existing unrelated Site
+gains no assignment for the importer either. **Master Admin remains globally
+accessible without any redundant `UserSiteAssignment` row being written**, identical
+to manual creation's own existing behavior.
+
+**Manual Site creation is explicitly unchanged.** `createProjectSite` (`POST /sites`,
+the "New Site" button) still creates only the Site + creator assignment — it does
+**not** automatically create an initial Project Unit, and never did before this
+checkpoint either. The initial-Unit invariant below applies to bulk import only; it is
+not retroactively true of manual creation, and must not be documented as if it were.
+
+**Initial Project Unit.** Investigated `createProjectUnitSchema` (`name` required,
+`code` optional/nullable) before adding any template column, per explicit instruction.
+Finding: `Unit Label` alone is sufficient — no `Initial Unit Name`/`Initial Unit Code`
+template column was needed or added. Every imported Site is provisioned with exactly
+one initial Project Unit, named **`Main <Unit Label>`** (e.g. `"Main Branch"`,
+`"Main Department"`), derived from the Site's own *actual, persisted* `unitLabel` —
+its parsed input value, or the `"Branch"` database default when the row left the
+column blank. `code` is left `null`: nothing in the import contract can safely derive
+one, and none is required. Duplicate Units are structurally impossible under normal
+operation (a colliding Site name is rejected before any write ever reaches the
+Unit-creation step) — verified explicitly anyway via a re-import test. Without this
+provisioning, importing 600 branches would still have left every one of them unable to
+receive an Employee (Employee import's `resolveRowUnit` requires a row to name a real,
+already-existing Unit) until a human manually created a first Unit under each of the
+600 Sites — defeating a large part of the point of bulk import. **No standalone
+Project Unit bulk importer was built** — Units remain an architecturally independent,
+optional-cardinality child resource with their own manual CRUD ("Manage Branches");
+Project Units in the capability matrix therefore read **"No standalone bulk import,"
+but "An initial Project Unit is automatically provisioned when a Project Site is bulk
+imported."** A Site legitimately needing *more than one* Unit still has the extras
+added the ordinary way, through "Manage Branches" — documented as a real, not-silently-
+ignored, remaining limitation. **No historical/existing Project Site received a
+retroactive Unit — no backfill migration was run or is needed**, verified by a
+dedicated test (an unrelated import leaves a pre-existing Site's zero Units at zero).
+
+**Atomicity.** Both Employee and Project Site import are **row-atomic, not
+file-atomic** — deliberately kept consistent across modules, not independently decided
+per module. A structurally invalid workbook (wrong/missing/reordered/extra header
+columns) creates nothing at all, for either module — verified by dedicated tests. A
+structurally valid file with some invalid rows applies every valid row and reports
+every invalid row's reason; for Project Sites, each successful row's Site + initial
+Unit + creator assignment commit together in one transaction, or all three roll back
+together — never a partial write.
+
+**Excel template contract.** Excel-side validation is advisory; server-side validation
+(the same Zod schemas the manual create/edit paths use) remains authoritative
+throughout, for both modules. Shared field-limit constants (`EMPLOYEE_FIELD_LIMITS`,
+`PROJECT_SITE_FIELD_LIMITS`, etc.) are used everywhere practical to prevent the
+template and the API from silently drifting apart. Instructions and Example sheets are
+never parsed as production data — the importer explicitly targets the sheet named
+"Import Data" by name, with a fallback for a plain ad hoc workbook (a single unnamed
+sheet, or either module's own plain export). CSV receives the exact same server-side
+validation as XLSX — it naturally carries no workbook formatting/dropdown/comment
+guidance, which the Instructions sheet documents explicitly as the tradeoff for using
+it.
+
+**Audit provenance.** Project Site import writes, per successfully imported row:
+`project-site.created`, `project-unit.created` for the initial Unit, and (unless the
+importer is Master Admin) `project-site.creator_assigned` — the same three action
+names manual creation already uses, each tagged `metadata.source: 'import'` so the two
+paths stay distinguishable without a new action-name taxonomy — plus one
+`project-site.import` summary entry per operation (created/skipped counts), the same
+"one summary entry for a bulk action" precedent `employee.import` already set. No
+redundant or noisy audit events were introduced.
+
+**Concurrency hardening (narrow, not a redesign).** The existing-name duplicate check
+is computed from a snapshot taken at the start of the import; a genuinely concurrent,
+independent request creating the same new Site name during that window (not another
+row in the same file, which the in-workbook pre-pass already catches) is now caught
+(`Prisma.PrismaClientKnownRequestError` P2002 on `ProjectSite.name`) and rewritten to
+the same friendly `Site Name: "X" already exists` message, rather than surfacing a raw
+database error for that one row. The underlying race itself was not redesigned.
+
+**Scale verification.** A representative focused test imported **600 Project Sites**
+in one workbook: **600 Sites, 600 initial Units (one per Site, none duplicated), 600
+creator assignments (for a scoped, non-Master-Admin importer), 0 duplicates, 0
+orphaned Sites, 0 orphaned Units**, completing in **~5.4 seconds** — well within a
+generous ceiling with no sign of pathological (e.g. accidental O(n²)) behavior. Not
+performed against production, and no production-scale import was run — see
+`docs/SESSION_HANDOFF.md` §19 for what was and wasn't verified live.
+
+**Intentionally non-importable, confirmed rather than assumed:**
+- **Payroll Entry** — export only; import was intentionally removed in an earlier
+  checkpoint and is **not reintroduced** by this checkpoint.
+- **Bank Sheets** — export only.
+- **Cash Receiving** — export only.
+- **Backup Packages** — archive/export only, no restore path.
+- **Project Units** — no standalone bulk import (an initial Unit is auto-provisioned
+  on Project Site import, as above).
+- **Users / Banks / Roles** — no import capability currently.
+
+**Test results (focused runs, not a full-suite re-run for the final delta per
+explicit instruction):**
+- `employees-import-export.test.ts` + `employees.test.ts` + `project-sites.test.ts` +
+  `project-units.test.ts`: **110/110**.
+- `project-sites-import-export.test.ts`: **33/33** (permission/RBAC, creator
+  ownership, transaction rollback, template structure, validation, duplicates, initial
+  Unit provisioning, 600-site scale).
+- `payroll-entry-draft-cycle-sync.test.ts` (Employee-import-dependent): **10/10**.
+- E2E `14-project-site-import.spec.ts` (real Chromium, full stack): **3/3**.
+- Backend typecheck/lint: clean across every touched file. **No new schema/migration.**
+- An earlier full-suite run (`983` tests) confirmed **953/983** passing, with all 30
+  failures isolated to `payslips.test.ts` and independently confirmed via `git stash`
+  against the clean, unmodified baseline to **pre-exist this checkpoint** — unrelated,
+  not re-litigated here (see `docs/SESSION_HANDOFF.md`'s standing known-issue note for
+  that suite's own environment-load-sensitivity history). One genuine cross-file
+  regression was found and fixed during this checkpoint itself: a different test file
+  (`payroll-entry-draft-cycle-sync.test.ts`) hardcoded a stale copy of the Employee
+  import header row, broken by the Part B rebuild — fixed to derive from the canonical
+  header array instead, so it cannot silently go stale again.
+
+**Files changed:** `backend/src/common/import-export.ts` (shared infrastructure);
+`backend/src/modules/employees/employees-import-export.service.ts`/`.routes.ts`
+(Employee rebuild); `backend/src/modules/project-sites/project-sites-import-export
+.service.ts` (new), `.routes.ts`, `.service.ts` (Project Site import + creator-access
+composition); `backend/src/modules/project-units/project-units.service.ts`
+(transaction-client-aware `createProjectUnit`); `shared/src/schemas/employee.ts`/
+`project-site.ts`/`index.ts` (canonical constants); `frontend/src/hooks/
+use-project-sites.ts`/`routes/project-sites-page.tsx` (import UX);
+`backend/tests/employees-import-export.test.ts`/`project-sites-import-export.test.ts`
+(new)/`payroll-entry-draft-cycle-sync.test.ts`; `tests/e2e/specs/
+14-project-site-import.spec.ts` (new); `docs/architecture/import-template
+-architecture.md` (new).
+
+**Commits:** `65764dc` (shared infrastructure), `3343a08` (Employee refactor),
+`5fae5e6` (Project Site import + initial-Unit/creator-access provisioning), `67253eb`
+(payroll-entry test fix), `913ce46` (Project Site import tests), `f57b4f8` (E2E spec),
+plus this documentation commit — see `docs/SESSION_HANDOFF.md` §19 for the exact
+push/deploy/post-deploy-verification record (updated in a small follow-up commit
+immediately after this one, once push and Render verification are actually performed
+this same session). No schema/migration change. **Phase 7 remains Not Started; this
+checkpoint does not begin it. No standalone Project Unit bulk importer was
+introduced. Payroll Entry import remains absent.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -7048,16 +7273,37 @@ begin it.
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-25 (latest) — Production Print Defect (Print Settings captured in printed
-output): FIXED, COMMITTED, and pushed/deployed.** See §1's own entry (immediately above §2) for the
+**Updated 2026-07-26 (latest) — Import Template Contract checkpoint (Employee Registry
+rebuild + Project Site bulk import + initial-Unit/creator-access provisioning):
+COMPLETE, COMMITTED; push and Render deploy verification in progress this same
+session.** See the dedicated "Import Template Contract checkpoint" entry in §1
+(immediately above §2) for the full record and `docs/SESSION_HANDOFF.md` §19 for the
+push/deploy/post-deploy-verification outcome (filled in via a small follow-up commit
+immediately after this one). Employees is the only module that had a real spreadsheet import capability
+before this checkpoint; its template was rebuilt onto a new shared Instructions/Import
+Data/Example infrastructure (`backend/src/common/import-export.ts`), closing a real
+gap (Pay Type/IBAN/EOBI fields were silently missing) and a real bug (an un-deleted
+Example row could previously be imported as data). Project Sites gained a new bulk
+import capability on the same shared infrastructure — creates new Sites only, Site
+Name is the uniqueness key, `sites:manage` enforced server-side — with every
+successfully imported row provisioning its Site, one initial Project Unit (`"Main
+<Unit Label>"`), and the importer's own `UserSiteAssignment` atomically in one
+transaction, composed from each module's own canonical creation primitive. Manual Site
+creation is unchanged (still no auto-created Unit). No standalone Project Unit
+importer was built. Payroll Entry import remains removed. 600-site scale test: 600
+Sites, 600 initial Units, 600 assignments, 0 duplicates, 0 orphans, ~5.4s. No
+schema/migration change. **Phase 7 remains Not Started; do not begin it.**
+
+**Updated 2026-07-25 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Production Print Defect (Print Settings captured in printed
+output): FIXED, COMMITTED, and pushed/deployed.** See §1's own entry for the
 full record and `docs/SESSION_HANDOFF.md` §18 for the exact push/deploy/post-deploy-verification
 outcome. Root cause: `window.print()` ran synchronously before the settings dialog's close had
 committed to the DOM (React 18 batches state updates — reordering the two calls would not have
 fixed it). Fixed via `flushSync`-forced synchronous close in `PrintButton`, plus `print:hidden`
 defense-in-depth on the shared `Modal` component. Regression tests (unit + Chromium) rewritten to
 capture DOM state synchronously inside the `window.print()` mock, confirmed to fail against the
-pre-fix code and pass against the fix. No backend/schema change. **Phase 7 remains Not Started; do
-not begin it.**
+pre-fix code and pass against the fix. No backend/schema change.
 
 **Updated 2026-07-25 (superseded by the entry above for status purposes, kept for its own still-
 useful record) — RBAC Creator Ownership & Professional Printing Checkpoint: COMPLETE, COMMITTED,
