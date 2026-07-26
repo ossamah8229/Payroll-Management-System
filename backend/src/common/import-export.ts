@@ -176,13 +176,20 @@ export interface ImportColumnSpec {
   schemaField?: string;
   /** Overrides the generic per-`dataType` default validation — for a dropdown (needs a source
    * list) or a cross-field custom formula (needs sibling-cell references), neither of which the
-   * generic defaults below can express without extra, module-specific context. `listRowCount` is
-   * the only such context every caller gets for free (how many rows the module's own hidden
-   * "Lists" sheet populated, `0` if it has none); anything else a formula needs (which columns to
-   * reference) is baked into the closure the module builds. A `type: 'custom'` validation's
-   * formula may contain the literal placeholder `{row}`, substituted with the real row number by
-   * `withRowNumber` when applied. Return `undefined` to fall back to the generic default. */
-  buildValidation?: (listRowCount: number) => ExcelJS.DataValidation | undefined;
+   * generic defaults below can express without extra, module-specific context. `listContext` is
+   * whatever `styleImportDataSheet`'s own caller passed as `options.listContext` — an opaque bag
+   * each module defines and casts to its own shape (e.g. `{ siteRowCount, bankRowCount }`), never
+   * a single shared row count: **a module with more than one dropdown sourced from its own "Lists"
+   * sheet must track each dropdown's own row count separately** — an earlier, single-shared-count
+   * version of this field caused a real bug (Import Templates checkpoint, post-deploy UAT):
+   * whichever list was shorter than the other still had its Excel validation range sized to the
+   * longer one, so the shorter dropdown showed trailing blank entries for the padding rows the
+   * "Lists" sheet needed to keep both columns the same height. Anything a formula needs beyond
+   * this context (which columns to reference, literal enum values) is baked into the closure the
+   * module builds. A `type: 'custom'` validation's formula may contain the literal placeholder
+   * `{row}`, substituted with the real row number by `withRowNumber` when applied. Return
+   * `undefined` to fall back to the generic default. */
+  buildValidation?: (listContext: unknown) => ExcelJS.DataValidation | undefined;
 }
 
 export const IMPORT_REQUIREMENT_LABEL: Record<ImportColumnRequirement, string> = {
@@ -300,9 +307,8 @@ export function withRowNumber(validation: ExcelJS.DataValidation, row: number): 
 export function styleImportDataSheet(
   sheet: ExcelJS.Worksheet,
   columns: readonly ImportColumnSpec[],
-  options: { listRowCount?: number; dataRowCount?: number } = {},
+  options: { listContext?: unknown; dataRowCount?: number } = {},
 ): void {
-  const listRowCount = options.listRowCount ?? 0;
   const dataRowCount = options.dataRowCount ?? IMPORT_TEMPLATE_DATA_ROW_COUNT;
 
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
@@ -323,7 +329,7 @@ export function styleImportDataSheet(
     headerCell.alignment = { vertical: 'middle', wrapText: true };
     headerCell.note = `${IMPORT_REQUIREMENT_LABEL[column.requirement]}\n\n${column.allowedFormat}\n\n${column.notes}`;
 
-    const validation = column.buildValidation?.(listRowCount) ?? buildGenericColumnValidation(column);
+    const validation = column.buildValidation?.(options.listContext) ?? buildGenericColumnValidation(column);
     if (!validation) return;
     for (let row = 2; row <= dataRowCount + 1; row += 1) {
       sheet.getCell(row, columnIndex).dataValidation = withRowNumber(validation, row);

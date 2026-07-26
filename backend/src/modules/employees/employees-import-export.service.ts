@@ -69,6 +69,19 @@ import { listBanks } from '../banks/banks.service';
  * the manual form and edited afterwards. Adding them closes that template/application contract gap
  * (Part D's "the application must not secretly require/support something the template doesn't
  * present" principle) rather than expanding scope — the field already existed everywhere else.
+ *
+ * **`Project Bank` renamed to `Employee Bank` (post-deployment UAT correction)** — the original
+ * name was misleading (these columns describe the *employee's own* payment/banking details, not a
+ * property of the Project). `"Project Bank"` is still accepted on upload as a legacy header alias
+ * (`LEGACY_HEADER_ALIASES` below) so a previously-downloaded template keeps working; every newly
+ * generated template uses the new name.
+ *
+ * **`Employee Bank` made explicitly required (final refinement, same checkpoint)** — a blank cell
+ * is rejected, not silently treated as `"Cash"`: every row must say `"Cash"` or a real bank name.
+ * `bankId: null` remains the single internal representation of a cash-paid employee either way
+ * (`"Cash"` is a parsing-only sentinel, never a real `Bank` row selection — see `importEmployees`);
+ * only the *input contract* tightened, removing the ambiguity of "did this row intend Cash, or did
+ * the operator just skip this column."
  */
 export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Sr. No',
@@ -86,7 +99,7 @@ export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Area',
   'Branch Code',
   'Area/Location',
-  'Project Bank',
+  'Employee Bank',
   'Bank Branch Code',
   'Account Number',
   'Basic/Gross Pay',
@@ -96,13 +109,23 @@ export const EMPLOYEE_TEMPLATE_HEADERS = [
   'Default EOBI Applicable',
 ] as const;
 
+/** Upload-only header aliasing (post-deployment UAT correction) — a header cell matching a key
+ * here is treated as if it read the mapped, current canonical name before structural validation
+ * runs, so a workbook downloaded before the `Project Bank` → `Employee Bank` rename above still
+ * imports without modification. Never used for anything the user sees (Instructions/Column Guide/
+ * Example/newly generated Import Data headers all use the canonical name only) — purely a
+ * backward-compatibility shim at the parsing boundary. */
+const LEGACY_HEADER_ALIASES: Readonly<Record<string, string>> = {
+  'Project Bank': 'Employee Bank',
+};
+
 /** Bumped whenever `EMPLOYEE_TEMPLATE_HEADERS` changes shape — stamped into the Instructions sheet
  * purely as a human-readable diagnostic aid (Part G). The importer never reads or enforces this
  * value: `assertExactHeaderMatch`'s structural comparison against the live header set already
  * deterministically catches an outdated template (missing/extra/reordered columns) even if a user
  * hand-edited the workbook and the version stamp went stale or was deleted, so parsing never
  * depends on it. */
-export const EMPLOYEE_TEMPLATE_VERSION = 2;
+export const EMPLOYEE_TEMPLATE_VERSION = 3;
 
 export const IMPORT_DATA_SHEET_NAME = STANDARD_IMPORT_DATA_SHEET_NAME;
 export const EXAMPLE_SHEET_NAME = STANDARD_EXAMPLE_SHEET_NAME;
@@ -110,6 +133,16 @@ export const INSTRUCTIONS_SHEET_NAME = STANDARD_INSTRUCTIONS_SHEET_NAME;
 const LISTS_SHEET_NAME = 'Lists';
 
 const REQUIRED_TEXT = (max: number) => `Text, up to ${max} characters`;
+
+/** The `listContext` shape this module passes to `styleImportDataSheet` — two *independent* row
+ * counts, one per "Lists" sheet column (post-deployment UAT correction: the Project and Employee
+ * Bank dropdowns previously shared one `Math.max(sites, banks)` count, so whichever list was
+ * shorter had its Excel validation range padded with blank rows past its own real data — see
+ * `buildValidation`'s doc comment on `ImportColumnSpec`, `common/import-export.ts`). */
+interface EmployeeListContext {
+  siteRowCount: number;
+  bankRowCount: number;
+}
 
 /**
  * Per-column contract for the downloadable Employee import template (Import Templates checkpoint)
@@ -122,7 +155,7 @@ const REQUIRED_TEXT = (max: number) => `Text, up to ${max} characters`;
  * `@db.VarChar(n)`/`@db.Decimal(p,s)` column definitions, never a re-typed number.
  *
  * Built as a plain array of the shared `ImportColumnSpec` shape (`common/import-export.ts`) — four
- * columns (Project, Project Bank, Pay Type, Default EOBI Applicable) supply their own
+ * columns (Project, Employee Bank, Pay Type, Default EOBI Applicable) supply their own
  * `buildValidation` for a dropdown sourced from the "Lists" sheet below or an inline enum list;
  * three (Area, Area/Location, Account Number) supply one for a cross-field custom formula
  * (Part C6's "Excel-enforceable" cross-field rules) — everything else uses the generic
@@ -146,12 +179,13 @@ const EMPLOYEE_TEMPLATE_COLUMNS: readonly ImportColumnSpec[] = [
     notes:
       'Must exactly match an existing Project Site name — matched case-insensitively. The dropdown lists every Project Site you currently have access to; a site created after this template was downloaded will not appear until you download a fresh copy.',
     schemaField: 'siteId',
-    buildValidation: (listRowCount) => {
-      if (listRowCount === 0) return undefined; // no accessible sites yet — nothing to populate the dropdown with
+    buildValidation: (context) => {
+      const { siteRowCount } = context as EmployeeListContext;
+      if (siteRowCount === 0) return undefined; // no accessible sites yet — nothing to populate the dropdown with
       return {
         type: 'list',
         allowBlank: false,
-        formulae: [`=${LISTS_SHEET_NAME}!$A$2:$A$${listRowCount + 1}`],
+        formulae: [`=${LISTS_SHEET_NAME}!$A$2:$A$${siteRowCount + 1}`],
         showErrorMessage: true,
         errorStyle: 'stop',
         errorTitle: 'Invalid Project',
@@ -311,22 +345,26 @@ const EMPLOYEE_TEMPLATE_COLUMNS: readonly ImportColumnSpec[] = [
     }),
   },
   {
-    header: 'Project Bank',
-    requirement: 'optional',
+    header: 'Employee Bank',
+    requirement: 'required',
     dataType: 'enum',
-    allowedFormat: 'Must exactly match an active Bank name (see the "Project Bank" dropdown), or blank for a cash employee',
+    allowedFormat: 'Must exactly match "Cash" or an active Bank name (see the "Employee Bank" dropdown) — never blank',
     example: 'Acme Commercial Bank',
-    notes: 'Leave every bank column blank for a cash employee.',
+    notes:
+      'The employee\'s own payment method — required on every row, explicitly. Enter "Cash" for a cash-paid employee (a blank cell is rejected, not treated as Cash — post-deployment UAT refinement), or an exact active Bank name for a bank-paid employee. Matched case-insensitively either way. Previously named "Project Bank" — files using that older header are still accepted, but must still provide an explicit value.',
     schemaField: 'bankId',
-    buildValidation: (listRowCount) => ({
-      type: 'list',
-      allowBlank: true,
-      formulae: [`=${LISTS_SHEET_NAME}!$B$2:$B$${listRowCount + 1}`],
-      showErrorMessage: true,
-      errorStyle: 'stop',
-      errorTitle: 'Invalid Project Bank',
-      error: 'Choose a Bank from the dropdown list, or leave blank for a cash employee.',
-    }),
+    buildValidation: (context) => {
+      const { bankRowCount } = context as EmployeeListContext;
+      return {
+        type: 'list',
+        allowBlank: false,
+        formulae: [`=${LISTS_SHEET_NAME}!$B$2:$B$${bankRowCount + 1}`],
+        showErrorMessage: true,
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Employee Bank',
+        error: 'Choose "Cash" or a Bank from the dropdown list — this column cannot be blank.',
+      };
+    },
   },
   {
     header: 'Bank Branch Code',
@@ -346,17 +384,21 @@ const EMPLOYEE_TEMPLATE_COLUMNS: readonly ImportColumnSpec[] = [
     allowedFormat: REQUIRED_TEXT(EMPLOYEE_FIELD_LIMITS.accountNumber),
     maxLength: EMPLOYEE_FIELD_LIMITS.accountNumber,
     example: '01234567890123',
-    notes: 'Required if "Project Bank" is set; must stay blank for a cash employee. Stored as text — leading zeros are preserved.',
+    notes:
+      'Required when Employee Bank is a real bank (not "Cash" or blank) — this is the only banking-detail field the backend actually requires; Bank Branch Code and IBAN stay optional either way (verified against the schema, not assumed). Stored as text — leading zeros are preserved.',
     preserveLeadingZeros: true,
     schemaField: 'accountNumber',
+    // Post-deployment UAT correction: "Cash" in the Employee Bank cell must be treated exactly
+    // like a blank cell here — otherwise the literal text "Cash" (a non-blank string) would
+    // incorrectly trip this "Account Number required" rule.
     buildValidation: () => ({
       type: 'custom',
       allowBlank: true,
-      formulae: [`=AND(OR($P{row}="",$R{row}<>""),LEN($R{row})<=${EMPLOYEE_FIELD_LIMITS.accountNumber})`],
+      formulae: [`=AND(OR($P{row}="",LOWER($P{row})="cash",$R{row}<>""),LEN($R{row})<=${EMPLOYEE_FIELD_LIMITS.accountNumber})`],
       showErrorMessage: true,
       errorStyle: 'stop',
       errorTitle: 'Invalid Account Number',
-      error: `Required when "Project Bank" is set (max ${EMPLOYEE_FIELD_LIMITS.accountNumber} characters).`,
+      error: `Required when Employee Bank is a real bank (max ${EMPLOYEE_FIELD_LIMITS.accountNumber} characters).`,
     }),
   },
   {
@@ -503,7 +545,7 @@ async function buildExportRows(currentUser: SessionUser, siteIds?: string[]) {
     employee.unit.name, // "Area" — the employee's ProjectUnit name (Checkpoint 3 remap, see header)
     employee.unit.code ?? '', // "Branch Code" — the employee's ProjectUnit code
     employee.unit.name, // "Area/Location" — alias of "Area", see header comment
-    employee.bank?.name ?? '',
+    employee.bank?.name ?? 'Cash', // "Employee Bank" — explicit "Cash" for bankId: null (post-deployment UAT correction)
     employee.branchCode ?? '', // "Bank Branch Code" — the employee's own bank branch code
     employee.accountNumber ?? '',
     employee.grossPay.toString(),
@@ -552,8 +594,23 @@ export async function exportEmployeesToXlsx(currentUser: SessionUser, siteIds?: 
 export async function generateEmployeeImportTemplate(currentUser: SessionUser): Promise<Buffer> {
   const [sites, banks] = await Promise.all([listProjectSites(currentUser), listBanks()]);
   const siteNames = sites.map((site) => site.name).sort((a, b) => a.localeCompare(b));
-  const bankNames = banks.map((bank) => bank.name).sort((a, b) => a.localeCompare(b));
-  const listRowCount = Math.max(siteNames.length, bankNames.length);
+  // "Cash" is prepended as a static, non-database entry, never a row from `listBanks()` — matching
+  // the manual Employee create/edit form's own "None (cash payment)" sentinel option
+  // (frontend/src/routes/employees-page.tsx): a cash-paid employee is represented by `bankId: null`
+  // in this system, never by selecting the reserved, protected `Bank` row whose `code` is `CASH`
+  // (`listBanks()` already deliberately excludes that reserved row from every ordinary dropdown —
+  // see its own doc comment, banks.service.ts). "Cash" here and a blank cell both parse to the
+  // exact same `bankId: null` (see `importEmployees` below) — one business meaning, two accepted
+  // spellings, never two representations.
+  const bankOptions = ['Cash', ...banks.map((bank) => bank.name).sort((a, b) => a.localeCompare(b))];
+  const siteRowCount = siteNames.length;
+  const bankRowCount = bankOptions.length;
+  // Post-deployment UAT correction: this shared row count is used *only* to decide how many rows
+  // to write into the two-column "Lists" sheet below (so neither column's real data gets cut off)
+  // — it must never be used as either dropdown's own Excel validation range end. Using it for both
+  // (the original bug) meant whichever list was shorter had its range padded with the other
+  // list's extra blank rows, producing visible blank dropdown entries.
+  const listSheetRowCount = Math.max(siteRowCount, bankRowCount);
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Payroll Management System';
@@ -562,9 +619,9 @@ export async function generateEmployeeImportTemplate(currentUser: SessionUser): 
   // --- Lists sheet: dropdown source data, very hidden — functional for data validation formulas
   // but never shown as a tab, so it can't be mistaken for a data-entry sheet. ---
   const listsSheet = workbook.addWorksheet(LISTS_SHEET_NAME, { state: 'veryHidden' });
-  listsSheet.addRow(['Project Sites', 'Banks']);
-  for (let i = 0; i < listRowCount; i += 1) {
-    listsSheet.addRow([siteNames[i] ?? '', bankNames[i] ?? '']);
+  listsSheet.addRow(['Project Sites', 'Employee Banks']);
+  for (let i = 0; i < listSheetRowCount; i += 1) {
+    listsSheet.addRow([siteNames[i] ?? '', bankOptions[i] ?? '']);
   }
 
   // --- Instructions sheet ---
@@ -598,7 +655,14 @@ export async function generateEmployeeImportTemplate(currentUser: SessionUser): 
   addBullet('Dates: DD-MM-YYYY (this application\'s own display format). YYYY-MM-DD and DD/MM/YYYY are also accepted.');
   addBullet('Numbers (Basic/Gross Pay, Default EOBI Amount): plain numbers, up to 2 decimal places, no currency symbols or thousands separators.');
   addBullet('Codes and identifiers (Employee Number/Code, CNIC, Branch Code, Bank Branch Code, Account Number) are stored as text — leading zeros are preserved.');
-  addBullet('Project Site, Project Bank, Pay Type, and Default EOBI Applicable values are matched case-insensitively; using the provided dropdown avoids typos entirely.');
+  addBullet('Project Site, Employee Bank, Pay Type, and Default EOBI Applicable values are matched case-insensitively; using the provided dropdown avoids typos entirely.');
+
+  addSubheading('Employee Bank and Cash payments');
+  addBullet('Employee Bank is required on every row — it cannot be left blank. Use "Cash" when the employee has no bank account.');
+  addBullet('The system stores Cash as bankId = null internally — "Cash" is not a real Bank record, just this template\'s way of saying "no bank."');
+  addBullet('For a bank-paid employee, Employee Bank must exactly match an active Bank name from the dropdown, and Account Number is then required.');
+  addBullet('Bank Branch Code and IBAN are always optional, whether the employee is paid by Cash or by a real bank.');
+  addBullet('This column was previously named "Project Bank" — a file using that older header name is still accepted, but must still provide "Cash" or a real bank name; a blank value is rejected either way.');
 
   addSubheading('Duplicates, updates, and errors');
   addBullet('Each row is validated and applied independently — one invalid row is skipped and reported; it never fails the whole file.');
@@ -612,7 +676,8 @@ export async function generateEmployeeImportTemplate(currentUser: SessionUser): 
   // --- Import Data sheet: the only sheet the importer reads ---
   const importDataSheet = workbook.addWorksheet(IMPORT_DATA_SHEET_NAME);
   importDataSheet.addRow(EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]);
-  styleImportDataSheet(importDataSheet, EMPLOYEE_TEMPLATE_COLUMNS, { listRowCount });
+  const listContext: EmployeeListContext = { siteRowCount, bankRowCount };
+  styleImportDataSheet(importDataSheet, EMPLOYEE_TEMPLATE_COLUMNS, { listContext });
 
   // --- Example sheet: same columns, one fully valid neutral sample row, structurally separate
   // from Import Data (Part B3) ---
@@ -632,7 +697,14 @@ function rowsFromTable(table: string[][]): ParsedRow[] {
     throw badRequest('The uploaded file is empty');
   }
 
-  const header = table[0]!.map((cell) => cell.trim());
+  // Legacy header aliasing applied before structural validation (post-deployment UAT correction)
+  // — a workbook downloaded before the "Project Bank" → "Employee Bank" rename still validates and
+  // imports without modification; every column beyond this substitution is read positionally
+  // against `expected` below regardless of what the uploaded file's own header text said.
+  const header = table[0]!.map((cell) => {
+    const trimmed = cell.trim();
+    return LEGACY_HEADER_ALIASES[trimmed] ?? trimmed;
+  });
   const expected = EMPLOYEE_TEMPLATE_HEADERS as unknown as string[];
   assertExactHeaderMatch(header, expected, 'Employee Registry import template', 'download a fresh copy from Employees → Download Import Template');
 
@@ -803,9 +875,23 @@ export async function importEmployees(
 
       const unit = resolveRowUnit(row, site, units);
 
-      const bankName = row.cells['Project Bank'];
-      const bank = bankName ? bankByName.get(bankName.toLowerCase()) : undefined;
-      if (bankName && !bank) {
+      // Employee Bank must be an explicit value — "Cash" or a real bank name, never blank (final
+      // refinement, post-deployment UAT): a blank/whitespace-only cell (already `.trim()`-ed by
+      // `rowsFromTable`) is rejected outright, rather than silently treated as Cash. This removes
+      // the ambiguity the earlier correction still allowed (blank and "Cash" both meaning the
+      // same thing was fine for the *output*, but left the *input contract* ambiguous about
+      // whether a blank cell was an intentional Cash selection or a skipped column).
+      const bankName = row.cells['Employee Bank']!.trim();
+      if (!bankName) {
+        throw new Error('Employee Bank: Select "Cash" or a valid bank');
+      }
+      // "Cash" is a parsing-only sentinel, never looked up against real Bank rows (the reserved
+      // Cash Bank record is deliberately excluded from `banks`/`bankByName` above, matching
+      // `listBanks()`'s own default scope) — it parses to exactly the same `bankId: null` a manual
+      // "None (cash payment)" selection already produces.
+      const isCashSentinel = bankName.toLowerCase() === 'cash';
+      const bank = !isCashSentinel ? bankByName.get(bankName.toLowerCase()) : undefined;
+      if (!isCashSentinel && !bank) {
         throw new Error(`Unknown bank: "${bankName}"`);
       }
 
