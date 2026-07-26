@@ -324,6 +324,8 @@ describe('Draft-cycle employee population lifecycle and RBAC visibility', () => 
       Area: unit.name,
       'Area/Location': unit.name,
       'Basic/Gross Pay': '30000',
+      // Required as of the Employee Bank final refinement — a blank cell is now a validation error.
+      'Employee Bank': 'Cash',
     });
     const csv = [
       EMPLOYEE_TEMPLATE_HEADERS.join(','),

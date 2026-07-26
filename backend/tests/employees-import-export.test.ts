@@ -100,7 +100,10 @@ describe('Employee Registry import/export', () => {
       Area: '',
       'Branch Code': '',
       'Area/Location': '',
-      'Project Bank': '',
+      // Required as of the final refinement (post-deployment UAT) — defaulted here to "Cash" so
+      // every test that doesn't care about banking specifically still produces a valid row; tests
+      // that DO care override this explicitly.
+      'Employee Bank': 'Cash',
       'Bank Branch Code': '',
       'Account Number': '',
       'Basic/Gross Pay': '',
@@ -203,7 +206,7 @@ describe('Employee Registry import/export', () => {
     // Site/bank names follow this suite's own `cleanTestData()` cleanup convention ("Test Site "
     // prefix / "TB" bank-code prefix, see tests/helpers.ts) rather than reusing the template's own
     // "Downtown Regional Office"/"Acme Commercial Bank" example text verbatim — this test's own
-    // Project/Project Bank column values are overridden below to match, same as Area/Branch Code.
+    // Project/Employee Bank column values are overridden below to match, same as Area/Branch Code.
     const site = await makeSite('Test Site Example Sheet');
     const bank = await prisma.bank.create({ data: { code: 'TB-EXAMPLE', name: 'Test Bank Example Sheet' } });
     const { agent, csrfToken } = await masterAdminAgent('import-template-example@test.local');
@@ -223,7 +226,7 @@ describe('Employee Registry import/export', () => {
         if (header === 'Project') return site.name;
         if (header === 'Area' || header === 'Area/Location') return `${site.name} Unit`;
         if (header === 'Branch Code') return 'U-1';
-        if (header === 'Project Bank') return bank.name;
+        if (header === 'Employee Bank') return bank.name;
         return value;
       }),
     ]);
@@ -374,6 +377,449 @@ describe('Employee Registry import/export', () => {
     expect(siteNames).not.toContain(outsideSite.name);
   });
 
+  // ---------------------------------------------------------------------------------------------
+  // Post-deployment UAT correction — Employee Bank dropdown blank entries, Cash semantics,
+  // "Project Bank" -> "Employee Bank" rename, and Project dropdown dynamism after the Project
+  // Site bulk-import checkpoint.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Reads the actual cell values a `type: 'list'` Excel data validation formula references (e.g.
+   * `=Lists!$B$2:$B$6`) — proves a dropdown's real, rendered option list, not just the formula's
+   * own row-count arithmetic (the root cause of the blank-entries defect this correction fixes:
+   * the arithmetic alone previously "looked right" per column while still producing visible blank
+   * rows in whichever dropdown had fewer real entries than the other). */
+  function readDropdownValues(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet, row: number, col: number): string[] {
+    const validation = sheet.getCell(row, col).dataValidation;
+    if (!validation || validation.type !== 'list') throw new Error('Expected a list-type data validation');
+    const formula = String(validation.formulae?.[0] ?? '');
+    const match = formula.match(/^=?'?([^'!]+)'?!\$?([A-Z]+)\$(\d+):\$?[A-Z]+\$(\d+)$/);
+    if (!match) throw new Error(`Could not parse dropdown range formula: ${formula}`);
+    const [, sheetName, colLetter, startRow, endRow] = match;
+    const listSheet = workbook.getWorksheet(sheetName!)!;
+    const values: string[] = [];
+    for (let r = Number(startRow); r <= Number(endRow); r += 1) {
+      const cell = listSheet.getCell(`${colLetter}${r}`);
+      values.push(cell.value == null ? '' : String(cell.value));
+    }
+    return values;
+  }
+
+  it('[Issue 1] Employee Bank dropdown contains zero blank entries even when the Site and Bank counts differ', async () => {
+    // This system's own seeded reference data already includes real active banks (e.g. Allied
+    // Bank Limited, Habib Bank Limited, MCB Bank Limited) — never assume a count, always derive
+    // the expectation from what listBanks() itself would actually return at this moment.
+    const preexistingBankCount = await prisma.bank.count({ where: { isActive: true, code: { not: 'CASH' } } });
+
+    // Deliberately unequal counts (5 sites, 2 *additional* banks) — the exact scenario that
+    // previously produced blank dropdown entries: both dropdowns shared one
+    // Math.max(sites, banks) row count, so the shorter list's Excel range extended past its own
+    // real data into the "Lists" sheet's blank padding rows.
+    for (let i = 1; i <= 5; i += 1) await makeSite(`Test Site Unequal Counts ${i}`);
+    await prisma.bank.create({ data: { code: 'TB-UNEQ1', name: 'Test Bank Unequal One' } });
+    await prisma.bank.create({ data: { code: 'TB-UNEQ2', name: 'Test Bank Unequal Two' } });
+
+    const { agent } = await masterAdminAgent('import-bank-dropdown-no-blanks@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const bankValues = readDropdownValues(workbook, importDataSheet, 2, 16); // Employee Bank, column P
+    expect(bankValues.every((v) => v.trim().length > 0)).toBe(true);
+    // "Cash" + every real active bank — never padded to the (larger) site count.
+    expect(bankValues).toHaveLength(1 + preexistingBankCount + 2);
+  });
+
+  it('[Issue 1] Project dropdown also contains zero blank entries when Banks outnumber Sites', async () => {
+    // The symmetric case: more banks than sites — proves the fix isn't one-sided.
+    await makeSite('Test Site Fewer Sites');
+    for (let i = 1; i <= 4; i += 1) {
+      await prisma.bank.create({ data: { code: `TB-MANY${i}`, name: `Test Bank Many ${i}` } });
+    }
+
+    const { agent } = await masterAdminAgent('import-project-dropdown-no-blanks@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const siteValues = readDropdownValues(workbook, importDataSheet, 2, 2); // Project, column B
+    expect(siteValues.every((v) => v.trim().length > 0)).toBe(true);
+  });
+
+  it('[Issue 2] "Cash" appears in the Employee Bank dropdown exactly once, first', async () => {
+    await prisma.bank.create({ data: { code: 'TB-CASHORD', name: 'Test Bank Cash Ordering' } });
+    const { agent } = await masterAdminAgent('import-cash-appears-once@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const bankValues = readDropdownValues(workbook, importDataSheet, 2, 16);
+    const cashOccurrences = bankValues.filter((v) => v.toLowerCase() === 'cash');
+    expect(cashOccurrences).toHaveLength(1);
+    expect(bankValues[0]?.toLowerCase()).toBe('cash');
+  });
+
+  it('[Issue 3] newly generated templates use the header "Employee Bank", not "Project Bank"', async () => {
+    const { agent } = await masterAdminAgent('import-employee-bank-header@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const headerRow = (importDataSheet.getRow(1).values as unknown[]).slice(1);
+    expect(headerRow).toContain('Employee Bank');
+    expect(headerRow).not.toContain('Project Bank');
+  });
+
+  it('[Issue 3/11] a legacy workbook using the old "Project Bank" header is still accepted, for both Cash and a real bank value', async () => {
+    const site = await makeSite('Test Site Legacy Header');
+    const bank = await prisma.bank.create({ data: { code: 'TB-LEGACY', name: 'Test Bank Legacy Header' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-legacy-header@test.local');
+
+    const legacyHeaders = (EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]).map((h) => (h === 'Employee Bank' ? 'Project Bank' : h));
+    const buildLegacyCsv = (name: string, employeeBank: string, accountNumber = '') =>
+      stringifyCsvSync([
+        legacyHeaders,
+        EMPLOYEE_TEMPLATE_HEADERS.map(
+          (header) =>
+            templateRow({
+              Project: site.name,
+              Area: `${site.name} Unit`,
+              Name: name,
+              Designation: 'Guard',
+              'Basic/Gross Pay': '20000',
+              'Employee Bank': employeeBank,
+              'Account Number': accountNumber,
+            })[header],
+        ),
+      ]);
+
+    // Cash, under the legacy header name.
+    const cashRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', Buffer.from(buildLegacyCsv('Legacy Header Cash Employee', 'Cash'), 'utf-8'), 'legacy-cash.csv');
+    expect(cashRes.status).toBe(200);
+    expect(cashRes.body.skipped).toHaveLength(0);
+    expect(cashRes.body.created).toBe(1);
+    const cashEmployee = await prisma.employee.findFirst({ where: { name: 'Legacy Header Cash Employee' } });
+    expect(cashEmployee).not.toBeNull();
+    expect(cashEmployee?.bankId).toBeNull();
+
+    // A real bank, under the legacy header name.
+    const bankRes = await agent
+      .post('/api/v1/employees/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', Buffer.from(buildLegacyCsv('Legacy Header Bank Employee', bank.name, '00112233'), 'utf-8'), 'legacy-bank.csv');
+    expect(bankRes.status).toBe(200);
+    expect(bankRes.body.skipped).toHaveLength(0);
+    expect(bankRes.body.created).toBe(1);
+    const bankEmployee = await prisma.employee.findFirst({ where: { name: 'Legacy Header Bank Employee' } });
+    expect(bankEmployee?.bankId).toBe(bank.id);
+  });
+
+  it('[Issue 4] backward compatibility applies to the "Project Bank" header name only — a blank value under that legacy header is still rejected', async () => {
+    const site = await makeSite('Test Site Legacy Header Blank');
+    const { agent, csrfToken } = await masterAdminAgent('import-legacy-header-blank@test.local');
+
+    const legacyHeaders = (EMPLOYEE_TEMPLATE_HEADERS as unknown as string[]).map((h) => (h === 'Employee Bank' ? 'Project Bank' : h));
+    const csv = stringifyCsvSync([
+      legacyHeaders,
+      EMPLOYEE_TEMPLATE_HEADERS.map(
+        (header) =>
+          templateRow({
+            Project: site.name,
+            Area: `${site.name} Unit`,
+            Name: 'Legacy Header Blank Bank Employee',
+            Designation: 'Guard',
+            'Basic/Gross Pay': '20000',
+            'Employee Bank': '',
+          })[header],
+      ),
+    ]);
+
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', Buffer.from(csv, 'utf-8'), 'legacy-blank.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(0);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.skipped[0].reason).toContain('Employee Bank');
+    expect(await prisma.employee.findFirst({ where: { name: 'Legacy Header Blank Bank Employee' } })).toBeNull();
+  });
+
+  it('[Issue 2] Cash conditional validation: no bank details required for Cash, Account Number required for a real bank, Branch Code/IBAN never required either way', async () => {
+    const site = await makeSite('Test Site Cash Conditional');
+    const bank = await prisma.bank.create({ data: { code: 'TB-CASHC', name: 'Test Bank Cash Conditional' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-cash-conditional@test.local');
+
+    // 1. Employee Bank = "Cash", no Account Number/Branch Code/IBAN at all — succeeds.
+    const cashCsv = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Cash Employee One', Designation: 'Guard', 'Basic/Gross Pay': '20000', 'Employee Bank': 'Cash' }),
+    ]);
+    const cashRes = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', cashCsv, 'a.csv');
+    expect(cashRes.body.skipped).toHaveLength(0);
+    expect(cashRes.body.created).toBe(1);
+    const cashEmployee = await prisma.employee.findFirstOrThrow({ where: { name: 'Cash Employee One' } });
+    expect(cashEmployee.bankId).toBeNull();
+
+    // 2. Employee Bank = a real bank, no Account Number — rejected.
+    const missingAccountCsv = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Real Bank No Account', Designation: 'Guard', 'Basic/Gross Pay': '20000', 'Employee Bank': bank.name }),
+    ]);
+    const missingAccountRes = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', missingAccountCsv, 'b.csv');
+    expect(missingAccountRes.body.created).toBe(0);
+    expect(missingAccountRes.body.skipped).toHaveLength(1);
+    expect(missingAccountRes.body.skipped[0].reason).toContain('Account Number');
+
+    // 3. Employee Bank = "Cash", but Branch Code/IBAN populated anyway — still succeeds (neither is
+    // ever required by the backend, Cash or not — verified against the actual schema, not assumed).
+    const cashWithExtrasCsv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Cash Employee With Extras',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Employee Bank': 'Cash',
+        'Bank Branch Code': '0001',
+        IBAN: 'PK00TESTCASHEXTRAS0000001',
+      }),
+    ]);
+    const cashWithExtrasRes = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', cashWithExtrasCsv, 'c.csv');
+    expect(cashWithExtrasRes.body.skipped).toHaveLength(0);
+    expect(cashWithExtrasRes.body.created).toBe(1);
+  });
+
+  it('[Issue 2] a real bank correctly parses and links to the matching Bank record (Employee Bank is not treated as Cash)', async () => {
+    const site = await makeSite('Test Site Real Bank Link');
+    const bank = await prisma.bank.create({ data: { code: 'TB-REAL1', name: 'Test Bank Real Link' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-real-bank-link@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Real Bank Link Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Employee Bank': bank.name,
+        'Account Number': '00112233',
+      }),
+    ]);
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'sites.csv');
+    expect(res.body.created).toBe(1);
+    const created = await prisma.employee.findFirstOrThrow({ where: { name: 'Real Bank Link Employee' } });
+    expect(created.bankId).toBe(bank.id);
+  });
+
+  it('[Final refinement] Employee Bank is marked Required in the template\'s own metadata (header fill, comment, and Column Guide)', async () => {
+    const { agent } = await masterAdminAgent('import-employee-bank-required-metadata@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const headerCell = importDataSheet.getCell(1, 16); // Employee Bank, column P
+    expect(headerCell.value).toBe('Employee Bank');
+    // Required columns get the amber fill (IMPORT_REQUIREMENT_FILL.required, common/import-export.ts)
+    // — same convention as every other Required column (Project, Name, Designation, Basic/Gross Pay).
+    expect((headerCell.fill as { fgColor?: { argb?: string } }).fgColor?.argb).toBe('FFFDE9C8');
+    expect(String(headerCell.note)).toContain('Required');
+
+    const instructionsSheet = workbook.getWorksheet(INSTRUCTIONS_SHEET_NAME)!;
+    const rows = instructionsSheet.getSheetValues() as unknown[];
+    const guideRow = rows.find((row) => Array.isArray(row) && row[1] === 'Employee Bank') as unknown[] | undefined;
+    expect(guideRow).toBeDefined();
+    expect(guideRow?.[2]).toBe('Required'); // the Column Guide's own "Required?" column
+  });
+
+  it('[Final refinement] the Employee Bank dropdown contains every currently active real bank by name, not just the right count', async () => {
+    const realBanks = await prisma.bank.findMany({ where: { isActive: true, code: { not: 'CASH' } } });
+    const extraBank = await prisma.bank.create({ data: { code: 'TB-BYNAME', name: 'Test Bank By Name Check' } });
+
+    const { agent } = await masterAdminAgent('import-bank-dropdown-by-name@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+    const bankValues = readDropdownValues(workbook, importDataSheet, 2, 16);
+
+    for (const bank of [...realBanks, extraBank]) {
+      expect(bankValues).toContain(bank.name);
+    }
+    expect(bankValues).toContain('Cash');
+  });
+
+  it('[Final refinement] a blank Employee Bank is rejected server-side with a readable, column-named error', async () => {
+    const site = await makeSite('Test Site Blank Bank Rejected');
+    const { agent, csrfToken } = await masterAdminAgent('import-blank-bank-rejected@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Blank Bank Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Employee Bank': '',
+      }),
+    ]);
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'blank-bank.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(0);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.skipped[0].reason).toBe('Employee Bank: Select "Cash" or a valid bank');
+    expect(res.body.skipped[0].reason).not.toContain('{"code"');
+    expect(await prisma.employee.findFirst({ where: { name: 'Blank Bank Employee' } })).toBeNull();
+  });
+
+  it('[Final refinement] a whitespace-only Employee Bank is rejected the same as a genuinely blank one', async () => {
+    const site = await makeSite('Test Site Whitespace Bank Rejected');
+    const { agent, csrfToken } = await masterAdminAgent('import-whitespace-bank-rejected@test.local');
+
+    const csv = toCsv([
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Whitespace Bank Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Employee Bank': '   ',
+      }),
+    ]);
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'whitespace-bank.csv');
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(0);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.skipped[0].reason).toContain('Employee Bank');
+    expect(await prisma.employee.findFirst({ where: { name: 'Whitespace Bank Employee' } })).toBeNull();
+  });
+
+  it('[Final refinement] Cash maps to bankId: null and a real bank maps to its own Bank.id, unambiguously', async () => {
+    const site = await makeSite('Test Site Explicit Mapping');
+    const bank = await prisma.bank.create({ data: { code: 'TB-EXPLMAP', name: 'Test Bank Explicit Mapping' } });
+    const { agent, csrfToken } = await masterAdminAgent('import-explicit-mapping@test.local');
+
+    const csv = toCsv([
+      templateRow({ Project: site.name, Area: `${site.name} Unit`, Name: 'Explicit Cash Employee', Designation: 'Guard', 'Basic/Gross Pay': '20000', 'Employee Bank': 'Cash' }),
+      templateRow({
+        Project: site.name,
+        Area: `${site.name} Unit`,
+        Name: 'Explicit Bank Employee',
+        Designation: 'Guard',
+        'Basic/Gross Pay': '20000',
+        'Employee Bank': bank.name,
+        'Account Number': '998877',
+      }),
+    ]);
+    const res = await agent.post('/api/v1/employees/import').set('x-csrf-token', csrfToken).attach('file', csv, 'mapping.csv');
+    expect(res.body.skipped).toHaveLength(0);
+    expect(res.body.created).toBe(2);
+
+    const cashEmployee = await prisma.employee.findFirstOrThrow({ where: { name: 'Explicit Cash Employee' } });
+    expect(cashEmployee.bankId).toBeNull();
+    const bankEmployee = await prisma.employee.findFirstOrThrow({ where: { name: 'Explicit Bank Employee' } });
+    expect(bankEmployee.bankId).toBe(bank.id);
+  });
+
+  it('[Issue 4/5] a newly manually-created Site the user has access to appears immediately in a freshly downloaded Employee template', async () => {
+    const { agent, csrfToken } = await createAuthenticatedAgent(app, {
+      email: 'import-manual-site-dropdown@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_MANUAL_SITE_DROPDOWN',
+      permissionKeys: [...EMPLOYEE_PERMISSIONS, PERMISSIONS.SITES_MANAGE],
+    });
+
+    const createRes = await agent.post('/api/v1/sites').set('x-csrf-token', csrfToken).send({ name: 'Test Site Manual Dropdown Live' });
+    expect(createRes.status).toBe(201);
+
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const listsSheet = workbook.worksheets.find((sheet) => sheet.state === 'veryHidden')!;
+    const siteNames = listsSheet.getColumn(1).values.slice(2).filter((v): v is string => typeof v === 'string');
+    expect(siteNames).toContain('Test Site Manual Dropdown Live');
+  });
+
+  it('[Issue 4/5] a newly bulk-imported Site the user has access to appears immediately in a freshly downloaded Employee template, with exactly one initial Unit already usable', async () => {
+    const { agent, csrfToken, userId } = await createAuthenticatedAgent(app, {
+      email: 'import-bulk-site-dropdown@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_BULK_SITE_DROPDOWN',
+      permissionKeys: [...EMPLOYEE_PERMISSIONS, PERMISSIONS.SITES_MANAGE],
+    });
+
+    // Step 1-2: user initially has no assignment to the not-yet-existing Site.
+    expect(await prisma.userSiteAssignment.count({ where: { userId } })).toBe(0);
+
+    // Step 3-4: import creates the ProjectSite, its initial ProjectUnit, and the UserSiteAssignment.
+    const siteCsv = stringifyCsvSync([
+      ['Sr. No', 'Site Name', 'Unit Label', 'Address'],
+      ['1', 'Test Site Bulk Dropdown Live', 'Branch', ''],
+    ]);
+    const siteImportRes = await agent
+      .post('/api/v1/sites/import')
+      .set('x-csrf-token', csrfToken)
+      .attach('file', Buffer.from(siteCsv, 'utf-8'), 'sites.csv');
+    expect(siteImportRes.status).toBe(200);
+    expect(siteImportRes.body.created).toBe(1);
+
+    const site = await prisma.projectSite.findUniqueOrThrow({ where: { name: 'Test Site Bulk Dropdown Live' } });
+    const assignment = await prisma.userSiteAssignment.findUnique({ where: { userId_siteId: { userId, siteId: site.id } } });
+    expect(assignment).not.toBeNull();
+    const units = await prisma.projectUnit.findMany({ where: { siteId: site.id } });
+    expect(units).toHaveLength(1);
+
+    // Step 5-6: same user immediately downloads the Employee Import Template — no restart, no
+    // redeploy, no hardcoded/stale source.
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const listsSheet = workbook.worksheets.find((sheet) => sheet.state === 'veryHidden')!;
+    const siteNames = listsSheet.getColumn(1).values.slice(2).filter((v): v is string => typeof v === 'string');
+    expect(siteNames).toContain('Test Site Bulk Dropdown Live');
+
+    // Proves the two import architectures actually integrate: an Employee can be created against
+    // the bulk-imported Site's own auto-provisioned initial Unit with no separate manual step.
+    const employeeRes = await agent
+      .post('/api/v1/employees')
+      .set('x-csrf-token', csrfToken)
+      .send({ name: 'Bulk Site Employee', designation: 'Guard', siteId: site.id, unitId: units[0]!.id, grossPay: '20000' });
+    expect(employeeRes.status).toBe(201);
+  });
+
+  it('[Issue 4] an inaccessible Site does not appear in a scoped user\'s Employee template Project dropdown', async () => {
+    const outsideSite = await makeSite('Test Site Inaccessible To Scoped');
+    const { agent } = await createAuthenticatedAgent(app, {
+      email: 'import-inaccessible-site@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_INACCESSIBLE_SITE',
+      permissionKeys: EMPLOYEE_PERMISSIONS,
+      siteIds: [], // deliberately no assignment to outsideSite
+    });
+
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const listsSheet = workbook.worksheets.find((sheet) => sheet.state === 'veryHidden')!;
+    const siteNames = listsSheet.getColumn(1).values.slice(2).filter((v): v is string => typeof v === 'string');
+    expect(siteNames).not.toContain(outsideSite.name);
+  });
+
+  it('[Issue 4] Master Admin continues to see every active Site in the Employee template Project dropdown', async () => {
+    const siteA = await makeSite('Test Site Master Admin Sees A');
+    const siteB = await makeSite('Test Site Master Admin Sees B');
+    const { agent } = await masterAdminAgent('import-master-admin-sees-all@test.local');
+
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const listsSheet = workbook.worksheets.find((sheet) => sheet.state === 'veryHidden')!;
+    const siteNames = listsSheet.getColumn(1).values.slice(2).filter((v): v is string => typeof v === 'string');
+    expect(siteNames).toContain(siteA.name);
+    expect(siteNames).toContain(siteB.name);
+  });
+
+  it('[Issue 6] no duplicate or blank values across the Project or Employee Bank dropdown sources', async () => {
+    await makeSite('Test Site Dup Check One');
+    await makeSite('Test Site Dup Check Two');
+    await prisma.bank.create({ data: { code: 'TB-DUPCHK1', name: 'Test Bank Dup Check One' } });
+    await prisma.bank.create({ data: { code: 'TB-DUPCHK2', name: 'Test Bank Dup Check Two' } });
+
+    const { agent } = await masterAdminAgent('import-no-dup-values@test.local');
+    const { workbook } = await downloadTemplateWorkbook(agent);
+    const importDataSheet = workbook.getWorksheet(IMPORT_DATA_SHEET_NAME)!;
+
+    const siteValues = readDropdownValues(workbook, importDataSheet, 2, 2);
+    const bankValues = readDropdownValues(workbook, importDataSheet, 2, 16);
+
+    expect(siteValues.every((v) => v.trim().length > 0)).toBe(true);
+    expect(bankValues.every((v) => v.trim().length > 0)).toBe(true);
+    expect(new Set(siteValues).size).toBe(siteValues.length);
+    expect(new Set(bankValues).size).toBe(bankValues.length);
+  });
+
   it('preserves leading zeros on code-like columns by formatting them as Excel text', async () => {
     const { agent } = await masterAdminAgent('import-template-leading-zeros@test.local');
     const { workbook } = await downloadTemplateWorkbook(agent);
@@ -481,7 +927,7 @@ describe('Employee Registry import/export', () => {
         Name: 'No Account Number Employee',
         Designation: 'Guard',
         'Basic/Gross Pay': '20000',
-        'Project Bank': 'Cross Field Bank',
+        'Employee Bank': 'Cross Field Bank',
         'Account Number': '',
       }),
     ]);
@@ -541,7 +987,7 @@ describe('Employee Registry import/export', () => {
         Name: 'Unknown Bank Employee',
         Designation: 'Guard',
         'Basic/Gross Pay': '20000',
-        'Project Bank': 'Totally Fictional Bank',
+        'Employee Bank': 'Totally Fictional Bank',
         'Account Number': '12345',
       }),
     ]);
