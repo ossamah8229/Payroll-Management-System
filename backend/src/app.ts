@@ -39,6 +39,7 @@ import {
   payrollEntryCorrectionsRouter,
 } from './modules/corrections/corrections.routes';
 import { adjustmentTypesRouter } from './modules/adjustment-types/adjustment-types.routes';
+import { employeeStatementRouter } from './modules/statements/statements.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -137,6 +138,10 @@ export function createApp(): Express {
   app.use('/api/v1', projectUnitsRouter);
   app.use('/api/v1/sites', projectSitesRouter);
   app.use('/api/v1/banks', banksRouter);
+  // Phase 7A Checkpoint 1 — mounted ahead of employeesRouter's own blanket mount, same
+  // "more-specific-sub-resource-router-first" convention as every other :parentId-nested route
+  // below (Payslips, Bank Sheets, Cash Receiving, Corrections).
+  app.use('/api/v1/employees/:employeeId/statement', employeeStatementRouter);
   app.use('/api/v1/employees', employeesRouter);
   app.use('/api/v1/settings', settingsRouter);
   // Mounted before usersRouter's own blanket users:manage gate — /assignable is intentionally

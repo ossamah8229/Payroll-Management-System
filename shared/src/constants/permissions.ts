@@ -60,6 +60,14 @@ export const PERMISSIONS = {
    * uniformly — there is no separate "generate" action, since a Payslip is never persisted
    * (derived on demand from released `PayrollEntry` data, Principle 1). */
   PAYSLIPS_VIEW: 'payslips:view',
+  /** Added Phase 7A Checkpoint 1 (Employee Statement of Account ledger) — a dedicated permission,
+   * not a reuse of `PAYROLL_ENTRY`/`PAYROLL_VIEW`/`CORRECTIONS_APPROVE`/`REPORTS_VIEW`: a Statement
+   * exposes one employee's full cross-cycle financial history (corrections, balance adjustments,
+   * advances), a materially more sensitive per-person disclosure than any single-cycle document.
+   * Default grant matches `PAYSLIPS_VIEW` exactly (Master Admin, Payroll Staff, Finance) — the
+   * closest existing precedent for "per-employee financial detail visibility," per the Phase 7
+   * architecture report's approved decision. */
+  STATEMENTS_VIEW: 'statements:view',
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -92,6 +100,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionKey[]> = {
     PERMISSIONS.ADVANCES_MANAGE,
     PERMISSIONS.REPORTS_VIEW,
     PERMISSIONS.PAYSLIPS_VIEW,
+    PERMISSIONS.STATEMENTS_VIEW,
   ],
   /** Deliberately narrow (docs/architecture/authentication.md "Finance's permission set") — no
    * payroll-edit permission, no `payroll:mark-ready`, no corrections approval. Cash Receiving's
@@ -101,6 +110,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionKey[]> = {
     PERMISSIONS.PAYROLL_RELEASE,
     PERMISSIONS.BANK_SHEETS_VIEW,
     PERMISSIONS.PAYSLIPS_VIEW,
+    PERMISSIONS.STATEMENTS_VIEW,
   ],
 };
 
@@ -143,6 +153,7 @@ export const PERMISSION_GROUPS: Record<PermissionKey, { group: string; label: st
   [PERMISSIONS.AUDIT_LOG_VIEW]: { group: 'Audit Log', label: 'View audit log' },
   [PERMISSIONS.TASKS_MANAGE]: { group: 'Tasks', label: 'Manage tasks' },
   [PERMISSIONS.PAYSLIPS_VIEW]: { group: 'Payslips', label: 'View & download payslips' },
+  [PERMISSIONS.STATEMENTS_VIEW]: { group: 'Statements', label: 'View employee statements of account' },
 };
 
 /**
