@@ -16,7 +16,20 @@ export interface UnitReleaseStatus {
 
 export interface ReleaseUnitResult {
   release: { id: string; cycleId: string; unitId: string; releasedAt: string; releasedById: string };
+  /** Entries actually paid — `netSalary > 0` (Negative Payroll Recovery checkpoint, 2026-07-26). */
   releasedEntryCount: number;
+  /** `netSalary = 0` — no payment due. */
+  noPayDueCount: number;
+  /** `netSalary < 0` — a `BalanceAdjustment(type: RECOVERY)` was created for each. */
+  recoveryDueCount: number;
+  /** Excluded from this release entirely — duplicate identity/payment-destination data or missing
+   * required banking details. Still blocks Finalize until fixed or manually held. */
+  blockedCount: number;
+  /** Salary Release visibility (2026-07-27 refinement) — one entry per `blockedCount`, so the
+   * operator can see which employees were excluded and why, rather than a bare number with nothing
+   * to act on. `blockReasons` are generic, field-named strings — never another employee's own
+   * identifying details. */
+  blockedEntries: Array<{ id: string; employeeId: string; employeeName: string; blockReasons: string[] }>;
   correctionSettlementsConsumed: number;
   /** How many `RESERVED` Advances/Eid Advances this release settled to `PAID_OFF` (Presentation &
    * Workflow Stabilization Checkpoint, 2026-07-25, Issue 5). */

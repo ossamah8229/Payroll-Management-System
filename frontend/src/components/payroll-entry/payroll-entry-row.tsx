@@ -121,10 +121,31 @@ function PayrollEntryRowImpl({
     // flex box — the same `items-center justify-center` convention every other `align: 'center'`
     // column in this row uses (serial, units, eobiApplicable, hold) — because the column now
     // holds exactly one piece of content with nothing else to keep it from drifting off-center.
+    // Negative Payroll Recovery checkpoint (2026-07-26) — `payoutOutcome` is the other resolution
+    // a Unit release sweep can leave an entry in besides `released = true`; the UI must never show
+    // "Released" for an employee who received no salary payment (Part A3), so it gets its own
+    // distinct badges here rather than falling into the plain "—" unresolved state.
+    //
+    // Pre-release "Needs Attention" visibility (2026-07-27 refinement) — a still-unresolved entry
+    // the backend already knows can't release (duplicate CNIC/Employee Code/Account Number/IBAN,
+    // or missing required bank details) must never silently show the plain "—" either. One badge,
+    // kept centered exactly like every other outcome here — never a second badge alongside it, and
+    // never the old three-dot Status menu — with the specific reason(s) available via the same
+    // native-tooltip convention `SaveStatusIndicator` already uses elsewhere in this row, rather
+    // than a new interactive popover pattern. Never includes another employee's own identifying
+    // details — `releaseBlockReasons` are already generic, field-named strings server-side.
     status: (
       <div role="cell" data-col-id="status" className="flex items-center justify-center">
         {entry.released ? (
           <Badge tone="blue">Released</Badge>
+        ) : entry.payoutOutcome === 'RECOVERY_DUE' ? (
+          <Badge tone="red">Recovery Due</Badge>
+        ) : entry.payoutOutcome === 'NO_PAY_DUE' ? (
+          <Badge tone="gray">No Pay Due</Badge>
+        ) : entry.releaseBlockReasons.length > 0 ? (
+          <Badge tone="amber" title={`Reasons:\n${entry.releaseBlockReasons.map((reason) => `• ${reason}`).join('\n')}`}>
+            Needs Attention
+          </Badge>
         ) : (
           <span className="text-[10px] text-text-faint">—</span>
         )}

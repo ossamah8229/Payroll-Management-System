@@ -79,6 +79,8 @@ function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
     fine: '0',
     hold: false,
     released: false,
+    payoutOutcome: null,
+    releaseBlockReasons: [],
     releasedAt: null,
     releasedBy: null,
     lateReason: null,
@@ -361,5 +363,53 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     expect(statusCell.className).toMatch(/\bjustify-center\b/);
     expect(statusCell.textContent).toBe('—');
     expect(statusCell.querySelector('button')).toBeNull();
+  });
+
+  /**
+   * Pre-release "Needs Attention" visibility (2026-07-27 refinement) — items A/C. A still
+   * unresolved entry the backend flags via `releaseBlockReasons` must show a single "Needs
+   * Attention" badge, centered exactly like every other Status outcome (never a second badge, and
+   * never the old three-dot Status menu) — with the specific reason(s) available via a native
+   * tooltip, the same lightweight `title`-attribute convention `SaveStatusIndicator` already uses
+   * elsewhere in this row, rather than a new interactive popover pattern.
+   */
+  it('shows a single centered "Needs Attention" badge with reasons in its tooltip, and no action element, for a blocked entry', () => {
+    const blockedEntry = makeEntry({
+      released: false,
+      payoutOutcome: null,
+      releaseBlockReasons: ['Duplicate Account Number', 'Duplicate CNIC'],
+    });
+    const resolved = computeColumnWidths([blockedEntry], [testBank]);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={blockedEntry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    const statusCell = container.querySelector('[data-col-id="status"]') as HTMLElement;
+    expect(statusCell.className).toMatch(/\bflex\b/);
+    expect(statusCell.className).toMatch(/\bitems-center\b/);
+    expect(statusCell.className).toMatch(/\bjustify-center\b/);
+    expect(statusCell.className).not.toMatch(/grid-cols-/);
+    expect(statusCell.textContent).toBe('Needs Attention');
+    expect(statusCell.querySelectorAll('span').length).toBe(1); // exactly one badge, no second warning badge
+    expect(statusCell.querySelector('button')).toBeNull();
+    expect(statusCell.querySelector('[role="menu"]')).toBeNull();
+
+    const badge = statusCell.querySelector('span') as HTMLElement;
+    expect(badge.getAttribute('title')).toBe('Reasons:\n• Duplicate Account Number\n• Duplicate CNIC');
+    // Never another employee's own identifying details in the tooltip — only generic reason text.
+    expect(badge.getAttribute('title')).not.toMatch(/employee-|SHARED|ACC-/i);
   });
 });

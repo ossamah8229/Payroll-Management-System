@@ -69,6 +69,19 @@ export interface PayrollEntry {
   released: boolean;
   releasedAt: string | null;
   releasedBy: string | null;
+  /** Negative Payroll Recovery checkpoint (2026-07-26) — set only for a zero/negative-net entry
+   * resolved by a Unit release sweep; `null` for an ordinary Draft entry or one released for
+   * payment (`released = true` never coincides with a non-null `payoutOutcome`). */
+  payoutOutcome: 'NO_PAY_DUE' | 'RECOVERY_DUE' | null;
+  /** Pre-release "Needs Attention" visibility (2026-07-27 refinement) — non-empty only for a still
+   * unresolved entry (`released: false`, `hold: false`, `payoutOutcome: null`) the backend already
+   * knows would be excluded from the next Unit release sweep — duplicate CNIC/Employee Code/
+   * Account Number/IBAN, or a bank-paid entry missing its Account Number. Computed server-side by
+   * the exact same `evaluatePayrollEntryReleaseReadiness` function the release sweep itself
+   * enforces with (`payroll-release-eligibility.ts`) — never reimplemented here. Always `[]` for a
+   * resolved entry (released, held, or already `payoutOutcome`-classified). Generic, field-named
+   * strings only — never another employee's own identifying details. */
+  releaseBlockReasons: string[];
   lateReason: string | null;
   remarks: string | null;
   sortOrder: number;

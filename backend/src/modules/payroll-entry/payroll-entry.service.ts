@@ -7,7 +7,7 @@ import type {
   UpdatePayrollEntryInput,
   UpdateWorkLineInput,
 } from '@payroll/shared';
-import { calcNet, type CalcNetResult, type PayrollEntryCalcInput } from '@payroll/shared';
+import { calcNet, normalizeAccountNumber, normalizeIban, type CalcNetResult, type PayrollEntryCalcInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../common/http-error';
 import { diffFields } from '../../common/audit-diff';
@@ -16,6 +16,7 @@ import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertUnitBelongsToSite } from '../employees/employees.service';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
+import { evaluatePayrollEntryReleaseReadiness, RELEASE_BLOCK_REASONS } from '../payroll-release/payroll-release-eligibility';
 
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 50;
@@ -26,7 +27,7 @@ const DEFAULT_PAGE_SIZE = 50;
  * specific work line). A released/archived entry's work lines are never edited again (§12), so
  * this is the same historical snapshot for those entries forever; a Draft entry's lines reflect
  * whatever the roster reconciliation/edits currently have them pointing at. */
-const WORK_LINES_INCLUDE = { orderBy: { sortOrder: 'asc' as const }, include: { unit: true } };
+export const WORK_LINES_INCLUDE = { orderBy: { sortOrder: 'asc' as const }, include: { unit: true } };
 
 export type EntryWithWorkLines = PayrollEntry & { workLines: PayrollEntryWorkLine[] };
 
@@ -73,6 +74,169 @@ function withCalc<T extends EntryWithWorkLines>(entry: T): T & { calc: CalcNetRe
 }
 
 /**
+ * Pre-release "Needs Attention" visibility (2026-07-27 refinement) — the Payroll Entry grid must
+ * never silently show a plain "—" for an employee the backend already knows can't release
+ * (duplicate CNIC/Employee Code/Account Number/IBAN, or a bank-paid entry missing its Account
+ * Number). Reuses `evaluatePayrollEntryReleaseReadiness` — the exact same canonical function
+ * `releaseProjectUnit` enforces with — rather than reimplementing any of these rules; only its
+ * `blockReasons` are used here (the `netSalary` argument is irrelevant to this display purpose).
+ * Skipped entirely for an already-resolved entry (`released`, `hold`, or a non-null
+ * `payoutOutcome`) — there is nothing left to warn about once an entry has locked.
+ *
+ * **Single-entry only** — up to four DB round trips for the one entry being returned (a mutation
+ * response, or `getPayrollEntry`'s detail view). For a *list* of entries, use
+ * `attachReleaseBlockReasonsBulk` below instead — calling this once per row doubled as a real
+ * regression under concurrent load (a 50-row page load, run alongside 50 concurrent mutations,
+ * multiplied to hundreds of simultaneous queries and exhausted the connection pool — caught by
+ * `payroll-entry-performance.test.ts`'s own concurrency suite).
+ */
+async function withReleaseBlockReasons<
+  T extends {
+    released: boolean;
+    hold: boolean;
+    payoutOutcome: string | null;
+    employeeId: string;
+    bankId: string | null;
+    accountNumber: string | null;
+    iban: string | null;
+    employee: { cnic: string | null; employeeCode: string | null };
+  },
+>(entry: T): Promise<T & { releaseBlockReasons: string[] }> {
+  if (entry.released || entry.hold || entry.payoutOutcome !== null) {
+    return { ...entry, releaseBlockReasons: [] };
+  }
+  const readiness = await evaluatePayrollEntryReleaseReadiness(
+    {
+      employeeId: entry.employeeId,
+      bankId: entry.bankId,
+      accountNumber: entry.accountNumber,
+      iban: entry.iban,
+    },
+    entry.employee,
+    '0',
+    prisma,
+  );
+  return { ...entry, releaseBlockReasons: readiness.blockReasons };
+}
+
+/**
+ * Bulk variant of `withReleaseBlockReasons`, for the Payroll Entry *list* (`listPayrollEntries`) —
+ * the exact same duplicate-identity/missing-banking-detail rules `evaluatePayrollEntryReleaseReadiness`
+ * enforces (same `RELEASE_BLOCK_REASONS` wording, imported from the same canonical module — never a
+ * second definition of what counts as a duplicate), but computed via a handful of batched queries
+ * across the whole page instead of up to four sequential lookups per row. A page of N unresolved
+ * rows now costs a constant ~4 queries, not up to 4×N — the shape this codebase's own N+1 discipline
+ * already requires elsewhere (`payslips.test.ts`'s "issues a constant number of queries regardless
+ * of batch size").
+ */
+async function attachReleaseBlockReasonsBulk<
+  T extends {
+    id: string;
+    employeeId: string;
+    released: boolean;
+    hold: boolean;
+    payoutOutcome: string | null;
+    bankId: string | null;
+    accountNumber: string | null;
+    iban: string | null;
+    employee: { cnic: string | null; employeeCode: string | null };
+  },
+>(entries: T[]): Promise<Array<T & { releaseBlockReasons: string[] }>> {
+  const candidates = entries.filter((entry) => !entry.released && !entry.hold && entry.payoutOutcome === null);
+  if (candidates.length === 0) {
+    return entries.map((entry) => ({ ...entry, releaseBlockReasons: [] }));
+  }
+
+  const accountCanonicalByEntryId = new Map(candidates.map((entry) => [entry.id, normalizeAccountNumber(entry.accountNumber)]));
+  const ibanCanonicalByEntryId = new Map(candidates.map((entry) => [entry.id, normalizeIban(entry.iban)]));
+
+  const cnics = [...new Set(candidates.map((entry) => entry.employee.cnic).filter((value): value is string => Boolean(value)))];
+  const codes = [
+    ...new Set(candidates.map((entry) => entry.employee.employeeCode).filter((value): value is string => Boolean(value))),
+  ];
+  const accountCanonicals = [
+    ...new Set([...accountCanonicalByEntryId.values()].filter((value): value is string => Boolean(value))),
+  ];
+  const ibanCanonicals = [...new Set([...ibanCanonicalByEntryId.values()].filter((value): value is string => Boolean(value)))];
+
+  const [cnicRows, codeRows, accountRows, ibanRows] = await Promise.all([
+    cnics.length ? prisma.employee.findMany({ where: { cnic: { in: cnics } }, select: { id: true, cnic: true } }) : [],
+    codes.length
+      ? prisma.employee.findMany({ where: { employeeCode: { in: codes } }, select: { id: true, employeeCode: true } })
+      : [],
+    accountCanonicals.length
+      ? prisma.employee.findMany({
+          where: { accountNumberCanonical: { in: accountCanonicals } },
+          select: { id: true, accountNumberCanonical: true },
+        })
+      : [],
+    ibanCanonicals.length
+      ? prisma.employee.findMany({ where: { ibanCanonical: { in: ibanCanonicals } }, select: { id: true, ibanCanonical: true } })
+      : [],
+  ]);
+
+  // Maps each candidate value to every *currently existing* Employee id holding it (almost always
+  // exactly one, given the DB's own uniqueness constraints on all four fields — but see below).
+  // The check this mirrors is `findEmployeeByCnic`/etc.'s own "does anyone *other than me* hold
+  // this value" — never "do two rows in the Employee table currently collide," which the DB
+  // constraints on all four fields already make near-impossible going forward. The scenario this
+  // must still catch: a `PayrollEntry`'s own *frozen* accountNumber/iban snapshot ("copied, not
+  // linked") no longer matches its own employee's current record (which legitimately moved on to
+  // a new value) but now collides with some *other* employee's current one — the exact case Part
+  // A6/B8 exist for. A value held by 2+ distinct ids (a legacy, pre-constraint duplicate) is
+  // handled the same way: it's a conflict for anyone holding it, self included.
+  function holdersByValue<R extends { id: string }>(rows: R[], getValue: (row: R) => string | null): Map<string, Set<string>> {
+    const map = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const value = getValue(row);
+      if (!value) continue;
+      const ids = map.get(value) ?? new Set<string>();
+      ids.add(row.id);
+      map.set(value, ids);
+    }
+    return map;
+  }
+
+  function isDuplicateForEmployee(holders: Map<string, Set<string>>, value: string | null, employeeId: string): boolean {
+    if (!value) return false;
+    const ids = holders.get(value);
+    if (!ids) return false;
+    return [...ids].some((id) => id !== employeeId);
+  }
+
+  const cnicHolders = holdersByValue(cnicRows, (row) => row.cnic);
+  const codeHolders = holdersByValue(codeRows, (row) => row.employeeCode);
+  const accountHolders = holdersByValue(accountRows, (row) => row.accountNumberCanonical);
+  const ibanHolders = holdersByValue(ibanRows, (row) => row.ibanCanonical);
+
+  return entries.map((entry) => {
+    if (entry.released || entry.hold || entry.payoutOutcome !== null) {
+      return { ...entry, releaseBlockReasons: [] };
+    }
+
+    const reasons: string[] = [];
+    if (isDuplicateForEmployee(cnicHolders, entry.employee.cnic, entry.employeeId)) {
+      reasons.push(RELEASE_BLOCK_REASONS.DUPLICATE_CNIC);
+    }
+    if (isDuplicateForEmployee(codeHolders, entry.employee.employeeCode, entry.employeeId)) {
+      reasons.push(RELEASE_BLOCK_REASONS.DUPLICATE_EMPLOYEE_CODE);
+    }
+    if (entry.bankId) {
+      if (!entry.accountNumber) {
+        reasons.push(RELEASE_BLOCK_REASONS.MISSING_ACCOUNT_NUMBER);
+      } else if (isDuplicateForEmployee(accountHolders, accountCanonicalByEntryId.get(entry.id) ?? null, entry.employeeId)) {
+        reasons.push(RELEASE_BLOCK_REASONS.DUPLICATE_ACCOUNT_NUMBER);
+      }
+    }
+    if (isDuplicateForEmployee(ibanHolders, ibanCanonicalByEntryId.get(entry.id) ?? null, entry.employeeId)) {
+      reasons.push(RELEASE_BLOCK_REASONS.DUPLICATE_IBAN);
+    }
+
+    return { ...entry, releaseBlockReasons: reasons };
+  });
+}
+
+/**
  * A `PayrollEntry` is mutable only while `released = false` **and its cycle is not `ARCHIVED`**
  * (docs/architecture/database/payroll-entry.md §12, corrected 2026-07-14 — Phase 5 Checkpoint 1
  * architecture review; extended 2026-07-15 — Phase 5 Checkpoint 4 architecture review). Between
@@ -89,10 +253,23 @@ function withCalc<T extends EntryWithWorkLines>(entry: T): T & { calc: CalcNetRe
  * Draft cycle — never by reaching back into a locked Archived row; there is still no dedicated Late
  * Entry / exceptional-settlement workflow (remains deferred).
  */
-export function assertEntryEditable(entry: { released: boolean; cycle: { status: PayrollCycleStatus } }): void {
+export function assertEntryEditable(entry: {
+  released: boolean;
+  payoutOutcome: string | null;
+  cycle: { status: PayrollCycleStatus };
+}): void {
   if (entry.released) {
     throw badRequest(
       'This payroll entry is locked and can no longer be edited directly — released payroll is immutable (Principle 9)',
+    );
+  }
+  // Negative Payroll Recovery checkpoint (2026-07-26) — a zero/negative-net entry resolved by a
+  // Unit release sweep (`payoutOutcome = NO_PAY_DUE`/`RECOVERY_DUE`) is just as locked as a paid
+  // one, even though `released` itself stays `false` for it (released never redefines its meaning
+  // to include this case — see `payroll-release.service.ts`).
+  if (entry.payoutOutcome != null) {
+    throw badRequest(
+      'This payroll entry has been resolved by its Unit release (no payment due / recovery due) and can no longer be edited directly — released payroll is immutable (Principle 9)',
     );
   }
   if (entry.cycle.status === 'ARCHIVED') {
@@ -179,7 +356,7 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
     total,
     page,
     pageSize,
-    entries: entries.map((entry) => withCalc(entry)),
+    entries: await attachReleaseBlockReasonsBulk(entries.map((entry) => withCalc(entry))),
   };
 }
 
@@ -201,7 +378,7 @@ export async function getPayrollEntry(currentUser: SessionUser, id: string) {
     throw notFound('Payroll entry not found');
   }
   assertSiteAccess(currentUser, entry.siteId);
-  return withCalc(entry);
+  return withReleaseBlockReasons(withCalc(entry));
 }
 
 /**
@@ -316,7 +493,12 @@ export async function createPayrollEntry(
     return created;
   });
 
-  return withCalc(entry);
+  // A freshly created entry has no Employee relation loaded here (only `workLines` was included),
+  // so the release-readiness check (which needs the employee's own cnic/employeeCode) can't run
+  // against this shape — and a brand-new entry has nothing to warn about yet regardless (Employee
+  // creation itself already rejects a duplicate CNIC/Code/Account Number/IBAN before this entry
+  // could ever exist, B4). The grid's own list refetch picks up the real check on its next load.
+  return { ...withCalc(entry), releaseBlockReasons: [] };
 }
 
 /** Fields on `UpdatePayrollEntryInput` that map 1:1 onto a Prisma update payload. `version` is
@@ -383,7 +565,13 @@ export async function updatePayrollEntry(
     data as unknown as Record<string, unknown>,
   );
 
-  return prisma.$transaction(async (tx) => {
+  // Negative Payroll Recovery checkpoint (2026-07-27, performance fix) — `withReleaseBlockReasons`
+  // does its own DB round trips; running it *inside* this interactive transaction extended the
+  // transaction's own held time and made it compete with those extra queries for the same
+  // connection pool, causing real "Transaction already closed: ... timeout" failures under
+  // concurrent load (`payroll-entry-performance.test.ts`'s own concurrency suite caught this).
+  // Committed first, then the readiness check runs against a released connection.
+  const updated = await prisma.$transaction(async (tx) => {
     const guarded = await tx.payrollEntry.updateMany({
       where: { id, version },
       data: { ...data, version: { increment: 1 } },
@@ -408,12 +596,12 @@ export async function updatePayrollEntry(
       );
     }
 
-    const updated = await tx.payrollEntry.findUniqueOrThrow({
+    return tx.payrollEntry.findUniqueOrThrow({
       where: { id },
-      include: { workLines: WORK_LINES_INCLUDE },
+      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
     });
-    return withCalc(updated);
   });
+  return withReleaseBlockReasons(withCalc(updated));
 }
 
 /**
@@ -476,7 +664,10 @@ export async function addWorkLine(
     ? Math.max(...entry.workLines.map((line) => line.sortOrder)) + 1
     : 0;
 
-  return prisma.$transaction(async (tx) => {
+  // Negative Payroll Recovery checkpoint (2026-07-27, performance fix) — see the doc comment on
+  // `updatePayrollEntry`'s own identical restructuring: `withReleaseBlockReasons` must run after
+  // this transaction commits, never inside it.
+  const updated = await prisma.$transaction(async (tx) => {
     const guarded = await tx.payrollEntry.updateMany({
       where: { id: entryId, version: input.version },
       data: { version: { increment: 1 } },
@@ -511,12 +702,12 @@ export async function addWorkLine(
       tx,
     );
 
-    const updated = await tx.payrollEntry.findUniqueOrThrow({
+    return tx.payrollEntry.findUniqueOrThrow({
       where: { id: entryId },
-      include: { workLines: WORK_LINES_INCLUDE },
+      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
     });
-    return withCalc(updated);
   });
+  return withReleaseBlockReasons(withCalc(updated));
 }
 
 /** Fields on `UpdateWorkLineInput` that map 1:1 onto a Prisma update payload — the work-line
@@ -558,7 +749,10 @@ export async function updateWorkLine(
     data as unknown as Record<string, unknown>,
   );
 
-  return prisma.$transaction(async (tx) => {
+  // Negative Payroll Recovery checkpoint (2026-07-27, performance fix) — see the doc comment on
+  // `updatePayrollEntry`'s own identical restructuring: `withReleaseBlockReasons` must run after
+  // this transaction commits, never inside it.
+  const updated = await prisma.$transaction(async (tx) => {
     const guarded = await tx.payrollEntry.updateMany({
       where: { id: entry.id, version: input.version },
       data: { version: { increment: 1 } },
@@ -584,12 +778,12 @@ export async function updateWorkLine(
       );
     }
 
-    const updated = await tx.payrollEntry.findUniqueOrThrow({
+    return tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
-      include: { workLines: WORK_LINES_INCLUDE },
+      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
     });
-    return withCalc(updated);
   });
+  return withReleaseBlockReasons(withCalc(updated));
 }
 
 /**
@@ -608,7 +802,10 @@ export async function deleteWorkLine(
   assertSiteAccess(currentUser, entry.siteId);
   assertEntryEditable(entry);
 
-  return prisma.$transaction(async (tx) => {
+  // Negative Payroll Recovery checkpoint (2026-07-27, performance fix) — see the doc comment on
+  // `updatePayrollEntry`'s own identical restructuring: `withReleaseBlockReasons` must run after
+  // this transaction commits, never inside it.
+  const updated = await prisma.$transaction(async (tx) => {
     const remaining = await tx.payrollEntryWorkLine.count({ where: { payrollEntryId: entry.id } });
     if (remaining <= 1) {
       throw badRequest('Cannot delete the last remaining work line — a payroll entry must always have at least one');
@@ -637,12 +834,12 @@ export async function deleteWorkLine(
       tx,
     );
 
-    const updated = await tx.payrollEntry.findUniqueOrThrow({
+    return tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
-      include: { workLines: WORK_LINES_INCLUDE },
+      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
     });
-    return withCalc(updated);
   });
+  return withReleaseBlockReasons(withCalc(updated));
 }
 
 export interface BulkUpdatePayrollEntriesResult {
@@ -702,13 +899,17 @@ export async function bulkUpdatePayrollEntries(
     select: {
       id: true,
       released: true,
+      payoutOutcome: true,
       workLines: { orderBy: { sortOrder: 'asc' }, take: 1, select: { id: true } },
     },
   });
   // A released entry, or any entry at all once the cycle is Archived, is locked exactly like a
   // single-entity edit would reject it (`assertEntryEditable`) — skipped here rather than failing
-  // the whole batch over it.
-  const editable = cycle.status === 'ARCHIVED' ? [] : matched.filter((entry) => !entry.released);
+  // the whole batch over it. Negative Payroll Recovery checkpoint (2026-07-26): an entry already
+  // resolved as NO_PAY_DUE/RECOVERY_DUE is equally locked, even though `released` itself stays
+  // `false` for it.
+  const editable =
+    cycle.status === 'ARCHIVED' ? [] : matched.filter((entry) => !entry.released && entry.payoutOutcome === null);
 
   let appliedCount = 0;
 

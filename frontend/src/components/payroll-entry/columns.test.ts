@@ -58,6 +58,8 @@ function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
     fine: '0',
     hold: false,
     released: false,
+    payoutOutcome: null,
+    releaseBlockReasons: [],
     releasedAt: null,
     releasedBy: null,
     lateReason: null,

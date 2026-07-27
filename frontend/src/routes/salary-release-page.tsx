@@ -24,7 +24,7 @@ import {
 } from '@/hooks/use-payroll-cycles';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
-import { useReleaseProjectUnit, useUnitReleaseStatus, type UnitReleaseStatus } from '@/hooks/use-payroll-release';
+import { useReleaseProjectUnit, useUnitReleaseStatus, type ReleaseUnitResult, type UnitReleaseStatus } from '@/hooks/use-payroll-release';
 
 const selectClassName =
   'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
@@ -97,6 +97,58 @@ function ReleaseConfirmModal({
           </Button>
           <Button type="button" onClick={onConfirm} disabled={isPending}>
             {isPending ? 'Releasing…' : 'Release Unit'}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+/**
+ * Salary Release visibility (2026-07-27 refinement) — a Unit release must never silently exclude
+ * a blocked employee with no way to inspect why. Opens automatically right after a release whose
+ * `blockedCount > 0`, listing exactly the same `blockReasons` the Payroll Entry grid's own "Needs
+ * Attention" badge shows for that employee (`payroll-release-eligibility.ts` is the one canonical
+ * source for both). Purely informational — blocked entries remain unresolved and still block
+ * Finalize until fixed or manually held; this modal has no action of its own beyond closing.
+ */
+function BlockedEmployeesModal({
+  unitName,
+  entries,
+  onOpenChange,
+}: {
+  unitName: string;
+  entries: ReleaseUnitResult['blockedEntries'];
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Modal open onOpenChange={onOpenChange}>
+      <ModalContent title={`${unitName} — Needs Attention`} widthClassName="max-w-[520px]">
+        <div className="flex flex-col gap-3.5 text-xs">
+          <p className="text-text-muted">
+            {entries.length} employee{entries.length === 1 ? '' : 's'} at this Unit could not be released —
+            their master data needs correcting before they can be paid. Every other employee at this Unit
+            released normally.
+          </p>
+          <div className="flex flex-col gap-2">
+            {entries.map((entry) => (
+              <div key={entry.id} className="rounded border border-border bg-bg px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-text">{entry.employeeName}</span>
+                  <Badge tone="amber">Needs Attention</Badge>
+                </div>
+                <ul className="mt-1.5 list-disc pl-4 text-text-muted">
+                  {entry.blockReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+        <ModalFooter>
+          <Button type="button" onClick={() => onOpenChange(false)}>
+            Close
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -228,6 +280,9 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   const [confirming, setConfirming] = useState<UnitReleaseStatus | undefined>(undefined);
   const [confirmingFinalize, setConfirmingFinalize] = useState(false);
   const [confirmingRollover, setConfirmingRollover] = useState(false);
+  const [blockedResult, setBlockedResult] = useState<
+    { unitName: string; entries: ReleaseUnitResult['blockedEntries'] } | undefined
+  >(undefined);
 
   useEffect(() => {
     if (!siteId && sites.data && sites.data.length > 0) {
@@ -242,6 +297,7 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     setConfirming(undefined);
     setConfirmingFinalize(false);
     setConfirmingRollover(false);
+    setBlockedResult(undefined);
   }, [cycleId]);
 
   const unitStatus = useUnitReleaseStatus(cycle?.id, siteId);
@@ -258,13 +314,25 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     if (!confirming || !cycle) return;
     try {
       const result = await releaseUnit.mutateAsync(confirming.unit.id);
+      const parts: string[] = [];
+      if (result.releasedEntryCount > 0) {
+        parts.push(`${result.releasedEntryCount} paid`);
+      }
+      if (result.noPayDueCount > 0) {
+        parts.push(`${result.noPayDueCount} no pay due`);
+      }
+      if (result.recoveryDueCount > 0) {
+        parts.push(`${result.recoveryDueCount} recovery due`);
+      }
+      if (result.blockedCount > 0) {
+        parts.push(`${result.blockedCount} blocked — needs attention`);
+      }
       toast.success(
-        result.releasedEntryCount > 0
-          ? `${confirming.unit.name} released — ${result.releasedEntryCount} payroll ${
-              result.releasedEntryCount === 1 ? 'entry' : 'entries'
-            } finalized`
-          : `${confirming.unit.name} released`,
+        parts.length > 0 ? `${confirming.unit.name} released — ${parts.join(', ')}` : `${confirming.unit.name} released`,
       );
+      if (result.blockedEntries.length > 0) {
+        setBlockedResult({ unitName: confirming.unit.name, entries: result.blockedEntries });
+      }
       setConfirming(undefined);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Release failed');
@@ -483,6 +551,14 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
           cycleLabel={cycleLabel}
           onConfirm={handleConfirmRelease}
           isPending={releaseUnit.isPending}
+        />
+      )}
+
+      {blockedResult && (
+        <BlockedEmployeesModal
+          unitName={blockedResult.unitName}
+          entries={blockedResult.entries}
+          onOpenChange={(open) => !open && setBlockedResult(undefined)}
         />
       )}
 

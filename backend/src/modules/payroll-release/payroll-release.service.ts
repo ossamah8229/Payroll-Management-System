@@ -5,8 +5,12 @@ import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess } from '../../common/authz-policy';
 import { consumeMaterializationsForReleasedEntries } from '../corrections/corrections.materialization.service';
+import { computeReleaseRecoveryAdjustment } from '../corrections/corrections.materialization';
 import { lockPayrollCycleForUpdate } from '../corrections/corrections.repository';
+import { createNegativePayrollRecoveryAdjustment } from '../corrections/corrections.service';
 import { settleAdvancesForReleasedEntries } from '../advances/advances.service';
+import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
+import { evaluatePayrollEntryReleaseReadiness } from './payroll-release-eligibility';
 
 /**
  * Salary Release foundation (Phase 4 Checkpoint 2, docs/architecture/database/release.md §12b) —
@@ -79,7 +83,7 @@ export async function getUnitReleaseStatus(
     // headcount rather than the whole company's (Principle 10).
     prisma.payrollEntry.findMany({
       where: { cycleId, siteId },
-      select: { id: true, released: true, workLines: { select: { unitId: true } } },
+      select: { id: true, released: true, payoutOutcome: true, workLines: { select: { unitId: true } } },
     }),
   ]);
 
@@ -90,10 +94,13 @@ export async function getUnitReleaseStatus(
     const touching = entries.filter((entry) => entry.workLines.some((line) => line.unitId === unit.id));
     const release = releaseByUnitId.get(unit.id);
 
+    // Negative Payroll Recovery checkpoint (2026-07-26) — an entry already resolved by an earlier
+    // release sweep as NO_PAY_DUE/RECOVERY_DUE is just as "nothing left to release" as one that's
+    // `released = true`; both must be excluded here the same way.
     const willReleaseCount = release
       ? 0
       : touching.filter((entry) => {
-          if (entry.released) return false;
+          if (entry.released || entry.payoutOutcome !== null) return false;
           const touchedUnitIds = new Set(entry.workLines.map((line) => line.unitId));
           touchedUnitIds.delete(unit.id);
           return [...touchedUnitIds].every((id) => releasedUnitIdSet.has(id));
@@ -112,7 +119,26 @@ export async function getUnitReleaseStatus(
 
 export interface ReleaseUnitResult {
   release: { id: string; cycleId: string; unitId: string; releasedAt: string; releasedById: string };
+  /** Entries whose own `netSalary > 0` — the only entries this release actually pays; `released`
+   * flips `true` for exactly these (Negative Payroll Recovery checkpoint, 2026-07-26 — `released`
+   * keeps meaning exactly what it always has: money was paid). */
   releasedEntryCount: number;
+  /** `netSalary = 0` — no payment due; `payoutOutcome = NO_PAY_DUE`. */
+  noPayDueCount: number;
+  /** `netSalary < 0` — the employee was overpaid/over-deducted; `payoutOutcome = RECOVERY_DUE` and
+   * a `BalanceAdjustment(type: RECOVERY)` is created for each (`recoveryDueCount` entries → exactly
+   * `recoveryDueCount` new adjustments). */
+  recoveryDueCount: number;
+  /** Excluded from this sweep entirely — duplicate identity/payment-destination data or missing
+   * required banking details (`payroll-release-eligibility.ts`). Stays `released: false,
+   * hold: false, payoutOutcome: null`; still blocks Finalize until fixed or manually held. */
+  blockedCount: number;
+  /** Salary Release visibility (2026-07-26 refinement) — one entry per `blockedCount`, so the
+   * operator can see *which* employees were excluded and *why*, not just a bare count. Never
+   * includes another employee's own identifying details — `blockReasons` are generic, field-named
+   * strings (e.g. `"Duplicate Account Number"`), the same ones `payroll_entry.release_blocked`'s
+   * own audit metadata records. */
+  blockedEntries: Array<{ id: string; employeeId: string; employeeName: string; blockReasons: string[] }>;
   /** Phase 6 Checkpoint 7 — how many `ACTIVE` `BalanceAdjustmentMaterialization` reservations this
    * release consumed (flipped to `CONSUMED`, realized as a `BalanceAdjustmentSettlement`). `0` on
    * every release before Checkpoint 5's materialization existed, or when none of the entries this
@@ -195,13 +221,41 @@ export async function releaseProjectUnit(
         tx,
       );
 
+      // Negative Payroll Recovery checkpoint (2026-07-26) — `payoutOutcome: null` is an explicit,
+      // defense-in-depth exclusion alongside `released: false`: once an entry's payoutOutcome is
+      // set, every Unit it touches is, by construction, already released, so it could never
+      // legitimately reappear as a candidate here again — this just makes that invariant explicit
+      // rather than relying solely on that transitive proof.
       const candidates = await tx.payrollEntry.findMany({
-        where: { cycleId, siteId: unit.siteId, released: false, hold: false, workLines: { some: { unitId } } },
-        select: { id: true, workLines: { select: { unitId: true } } },
+        where: {
+          cycleId,
+          siteId: unit.siteId,
+          released: false,
+          hold: false,
+          payoutOutcome: null,
+          workLines: { some: { unitId } },
+        },
+        include: {
+          employee: { select: { name: true, cnic: true, employeeCode: true } },
+          workLines: WORK_LINES_INCLUDE,
+        },
       });
 
       let releasedEntryCount = 0;
-      let releasedEntryIds: string[] = [];
+      let noPayDueCount = 0;
+      let recoveryDueCount = 0;
+      let blockedCount = 0;
+      // Negative Payroll Recovery checkpoint (2026-07-26, accounting verification pass) — every
+      // entry this sweep *resolves* (PAID, NO_PAY_DUE, or RECOVERY_DUE — a blocked entry is not
+      // resolved, see `blockedEntries` below), not just the paid ones. A NO_PAY_DUE/RECOVERY_DUE
+      // entry is just as locked and just as much "this is the release event" as a paid one — its
+      // own materialized correction obligations and advance deductions must settle here too, or
+      // they'd be stranded ACTIVE/RESERVED forever against an entry that can never release again.
+      let resolvedEntryIds: string[] = [];
+      // Salary Release visibility (2026-07-26 refinement) — declared here (not inside the
+      // `candidates.length > 0` block below) so it's still in scope for the final return when
+      // there are zero candidates at all.
+      const blockedEntries: Array<{ id: string; employeeId: string; employeeName: string; blockReasons: string[] }> = [];
 
       if (candidates.length > 0) {
         const otherTouchedUnitIds = new Set<string>();
@@ -223,23 +277,86 @@ export async function releaseProjectUnit(
           entry.workLines.every((line) => line.unitId === unitId || releasedElsewhere.has(line.unitId)),
         );
 
-        if (toRelease.length > 0) {
-          const releasedAt = new Date();
+        // Negative Payroll Recovery & Employee Identity/Banking Uniqueness checkpoint (2026-07-26)
+        // — classify every entry this sweep would otherwise release, via the one canonical
+        // eligibility function (Part C of the checkpoint brief), before writing anything. A
+        // blocked entry is excluded from this sweep entirely, same tier as `hold` — it stays
+        // `released: false, hold: false, payoutOutcome: null`, still visible and still blocking
+        // Finalize until its master data is fixed or it's manually held.
+        const paidIds: string[] = [];
+        const noPayDueIds: string[] = [];
+        const recoveryEntries: Array<{ id: string; employeeId: string; netSalary: string }> = [];
+        const releasedAt = new Date();
+
+        for (const entry of toRelease) {
+          const calc = computeEntryCalc(entry);
+          // Negative Payroll Recovery checkpoint (2026-07-26, accounting verification pass) — a
+          // negative `calcNet` result caused *purely* by this entry absorbing a prior cycle's own
+          // RECOVERY obligation (`correctionBalanceRecovery`) must never read as grounds for a
+          // *second*, brand-new recovery on top of the one already being settled — see
+          // `computeReleaseRecoveryAdjustment`'s own doc comment for the exact three-case
+          // accounting. Every downstream decision (eligibility classification, and how much of the
+          // materialization actually settles) uses this adjusted figure, never the raw one.
+          const { adjustedNetSalary } = computeReleaseRecoveryAdjustment(calc);
+          const readiness = await evaluatePayrollEntryReleaseReadiness(
+            {
+              employeeId: entry.employeeId,
+              bankId: entry.bankId,
+              accountNumber: entry.accountNumber,
+              iban: entry.iban,
+            },
+            entry.employee,
+            adjustedNetSalary,
+            tx,
+          );
+
+          if (!readiness.releasable) {
+            blockedCount += 1;
+            blockedEntries.push({
+              id: entry.id,
+              employeeId: entry.employeeId,
+              employeeName: entry.employee.name,
+              blockReasons: readiness.blockReasons,
+            });
+            await recordAuditLog(
+              {
+                actorUserId: currentUser.id,
+                action: 'payroll_entry.release_blocked',
+                entityType: 'PayrollEntry',
+                entityId: entry.id,
+                metadata: { cycleId, triggeringUnitId: unitId, releaseId: release.id, blockReasons: readiness.blockReasons },
+                ipAddress: requestMeta.ipAddress,
+                userAgent: requestMeta.userAgent,
+              },
+              tx,
+            );
+            continue;
+          }
+
+          if (readiness.payoutOutcome === 'PAID') {
+            paidIds.push(entry.id);
+          } else if (readiness.payoutOutcome === 'NO_PAY_DUE') {
+            noPayDueIds.push(entry.id);
+          } else {
+            recoveryEntries.push({ id: entry.id, employeeId: entry.employeeId, netSalary: adjustedNetSalary });
+          }
+        }
+
+        if (paidIds.length > 0) {
           await tx.payrollEntry.updateMany({
-            where: { id: { in: toRelease.map((entry) => entry.id) } },
+            where: { id: { in: paidIds } },
             data: { released: true, releasedAt, releasedBy: currentUser.id, version: { increment: 1 } },
           });
-
           // One `payroll_entry.released` entry per swept entry (release.md §12b's explicit
           // requirement) — bounded by this one Unit's own headcount, not the whole cycle's, so
           // this loop stays small even at the 10,000-employee design floor (Principle 10).
-          for (const entry of toRelease) {
+          for (const id of paidIds) {
             await recordAuditLog(
               {
                 actorUserId: currentUser.id,
                 action: 'payroll_entry.released',
                 entityType: 'PayrollEntry',
-                entityId: entry.id,
+                entityId: id,
                 metadata: { cycleId, triggeringUnitId: unitId, releaseId: release.id },
                 ipAddress: requestMeta.ipAddress,
                 userAgent: requestMeta.userAgent,
@@ -247,19 +364,73 @@ export async function releaseProjectUnit(
               tx,
             );
           }
-
-          releasedEntryCount = toRelease.length;
-          releasedEntryIds = toRelease.map((entry) => entry.id);
         }
+
+        if (noPayDueIds.length > 0) {
+          await tx.payrollEntry.updateMany({
+            where: { id: { in: noPayDueIds } },
+            data: { payoutOutcome: 'NO_PAY_DUE', version: { increment: 1 } },
+          });
+          for (const id of noPayDueIds) {
+            await recordAuditLog(
+              {
+                actorUserId: currentUser.id,
+                action: 'payroll_entry.no_pay_due',
+                entityType: 'PayrollEntry',
+                entityId: id,
+                metadata: { cycleId, triggeringUnitId: unitId, releaseId: release.id },
+                ipAddress: requestMeta.ipAddress,
+                userAgent: requestMeta.userAgent,
+              },
+              tx,
+            );
+          }
+        }
+
+        for (const entry of recoveryEntries) {
+          await tx.payrollEntry.update({
+            where: { id: entry.id },
+            data: { payoutOutcome: 'RECOVERY_DUE', version: { increment: 1 } },
+          });
+          const adjustment = await createNegativePayrollRecoveryAdjustment(
+            { id: entry.id, employeeId: entry.employeeId, cycleId },
+            entry.netSalary,
+            tx,
+          );
+          await recordAuditLog(
+            {
+              actorUserId: currentUser.id,
+              action: 'payroll_entry.recovery_due',
+              entityType: 'PayrollEntry',
+              entityId: entry.id,
+              metadata: {
+                cycleId,
+                triggeringUnitId: unitId,
+                releaseId: release.id,
+                balanceAdjustmentId: adjustment.id,
+                amount: adjustment.amount.toString(),
+              },
+              ipAddress: requestMeta.ipAddress,
+              userAgent: requestMeta.userAgent,
+            },
+            tx,
+          );
+        }
+
+        releasedEntryCount = paidIds.length;
+        noPayDueCount = noPayDueIds.length;
+        recoveryDueCount = recoveryEntries.length;
+        resolvedEntryIds = [...paidIds, ...noPayDueIds, ...recoveryEntries.map((entry) => entry.id)];
       }
 
       // Phase 6 Checkpoint 7 — second in the lock order, per adjustment, acquired inside
-      // `consumeMaterializationsForReleasedEntries` itself. Scoped to exactly the entries that
-      // just flipped `released: true` in this call — an entry already released before this Unit's
-      // sweep ran keeps whatever happened at its own release event, never revisited here.
+      // `consumeMaterializationsForReleasedEntries` itself. Scoped to exactly the entries this
+      // sweep just resolved in this call, in any of the three outcomes — an entry already resolved
+      // before this Unit's sweep ran keeps whatever happened at its own resolution event, never
+      // revisited here.
       const consumption = await consumeMaterializationsForReleasedEntries(
         {
-          entryIds: releasedEntryIds,
+          entryIds: resolvedEntryIds,
           releasingCycleId: cycleId,
           actorUserId: currentUser.id,
           requestMeta,
@@ -267,11 +438,11 @@ export async function releaseProjectUnit(
         tx,
       );
 
-      // Issue 5's own settlement step — same "scoped to exactly the entries that just flipped
-      // `released: true` in this call" rule as the correction consumption immediately above.
+      // Issue 5's own settlement step — same "scoped to exactly the entries this sweep just
+      // resolved in this call" rule as the correction consumption immediately above.
       const advanceSettlement = await settleAdvancesForReleasedEntries(
         {
-          entryIds: releasedEntryIds,
+          entryIds: resolvedEntryIds,
           actorUserId: currentUser.id,
           requestMeta,
         },
@@ -287,6 +458,10 @@ export async function releaseProjectUnit(
           releasedById: release.releasedById,
         },
         releasedEntryCount,
+        noPayDueCount,
+        recoveryDueCount,
+        blockedCount,
+        blockedEntries,
         correctionSettlementsConsumed: consumption.consumedCount,
         advancesSettled: advanceSettlement.settledCount,
       };
