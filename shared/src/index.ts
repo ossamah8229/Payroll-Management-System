@@ -152,6 +152,7 @@ export { decimalString } from './schemas/common';
 export { formatDate, isoDateToUtcDate, parseDateInput, toIsoDateOnly } from './lib/date';
 export { pluralize } from './lib/text';
 export { normalizeCnic } from './lib/cnic';
+export { normalizeIban, normalizeAccountNumber } from './lib/banking';
 export { formatMoney, formatNumber } from './lib/number';
 export { calcNet, sumMoney } from './lib/calc-net';
 export type {
