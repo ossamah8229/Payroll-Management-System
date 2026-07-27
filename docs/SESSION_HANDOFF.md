@@ -17,6 +17,26 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-07-27 (latest) — Phase 7 has formally begun. Architecture review COMPLETE (read-only,
+> no code); Phase 7A Checkpoint 1 (canonical Employee Statement of Account ledger, backend only) is
+> COMPLETE, NOT COMMITTED.** New module `backend/src/modules/statements/` — a purely derived,
+> read-only ledger over `PayrollEntry`/`Correction`/`BalanceAdjustment`/`Advance`, exposing three
+> independent running balances (Payable to Employee / Recoverable from Employee / Advance Outstanding
+> — never combined), a hard informational-vs-financial-movement invariant, full negative-payroll and
+> legacy-anomaly incorporation, and historical-site RBAC keyed off each `PayrollEntry`'s own frozen
+> `siteId` (never the employee's current site). New `statements:view` permission, default-granted like
+> `payslips:view`. No schema change, no new table, no index added (none was justified by the actual
+> query shape). **Same-day gap-closure pass added**: a dedicated bounded-range opening-balance
+> regression proof (no defect found), sensitive-document `Cache-Control: no-store`/`statement.viewed`
+> audit/no-mutation regression coverage (no code change needed — already correct), and a new
+> `EmployeeStatement.scope` field making the Advances-history site-scope limitation explicit rather
+> than silent (zero weakening of the underlying security rule). **Final: 28/28 ledger tests, 123/123
+> across every directly-related regression suite, zero regressions, backend typecheck/lint/build
+> clean.** Full design record: `docs/architecture/workflows/statements-ledger.md`; full build record:
+> `docs/PROJECT_PROGRESS.md`'s "Phase 7A, Checkpoint 1" and "gap-closure pass" entries. **No frontend,
+> print/export, Reports, or Dashboard work was done — each remains a separate, later checkpoint
+> requiring its own explicit authorization. Not committed, not pushed, not deployed.**
+
 > **Update, 2026-07-23 (latest same-day update) — Pre-Deployment Reliability Checkpoint (Payslip PDF
 > Full-Suite Flakiness) is COMPLETE, NOT pushed.** `payslips.test.ts`'s intermittent full-suite
 > failures were root-caused via extensive controlled reproduction (20 isolated + 10 full-suite runs,

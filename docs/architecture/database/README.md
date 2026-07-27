@@ -49,6 +49,7 @@ Related, non-schema documentation:
 | `docs/architecture/workflows/payroll-lifecycle.md` | Draft/Released/Archived state machine, new-cycle creation, Payroll Cycle Selector, backup-package generation |
 | `docs/architecture/workflows/outstanding-obligations.md` | The carry-forward predicate / Payroll Materialization Hook extensibility seam |
 | `docs/architecture/workflows/corrections-and-balance-adjustments.md` | The full Corrections + Balance Adjustments workflow narrative |
+| `docs/architecture/workflows/statements-ledger.md` | The canonical Employee Statement of Account ledger — event kinds, sign convention, historical-site RBAC, negative-payroll/legacy-anomaly treatment (Phase 7A) |
 
 ---
 

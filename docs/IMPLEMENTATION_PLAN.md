@@ -2243,6 +2243,41 @@ dependency on everything before it, since these are pure aggregations with no da
 across two cycles shows a Statement of Account that a non-technical reviewer can follow and that
 reconciles to the penny against the underlying records.
 
+**Architecture review — COMPLETE, 2026-07-27 (read-only, no code).** A full investigation against the
+current repository state (superseding this section's own original text wherever the two differ — the
+current implementation wins, per the review's own standing instruction) produced a Phase 7
+architecture report and nine approved decisions: three independent balances (Payable to Employee /
+Recoverable from Employee / Advance Outstanding, never combined); "Payable"/"Recoverable" terminology,
+never raw Debit/Credit; a hard informational-vs-financial-movement invariant; Advances as a genuinely
+separate sub-ledger respecting `RESERVED`-is-reversible/`PAID_OFF`-is-final; full negative-payroll and
+legacy-anomaly incorporation; current-real (not aspirational) Correction/Balance-Adjustment behavior
+as authoritative; a bounded-but-uncapped cycle range defaulting to the latest 12 cycles; a new
+`statements:view` permission matching `payslips:view`'s default grant, with historical-site RBAC keyed
+off each `PayrollEntry`'s own frozen `siteId`; and additive indexes only if the actual query shape
+justifies them. Full record: `docs/architecture/workflows/statements-ledger.md`.
+
+**Checkpoint 1 — Canonical Employee Statement of Account ledger (backend only) — COMPLETE, 2026-07-27,
+NOT COMMITTED.** `backend/src/modules/statements/` — no new table, no schema change, no additive
+migration (none was justified by the actual per-employee query shape). New `statements:view`
+permission (`shared/src/constants/permissions.ts`, the one mechanically-required shared-package
+change). Initial close: 19/19 new ledger tests covering normal/No-Pay-Due/Recovery-Due outcomes, the
+full three-case carried-forward recovery accounting, Correction PAYABLE/RECOVERY lifecycles,
+standalone `CorrectionPayment`, the full Advance lifecycle (creation/reserved/final/deferred/
+cancelled), employee-transfer site-scoping, the legacy negative-payroll anomaly, deterministic
+ordering, and penny-level three-balance reconciliation, plus dedicated `statements:view` permission
+tests, at **271/271** across this suite plus every directly-related regression suite. **A same-day
+gap-closure pass then added: a dedicated bounded-range opening-balance regression proof (no defect
+found — the full-history-replay architecture was already correct); sensitive-document `Cache-Control:
+no-store`/`statement.viewed` audit/no-mutation regression coverage (no route/service code change
+needed — already correct since this checkpoint's first pass); and a new `EmployeeStatement.scope`
+field making the Advances-history site-scope limitation explicit rather than silent, with zero
+weakening of the underlying security rule.** Final: `backend/tests/statements.test.ts` **28/28**;
+`roles.test.ts`/`advances.test.ts`/`corrections-settlement.test.ts` **123/123**; zero regressions;
+backend typecheck/lint/build clean. Full build record: `docs/PROJECT_PROGRESS.md`'s "Phase 7A,
+Checkpoint 1" and its "gap-closure pass" entries; full design record:
+`docs/architecture/workflows/statements-ledger.md`. **No frontend, print/export, Reports, or
+Dashboard work — each is a separate, later checkpoint requiring its own explicit authorization.**
+
 ---
 
 ### Phase 8 — Supporting Features

@@ -7151,6 +7151,151 @@ re-run both diagnostics and should show the same clean/expected results):
 
 ---
 
+### Phase 7 architecture review — Statements, Reports, Dashboard — COMPLETE, 2026-07-27 (read-only, no code)
+
+A full investigation across the current schema, every payroll/corrections/advances/release service,
+the print/export infrastructure, and RBAC produced a Phase 7 architecture report covering: the
+canonical Statement ledger model; the Payable/Recoverable/Advance sign convention; the
+informational-vs-financial-movement invariant; historical-site RBAC; negative-payroll and legacy-
+anomaly treatment; a Reports catalogue (build/already-covered/unnecessary); Dashboard metrics; and a
+staged 7A–7E implementation sequence. Approved by the user with nine explicit architecture decisions
+(see `docs/architecture/workflows/statements-ledger.md` §"Approved architecture decisions" for the
+authoritative record). **No schema change, code change, or commit resulted from the review itself.**
+
+### Phase 7A, Checkpoint 1 — Canonical Employee Statement of Account ledger — COMPLETE, 2026-07-27, NOT COMMITTED
+
+**Backend only — no frontend, no PDF/CSV/Excel export, no Reports, no Dashboard change; all
+explicitly deferred to later checkpoints per this checkpoint's own approved scope.**
+
+Built `backend/src/modules/statements/` (`statements.types.ts`, `statements.service.ts`,
+`statements.routes.ts`) — a purely derived, read-only ledger assembling one employee's full
+cross-cycle financial history from `PayrollEntry`, `Correction`, `BalanceAdjustment` (+
+`BalanceAdjustmentSettlement`/`CorrectionPayment`), and `Advance` (+ `AdvanceScheduleChange`). No new
+table; no schema change; no additive migration (none was justified by the actual query shape — see
+below). Full design record, including the sign convention, the deterministic ordering rule, and the
+historical-site RBAC rule: `docs/architecture/workflows/statements-ledger.md` (new).
+
+- **Three independent running balances** — `payableOutstanding` ("Payable to Employee"),
+  `recoveryOutstanding` ("Recoverable from Employee"), `advanceOutstanding` (the Advances sub-ledger)
+  — never combined into a synthetic net-position figure, per the approved architecture decision.
+- **Informational vs. financial-movement invariant enforced structurally**: every ledger entry
+  carries a typed `kind` and, only when it genuinely moves a balance, a typed `movement`
+  (`{balance, direction, amount}`) — an informational entry's `movement` is always `null` by
+  construction, never inferred from `description` text.
+- **Correctness-over-truncation query strategy**: always replays one employee's *full* history
+  (cheap — per-employee, not company-wide) to compute a correct Opening Balance for any requested
+  window, then slices the *output* to the requested range (default: latest 12 `PayrollCycle` rows
+  system-wide, per the approved default; explicit `fromCycleId`/`toCycleId` supported, uncapped).
+- **RBAC**: new `statements:view` permission (`shared/src/constants/permissions.ts`), default-granted
+  to Master Admin, Payroll Staff, and Finance — matching `payslips:view` exactly, per the approved
+  decision. Historical rows are scoped by each `PayrollEntry`'s own frozen `siteId` (via
+  `getAccessibleSiteIds`), never by the employee's current `Employee.siteId` — verified end-to-end
+  against a real employee transfer between two sites (test K). The Advances sub-ledger, which has no
+  historical per-site attribution anywhere in this schema, is gated as one all-or-nothing unit by the
+  employee's *current* site, matching the existing Advances module's own established convention.
+- **Negative payroll**: `PAID`/`NO_PAY_DUE`/`RECOVERY_DUE` fully incorporated — `RECOVERY_DUE` is
+  represented exclusively through its canonical `BalanceAdjustment(type: RECOVERY)` row, never a
+  second, independent recovery representation. The three-case carried-forward recovery accounting
+  (`computeReleaseRecoveryAdjustment`) is read faithfully, including the "genuinely new obligation
+  alongside an unaffected old one" case. The three known legacy production negative-payroll rows
+  (predating this architecture) render as an inert `CYCLE_LEGACY_NEGATIVE_ANOMALY` informational row
+  — verified to create zero new `BalanceAdjustment` rows and mutate nothing.
+- **A real doc/code discrepancy, recorded, not fixed here** (per the approved instruction not to
+  expand this checkpoint into fixing it): the frozen `corrections-and-balance-adjustments.md`
+  workflow doc describes an `IMMEDIATE PAYABLE` as automatically folding into an employee's open
+  entry, and a Master User "correcting directly" bypassing `CorrectionRequest` — neither is actually
+  implemented; only the `CorrectionRequest → approve` path plus *manual* settlement recording
+  (`recordCorrectionPayment`/`recordBalanceAdjustmentSettlement`) exist in the real code. This
+  checkpoint's ledger and tests are built against the real, manual-settlement behavior. Full note:
+  `docs/architecture/workflows/statements-ledger.md`'s own "Known discrepancy" section.
+- **Indexes**: none added. The only genuinely new query shape (per-employee, across all cycles) was
+  implemented and load-bearing-tested (see below) without one — every source table's existing
+  indexes (`PayrollEntry.employeeId`, `Correction`'s `(payrollEntryId, field, approvedAt)`,
+  `BalanceAdjustment.employeeId`, `Advance.employeeId`) already cover a single-employee scan
+  efficiently; a single employee's full history is small by construction (bounded by tenure, not by
+  company headcount), so no additive migration was justified against the checkpoint's own "only add
+  what the actual query shape demonstrably needs" instruction.
+
+**Tests**: `backend/tests/statements.test.ts`, 19/19 passing at this checkpoint's own initial close
+(now 28/28 after the gap-closure pass immediately below) — normal Paid/No-Pay-Due (A/B),
+Recovery-Due (C), the full three-case carried-forward recovery accounting split across three
+independent tests (D1–D3, reusing the exact fixture technique `payroll-release-recovery-
+accounting.test.ts` established), Correction PAYABLE and RECOVERY lifecycles end to end (E/F),
+standalone `CorrectionPayment` (G), the full Advance lifecycle including deferral and cancellation
+(H/I/J), employee-transfer site-scoping and Master-Admin visibility (K/L/M, one integration test),
+the legacy negative-payroll anomaly (N), deterministic ordering (O), and penny-level three-balance
+reconciliation against independently-computed Prisma aggregates (P) — plus three dedicated
+`statements:view` permission tests. Directly-related regression suites re-run clean: `advances.test.ts`,
+`corrections-materialization.test.ts`, `corrections-release-consumption.test.ts`,
+`corrections-service.test.ts`, `corrections-settlement.test.ts`, `payroll-release.test.ts`,
+`payroll-release-eligibility.test.ts`, `payroll-release-negative-salary.test.ts`,
+`payroll-release-recovery-accounting.test.ts`, `roles.test.ts` — **271/271 passing**, zero
+regressions. Backend `typecheck`/`lint`/`build` clean; `prisma validate` clean (no schema drift, as
+expected — no schema/migration touched). No broader full-suite regression run — justified per this
+checkpoint's own instruction, since no shared financial primitive (`calcNet`, `computeEntryCalc`,
+`releaseProjectUnit`, the corrections/settlement/materialization engines, `advances.service.ts`) was
+modified; the Statement module only ever *reads* them.
+
+**Two small, mechanically-required shared-package changes** (not a scope broadening — flagged per
+the checkpoint's own "stop and report before broadening scope" instruction, but both are the single
+minimal addition TypeScript's own `Record<PermissionKey, ...>` exhaustiveness check requires for a
+new permission key to compile at all): `shared/src/constants/permissions.ts` adds
+`PERMISSIONS.STATEMENTS_VIEW` and its one corresponding `PERMISSION_GROUPS` entry, and grants it to
+`PAYROLL_STAFF`/`FINANCE` in `ROLE_PERMISSIONS`. No frontend file was touched.
+
+#### Phase 7A, Checkpoint 1 — gap-closure pass — COMPLETE, 2026-07-27, NOT COMMITTED
+
+Approved-in-principle Checkpoint 1 required three small backend-contract gaps closed before
+committing. All three closed with **no redesign** of ledger event kinds, the Payable/Recoverable/
+Advance separation, deterministic ordering, negative-payroll handling, Corrections behavior,
+permissions, `PayrollEntry` site-scoping, or query architecture — exactly as instructed.
+
+1. **Bounded-range opening balances, proven, not just claimed.** Two new dedicated regression tests
+   (`statements.test.ts`'s Q1/Q2) construct a multi-cycle fixture with financial obligations strictly
+   *before* the requested range (a `PAYABLE` 1000 → 400 partial settlement across cycles 1–2, plus a
+   separate `RECOVERY` 250 in cycle 3; and, separately, an Advance given before the range and still
+   fully outstanding) and assert `openingBalances`/`closingBalances` are exactly correct when the
+   Statement is requested scoped to cycle 3 alone. **No defect found** — the existing full-history-
+   replay architecture was already correct; this closes the gap of having no dedicated proof. One test
+   fixture bug was found and fixed along the way (the test helper conflated an Advance's `dateGiven`
+   with its scheduled `originalPeriod` — a test-only fix, no service code change).
+2. **Sensitive-document HTTP/audit behavior — already correctly implemented since Checkpoint 1, now
+   with dedicated regression coverage.** `Cache-Control: no-store` on every successful view;
+   `statement.viewed` audit with safe metadata only (`fromCycleId`/`toCycleId`/`entryCount` — no CNIC/
+   bank/IBAN/salary/balance content, verified by asserting the metadata's own key set); zero audit
+   entries on either denial path (missing permission, or zero site overlap); and a dedicated test
+   snapshotting every financial-table row count plus the touched `PayrollEntry`'s own `version`/
+   `updatedAt` before and after a view, proving the read causes no mutation beyond the one append-only
+   audit insert. **No route/service code change was needed for this gap** — only new tests.
+3. **Advance-history RBAC limitation made explicit, never silent.** New `EmployeeStatement.scope`
+   field (`StatementScope`, `statements.types.ts`): `{ advanceHistoryIncluded: boolean,
+   advanceHistoryRestriction?: 'CURRENT_SITE_OUT_OF_SCOPE' }` — carries no count or detail about
+   whatever Advance history is actually hidden, only the fact that it is. The existing security rule
+   is **unchanged and unweakened**: Advance history is still gated as one all-or-nothing unit by the
+   employee's current site (no historical Advance site attribution was inferred or added). Verified by
+   three tests: a user with only the employee's *old* site sees allowed historical salary rows but
+   gets the restriction flag and zero leaked `ADVANCE_*` entries; a user with the employee's *current*
+   site sees the real history; Master Admin always sees the real history regardless of site
+   assignment.
+
+**Tests**: `statements.test.ts` now **28/28** (9 new: Q1, Q2, 4 sensitive-document HTTP/audit tests,
+3 Advance-scope-metadata tests). `roles.test.ts`/`advances.test.ts`/`corrections-settlement.test.ts`
+re-run clean, **123/123**, zero regressions. Backend typecheck/lint/build clean; `prisma validate`
+clean (still no schema change). No full backend-suite re-run — justified per this pass's own
+instruction, no shared primitive touched. Full record:
+`docs/architecture/workflows/statements-ledger.md` §7a, §12, §13.
+
+**Files touched this pass**: `backend/src/modules/statements/statements.types.ts` (new `StatementScope`
+type), `backend/src/modules/statements/statements.service.ts` (compute `scope`), `backend/tests/
+statements.test.ts` (9 new tests + one test-helper fix). `statements.routes.ts` was **not** changed —
+its Cache-Control/audit behavior was already correct.
+
+**Phase 7 has only begun — Checkpoint 1 (backend ledger), including its gap-closure pass, is complete;
+the Statement frontend page, Reports, and Dashboard are all still Not Started, each requiring its own
+separate authorization. Not committed, not pushed, not deployed, per explicit instruction.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -7162,8 +7307,8 @@ re-run both diagnostics and should show the same clean/expected results):
 | 3.5 | Tasks Workspace (new — permanent replacement for the previously-planned Team Collaboration/Chat panel) | **CLOSED, 2026-07-10.** All four checkpoints (0: architecture revision — `0fb296e`; 1: database foundation + shared contracts; 2: backend services/routes/notifications; 3: frontend, prototype, testing — `1220dce`) are COMPLETE and committed — see §1. Phase 3.5's own 🛑 review checkpoint has passed |
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
-| 6 | Corrections & Balance Adjustments (highest-risk logic) | **CLOSED, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. **Checkpoint 7 (End-to-End Financial Lifecycle Validation, Audit Hardening & Phase 6 Close-Out) CLOSED** — full lifecycle/audit/API/permission/reporting validation found one genuine gap (the `ACTIVE -> CONSUMED` materialization transition every prior checkpoint deferred, which blocked a materialized obligation from ever reaching `SETTLED`) and fixed it: `releaseProjectUnit` now consumes every `ACTIVE` reservation the moment its `PayrollEntry` actually releases, using the `settlementId`/`consumedAt` columns Checkpoint 5's own schema already reserved for it — no migration, no new permission key. See §1's own Checkpoint 7 entry for the full record. **Phase 6 is now fully closed. Phase 7 has not been started.** |
-| 7 | Statements, Reports, Dashboard | Not started — depends on Phase 6 (Corrections/Balance Adjustments) existing, reaffirmed by the 2026-07-11 architecture review (§1), which also newly recorded that Reports should reuse Statements' ledger-computation code rather than duplicating it |
+| 6 | Corrections & Balance Adjustments (highest-risk logic) | **CLOSED, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. **Checkpoint 7 (End-to-End Financial Lifecycle Validation, Audit Hardening & Phase 6 Close-Out) CLOSED** — full lifecycle/audit/API/permission/reporting validation found one genuine gap (the `ACTIVE -> CONSUMED` materialization transition every prior checkpoint deferred, which blocked a materialized obligation from ever reaching `SETTLED`) and fixed it: `releaseProjectUnit` now consumes every `ACTIVE` reservation the moment its `PayrollEntry` actually releases, using the `settlementId`/`consumedAt` columns Checkpoint 5's own schema already reserved for it — no migration, no new permission key. See §1's own Checkpoint 7 entry for the full record. **Phase 6 is now fully closed.** |
+| 7 | Statements, Reports, Dashboard | **STARTED, IN PROGRESS — not complete.** Architecture review CLOSED, 2026-07-27 (read-only, nine approved decisions — §1). Phase 7A Checkpoint 1 (canonical Employee Statement of Account ledger, backend only, including its gap-closure pass) CLOSED, 2026-07-27 — see §1's "Phase 7A, Checkpoint 1" and "gap-closure pass" entries. **Reports should reuse Statements' ledger-computation code rather than duplicating it** (2026-07-11 architecture review, reaffirmed 2026-07-27). Remaining, none yet started: Statement frontend page (next checkpoint), Reports, Dashboard. |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
 
