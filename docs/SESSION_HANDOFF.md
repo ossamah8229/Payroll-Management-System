@@ -2717,13 +2717,53 @@ editing, reactivation, import, and the database's own partial unique indexes —
 through the same `assertNoDuplicateEmployeeIdentifiers` pre-write check and the same
 `accountNumberCanonical`/`ibanCanonical` columns.
 
-### Steps 4–7 (tests, push, deploy, post-deploy verification)
+### Steps 4–7 — tests, push, deploy, post-deploy verification (COMPLETE)
 
-See `docs/PROJECT_PROGRESS.md` §1's own entry (this same checkpoint) for the exact tests run this
-final pass, the push outcome (local/`origin/main` SHAs), the Render deployment verification, and the
-post-deployment diagnostic re-run result (if production access allowed it) — recorded there to keep
-this addendum from needing a further edit after the fact, consistent with how prior push/deploy
-records in this file are kept append-only via a new dated line rather than rewritten.
+**Tests/typecheck (final pass, no application code changed since the diagnostic fix):**
+`tests/find-negative-released-entries-script.test.ts` **3/3**; backend `tsc --noEmit` clean;
+`npx prisma validate` clean. No full-suite re-run performed — no application code changed during
+this final documentation/review pass, per explicit instruction to run only what's necessary.
 
-**Phase 7 remains Not Started.**
+**Push:** `git push origin main` — performed by the user directly (this session's own `git push` was
+blocked by its sandbox's own auto-mode permission classifier, which treats a push to `origin/main`,
+which triggers Render auto-deploy, as too high-stakes to run automatically even under explicit
+instruction; the user ran it themselves). Confirmed after the fact: local `main` and `origin/main`
+both resolve to the identical SHA `192ce8b` (`git fetch` + `git rev-parse` both sides) — 9 commits
+(`6760e83`..`192ce8b`) landed on `origin/main` in one push, no force-push, no rewritten history.
+
+**Render deployment verification:**
+- `https://payroll-management-api-wlic.onrender.com/health` → `{"status":"ok"}` / HTTP 200,
+  consistently across 3 checks spaced ~4s apart — no crash loop.
+- `https://payroll-management-app-qa3x.onrender.com/` (root) and `/login` → HTTP 200.
+- **Migration success**: not directly confirmed via Render build logs (no Render dashboard/API
+  access exists in this environment, same limitation every prior checkpoint in this project has
+  noted) — inferred instead from the documented Start Command ordering
+  (`docs/RENDER_PRODUCTION_DEPLOYMENT.md`: `npx prisma migrate deploy ... && ... npm run start`) —
+  a failed migration (e.g. the uniqueness index's own self-guard tripping on an undetected
+  duplicate) would have prevented the backend process from ever starting, so `/health` returning 200
+  is strong indirect evidence both new migrations applied cleanly. This is weaker than an actual
+  build-log line reading "Applying migration `20260726121000_...`" — reported honestly as indirect
+  evidence, not overstated as a direct confirmation.
+- **Direct proof the new frontend build is actually live** (stronger than timing alone): fetched the
+  live `index.html` → its hashed entry bundle → the lazy-loaded `payroll-entry-page-*.js` and
+  `salary-release-page-*.js` chunks, and grepped them for this checkpoint's own new, distinctive UI
+  strings — **found `"Needs Attention"`** in the Payroll Entry chunk and **found `"blocked — needs
+  attention"`** in the Salary Release chunk, both strings that did not exist in the application
+  before this checkpoint. The entry bundle's `last-modified` header also read a timestamp from
+  within the hour this deploy happened, consistent with (not proof of, on its own) a fresh build.
+
+**Post-deployment safety check:** no production data was read, written, or otherwise touched by this
+session at any point — this environment has no authenticated production database or API access, so
+neither diagnostic script could be re-run here post-deploy. **If the user has production database
+read access, re-running both is worthwhile confirmation** (not required — deployment is already
+verified healthy by the checks above): `find-employee-identifier-duplicates.ts` is expected to still
+report 0 duplicates; `find-negative-released-entries.ts` is expected to still report the *same* 3
+historical rows (Adil Masih, Asim Khan, Ameen Shah) — **that is the correct, expected outcome, not a
+regression** — the new architecture prevents *future* negative-net entries from ever reaching
+`released = true`, it does not and must not retroactively alter historical data. No historical
+`PayrollEntry` row was modified by this deployment, and no automatic recovery was created for any of
+the 3 legacy rows.
+
+**Phase 7 remains Not Started; this checkpoint's deployment does not begin it. No further feature
+work follows this deployment without a separate go-ahead.**
 

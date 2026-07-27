@@ -7121,14 +7121,33 @@ whether these amounts were ever actually paid out. **This finding does not block
 deployment** — the new architecture governs future releases only; it takes no retroactive
 action on data that predates it. Full record: `docs/SESSION_HANDOFF.md §22`.
 
-**Commits (local `main`, in order):** `6760e83` (shared banking normalization helpers),
-`f79f564` (payout outcomes + recovery accounting, migration `20260726120000`), `b8e0b54`
-(employee identifier uniqueness, migration `20260726121000`), `d5d2e9f`
-(release-readiness/Needs Attention), `9e0c5e2` (tests), `2f15000` (read-only diagnostic
-scripts), `e9769b6` (documentation), `bc14ec3` (pre-migration diagnostic-script fix), plus
-this documentation commit recording the production preflight outcome. See
-`docs/SESSION_HANDOFF.md §22` for the full record and the push/deploy outcome once that
-step completes. **Phase 7 remains Not Started; this checkpoint does not begin it.**
+**Commits (`main`, in order, ALL PUSHED and DEPLOYED, 2026-07-27):** `6760e83` (shared
+banking normalization helpers), `f79f564` (payout outcomes + recovery accounting, migration
+`20260726120000`), `b8e0b54` (employee identifier uniqueness, migration `20260726121000`),
+`d5d2e9f` (release-readiness/Needs Attention), `9e0c5e2` (tests), `2f15000` (read-only
+diagnostic scripts), `e9769b6` (documentation), `bc14ec3` (pre-migration diagnostic-script
+fix), `192ce8b` (production preflight outcome documentation). `origin/main` confirmed at
+the identical SHA `192ce8b` after push (the push itself was performed by the user directly
+— this session's own sandbox blocks `git push` to `origin/main` via its auto-mode
+permission classifier regardless of instruction).
+
+**Deployed and verified, 2026-07-27.** Render auto-deployed from this push:
+`https://payroll-management-api-wlic.onrender.com/health` returned `{"status":"ok"}`/HTTP
+200 consistently (3 checks, no crash loop); `https://payroll-management-app-qa3x.onrender.com/`
+and `/login` both returned HTTP 200. Migration success inferred from the documented Start
+Command ordering (`migrate deploy` runs before the server starts — a failed migration
+would have prevented `/health` from ever returning 200) rather than directly confirmed via
+Render build logs (no dashboard/API access in this environment) — reported as indirect,
+not overstated. **Stronger, direct evidence the new frontend build is live**: the deployed
+`payroll-entry-page-*.js` and `salary-release-page-*.js` chunks were fetched and grepped
+for this checkpoint's own new strings — `"Needs Attention"` and `"blocked — needs
+attention"` were both found, present only because this exact code is now live. Full
+record, including the post-deployment safety-check note (no production data touched by
+this session; production DB access, if available to the user, may optionally be used to
+re-run both diagnostics and should show the same clean/expected results):
+`docs/SESSION_HANDOFF.md §22`.
+
+**Phase 7 remains Not Started; this checkpoint's deployment does not begin it.**
 
 ---
 
@@ -7501,15 +7520,14 @@ step completes. **Phase 7 remains Not Started; this checkpoint does not begin it
 ## 5. Exact next action for the next development session
 
 **Updated 2026-07-27 (latest) — Negative Payroll Recovery & Employee Identity/Banking
-Uniqueness Checkpoint: production preflight PASSED, pushing and deploying now.** See the
-dedicated checkpoint entry in §1 (immediately above §2) and `docs/SESSION_HANDOFF.md §22`
-for the full production-preflight result (0 employee-identifier duplicates; 3 historical
-negative-net legacy `PayrollEntry` rows found, explicitly not mutated, no automatic
-recovery created for them, deployment not blocked) and, once complete, the push/deploy/
-post-deploy-verification record. If a future session finds this note still current
-(push/deploy not yet reflected below), treat push/deploy as **not yet confirmed** and
-re-verify `origin/main`'s SHA before assuming this checkpoint is live. Phase 7 remains Not
-Started.
+Uniqueness Checkpoint: COMPLETE, COMMITTED, PUSHED, and DEPLOYED.** `origin/main` is at
+`192ce8b`; Render health/frontend checks all passed; the new frontend build confirmed live
+by direct chunk-content grep. See the dedicated checkpoint entry in §1 (immediately above
+§2) and `docs/SESSION_HANDOFF.md §22` for the full record — production preflight result (0
+employee-identifier duplicates; 3 historical negative-net legacy `PayrollEntry` rows
+found, explicitly not mutated, no automatic recovery created for them, deployment not
+blocked) and the full push/deploy/post-deploy-verification record. **This checkpoint is
+closed. Phase 7 remains Not Started — do not begin it without a separate go-ahead.**
 
 **Updated 2026-07-27 (superseded by the entry above for status purposes, kept for its own
 still-useful record) — Negative Payroll Recovery & Employee Identity/Banking Uniqueness
