@@ -78,7 +78,11 @@ describe('Phase 5 Checkpoint 1 — Finalize Payroll Cycle', () => {
     const res = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycleId}/entries`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ employeeId });
+      // Negative Payroll Recovery checkpoint (2026-07-26) — a default 0-work-day entry nets -400
+      // (the default 400 EOBI deduction) and correctly resolves to RECOVERY_DUE rather than
+      // releasing for payment; this suite is about Finalize mechanics, not net-salary sign, so
+      // every entry gets enough worked days to net positive by default.
+      .send({ employeeId, workLines: [{ days: '26' }] });
     if (res.status !== 201) throw new Error(`entry create failed: ${res.status} ${JSON.stringify(res.body)}`);
     return res.body.entry as { id: string; version: number };
   }

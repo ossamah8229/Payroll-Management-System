@@ -72,6 +72,7 @@ function makeEntry(
     released: true,
     releasedAt: new Date('2026-01-05T00:00:00Z'),
     releasedBy: 'user-1',
+    payoutOutcome: null,
     lateReason: null,
     remarks: null,
     sortOrder: 0,

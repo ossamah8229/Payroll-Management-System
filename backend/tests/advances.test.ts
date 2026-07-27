@@ -1,6 +1,7 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
+import { computeEntryCalc, type EntryWithWorkLines } from '../src/modules/payroll-entry/payroll-entry.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
@@ -68,6 +69,25 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
   }
 
   async function releaseUnit(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, cycleId: string, unitId: string) {
+    // Negative Payroll Recovery checkpoint (2026-07-26) — a heavy Advance/EID Advance deduction is
+    // exactly the kind of input that can legitimately push netSalary negative, which now correctly
+    // resolves to RECOVERY_DUE (no payment, no settlement) instead of releasing regardless of sign.
+    // This file's own tests are about Advance materialization/settlement mechanics, not net-salary
+    // sign, so any entry this Unit's sweep would otherwise touch gets just enough extra allowance
+    // to stay positive first — entries already positive are left untouched.
+    const candidates = await prisma.payrollEntry.findMany({
+      where: { cycleId, released: false, hold: false, payoutOutcome: null, workLines: { some: { unitId } } },
+      include: { workLines: true },
+    });
+    for (const entry of candidates) {
+      const calc = computeEntryCalc(entry as EntryWithWorkLines);
+      const net = Number(calc.netSalary);
+      if (net <= 0) {
+        const topUp = (Number(entry.allowance) + Math.abs(net) + 100).toFixed(2);
+        await prisma.payrollEntry.update({ where: { id: entry.id }, data: { allowance: topUp } });
+      }
+    }
+
     const res = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycleId}/units/${unitId}/release`)
       .set('x-csrf-token', admin.csrfToken)

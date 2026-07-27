@@ -7,6 +7,7 @@ import { prisma } from '../src/lib/prisma';
 import { storageProvider, resolveStorageRoot } from '../src/lib/storage';
 import * as payrollEntryExportService from '../src/modules/payroll-entry/payroll-entry-import-export.service';
 import { recoverStaleGeneratingBackupPackages } from '../src/modules/backup-packages/backup-packages.service';
+import { computeEntryCalc, type EntryWithWorkLines } from '../src/modules/payroll-entry/payroll-entry.service';
 import { cleanTestData, createAuthenticatedAgent, extractCookie } from './helpers';
 
 const app = createApp();
@@ -138,6 +139,23 @@ describe('Phase 5 Checkpoint 2 — Backup Packages', () => {
   }
 
   async function releaseUnit(admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>, cycleId: string, unitId: string) {
+    // Negative Payroll Recovery checkpoint (2026-07-26) — a default 0-work-day entry nets -400
+    // (the default 400 EOBI deduction) and correctly resolves to RECOVERY_DUE rather than
+    // releasing for payment; this suite is about Backup Package generation, not net-salary sign,
+    // so every entry this Unit's sweep would touch gets topped up to net positive first.
+    const candidates = await prisma.payrollEntry.findMany({
+      where: { cycleId, released: false, hold: false, payoutOutcome: null, workLines: { some: { unitId } } },
+      include: { workLines: true },
+    });
+    for (const entry of candidates) {
+      const calc = computeEntryCalc(entry as EntryWithWorkLines);
+      const net = Number(calc.netSalary);
+      if (net <= 0) {
+        const topUp = (Number(entry.allowance) + Math.abs(net) + 100).toFixed(2);
+        await prisma.payrollEntry.update({ where: { id: entry.id }, data: { allowance: topUp } });
+      }
+    }
+
     const res = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycleId}/units/${unitId}/release`)
       .set('x-csrf-token', admin.csrfToken)

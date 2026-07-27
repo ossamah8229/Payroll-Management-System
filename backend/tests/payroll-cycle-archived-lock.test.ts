@@ -103,6 +103,18 @@ describe('Phase 5 Checkpoint 4 — Archived Cycle Ordinary-Editing Lock', () => 
 
     const heldEntryBefore = await getEntry(admin, cycle.id, heldEmployee.id);
     await holdEntry(admin, heldEntryBefore.id, heldEntryBefore.version);
+
+    // Negative Payroll Recovery checkpoint (2026-07-26) — the auto-bootstrapped entry has 0 work
+    // days, netting -400 (the default 400 EOBI deduction), which now correctly resolves to
+    // RECOVERY_DUE rather than releasing for payment. This suite is about the Archived-cycle edit
+    // lock, not net-salary sign, so the entry expected to actually release is patched to a
+    // positive net salary first.
+    const releasedEntryBefore = await getEntry(admin, cycle.id, releasedEmployee.id);
+    await admin.agent
+      .patch(`/api/v1/payroll-entries/${releasedEntryBefore.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: releasedEntryBefore.version, eobiApplicable: false, allowance: '5000' });
+
     await releaseUnit(admin, cycle.id, unit.id); // releases the non-held entry only
 
     const finalized = await finalizeCycle(admin, cycle.id);

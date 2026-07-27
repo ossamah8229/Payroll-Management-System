@@ -148,6 +148,16 @@ describe('Phase 5 Checkpoint 3 — Cycle Archiving, Automatic Backup Generation,
     const { site, unit } = await makeSiteWithUnit(`Test Site Rollover ${month}`);
     const employee = await makeEmployee(site.id, unit.id, `Rollover Employee ${month}`);
     const cycle = await makeDraftCycle(admin, month);
+    // Negative Payroll Recovery checkpoint (2026-07-26) — the employee's entry is auto-bootstrapped
+    // by cycle creation with 0 work days, netting -400 (the default 400 EOBI deduction), which now
+    // correctly resolves to RECOVERY_DUE rather than releasing for payment. This suite is about
+    // rollover mechanics, not net-salary sign, so the auto-created entry is patched to a positive
+    // net salary before release.
+    const bootstrapped = await getEntry(admin, cycle.id, employee.id);
+    await admin.agent
+      .patch(`/api/v1/payroll-entries/${bootstrapped.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: bootstrapped.version, eobiApplicable: false, allowance: '5000' });
     await releaseUnit(admin, cycle.id, unit.id);
     const finalized = await finalizeCycle(admin, cycle.id);
     return { site, unit, employee, cycle: finalized };

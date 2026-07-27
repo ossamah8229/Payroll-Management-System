@@ -314,7 +314,7 @@ describe('Phase 6 Checkpoint 1 — Corrections & Balance Adjustments schema', ()
       include: { correction: true, employee: true, sourceCycle: true, adjustmentType: true },
     });
 
-    expect(adjustment.correction.id).toBe(correction.id);
+    expect(adjustment.correction!.id).toBe(correction.id);
     expect(adjustment.employee.id).toBe(employee.id);
     expect(adjustment.sourceCycle.id).toBe(cycle.id);
     expect(adjustment.status).toBe('PENDING');

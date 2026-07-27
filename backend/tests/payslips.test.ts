@@ -7,6 +7,7 @@ import * as payslipsService from '../src/modules/payslips/payslips.service';
 import { getPayslip, getPayslipsBulk } from '../src/modules/payslips/payslips.service';
 import { buildArchiveEntryName, slugify } from '../src/modules/payslips/payslips.routes';
 import { loadSessionUser } from '../src/modules/auth/auth.service';
+import { computeEntryCalc, type EntryWithWorkLines } from '../src/modules/payroll-entry/payroll-entry.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 /**
@@ -169,7 +170,11 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     const res = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycleId}/entries`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ employeeId });
+      // Negative Payroll Recovery checkpoint (2026-07-26) — a default 0-work-day entry nets -400
+      // (the default 400 EOBI deduction) and correctly resolves to RECOVERY_DUE rather than
+      // releasing for payment; this suite is about Payslip generation, not net-salary sign, so
+      // every entry gets enough worked days to net positive by default.
+      .send({ employeeId, workLines: [{ days: '26' }] });
     return res.body.entry as { id: string; version: number; workLines: { id: string; unitId: string }[] };
   }
 
@@ -178,6 +183,25 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     cycleId: string,
     unitId: string,
   ) {
+    // Negative Payroll Recovery checkpoint (2026-07-26) — a default 0-work-day entry (including
+    // one bootstrapped by cycle creation via `prisma.employee.createMany`, which never goes
+    // through this file's own `createEntry` helper) nets -400 and correctly resolves to
+    // RECOVERY_DUE rather than releasing for payment. This suite is about Payslip generation, not
+    // net-salary sign, so every entry this Unit's sweep would touch gets topped up to net
+    // positive first; entries already positive are left untouched.
+    const candidates = await prisma.payrollEntry.findMany({
+      where: { cycleId, released: false, hold: false, payoutOutcome: null, workLines: { some: { unitId } } },
+      include: { workLines: true },
+    });
+    for (const entry of candidates) {
+      const calc = computeEntryCalc(entry as EntryWithWorkLines);
+      const net = Number(calc.netSalary);
+      if (net <= 0) {
+        const topUp = (Number(entry.allowance) + Math.abs(net) + 100).toFixed(2);
+        await prisma.payrollEntry.update({ where: { id: entry.id }, data: { allowance: topUp } });
+      }
+    }
+
     const res = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycleId}/units/${unitId}/release`)
       .set('x-csrf-token', admin.csrfToken)

@@ -189,6 +189,18 @@ describe('Draft Payroll Roster Reconciliation', () => {
     const releasedEmployee = await makePreExistingEmployee(site.id, unit.id, { name: 'Released Employee' });
     const cycle = await makeDraftCycle(admin, 5);
 
+    // Negative Payroll Recovery checkpoint (2026-07-26) — the auto-bootstrapped entry has 0 work
+    // days, netting -400 (the default 400 EOBI deduction), which now correctly resolves to
+    // RECOVERY_DUE rather than releasing for payment. This test is about roster reconciliation,
+    // not net-salary sign, so the entry is patched to a positive net salary before release.
+    const bootstrapped = await prisma.payrollEntry.findFirstOrThrow({
+      where: { cycleId: cycle.id, employeeId: releasedEmployee.id },
+    });
+    await admin.agent
+      .patch(`/api/v1/payroll-entries/${bootstrapped.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: bootstrapped.version, eobiApplicable: false, allowance: '5000' });
+
     const releaseRes = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycle.id}/units/${unit.id}/release`)
       .set('x-csrf-token', admin.csrfToken)

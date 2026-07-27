@@ -83,7 +83,18 @@ export async function cleanTestData(): Promise<void> {
   await prisma.correctionPayment.deleteMany({
     where: { balanceAdjustment: { correction: { payrollEntry: { cycle: { year: { gte: 2900 } } } } } },
   });
-  await prisma.balanceAdjustment.deleteMany({ where: { correction: { payrollEntry: { cycle: { year: { gte: 2900 } } } } } });
+  // Negative Payroll Recovery checkpoint (2026-07-26) — a RECOVERY BalanceAdjustment can also
+  // originate directly from a negative-net PayrollEntry (`originPayrollEntryId`), not only from a
+  // Correction (`correctionId`) — both origins must be scoped here, or a negative-payroll-origin
+  // row survives this cleanup and blocks `payrollEntry.deleteMany` below via its own RESTRICT FK.
+  await prisma.balanceAdjustment.deleteMany({
+    where: {
+      OR: [
+        { correction: { payrollEntry: { cycle: { year: { gte: 2900 } } } } },
+        { originPayrollEntry: { cycle: { year: { gte: 2900 } } } },
+      ],
+    },
+  });
   await prisma.correctionRequest.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
   await prisma.correction.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
   await prisma.payrollEntry.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });

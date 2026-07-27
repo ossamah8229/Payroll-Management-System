@@ -76,7 +76,11 @@ describe('Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation', 
     const res = await admin.agent
       .post(`/api/v1/payroll-cycles/${cycleId}/entries`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ employeeId });
+      // Negative Payroll Recovery checkpoint (2026-07-26) — a default 0-work-day entry now nets
+      // -400 (0 earning, the default 400 EOBI deduction) and correctly resolves to RECOVERY_DUE
+      // rather than releasing for payment. This suite's tests are about release/lock mechanics,
+      // not net-salary sign, so every entry gets enough worked days to net positive by default.
+      .send({ employeeId, workLines: [{ days: '26' }] });
     return res.body.entry as { id: string; version: number; workLines: { id: string; unitId: string }[] };
   }
 
