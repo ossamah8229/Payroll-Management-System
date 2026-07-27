@@ -7091,31 +7091,44 @@ directly-related result was judged sufficient.
 `20260726120000_negative_payroll_recovery_schema` (the `payoutOutcome` enum/column, the
 `BalanceAdjustment` origin-XOR change) and
 `20260726121000_employee_account_iban_canonical_uniqueness` (the two shadow columns and
-their partial unique indexes). **The second migration is the one remaining deployment
-blocker**: its `CREATE UNIQUE INDEX` statements are self-guarding (they fail outright,
-rolling back the whole migration, if a canonical-level duplicate already exists in
-production), but per explicit instruction this checkpoint does not rely on "fails safely"
-alone — a read-only preflight script,
-`backend/scripts/find-employee-identifier-duplicates.ts`, must be run against production
-and confirmed clean (0 duplicate Employee Codes, 0 duplicate CNICs, 0 duplicate canonical
-Account Numbers, 0 duplicate canonical IBANs) **before this repository is pushed to
-`origin/main`** (Render auto-deploys from that branch). No production database access
-exists in this environment, so that run is a separate operator action. A second, non-
-blocking read-only diagnostic, `backend/scripts/find-negative-released-entries.ts`,
-reports any pre-existing `released = true` row with a negative net salary, for manual
-finance reconciliation — Bank Sheets/Cash Receiving are derived-only and never stored, so
-it cannot determine whether such a row was ever actually paid out; that remains a human
-judgment call, not something this checkpoint's code can resolve. **No production data was
-read, mutated, or otherwise touched by this checkpoint.**
+their partial unique indexes).
 
-**Commits (local `main`, in order, none pushed):** `6760e83` (shared banking
-normalization helpers), `f79f564` (payout outcomes + recovery accounting, migration
-`20260726120000`), `b8e0b54` (employee identifier uniqueness, migration `20260726121000`),
-`d5d2e9f` (release-readiness/Needs Attention), `9e0c5e2` (tests), `2f15000` (read-only
-diagnostic scripts), plus this documentation commit. See `docs/SESSION_HANDOFF.md` §21
-for the full local-commit report (HEAD, ahead-of-`origin/main` count, working-tree status,
-production-preflight procedure). **Phase 7 remains Not Started; this checkpoint does not
-begin it.**
+**Production preflight — PASSED, 2026-07-27.** `backend/scripts/find-employee-identifier-duplicates.ts`
+ran against production (6 `Employee` rows) and reported **0 duplicate Employee Codes, 0
+duplicate CNICs, 0 duplicate canonical Account Numbers, 0 duplicate canonical IBANs** —
+the uniqueness migration is cleared from the duplicate-data perspective and no longer
+blocks deployment. Running this diagnostic first surfaced a real pre-migration
+compatibility bug in the *second* script (`find-negative-released-entries.ts`): it used an
+implicit full-column select, which asked the (not-yet-migrated) production database for
+`PayrollEntry.payoutOutcome` and failed with `P2022`. Fixed with an explicit
+`PRE_MIGRATION_SAFE_PAYROLL_ENTRY_SELECT` excluding that column (verified against a
+disposable local database in both the pre- and post-migration state, plus a dedicated
+regression test) — see `docs/SESSION_HANDOFF.md §22` for the full fix record. Committed
+standalone as `bc14ec3`, no schema/migration/application-behavior change.
+
+**Historical negative released payroll — 3 legacy rows found, 2026-07-27.** The corrected
+diagnostic then ran against production and found exactly 3 historical `released = true`
+`PayrollEntry` rows with a negative calculated Net Salary, all Cycle 2026-07, all with
+every touched Unit already carrying its own `PayrollUnitRelease` row: **Adil Masih
+(-400.00), Asim Khan (-400.00), Ameen Shah (-400.00) — total 1,200.00.** These are legacy
+records created before this checkpoint's negative-payroll-recovery architecture existed.
+**Explicit decision: these 3 historical `PayrollEntry` rows are NOT mutated by this
+checkpoint or its deployment; no `BalanceAdjustment`/recovery is automatically created for
+any of them.** Whether PKR 400 is genuinely receivable from each employee is an open
+manual finance reconciliation question the database alone cannot answer — Bank Sheet/Cash
+Receiving are derived-on-demand and never persisted, so there is no stored record of
+whether these amounts were ever actually paid out. **This finding does not block
+deployment** — the new architecture governs future releases only; it takes no retroactive
+action on data that predates it. Full record: `docs/SESSION_HANDOFF.md §22`.
+
+**Commits (local `main`, in order):** `6760e83` (shared banking normalization helpers),
+`f79f564` (payout outcomes + recovery accounting, migration `20260726120000`), `b8e0b54`
+(employee identifier uniqueness, migration `20260726121000`), `d5d2e9f`
+(release-readiness/Needs Attention), `9e0c5e2` (tests), `2f15000` (read-only diagnostic
+scripts), `e9769b6` (documentation), `bc14ec3` (pre-migration diagnostic-script fix), plus
+this documentation commit recording the production preflight outcome. See
+`docs/SESSION_HANDOFF.md §22` for the full record and the push/deploy outcome once that
+step completes. **Phase 7 remains Not Started; this checkpoint does not begin it.**
 
 ---
 
@@ -7444,9 +7457,10 @@ begin it.**
     still-Draft entry, reusing the existing Correction-adjacent materialization/settlement machinery
     rather than a new ledger. A carried-forward recovery larger than a future cycle's own earnings is
     proven, with a dedicated conservation-invariant test, to never double-count into a second
-    recovery. **Deployment of the accompanying Employee identifier-uniqueness migration
-    (`20260726121000_employee_account_iban_canonical_uniqueness`) remains blocked on a production
-    duplicate preflight — see §1's own entry and `docs/SESSION_HANDOFF.md` §21.**
+    recovery. **The accompanying Employee identifier-uniqueness migration
+    (`20260726121000_employee_account_iban_canonical_uniqueness`) cleared its production duplicate
+    preflight 2026-07-27 (0 duplicates across all four fields) — see §1's own entry and
+    `docs/SESSION_HANDOFF.md` §22.**
 
 ---
 
@@ -7475,33 +7489,34 @@ begin it.**
   This is the single condition keeping Phase 4 from being marked fully closed (§1's "Phase 4
   close-out review," §2's Phase 4 row). Must be closed with a real deploy (or genuine Linux
   container) smoke test — a further local run does not satisfy it.
-- **Production duplicate preflight — OUTSTANDING, blocks pushing this checkpoint (added
-  2026-07-27, Negative Payroll Recovery & Employee Identity/Banking Uniqueness checkpoint, §1's own
-  entry).** Migration `20260726121000_employee_account_iban_canonical_uniqueness` adds partial
-  unique indexes on Employee `accountNumberCanonical`/`ibanCanonical`. It is self-guarding (fails
-  and rolls back if a canonical duplicate already exists), but per explicit instruction that is not
-  relied on alone: `backend/scripts/find-employee-identifier-duplicates.ts` (read-only) must be run
-  against production and confirmed clean (0 duplicates across all four identifier fields) before
-  this repository is pushed to `origin/main` — Render auto-deploys from that branch. No production
-  database access exists in this environment; this is a separate operator action. See
-  `docs/SESSION_HANDOFF.md` §21 for the exact procedure.
+- **Production duplicate preflight — PASSED 2026-07-27, no longer a blocker.** Migration
+  `20260726121000_employee_account_iban_canonical_uniqueness` adds partial unique indexes on
+  Employee `accountNumberCanonical`/`ibanCanonical`. `backend/scripts/find-employee-identifier-duplicates.ts`
+  ran against production (6 `Employee` rows) and reported 0 duplicates across all four identifier
+  fields — see §1's own checkpoint entry and `docs/SESSION_HANDOFF.md §22` for the full result and
+  the (unrelated, non-blocking) historical-negative-payroll finding that same pass surfaced.
 
 ---
 
 ## 5. Exact next action for the next development session
 
 **Updated 2026-07-27 (latest) — Negative Payroll Recovery & Employee Identity/Banking
-Uniqueness Checkpoint: COMPLETE, COMMITTED LOCALLY on `main` (6 commits,
-`6760e83`..`2f15000`), NOT pushed, NOT deployed.** See the dedicated "Negative Payroll
-Recovery & Employee Identity/Banking Uniqueness Checkpoint" entry in §1 (immediately
-above §2) for the full record and `docs/SESSION_HANDOFF.md` §21 for the exact
-local-commit report and production-preflight procedure. **The next development session's
-first action, before anything else touches `main`, is: get someone with production
-database access to run `backend/scripts/find-employee-identifier-duplicates.ts` against
-production and confirm 0 duplicates across Employee Code/CNIC/canonical Account
-Number/canonical IBAN — only then push `main` to `origin/main`.** Until that preflight
-passes, do not push, do not deploy, do not run `prisma migrate deploy` against
-production. Phase 7 remains Not Started.
+Uniqueness Checkpoint: production preflight PASSED, pushing and deploying now.** See the
+dedicated checkpoint entry in §1 (immediately above §2) and `docs/SESSION_HANDOFF.md §22`
+for the full production-preflight result (0 employee-identifier duplicates; 3 historical
+negative-net legacy `PayrollEntry` rows found, explicitly not mutated, no automatic
+recovery created for them, deployment not blocked) and, once complete, the push/deploy/
+post-deploy-verification record. If a future session finds this note still current
+(push/deploy not yet reflected below), treat push/deploy as **not yet confirmed** and
+re-verify `origin/main`'s SHA before assuming this checkpoint is live. Phase 7 remains Not
+Started.
+
+**Updated 2026-07-27 (superseded by the entry above for status purposes, kept for its own
+still-useful record) — Negative Payroll Recovery & Employee Identity/Banking Uniqueness
+Checkpoint: COMPLETE, COMMITTED LOCALLY on `main` (6 commits, `6760e83`..`2f15000`), NOT
+pushed, NOT deployed, awaiting the production preflight.** See `docs/SESSION_HANDOFF.md
+§21` for the local-commit report and production-preflight procedure as they stood before
+the preflight actually ran.
 
 **Updated 2026-07-26 (superseded by the entry above for status purposes, kept for its own
 still-useful record) — Employee Import Template Post-deployment UAT

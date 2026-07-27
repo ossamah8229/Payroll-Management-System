@@ -2598,3 +2598,132 @@ historical record of what was actually paid).
 session. Do not push `main` to `origin/main` until the first script above has been run against
 production and confirmed clean. Phase 7 remains Not Started; this checkpoint does not begin it.**
 
+**Superseded for status purposes by §22 below** — the production preflight described above as
+outstanding has since run and passed; §22 has the actual results and a diagnostic-script fix this
+addendum's own procedure surfaced.
+
+## 22. Addendum, 2026-07-27 (latest) — Production Preflight Results, Diagnostic Fix, and Push/Deploy
+Record
+
+Full architecture record: §21 above and `docs/PROJECT_PROGRESS.md` §1's own dated entry. This
+addendum is the actual production-preflight-outcome record, the pre-migration diagnostic-script fix
+that outcome surfaced, and (once Steps 5–7 below complete) the push/deploy/post-deploy-verification
+record.
+
+### Diagnostic-script fix: `find-negative-released-entries.ts` pre-migration compatibility
+
+Running the second (non-blocking) diagnostic against production — still pre-migration, since it must
+run before that deploy — failed with `P2022: PayrollEntry.payoutOutcome does not exist`. Root cause:
+the script used an implicit full-column `include`, and the locally generated Prisma Client (built
+from the *current* `schema.prisma`, which already declares `payoutOutcome`) asked Postgres for that
+column regardless of the target database's actual migration state. Fixed with an explicit
+`PRE_MIGRATION_SAFE_PAYROLL_ENTRY_SELECT` (`find-negative-released-entries.ts`) — every `PayrollEntry`
+column that predates migration `20260726120000_negative_payroll_recovery_schema`, `payoutOutcome`
+deliberately excluded, so the generated SQL never references it on either schema state.
+`computeEntryCalc`/`calcNet` never read `payoutOutcome` (confirmed by direct inspection of every field
+each one touches — 11 `PayrollEntry` scalars, 5 `PayrollEntryWorkLine` scalars, none of them this
+migration's column), so a local `payoutOutcome: null` placeholder satisfies the function's full-entry
+input type without touching any real financial field. Verified against a disposable local database
+built by applying every migration except the last two, then again with both applied — identical
+output. New regression test, `find-negative-released-entries-script.test.ts` (3 tests): asserts the
+select never reintroduces `payoutOutcome`, contains every field the calculation needs, and produces
+the exact same `netSalary` as an unrestricted fetch. Both diagnostic scripts re-confirmed read-only.
+Committed as `bc14ec3`, standalone, no schema/migration/application-behavior change.
+
+### Production preflight — RESULT 1: Employee identifier duplicates — PASS
+
+Production contains 6 `Employee` rows. `find-employee-identifier-duplicates.ts` reported:
+- Employee Code: **0 duplicates**
+- CNIC: **0 duplicates**
+- canonical Account Number: **0 duplicates**
+- canonical IBAN: **0 duplicates**
+
+**The employee identifier uniqueness migration (`20260726121000_employee_account_iban_canonical_uniqueness`)
+is cleared from the duplicate-data perspective and no longer blocks deployment.**
+
+### Production preflight — RESULT 2: historical negative released payroll — 3 legacy rows found
+
+`find-negative-released-entries.ts` (post-fix) found exactly 3 historical `released = true`
+`PayrollEntry` rows with a negative calculated Net Salary, all Cycle 2026-07, all with every touched
+Unit already carrying its own `PayrollUnitRelease` row:
+
+| Employee | Net Salary | releasedAt |
+|---|---|---|
+| Adil Masih | -400.00 | 2026-07-25T12:37:39.688Z |
+| Asim Khan | -400.00 | 2026-07-25T18:55:10.602Z |
+| Ameen Shah | -400.00 | 2026-07-25T18:55:10.602Z |
+
+**Total historical negative amount: 1,200.00.**
+
+**Explicit accounting decision (recorded here as the authoritative record of this decision, made by
+the user, not inferred):**
+- These are **legacy records created before the negative-payroll-recovery architecture existed** —
+  the exact accepted-gap scenario `docs/PROJECT_PROGRESS.md` §1's own checkpoint entry and this
+  addendum's §21 both already flagged as a possibility, now confirmed to exist.
+- **These 3 historical `PayrollEntry` rows must NOT be mutated** — no field on any of them is
+  changed by this checkpoint or its deployment, preserving audit integrity for records created under
+  the old application behavior.
+- **No `BalanceAdjustment`/recovery is automatically created for any of these 3 employees.** The new
+  architecture's recovery-creation path (`createNegativePayrollRecoveryAdjustment`) only ever fires
+  at the moment `releaseProjectUnit` itself resolves a still-Draft entry — it has no retroactive
+  sweep over already-released historical rows, and none was added for this finding.
+- **Whether PKR 400 is genuinely receivable from each of these 3 employees is an open manual finance
+  reconciliation question**, not something resolvable from the database alone — the diagnostic
+  correctly cannot determine whether these amounts were ever actually paid out, since Bank
+  Sheet/Cash Receiving are derived-on-demand and never persisted, so there is no stored record of
+  what any historical sheet actually contained.
+- **This finding does NOT block deployment.** The new architecture governs *future* releases only —
+  it structurally prevents a *new* negative-net entry from ever being paid or silently
+  double-counted; it makes no claim about, and takes no action on, data that predates it.
+
+### Migration/architecture final review (Step 3)
+
+Both new migrations remain exactly `20260726120000_negative_payroll_recovery_schema` and
+`20260726121000_employee_account_iban_canonical_uniqueness`, in that order, with no other new
+migration folder present. Migration SQL re-read in full immediately before push: the
+`accountNumberCanonical`/`ibanCanonical` backfill `UPDATE` statements
+(`NULLIF(regexp_replace(upper("accountNumber"), '[^A-Z0-9]', '', 'g'), '')` /
+`NULLIF(regexp_replace(upper("iban"), '[^A-Z0-9]', '', 'g'), '')`) use the exact same semantics as
+`shared/src/lib/banking.ts`'s `normalizeAccountNumber`/`normalizeIban` (uppercase, strip everything
+but `[A-Z0-9]` for Account Number / strip whitespace only for IBAN, never numeric coercion) — the
+migration's one-time backfill and the application's ongoing write path can never compute a different
+canonical value for the same input. `employeeCode`/`cnic` uniqueness is unchanged by either new
+migration — still the pre-existing partial unique indexes, still case-sensitive for `employeeCode`,
+**not touched by this checkpoint**, per explicit instruction.
+
+Architecture guarantees reconfirmed against the actual code (not merely restated) immediately before
+push:
+1. `netSalary < 0` can never become a payable amount — `releaseProjectUnit` only sets `released =
+   true` for `netSalary > 0` (`computeReleaseRecoveryAdjustment`'s adjusted figure).
+2. The negative amount is represented through `BalanceAdjustment(type: RECOVERY,
+   originPayrollEntryId: ...)`, reusing the existing materialization/settlement lifecycle.
+3. `netSalary = 0` → `payoutOutcome = NO_PAY_DUE`.
+4. `netSalary > 0` and otherwise eligible → `released = true` (paid).
+5. Bank Sheet excludes non-positive payouts (`bank-sheets.service.ts`'s `netSalary > 0` filter).
+6. Cash Receiving excludes non-positive payouts (`cash-receiving.service.ts`, same filter).
+7. Release readiness (`evaluatePayrollEntryReleaseReadiness`) blocks duplicate CNIC/Employee
+   Code/Account Number/IBAN and missing-Account-Number-for-a-bank-employee.
+8. Payroll Entry surfaces "Needs Attention" pre-release via the same canonical
+   `releaseBlockReasons`, no duplicated frontend logic.
+9. Salary Release reports `blockedEntries` (employee + reasons), not just a bare count.
+10. A carried-forward recovery cannot double-count — proven for all three
+    `computeReleaseRecoveryAdjustment` cases, including Case 3, with a conservation-invariant test.
+11. Historical Released/Archived records are not rewritten by this deployment — neither migration's
+    SQL touches `PayrollEntry.released`/`.netSalary`-affecting columns for existing rows, and no
+    application code path retroactively processes already-released entries.
+
+Employee identifier uniqueness confirmed to apply consistently across manual creation, manual
+editing, reactivation, import, and the database's own partial unique indexes — all four routed
+through the same `assertNoDuplicateEmployeeIdentifiers` pre-write check and the same
+`accountNumberCanonical`/`ibanCanonical` columns.
+
+### Steps 4–7 (tests, push, deploy, post-deploy verification)
+
+See `docs/PROJECT_PROGRESS.md` §1's own entry (this same checkpoint) for the exact tests run this
+final pass, the push outcome (local/`origin/main` SHAs), the Render deployment verification, and the
+post-deployment diagnostic re-run result (if production access allowed it) — recorded there to keep
+this addendum from needing a further edit after the fact, consistent with how prior push/deploy
+records in this file are kept append-only via a new dated line rather than rewritten.
+
+**Phase 7 remains Not Started.**
+
