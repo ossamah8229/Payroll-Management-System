@@ -299,11 +299,22 @@ model Employee {
   bankId                String?   @db.Uuid
   branchCode            String?   @db.VarChar(20)
   accountNumber         String?   @db.VarChar(40)
+  /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** `normalizeAccountNumber(accountNumber)`
+  /// (shared/src/lib/banking.ts) — uppercased, non-alphanumeric characters stripped. App-maintained
+  /// (not a Postgres `GENERATED` column, matching this schema's existing derived-column convention,
+  /// e.g. `correctionBalancePayable`) — set by the single write path every create/update/import
+  /// flow shares (`employees.service.ts`). Never displayed; exists solely so a partial unique index
+  /// (raw SQL, `docs/architecture/database/employee.md §9`) can enforce uniqueness on the *canonical*
+  /// account number while `accountNumber` itself keeps whatever formatting was entered.
+  accountNumberCanonical String?  @db.VarChar(40)
   /// **Added Phase 4 banking refinement (2026-07-11).** Optional; stored trimmed and uppercase.
   /// Replaces `accountTitle` (removed the same pass) — the account holder is now always the
   /// employee's own legal `name`, never a separately entered/stored string. VARCHAR(34) is the
   /// ISO 13616 international maximum (a Pakistani IBAN is 24 characters).
   iban                  String?   @db.VarChar(34)
+  /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** `normalizeIban(iban)` — same
+  /// convention as `accountNumberCanonical` immediately above.
+  ibanCanonical         String?   @db.VarChar(34)
   defaultEobiAmount     Decimal   @default(400.00) @db.Decimal(10, 2)
   defaultEobiApplicable Boolean   @default(true)
   createdAt             DateTime  @default(now()) @db.Timestamptz(6)
@@ -322,7 +333,8 @@ model Employee {
 
   // Partial unique indexes (WHERE ... IS NOT NULL) and the CNIC numeric-pattern check constraint
   // are not expressible via Prisma's schema DSL — both are added by raw SQL in the migration
-  // (docs/architecture/database/employee.md §9).
+  // (docs/architecture/database/employee.md §9). Negative Payroll Recovery checkpoint (2026-07-26)
+  // adds two more partial unique indexes the same way, on accountNumberCanonical/ibanCanonical.
   @@index([siteId])
   @@index([unitId])
   @@index([bankId])

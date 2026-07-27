@@ -6,6 +6,9 @@ import {
   EMPLOYEE_GROSS_PAY_MAX,
   formatDate,
   isoDateToUtcDate,
+  normalizeAccountNumber,
+  normalizeCnic,
+  normalizeIban,
   PAY_TYPE_LABELS,
   PAY_TYPE_VALUES,
   pluralize,
@@ -30,9 +33,11 @@ import {
   type ImportRowError,
 } from '../../common/import-export';
 import {
+  assertNoDuplicateEmployeeIdentifiers,
   assertUnitBelongsToSite,
   findEmployeeByCnic,
   listEmployees,
+  mapEmployeeUniqueViolation,
   reactivateEmployee,
   recordEmployeeTransfer,
   type RequestMeta,
@@ -829,6 +834,72 @@ function resolveRowUnit(
 }
 
 /**
+ * The identity a row resolves to for "is this an update to an already-seen row in this same
+ * file" purposes — CNIC first, Employee Code fallback, exactly mirroring `importEmployees`' own
+ * `existing` lookup below. Two rows with no identity information in common (e.g. neither has a
+ * CNIC and their codes differ) each get a unique, row-scoped key that can never collide with
+ * another row's.
+ */
+function identityKeyForRow(row: ParsedRow): string {
+  const cnic = normalizeCnic(row.cells['CNIC'] || '');
+  if (cnic) return `cnic:${cnic}`;
+  const code = (row.cells['Employee Number/Code'] || '').trim();
+  if (code) return `code:${code}`;
+  return `row:${row.rowNumber}`;
+}
+
+/**
+ * Employee Identifier Uniqueness checkpoint (2026-07-26, Part B5) — an in-memory pre-scan over the
+ * whole parsed workbook, run before any database write, for Employee Code/Account Number/IBAN.
+ *
+ * A "duplicate" here is deliberately narrower than "same value on two rows": two rows sharing a
+ * CNIC (or, lacking one, the same Employee Code) resolve to the *same* identity, and
+ * `importEmployees` already treats that as a legitimate create-then-update of one person — an
+ * already-tested product rule (`employees-import-export.test.ts`), not something this checkpoint
+ * may regress. So a value is only flagged when it's claimed by rows that resolve to *different*
+ * identities — two rows genuinely claiming to be different people, yet sharing an Employee
+ * Code/Account Number/IBAN that must be unique per person. CNIC itself is deliberately not
+ * pre-scanned here: since CNIC *is* the identity key, two rows sharing one can never resolve to
+ * different identities by construction — that case is exactly the existing create-then-update
+ * path, never a conflict (canonical-formatting CNIC collisions are still caught by the per-row
+ * `findEmployeeByCnic` lookup below, same as before this checkpoint).
+ */
+function detectWorkbookDuplicates(rows: ParsedRow[]): Map<number, string[]> {
+  const errorsByRow = new Map<number, string[]>();
+
+  function scanField(fieldLabel: string, getValue: (row: ParsedRow) => string | null) {
+    const rowsByValue = new Map<string, ParsedRow[]>();
+    for (const row of rows) {
+      const value = getValue(row);
+      if (!value) continue;
+      const list = rowsByValue.get(value) ?? [];
+      list.push(row);
+      rowsByValue.set(value, list);
+    }
+
+    for (const rowsForValue of rowsByValue.values()) {
+      if (rowsForValue.length < 2) continue;
+      const distinctIdentities = new Set(rowsForValue.map(identityKeyForRow));
+      if (distinctIdentities.size <= 1) continue;
+
+      const rowNumbers = rowsForValue.map((r) => r.rowNumber);
+      const message = `${fieldLabel}: duplicate value appears on rows ${rowNumbers.join(', ')} of this import`;
+      for (const row of rowsForValue) {
+        const list = errorsByRow.get(row.rowNumber) ?? [];
+        list.push(message);
+        errorsByRow.set(row.rowNumber, list);
+      }
+    }
+  }
+
+  scanField('Employee Number/Code', (row) => (row.cells['Employee Number/Code'] || '').trim() || null);
+  scanField('Account Number', (row) => normalizeAccountNumber(row.cells['Account Number'] || ''));
+  scanField('IBAN', (row) => normalizeIban(row.cells['IBAN'] || ''));
+
+  return errorsByRow;
+}
+
+/**
  * Imports parsed rows: matches an existing employee by CNIC first, then employee code, otherwise
  * creates a new one. Each row is validated and applied independently — one bad row is skipped and
  * reported, never a whole-file failure (per docs/IMPLEMENTATION_PLAN.md Phase 2 testing strategy,
@@ -863,7 +934,18 @@ export async function importEmployees(
   let updated = 0;
   const skipped: ImportRowError[] = [];
 
+  // Employee Identifier Uniqueness checkpoint (2026-07-26, Part B5) — a flagged row is skipped
+  // before any per-row processing runs at all, same row-atomic contract as every other rejection
+  // below (this row never applies; every other row in the file still does).
+  const workbookDuplicates = detectWorkbookDuplicates(rows);
+
   for (const row of rows) {
+    const duplicateReasons = workbookDuplicates.get(row.rowNumber);
+    if (duplicateReasons) {
+      skipped.push({ row: row.rowNumber, reason: duplicateReasons.join('; ') });
+      continue;
+    }
+
     try {
       const projectName = row.cells['Project']!.toLowerCase();
       const site = siteByName.get(projectName);
@@ -926,6 +1008,12 @@ export async function importEmployees(
         dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
         dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
         dateOfLeaving: isoDateToUtcDate(dateOfLeaving),
+        // Employee Identifier Uniqueness checkpoint (2026-07-26) — this importer writes via raw
+        // `tx.employee.create`/`update` rather than `employees.service.ts`'s create/update
+        // functions, so the canonical shadow columns have to be set here directly, the same
+        // normalizeAccountNumber/normalizeIban this whole checkpoint standardizes on.
+        accountNumberCanonical: normalizeAccountNumber(input.accountNumber),
+        ibanCanonical: normalizeIban(input.iban),
       };
 
       // Validation layer 2: the same shared service-layer assertion the ordinary create/update
@@ -942,6 +1030,21 @@ export async function importEmployees(
         : input.employeeCode
           ? await prisma.employee.findFirst({ where: { employeeCode: input.employeeCode } })
           : null;
+
+      // Employee Identifier Uniqueness checkpoint (2026-07-26, Part B5) — the same pre-write check
+      // manual create/update/reactivate use (`employees.service.ts`), so this row is rejected with
+      // a clear field-specific reason before any database write, rather than surfacing a raw
+      // constraint violation. `excludeEmployeeId: existing?.id` lets an update row (or a rehire)
+      // keep its own current value without conflicting with itself.
+      await assertNoDuplicateEmployeeIdentifiers(
+        {
+          employeeCode: input.employeeCode,
+          cnic: input.cnic,
+          accountNumber: input.accountNumber,
+          iban: input.iban,
+        },
+        { excludeEmployeeId: existing?.id },
+      );
 
       if (existing) {
         assertSiteAccess(currentUser, existing.siteId);
@@ -994,7 +1097,14 @@ export async function importEmployees(
         created += 1;
       }
     } catch (error) {
-      skipped.push({ row: row.rowNumber, reason: formatImportValidationError(error, SCHEMA_FIELD_TO_COLUMN) });
+      // Race-condition backstop (B6): two rows in the same file (or a concurrent request) could
+      // both pass the pre-write check above before either commits — map that back to the same
+      // friendly message rather than a raw Prisma P2002 index name.
+      const mappedUniqueViolation = mapEmployeeUniqueViolation(error);
+      skipped.push({
+        row: row.rowNumber,
+        reason: mappedUniqueViolation ? mappedUniqueViolation.message : formatImportValidationError(error, SCHEMA_FIELD_TO_COLUMN),
+      });
     }
   }
 

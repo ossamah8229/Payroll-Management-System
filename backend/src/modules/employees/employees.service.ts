@@ -5,9 +5,16 @@ import type {
   SessionUser,
   UpdateEmployeeInput,
 } from '@payroll/shared';
-import { isoDateToUtcDate, normalizeCnic, toIsoDateOnly } from '@payroll/shared';
+import {
+  isoDateToUtcDate,
+  normalizeAccountNumber,
+  normalizeCnic,
+  normalizeIban,
+  toIsoDateOnly,
+} from '@payroll/shared';
+import { Prisma as PrismaRuntime } from '@prisma/client';
 import { prisma, type PrismaTransactionClient } from '../../lib/prisma';
-import { badRequest, notFound } from '../../common/http-error';
+import { badRequest, conflict, notFound } from '../../common/http-error';
 import { diffFields, omitKeys, type JsonPrimitive } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
@@ -129,6 +136,142 @@ export async function checkCnicAvailability(
   };
 }
 
+/**
+ * Same convention as `findEmployeeByCnic` (above), for `employeeCode` — the single lookup
+ * implementation every uniqueness check against this field goes through (Negative Payroll
+ * Recovery / Employee Identifier Uniqueness checkpoint, 2026-07-26). Trims the same way
+ * `createEmployeeSchema`/`updateEmployeeSchema` do; a blank/whitespace-only code never matches
+ * anything (an employee without a code is never "duplicate" against another employee without one).
+ */
+export async function findEmployeeByEmployeeCode(
+  rawCode: string,
+  options: { excludeEmployeeId?: string; client?: PrismaTransactionClient } = {},
+) {
+  const trimmed = rawCode.trim();
+  if (!trimmed) return null;
+  const client = options.client ?? prisma;
+  return client.employee.findFirst({
+    where: {
+      employeeCode: trimmed,
+      ...(options.excludeEmployeeId ? { id: { not: options.excludeEmployeeId } } : {}),
+    },
+    include: { site: true },
+  });
+}
+
+/**
+ * Canonical-comparison lookup for `accountNumber` (Negative Payroll Recovery / Employee Identifier
+ * Uniqueness checkpoint, 2026-07-26) — normalizes via `normalizeAccountNumber`
+ * (shared/src/lib/banking.ts) and queries the `accountNumberCanonical` shadow column, the same
+ * column the partial unique index (`Employee_accountNumberCanonical_key`) is built on. A Cash
+ * employee's `null` account number never matches anything, same as CNIC's null-handling.
+ */
+export async function findEmployeeByAccountNumber(
+  rawAccountNumber: string,
+  options: { excludeEmployeeId?: string; client?: PrismaTransactionClient } = {},
+) {
+  const normalized = normalizeAccountNumber(rawAccountNumber);
+  if (!normalized) return null;
+  const client = options.client ?? prisma;
+  return client.employee.findFirst({
+    where: {
+      accountNumberCanonical: normalized,
+      ...(options.excludeEmployeeId ? { id: { not: options.excludeEmployeeId } } : {}),
+    },
+    include: { site: true },
+  });
+}
+
+/** Same as `findEmployeeByAccountNumber`, for `iban`/`ibanCanonical`. */
+export async function findEmployeeByIban(
+  rawIban: string,
+  options: { excludeEmployeeId?: string; client?: PrismaTransactionClient } = {},
+) {
+  const normalized = normalizeIban(rawIban);
+  if (!normalized) return null;
+  const client = options.client ?? prisma;
+  return client.employee.findFirst({
+    where: {
+      ibanCanonical: normalized,
+      ...(options.excludeEmployeeId ? { id: { not: options.excludeEmployeeId } } : {}),
+    },
+    include: { site: true },
+  });
+}
+
+/**
+ * The single pre-write duplicate check every Employee create/update/reactivate/import path calls
+ * before touching the database (B4/B5 of the Negative Payroll Recovery / Employee Identifier
+ * Uniqueness checkpoint) — rejects immediately with a field-specific message, rather than waiting
+ * for a database constraint violation. Never reveals the other employee's own CNIC/account/IBAN —
+ * only that the *submitted* value collides. `excludeEmployeeId` lets an edit compare against every
+ * other employee without ever conflicting with its own current value (B4's "editing an employee
+ * without changing own identifier" rule).
+ */
+export async function assertNoDuplicateEmployeeIdentifiers(
+  values: {
+    employeeCode?: string | null;
+    cnic?: string | null;
+    accountNumber?: string | null;
+    iban?: string | null;
+  },
+  options: { excludeEmployeeId?: string; client?: PrismaTransactionClient } = {},
+): Promise<void> {
+  if (values.employeeCode) {
+    const dup = await findEmployeeByEmployeeCode(values.employeeCode, options);
+    if (dup) {
+      throw conflict(`Employee Code: "${values.employeeCode}" is already assigned to another employee.`);
+    }
+  }
+  if (values.cnic) {
+    const dup = await findEmployeeByCnic(values.cnic, options);
+    if (dup) {
+      throw conflict(`CNIC: "${values.cnic}" is already assigned to another employee.`);
+    }
+  }
+  if (values.accountNumber) {
+    const dup = await findEmployeeByAccountNumber(values.accountNumber, options);
+    if (dup) {
+      throw conflict('Account Number: this bank account is already assigned to another employee.');
+    }
+  }
+  if (values.iban) {
+    const dup = await findEmployeeByIban(values.iban, options);
+    if (dup) {
+      throw conflict('IBAN: this IBAN is already assigned to another employee.');
+    }
+  }
+}
+
+/** Maps the four Employee unique-index names to the same friendly, field-specific messages
+ * `assertNoDuplicateEmployeeIdentifiers` throws — the race-condition backstop for the (rare) case
+ * two concurrent requests both pass the pre-write check before either commits. Never lets a raw
+ * Prisma P2002/index name reach the client (B6's "don't leak raw P2002 messages"). Returns `null`
+ * (letting the caller rethrow the original error) for anything that isn't one of these four known
+ * constraints, so an unrelated P2002 still falls through to the generic error-handler.
+ */
+export function mapEmployeeUniqueViolation(error: unknown): ReturnType<typeof conflict> | null {
+  if (!(error instanceof PrismaRuntime.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return null;
+  }
+  const target = (error.meta?.target as string | string[] | undefined) ?? '';
+  const targetStr = Array.isArray(target) ? target.join(',') : String(target);
+
+  if (targetStr.includes('employeeCode')) {
+    return conflict('Employee Code: this Employee Code is already assigned to another employee.');
+  }
+  if (targetStr.includes('cnic')) {
+    return conflict('CNIC: this CNIC is already assigned to another employee.');
+  }
+  if (targetStr.includes('accountNumberCanonical')) {
+    return conflict('Account Number: this bank account is already assigned to another employee.');
+  }
+  if (targetStr.includes('ibanCanonical')) {
+    return conflict('IBAN: this IBAN is already assigned to another employee.');
+  }
+  return null;
+}
+
 export interface ListEmployeesFilters {
   siteIds?: string[];
   activeOnly?: boolean;
@@ -198,35 +341,59 @@ export async function createEmployee(
   assertSiteAccess(currentUser, input.siteId);
   await assertUnitBelongsToSite(input.unitId, input.siteId);
 
+  // A cash employee (no bank) never has an Account Number/IBAN on file — computed once, up front,
+  // so both the duplicate check below and the write itself agree on the effective values.
+  const effectiveAccountNumber = input.bankId ? (input.accountNumber ?? null) : null;
+  const effectiveIban = input.bankId ? (input.iban ?? null) : null;
+
+  // Employee Identifier Uniqueness checkpoint (2026-07-26) — reject immediately, before any write,
+  // rather than surfacing a raw database constraint violation (B4).
+  await assertNoDuplicateEmployeeIdentifiers({
+    employeeCode: input.employeeCode,
+    cnic: input.cnic,
+    accountNumber: effectiveAccountNumber,
+    iban: effectiveIban,
+  });
+
   return prisma.$transaction(async (tx) => {
-    const employee = await tx.employee.create({
-      data: {
-        employeeCode: input.employeeCode ?? null,
-        cnic: input.cnic ?? null,
-        name: input.name,
-        fatherName: input.fatherName ?? null,
-        religion: input.religion ?? null,
-        dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
-        mobileNumber: input.mobileNumber ?? null,
-        designation: input.designation,
-        siteId: input.siteId,
-        unitId: input.unitId,
-        dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
-        payType: input.payType ?? undefined,
-        grossPay: input.grossPay,
-        bankId: input.bankId ?? null,
-        branchCode: input.branchCode ?? null,
-        // A cash employee (no bank) never has an Account Number/IBAN on file — enforced here even
-        // though `createEmployeeSchema` already rejects "bank set, no Account Number", since the
-        // reverse (no bank, but an Account Number/IBAN supplied anyway) is a normalization, not a
-        // rejection (docs/architecture/database/employee.md §7's banking-fields note).
-        accountNumber: input.bankId ? (input.accountNumber ?? null) : null,
-        iban: input.bankId ? (input.iban ?? null) : null,
-        ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount ?? undefined }),
-        ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
-      },
-      include: { site: true, unit: true, bank: true },
-    });
+    let employee;
+    try {
+      employee = await tx.employee.create({
+        data: {
+          employeeCode: input.employeeCode ?? null,
+          cnic: input.cnic ?? null,
+          name: input.name,
+          fatherName: input.fatherName ?? null,
+          religion: input.religion ?? null,
+          dateOfBirth: isoDateToUtcDate(input.dateOfBirth),
+          mobileNumber: input.mobileNumber ?? null,
+          designation: input.designation,
+          siteId: input.siteId,
+          unitId: input.unitId,
+          dateOfJoining: isoDateToUtcDate(input.dateOfJoining),
+          payType: input.payType ?? undefined,
+          grossPay: input.grossPay,
+          bankId: input.bankId ?? null,
+          branchCode: input.branchCode ?? null,
+          // A cash employee (no bank) never has an Account Number/IBAN on file — enforced here even
+          // though `createEmployeeSchema` already rejects "bank set, no Account Number", since the
+          // reverse (no bank, but an Account Number/IBAN supplied anyway) is a normalization, not a
+          // rejection (docs/architecture/database/employee.md §7's banking-fields note).
+          accountNumber: effectiveAccountNumber,
+          iban: effectiveIban,
+          accountNumberCanonical: normalizeAccountNumber(effectiveAccountNumber),
+          ibanCanonical: normalizeIban(effectiveIban),
+          ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount ?? undefined }),
+          ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
+        },
+        include: { site: true, unit: true, bank: true },
+      });
+    } catch (error) {
+      // Race-condition backstop (B6): two concurrent creates could both pass the check above
+      // before either commits — the database's own partial unique indexes are the real backstop,
+      // this just keeps the resulting error friendly instead of a raw Prisma P2002.
+      throw mapEmployeeUniqueViolation(error) ?? error;
+    }
 
     // Operational Stabilization Checkpoint (2026-07-24) — a newly created, active employee is
     // immediately eligible for the current Draft cycle, if one exists; see
@@ -332,8 +499,14 @@ function mapUpdateInputToData(input: UpdateEmployeeInput): Prisma.EmployeeUnchec
     ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
     ...(input.bankId !== undefined && { bankId: input.bankId }),
     ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
-    ...(input.accountNumber !== undefined && { accountNumber: input.accountNumber }),
-    ...(input.iban !== undefined && { iban: input.iban }),
+    ...(input.accountNumber !== undefined && {
+      accountNumber: input.accountNumber,
+      accountNumberCanonical: normalizeAccountNumber(input.accountNumber),
+    }),
+    ...(input.iban !== undefined && {
+      iban: input.iban,
+      ibanCanonical: normalizeIban(input.iban),
+    }),
     ...(input.defaultEobiAmount !== undefined && { defaultEobiAmount: input.defaultEobiAmount }),
     ...(input.defaultEobiApplicable !== undefined && { defaultEobiApplicable: input.defaultEobiApplicable }),
   };
@@ -360,6 +533,8 @@ function applyBankingInvariant(
   if (!nextBankId) {
     data.accountNumber = null;
     data.iban = null;
+    data.accountNumberCanonical = null;
+    data.ibanCanonical = null;
     return;
   }
 
@@ -405,17 +580,35 @@ export async function updateEmployee(
   const data = mapUpdateInputToData(input);
   applyBankingInvariant(existing, data);
 
+  // Employee Identifier Uniqueness checkpoint (2026-07-26) — checked against the *merged*
+  // effective state (existing row + this partial patch), excluding this employee's own row, so an
+  // update that doesn't touch a given field never conflicts with itself (B4).
+  await assertNoDuplicateEmployeeIdentifiers(
+    {
+      employeeCode: 'employeeCode' in data ? (data.employeeCode as string | null) : existing.employeeCode,
+      cnic: 'cnic' in data ? (data.cnic as string | null) : existing.cnic,
+      accountNumber: 'accountNumber' in data ? (data.accountNumber as string | null) : existing.accountNumber,
+      iban: 'iban' in data ? (data.iban as string | null) : existing.iban,
+    },
+    { excludeEmployeeId: id },
+  );
+
   const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,
     data as unknown as Record<string, unknown>,
   );
 
   const employee = await prisma.$transaction(async (tx) => {
-    const updated = await tx.employee.update({
-      where: { id },
-      data,
-      include: { site: true, unit: true, bank: true },
-    });
+    let updated;
+    try {
+      updated = await tx.employee.update({
+        where: { id },
+        data,
+        include: { site: true, unit: true, bank: true },
+      });
+    } catch (error) {
+      throw mapEmployeeUniqueViolation(error) ?? error;
+    }
 
     if (isTransfer) {
       await recordEmployeeTransfer(tx, {
@@ -523,17 +716,35 @@ export async function reactivateEmployee(
   };
   applyBankingInvariant(existing, data);
 
+  // Employee Identifier Uniqueness checkpoint (2026-07-26) — a rehire can change any of these four
+  // fields too (e.g. correcting a typo'd CNIC while reactivating), so this path needs the exact
+  // same pre-write check as an ordinary update (B4).
+  await assertNoDuplicateEmployeeIdentifiers(
+    {
+      employeeCode: 'employeeCode' in data ? (data.employeeCode as string | null) : existing.employeeCode,
+      cnic: 'cnic' in data ? (data.cnic as string | null) : existing.cnic,
+      accountNumber: 'accountNumber' in data ? (data.accountNumber as string | null) : existing.accountNumber,
+      iban: 'iban' in data ? (data.iban as string | null) : existing.iban,
+    },
+    { excludeEmployeeId: id },
+  );
+
   const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,
     data as unknown as Record<string, unknown>,
   );
 
   const employee = await prisma.$transaction(async (tx) => {
-    const updated = await tx.employee.update({
-      where: { id },
-      data,
-      include: { site: true, unit: true, bank: true },
-    });
+    let updated;
+    try {
+      updated = await tx.employee.update({
+        where: { id },
+        data,
+        include: { site: true, unit: true, bank: true },
+      });
+    } catch (error) {
+      throw mapEmployeeUniqueViolation(error) ?? error;
+    }
 
     if (isTransfer) {
       await recordEmployeeTransfer(tx, {
