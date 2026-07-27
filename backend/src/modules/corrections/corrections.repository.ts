@@ -262,6 +262,9 @@ const balanceAdjustmentDetailInclude = {
   // already-joined relation) so the Corrections Ledger can display it without a follow-up fetch.
   employee: { select: { id: true, name: true, employeeCode: true, siteId: true, dateOfLeaving: true } },
   correction: { select: { id: true, field: true, payrollEntryId: true } },
+  /// Negative Payroll Recovery checkpoint (2026-07-26) — `null` for a Correction-originated row
+  /// (mutually exclusive with `correction` above; see `BalanceAdjustment.originPayrollEntryId`).
+  originPayrollEntry: { select: { id: true, cycleId: true, employeeId: true } },
   adjustmentType: true,
   sourceCycle: { select: { id: true, year: true, month: true } },
   settledInCycle: { select: { id: true, year: true, month: true } },
@@ -527,6 +530,25 @@ export async function consumeMaterializationRow(
   const result = await client.balanceAdjustmentMaterialization.updateMany({
     where: { id, status: 'ACTIVE' },
     data: { status: 'CONSUMED', settlementId: data.settlementId, consumedAt: new Date() },
+  });
+  return result.count;
+}
+
+/** Negative Payroll Recovery checkpoint (2026-07-26) — flips one `BalanceAdjustmentMaterialization`
+ * `ACTIVE -> CANCELLED`, never touching `BalanceAdjustment.remainingAmount`/`.status` (unlike
+ * `consumeMaterializationRow`, this is not a settlement). Used exactly once: when a `RECOVERY`
+ * materialization's target entry resolves (releases) with zero actual capacity to absorb it this
+ * cycle (`computeReleaseRecoveryAdjustment`'s case 3) — the reservation must not linger `ACTIVE`
+ * against an entry that has just permanently locked, since `getActiveReservedAmount` would then
+ * under-count `availableToMaterialize` for every future cycle forever. Cancelling frees the full
+ * `remainingAmount` to be re-materialized into the employee's next Draft-cycle entry instead. */
+export async function cancelMaterializationRow(
+  id: string,
+  client: PrismaTransactionClient = prisma,
+): Promise<number> {
+  const result = await client.balanceAdjustmentMaterialization.updateMany({
+    where: { id, status: 'ACTIVE' },
+    data: { status: 'CANCELLED', cancelledAt: new Date() },
   });
   return result.count;
 }

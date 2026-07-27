@@ -173,7 +173,14 @@ export async function getBankSheet(
     orderBy: [{ site: { name: 'asc' } }, { sortOrder: 'asc' }],
   });
 
-  const rows = entries.map((entry) => buildRow(entry, code));
+  // Negative Payroll Recovery checkpoint (2026-07-26) — defense-in-depth, not the primary guard:
+  // going forward, `released = true` is only ever set for `netSalary > 0` (`payroll-release.service.ts`),
+  // so this filter should never actually drop anything new. It exists so a pre-existing bad row
+  // (a negative-net entry marked `released` before this checkpoint shipped) can never resurface as
+  // a payable Bank Sheet row if a historical cycle's sheet is ever regenerated — Bank Sheet totals
+  // must never include a zero/negative payable amount (Part A5), with no netting against any other
+  // employee's total.
+  const rows = entries.map((entry) => buildRow(entry, code)).filter((row) => Number(row.netSalary) > 0);
 
   return {
     bankFilter,

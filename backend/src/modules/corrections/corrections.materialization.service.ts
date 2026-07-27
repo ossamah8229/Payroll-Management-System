@@ -5,7 +5,7 @@ import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess } from '../../common/authz-policy';
 import { acquireBalanceAdjustmentLock } from './corrections.lock';
-import { determineMaterialization } from './corrections.materialization';
+import { computeReleaseRecoveryAdjustment, determineMaterialization } from './corrections.materialization';
 import {
   MaterializationValidationError,
   type BatchMaterializationSummary,
@@ -15,6 +15,7 @@ import {
 import { calculateSettlement } from './corrections.settlement';
 import { SettlementValidationError } from './corrections.settlement.types';
 import {
+  cancelMaterializationRow,
   consumeMaterializationRow,
   createBalanceAdjustmentSettlementRow,
   createMaterializationRow,
@@ -32,6 +33,7 @@ import {
   updatePayrollEntryCorrectionAggregates,
   type BalanceAdjustmentDetail,
 } from './corrections.repository';
+import { computeEntryCalc, type EntryWithWorkLines } from '../payroll-entry/payroll-entry.service';
 
 /**
  * Phase 6 Checkpoint 5 — Draft-cycle materialization orchestration: lock ordering, eligibility
@@ -422,6 +424,14 @@ export async function consumeMaterializationsForReleasedEntries(
   let consumedCount = 0;
   let settledCount = 0;
 
+  // Negative Payroll Recovery checkpoint (2026-07-26) — a RECOVERY materialization's target entry
+  // may not be able to afford the full reserved amount this cycle (`computeReleaseRecoveryAdjustment`).
+  // Capacity is a property of the *entry*, computed once per distinct entry (not per materialization
+  // — an entry could in principle carry more than one active RECOVERY reservation) and allocated
+  // across that entry's own materializations in the same deterministic order the query already
+  // returns them in, so it's never recomputed against an already-partially-consumed capacity.
+  const remainingRecoveryCapacityByEntryId = new Map<string, Decimal>();
+
   for (const materialization of materializations) {
     await acquireBalanceAdjustmentLock(materialization.balanceAdjustmentId, tx);
 
@@ -432,13 +442,57 @@ export async function consumeMaterializationsForReleasedEntries(
       continue;
     }
 
+    let proposedAmount = new Decimal(materialization.amount.toString());
+    if (adjustment.type === 'RECOVERY') {
+      let capacity = remainingRecoveryCapacityByEntryId.get(materialization.payrollEntryId);
+      if (capacity === undefined) {
+        const targetEntry = await tx.payrollEntry.findUniqueOrThrow({
+          where: { id: materialization.payrollEntryId },
+          include: { workLines: true },
+        });
+        const calc = computeEntryCalc(targetEntry as EntryWithWorkLines);
+        capacity = new Decimal(computeReleaseRecoveryAdjustment(calc).cappedRecoveryConsumption);
+      }
+      proposedAmount = Decimal.min(proposedAmount, capacity);
+      remainingRecoveryCapacityByEntryId.set(materialization.payrollEntryId, capacity.minus(proposedAmount));
+    }
+
+    if (proposedAmount.isZero()) {
+      // This entry's own earnings gave zero capacity for this reservation this cycle, and the
+      // entry itself just locked (this is exactly the release event that would otherwise consume
+      // it) — cancel rather than settle, so the full `remainingAmount` stays available to
+      // re-materialize into the employee's next Draft-cycle entry instead of permanently
+      // under-counting `availableToMaterialize` against an entry that can never release again.
+      const cancelledRows = await cancelMaterializationRow(materialization.id, tx);
+      if (cancelledRows > 0) {
+        await recordAuditLog(
+          {
+            actorUserId: params.actorUserId,
+            action: 'balance_adjustment_materialization.cancelled',
+            entityType: 'BalanceAdjustmentMaterialization',
+            entityId: materialization.id,
+            metadata: {
+              balanceAdjustmentId: materialization.balanceAdjustmentId,
+              payrollEntryId: materialization.payrollEntryId,
+              releasingCycleId: params.releasingCycleId,
+              reason: 'ZERO_RECOVERY_CAPACITY_AT_RELEASE',
+            },
+            ipAddress: params.requestMeta.ipAddress,
+            userAgent: params.requestMeta.userAgent,
+          },
+          tx,
+        );
+      }
+      continue;
+    }
+
     const activeReservedAmount = await getActiveReservedAmount(materialization.balanceAdjustmentId, tx);
     const otherActiveReservedAmount = new Decimal(activeReservedAmount).minus(materialization.amount.toString()).toFixed(2);
 
     const result = calculateSettlement({
       remainingAmount: adjustment.remainingAmount.toString(),
       status: adjustment.status,
-      proposedAmount: materialization.amount.toString(),
+      proposedAmount: proposedAmount.toFixed(2),
       activeReservedAmount: otherActiveReservedAmount,
     });
 

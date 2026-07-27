@@ -37,6 +37,11 @@ const ADJUSTMENT_TYPES = [
   { code: 'FINE_ADJUSTMENT', label: 'Fine Adjustment' },
   { code: 'ADVANCE_RECOVERY', label: 'Advance Recovery' },
   { code: 'MANUAL_ADJUSTMENT', label: 'Manual Adjustment' },
+  // Negative Payroll Recovery checkpoint (2026-07-26) — the AdjustmentType a RECOVERY
+  // BalanceAdjustment gets when it originates directly from a negative-net Draft entry at
+  // release time, rather than from an approved Correction (backend/src/modules/payroll-release/
+  // payroll-release-eligibility.ts).
+  { code: 'NEGATIVE_PAYROLL_RECOVERY', label: 'Negative Payroll Recovery' },
 ];
 
 /**

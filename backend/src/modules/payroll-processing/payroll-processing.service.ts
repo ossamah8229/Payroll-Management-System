@@ -636,11 +636,18 @@ export async function finalizePayrollCycle(currentUser: SessionUser, cycleId: st
 
   return prisma.$transaction(
     async (tx) => {
+      // Negative Payroll Recovery checkpoint (2026-07-26) — an entry a Unit release sweep already
+      // resolved as NO_PAY_DUE/RECOVERY_DUE (`payoutOutcome` set) is just as "done" as a released
+      // one for Finalize's purposes, even though `released` itself stays `false` for it. Only an
+      // entry with `payoutOutcome: null` that is neither released nor held still blocks Finalize —
+      // an unresolved negative/zero-net entry, or one excluded from every release sweep so far by
+      // the release-eligibility gate (duplicate identity/missing banking details), keeps blocking
+      // exactly like before, forcing the operator to fix it or explicitly Hold it.
       const [entryCount, releasedCount, heldCount, blockingCount] = await Promise.all([
         tx.payrollEntry.count({ where: { cycleId } }),
         tx.payrollEntry.count({ where: { cycleId, released: true } }),
         tx.payrollEntry.count({ where: { cycleId, hold: true } }),
-        tx.payrollEntry.count({ where: { cycleId, released: false, hold: false } }),
+        tx.payrollEntry.count({ where: { cycleId, released: false, hold: false, payoutOutcome: null } }),
       ]);
 
       if (blockingCount > 0) {

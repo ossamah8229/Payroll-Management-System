@@ -109,7 +109,12 @@ export async function getCashReceivingSheet(
     orderBy: [{ site: { name: 'asc' } }, { sortOrder: 'asc' }],
   });
 
-  const rows = entries.map(buildRow);
+  // Negative Payroll Recovery checkpoint (2026-07-26) — same defense-in-depth filter as Bank
+  // Sheets (`bank-sheets.service.ts`): going forward `released = true` is only ever set for
+  // `netSalary > 0`, so this should never actually drop anything new; it protects against a
+  // pre-existing bad row (a negative-net entry marked `released` before this checkpoint) ever
+  // resurfacing as a payable Cash Receiving row.
+  const rows = entries.map(buildRow).filter((row) => Number(row.netSalary) > 0);
 
   return {
     rows,

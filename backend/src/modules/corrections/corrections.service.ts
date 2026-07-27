@@ -515,3 +515,52 @@ export async function rejectCorrectionRequest(
     return (await getCorrectionRequestById(requestId, tx))!;
   });
 }
+
+/** Seeded once in `backend/prisma/seed.ts` — the AdjustmentType a negative-payroll-origin
+ * `RECOVERY` gets, distinct from every Correction-originated adjustment's own operator-chosen
+ * type. */
+const NEGATIVE_PAYROLL_RECOVERY_ADJUSTMENT_TYPE_CODE = 'NEGATIVE_PAYROLL_RECOVERY';
+
+/**
+ * Negative Payroll Recovery checkpoint (2026-07-26) — creates the `BalanceAdjustment(type:
+ * RECOVERY)` a still-Draft `PayrollEntry` gets when its own `netSalary` comes out negative at the
+ * moment its Unit(s) release (`payoutOutcome = RECOVERY_DUE`, `payroll-release.service.ts`). A
+ * deliberately distinct trigger from the ordinary Correction workflow above (which requires the
+ * entry to already be `released` — `assertEntryIsReleased`) — this one fires on a still-Draft
+ * entry, before release, which is exactly why `correctionId` had to become nullable
+ * (`originPayrollEntryId` instead). Everything downstream — materialization into the employee's
+ * next Draft-cycle entry, release-time settlement, the departed-employee-stays-PENDING rule — is
+ * the existing, unmodified `BalanceAdjustment` machinery; this function only creates the row.
+ * Called inside `releaseProjectUnit`'s own transaction, so it commits or rolls back atomically
+ * with the release sweep itself.
+ */
+export async function createNegativePayrollRecoveryAdjustment(
+  entry: { id: string; employeeId: string; cycleId: string },
+  netSalary: string | number,
+  tx: PrismaTransactionClient,
+) {
+  const amount = new Decimal(netSalary).abs().toFixed(2);
+  const adjustmentType = await tx.adjustmentType.findUniqueOrThrow({
+    where: { code: NEGATIVE_PAYROLL_RECOVERY_ADJUSTMENT_TYPE_CODE },
+  });
+  const cycle = await tx.payrollCycle.findUniqueOrThrow({ where: { id: entry.cycleId } });
+  const remark = `Recovery — negative net salary of PKR ${amount} at release (Cycle ${cycle.year}-${String(cycle.month).padStart(2, '0')})`;
+
+  return createBalanceAdjustmentRow(
+    {
+      correctionId: null,
+      originPayrollEntryId: entry.id,
+      employeeId: entry.employeeId,
+      sourceCycleId: entry.cycleId,
+      adjustmentTypeId: adjustmentType.id,
+      amount,
+      type: 'RECOVERY',
+      status: 'PENDING',
+      paymentTiming: null,
+      recoveryInstallmentAmount: null,
+      remainingAmount: amount,
+      remark,
+    },
+    tx,
+  );
+}

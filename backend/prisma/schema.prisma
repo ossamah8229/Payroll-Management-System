@@ -539,6 +539,21 @@ model ScheduledPayrollPeriod {
 /// The numeric `>= 0` check constraints, `released = true ⇒ releasedAt/releasedBy NOT NULL`, and
 /// `lateReason IS NOT NULL ⇒ released = true` are Prisma-DSL-inexpressible and added by raw SQL
 /// in the migration.
+/// Negative Payroll Recovery checkpoint (2026-07-26) — the two non-payment resolutions a
+/// `PayrollEntry` can settle into when its Units release but its own `netSalary <= 0`. Mutually
+/// exclusive with `released = true` by a raw-SQL CHECK constraint (`released` keeps meaning
+/// exactly what it always has — "money was paid" — this enum never redefines it). Set exactly
+/// once, at the same release-sweep moment `released`/`releasedAt`/`releasedBy` would otherwise
+/// flip; immutable thereafter (`assertEntryEditable`).
+enum PayrollEntryPayoutOutcome {
+  /// `netSalary = 0` — no payment due, nothing further to settle.
+  NO_PAY_DUE
+  /// `netSalary < 0` — the employee was overpaid/over-deducted; a `BalanceAdjustment(type:
+  /// RECOVERY, originPayrollEntryId: this entry)` is created in the same transaction (see
+  /// `docs/architecture/database/release.md`).
+  RECOVERY_DUE
+}
+
 model PayrollEntry {
   id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   cycleId                   String    @db.Uuid
@@ -596,6 +611,12 @@ model PayrollEntry {
   released                  Boolean   @default(false)
   releasedAt                DateTime? @db.Timestamptz(6)
   releasedBy                String?   @db.Uuid
+  /// Negative Payroll Recovery checkpoint (2026-07-26). `NULL` for an ordinary Draft entry or one
+  /// released for payment (`released = true`); set to `NO_PAY_DUE`/`RECOVERY_DUE` exactly once,
+  /// by the same release sweep that would otherwise flip `released`, when this entry's own
+  /// `netSalary <= 0`. A raw-SQL CHECK (`payoutOutcome IS NULL OR released = false`) in the
+  /// migration enforces the two are mutually exclusive.
+  payoutOutcome             PayrollEntryPayoutOutcome?
   lateReason                String?
   /// Approved Phase 3 Checkpoint 0 addition — not in docs/architecture/database/payroll-entry.md §12 as originally
   /// frozen. Editable while the entry is editable; frozen into the permanent snapshot once
@@ -623,11 +644,16 @@ model PayrollEntry {
   correctionRequests                CorrectionRequest[]
   /// Phase 6 Checkpoint 5 — schema/domain foundation only (Draft-cycle projection reservations).
   balanceAdjustmentMaterializations BalanceAdjustmentMaterialization[]
+  /// Negative Payroll Recovery checkpoint (2026-07-26) — set only when this entry's own release
+  /// created a `RECOVERY` `BalanceAdjustment` directly (`payoutOutcome = RECOVERY_DUE`), never for
+  /// a Correction-originated one (see `BalanceAdjustment.originPayrollEntryId`).
+  originatedBalanceAdjustment       BalanceAdjustment?
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
   @@index([employeeId])
   @@index([cycleId, hold, released])
+  @@index([cycleId, hold, released, payoutOutcome])
   @@index([cycleId, siteId])
   @@index([bankId])
   @@index([advanceId])
@@ -881,12 +907,24 @@ enum BalanceAdjustmentPaymentTiming {
 /// settlement pipeline (Automatic Settlement Workflow) is Checkpoint 3.
 model BalanceAdjustment {
   id                        String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  correctionId              String                          @unique @db.Uuid
-  /// Denormalized from `correction → payrollEntry → employee` for fast "pending balances for
-  /// employee X" lookups — always derived server-side from the approving `Correction`, never
-  /// accepted as independent input. The one deliberate denormalization in this domain (unlike
-  /// `Correction`, which stays derivable-only) — justified here by the hot settlement-sweep query
-  /// path Checkpoint 3 will add, which `Correction` itself has no equivalent of.
+  /// **Made nullable, Negative Payroll Recovery checkpoint (2026-07-26).** Exactly one of
+  /// `correctionId`/`originPayrollEntryId` is set, enforced by a raw-SQL CHECK constraint (a
+  /// UNIQUE constraint on a nullable column already permits multiple `NULL`s in Postgres, so no
+  /// partial index is needed here). Set for the original, Correction-originated path — a
+  /// post-release adjustment approved through `CorrectionRequest`/`approveCorrectionRequest`.
+  correctionId              String?                         @unique @db.Uuid
+  /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** Set instead of `correctionId`
+  /// when this `RECOVERY` row was created directly from a still-Draft `PayrollEntry` whose own
+  /// current-cycle `netSalary` came out negative at release time — a distinct trigger from the
+  /// Correction workflow (which requires the entry to already be `released`), reusing the exact
+  /// same `BalanceAdjustment` lifecycle/materialization/settlement machinery unchanged. See
+  /// `docs/architecture/database/release.md`.
+  originPayrollEntryId      String?                         @unique @db.Uuid
+  /// Denormalized from `correction → payrollEntry → employee` (or, for a negative-payroll-origin
+  /// row, from `originPayrollEntry → employee`) for fast "pending balances for employee X"
+  /// lookups — always derived server-side, never accepted as independent input. The one
+  /// deliberate denormalization in this domain (unlike `Correction`, which stays
+  /// derivable-only) — justified here by the hot settlement-sweep query path.
   employeeId                String                          @db.Uuid
   /// The cycle the correction was made against — may be `Released` or `Archived`, or a still-`Draft`
   /// cycle in which this specific entry was individually released (Late Entry).
@@ -917,7 +955,11 @@ model BalanceAdjustment {
   settledAt                 DateTime?                       @db.Timestamptz(6)
   createdAt                 DateTime                        @default(now()) @db.Timestamptz(6)
 
-  correction        Correction                         @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  correction        Correction?                        @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** The still-Draft-at-the-time
+  /// `PayrollEntry` whose own negative `netSalary` created this row (mutually exclusive with
+  /// `correction`, see `correctionId`/`originPayrollEntryId` comments above).
+  originPayrollEntry PayrollEntry?                      @relation(fields: [originPayrollEntryId], references: [id], onDelete: Restrict)
   employee          Employee                           @relation(fields: [employeeId], references: [id], onDelete: Restrict)
   sourceCycle       PayrollCycle                       @relation("BalanceAdjustmentSourceCycle", fields: [sourceCycleId], references: [id], onDelete: Restrict)
   adjustmentType    AdjustmentType                     @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)

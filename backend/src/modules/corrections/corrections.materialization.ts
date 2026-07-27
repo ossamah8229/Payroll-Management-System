@@ -72,3 +72,64 @@ export function determineMaterialization(input: MaterializationEligibilityInput)
   const amount = Decimal.min(installment, availableToMaterialize);
   return { eligible: true, amount: amount.toFixed(2) };
 }
+
+export interface ReleaseRecoveryAdjustment {
+  /** The entry's true net salary for release-classification purposes — identical to
+   * `calc.netSalary` unless a shortfall exists (below), in which case this is the *floor-adjusted*
+   * figure that must be used instead, never the raw `calc.netSalary`. */
+  adjustedNetSalary: string;
+  /** How much of `calc.correctionBalanceRecovery` this cycle's release can actually settle against
+   * the originating `BalanceAdjustment` — strictly less than `correctionBalanceRecovery` only when
+   * this entry's own earnings can't cover the full scheduled deduction. */
+  cappedRecoveryConsumption: string;
+}
+
+/**
+ * Negative Payroll Recovery checkpoint (2026-07-26) — prevents a genuine double-counting bug:
+ * when an entry's own `correctionBalanceRecovery` (a *prior* cycle's `RECOVERY` `BalanceAdjustment`
+ * materialized into this cycle, via `determineMaterialization` above) is larger than what this
+ * cycle's own earnings can actually absorb, `calcNet`'s `netSalary` goes negative purely as an
+ * artifact of that already-existing obligation — not a *new* one. Without this adjustment,
+ * `payroll-release.service.ts`'s release sweep would (wrongly) read that negative `netSalary` as
+ * grounds to create a brand-new `RECOVERY` `BalanceAdjustment` for the shortfall, stacking a second
+ * obligation on top of the first for the exact same debt.
+ *
+ * `baseNet` is this entry's earnings *before* this cycle's recovery deduction
+ * (`netSalary + correctionBalanceRecovery` — algebraically exact, since `calcNet` computes
+ * `netSalary = totalEarning - totalDeduction` and `correctionBalanceRecovery` is one additive term
+ * of `totalDeduction`). Three cases, matching the accounting the checkpoint brief specifies:
+ *
+ * 1. `netSalary >= 0` (no shortfall — this cycle's earnings fully cover the recovery deduction and
+ *    then some): no adjustment, `cappedRecoveryConsumption = correctionBalanceRecovery` in full.
+ * 2. `netSalary < 0` and `baseNet >= 0` (earnings cover *some but not all* of the recovery
+ *    deduction): the entry floors to exactly `0` (`No Pay Due`, never negative) and only `baseNet`
+ *    of the recovery is actually consumed this cycle — the remainder (`correctionBalanceRecovery -
+ *    baseNet`) stays owed on the *original* `BalanceAdjustment.remainingAmount` for a future cycle,
+ *    never re-created as a new one.
+ * 3. `netSalary < 0` and `baseNet < 0` (this entry is negative even setting the recovery deduction
+ *    aside entirely — e.g. a large Advance/EID Advance/fine independently exceeds earnings): the
+ *    existing recovery deduction consumes nothing this cycle (`cappedRecoveryConsumption = 0`,
+ *    deferred whole to a future cycle) and `adjustedNetSalary = baseNet` becomes the basis for a
+ *    *distinct*, new `RECOVERY_DUE` classification — a genuinely different obligation, not the same
+ *    one being double-counted.
+ */
+export function computeReleaseRecoveryAdjustment(calc: {
+  netSalary: string;
+  correctionBalanceRecovery: string;
+}): ReleaseRecoveryAdjustment {
+  const netSalary = new Decimal(calc.netSalary);
+  const materializedRecovery = new Decimal(calc.correctionBalanceRecovery);
+
+  if (materializedRecovery.lessThanOrEqualTo(0) || netSalary.greaterThanOrEqualTo(0)) {
+    return { adjustedNetSalary: netSalary.toFixed(2), cappedRecoveryConsumption: materializedRecovery.toFixed(2) };
+  }
+
+  const baseNet = netSalary.plus(materializedRecovery);
+  const cappedRecoveryConsumption = Decimal.max(0, Decimal.min(materializedRecovery, baseNet));
+  const adjustedNetSalary = baseNet.minus(cappedRecoveryConsumption);
+
+  return {
+    adjustedNetSalary: adjustedNetSalary.toFixed(2),
+    cappedRecoveryConsumption: cappedRecoveryConsumption.toFixed(2),
+  };
+}
