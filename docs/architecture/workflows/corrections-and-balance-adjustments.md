@@ -489,6 +489,114 @@ total must always be traceable back to *why* it's larger or smaller than the ord
 the linked `Correction`/`BalanceAdjustment` records — never by silently overwriting an ordinary
 earnings/deductions field, which would destroy that traceability entirely (Principle 6).
 
+## Negative Payroll Recovery — a second `BalanceAdjustment` origin (added 2026-07-26)
+
+Everything above describes `BalanceAdjustment` created from an approved `Correction` — a
+**post-release** adjustment, gated by `assertEntryIsReleased` (`corrections.calculation.ts`) at every
+layer, requiring the entry being corrected to already be `released = true`. The Negative Payroll
+Recovery checkpoint introduced a genuinely different trigger: a still-**Draft** `PayrollEntry` whose
+own current-cycle `netSalary` comes out negative at the moment its Unit(s) release
+(`database/release.md §12c`). That scenario cannot go through the Correction workflow at all — the
+entry isn't released yet, that's the whole point (a negative-net entry must never be released for
+payment).
+
+Rather than building a second, parallel ledger, `BalanceAdjustment.correctionId` was made **nullable**
+and a new **`originPayrollEntryId`** column added (FK → `PayrollEntry`, also unique) — exactly one of
+the two is ever set, enforced by a raw-SQL CHECK (`BalanceAdjustment_origin_xor_check`). A
+`RECOVERY`-type row with `originPayrollEntryId` set instead of `correctionId` is functionally
+identical to every downstream consumer: `determineMaterialization` and
+`materializeCorrectionObligationsForNewCycle` (still runs automatically at the employee's next
+Draft-cycle bootstrap) needed **no** change — they operate purely on `BalanceAdjustment`/
+`BalanceAdjustmentMaterialization` fields, never on `correctionId` itself. This gives the
+negative-payroll-origin recovery the exact same carry-forward lifecycle as a Correction-originated one
+for free: it materializes into the employee's next Draft-cycle entry (`correctionBalanceRecovery`),
+recovers in full next cycle by default or via a staff-set `recoveryInstallmentAmount`, and — if the
+employee departs before it's settled — stays permanently `PENDING`, the same accepted,
+already-documented gap (`assertRecoverySettlementAllowed`, above) as a Correction-originated
+`RECOVERY`. Its `adjustmentTypeId` is a dedicated seeded `AdjustmentType`
+(`NEGATIVE_PAYROLL_RECOVERY`, `backend/prisma/seed.ts`), distinct from every operator-chosen
+Correction adjustment type, so the two origins stay distinguishable in the Corrections Ledger. Created
+by `createNegativePayrollRecoveryAdjustment` (`corrections.service.ts`), called from
+`releaseProjectUnit` inside its own transaction — never as a standalone write.
+
+### Preventing double-counted recovery (accounting verification pass, 2026-07-27)
+
+`consumeMaterializationsForReleasedEntries` **did** need one change, discovered by explicitly working
+through what happens when a carried-forward recovery deduction is *larger than* the target cycle's
+own earnings — the exact scenario the checkpoint's own accounting review asked to be verified before
+committing. Before this fix, `calculateSettlement` was always proposed the materialization's full
+reserved amount, and — critically — `payroll-release.service.ts`'s sweep read that cycle's own
+(unadjusted) `netSalary`, which is negative whenever the carried-forward deduction exceeds this
+cycle's earnings. Left unfixed, that negative figure would have been (wrongly) classified as a *new*
+`RECOVERY_DUE`, stacking a second `BalanceAdjustment` on top of the one already being settled for the
+same debt.
+
+The fix, `computeReleaseRecoveryAdjustment` (`corrections.materialization.ts`, a pure function): given
+an entry's own `calcNet` result, compute `baseNet = netSalary + correctionBalanceRecovery` — this
+cycle's earnings *before* the recovery deduction, algebraically recoverable since
+`correctionBalanceRecovery` is one additive term of `calcNet`'s `totalDeduction`. Three cases:
+
+1. `netSalary >= 0` — no shortfall, nothing to adjust.
+2. `netSalary < 0` and `baseNet >= 0` — this cycle's earnings cover *part* of the deduction: the
+   entry floors to exactly `0` (`NO_PAY_DUE`, never negative), and only `baseNet` of the recovery
+   settles this cycle (`BalanceAdjustmentSettlement.amountApplied = baseNet`,
+   `BalanceAdjustment.remainingAmount` decreases by exactly that much) — the remainder stays owed on
+   the *same* `BalanceAdjustment` for a future cycle. **No new adjustment is ever created for the
+   shortfall.**
+3. `netSalary < 0` and `baseNet < 0` — this entry is negative even setting the carried-forward
+   recovery aside entirely (e.g. a large Advance deduction independently exceeds earnings): the
+   existing recovery settles nothing this cycle (deferred whole, `remainingAmount` unchanged) and
+   `adjustedNetSalary = baseNet` becomes the basis for a distinct, *new* `RECOVERY_DUE` — a genuinely
+   different obligation, not a double-count of the first.
+
+Both `payroll-release.service.ts`'s classification (`payoutOutcome`) and
+`consumeMaterializationsForReleasedEntries`'s actual settlement amount are derived from this same
+function, so they can never disagree about which case applies. When a `RECOVERY` materialization's
+capped consumption comes out to exactly `0` (case 3), the reservation is **cancelled**
+(`cancelMaterializationRow`, a new `MaterializationStatus.CANCELLED` transition — the `CANCELLED`
+enum value existed in the schema since Phase 6 Checkpoint 5 but had no code path reaching it before
+this) rather than left `ACTIVE` forever against an entry that just permanently locked — cancelling
+frees the full `remainingAmount` to re-materialize into the employee's next Draft-cycle entry instead
+of silently under-counting `availableToMaterialize` for every future cycle.
+
+Verified end-to-end (`backend/tests/payroll-release-recovery-accounting.test.ts`), all three cases:
+
+**Case 2 — partial absorption across three cycles.** Opening recovery 400. Cycle 2: salary capacity
+300 → settles 300, remaining 100, entry `NO_PAY_DUE`, employee paid 0 — no second adjustment created.
+Cycle 3: salary 500 → settles the remaining 100, employee receives exactly 400 (500 − 100), the
+`BalanceAdjustment` reaches `SETTLED`.
+
+**Exact-zero boundary.** Salary 400 against a 400 recovery → settles in full, entry `NO_PAY_DUE`
+(never `RECOVERY_DUE` — the deduction consumes salary exactly to zero, not below it), `remainingAmount
+= 0`, `SETTLED`, no new recovery created.
+
+**Case 3 — the old recovery is independently unaffordable this cycle, and this cycle independently
+generates a genuinely new shortfall (2026-07-27 accounting verification).** The scenario this case
+exists to prove correct: opening recovery 400 entering Cycle 2; Cycle 2 earnings = 300; a new,
+unrelated deduction (e.g. a fine) = 500; materialized old recovery = 400. Raw `netSalary` = 300 − 500
+− 400 = **−600**; `baseNet` (earnings minus only this cycle's *own* deductions, excluding the old
+recovery) = 300 − 500 = **−200** — negative on its own, independent of the carried-forward 400. Traced
+outcome, confirmed by the test:
+- Old 400 recovery: **settles 0** this cycle (its materialization is cancelled, not settled for 0) —
+  `remainingAmount` stays exactly `400.00`, status stays `PENDING`, no
+  `BalanceAdjustmentSettlement` row is written for it this cycle.
+- A **new, distinct** `BalanceAdjustment(type: RECOVERY, originPayrollEntryId: <this cycle's entry>)`
+  is created for exactly `200.00` (`= |baseNet|`) — the genuinely new shortfall, never merged with the
+  old 400 and never a second row against the old adjustment's own origin.
+- Entry: `payoutOutcome = RECOVERY_DUE`, `released = false`, employee paid `0` — never negative.
+  Bank Sheet/Cash Receiving exclude the entry (§12c's defensive `netSalary > 0` filter).
+- **Conservation invariant holds:** opening (400.00) + newly generated (200.00) − settled this cycle
+  (0.00) = closing total (600.00) = the sum of both adjustments' own `remainingAmount` (400.00 +
+  200.00) — asserted with `Decimal`/`.toFixed(2)` string comparison, not floating-point.
+- Cycle 3 (earnings 700, both obligations now materialize together = 600 total): both settle in full
+  in the same release (`400.00` + `200.00` = `600.00` total settled), employee receives exactly `100`
+  (700 − 600), both adjustments reach `SETTLED`. Still exactly two `BalanceAdjustment` rows across the
+  employee's whole history — no third was ever created.
+
+This closes the one remaining un-tested branch of `computeReleaseRecoveryAdjustment`'s three-case
+accounting (case 3 specifically) with a dedicated end-to-end test — the existing implementation
+already satisfied the invariant; no code change was required to pass it.
+
 ## What does not change
 
 - The Correction modal's old-value/new-value/old-net/new-net comparison UX (from the prototype) is

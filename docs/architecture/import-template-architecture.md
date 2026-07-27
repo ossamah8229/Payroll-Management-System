@@ -166,7 +166,9 @@ Employees' cross-field rules (unchanged from the Employee-only checkpoint):
 | Area / Area-Location must agree if both given | Excel-enforceable | Custom per-row formula, **and** `resolveRowUnit` |
 | At least one of Area / Branch Code / Area-Location required | Excel-enforceable | Custom per-row formula, **and** `resolveRowUnit` |
 | A row's unit must belong to the row's own site | Server-only (dynamic data) | `resolveRowUnit` (layer 1) → `assertUnitBelongsToSite` (layer 2) → composite FK (layer 3) |
-| CNIC / Employee Code uniqueness | Server-only (dynamic data) | Database unique constraint |
+| CNIC / Employee Code uniqueness | Server-only (dynamic data) | Database unique constraint, plus `assertNoDuplicateEmployeeIdentifiers` pre-write check (2026-07-26) |
+| Account Number / IBAN uniqueness (added 2026-07-26, Employee Identifier Uniqueness checkpoint — previously not enforced at all) | Server-only (dynamic data) | Database partial unique index on `accountNumberCanonical`/`ibanCanonical`, plus the same `assertNoDuplicateEmployeeIdentifiers` pre-write check |
+| Duplicate Employee Code/Account Number/IBAN across two different rows in the same workbook (added 2026-07-26) | Server-only (in-memory pre-scan, before any DB write) | `detectWorkbookDuplicates` (`employees-import-export.service.ts`) — identity-aware: two rows sharing a CNIC (or, lacking one, the same Employee Code) resolve to the same person and are a legitimate create-then-update, never flagged; a value shared by rows resolving to *different* identities is a genuine conflict. CNIC itself is not workbook-pre-scanned, since it *is* the identity key — two rows sharing one can never be a different-identity conflict by construction |
 | Site/Bank name must reference a real, accessible record | Server-only, Excel dropdown reduces typos | Site/bank lookup + `assertSiteAccess` |
 | Date of Leaving ≥ Date of Joining | **Not currently validated anywhere** (see Limitations) | — |
 

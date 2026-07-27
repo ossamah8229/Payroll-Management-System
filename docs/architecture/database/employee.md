@@ -123,7 +123,9 @@ cycle (`PayrollEntryWorkLine`, `database/payroll-entry.md §12a`) leaves this de
 | `bankId` | uuid | yes | — | FK → `Bank.id`, `ON DELETE RESTRICT`; null = no bank on file |
 | `branchCode` | varchar(20) | yes | — | **the employee's own bank branch code** — unrelated to `ProjectUnit.code` (`database/sites-and-units.md §8a`) or the removed `ProjectSite.branchCode` (`database/sites-and-units.md §8`); three different "branch code" concepts have existed across this schema's history, and this is the one that survives unchanged: an employee's bank account's branch code, nothing to do with where they're deputed |
 | `accountNumber` | varchar(40) | yes | — | null + null `bankId` ⇒ cash payment (derived rule, applied wherever bank-account presence is checked — e.g. Bank Sheet vs. Cash Receiving eligibility). **Banking rule (2026-07-11):** required whenever `bankId` is set — enforced server-side against the merged post-update state (`employees.service.ts`'s `applyBankingInvariant`), never entered-but-ignored |
+| `accountNumberCanonical` | varchar(40) | yes | — | **added 2026-07-26, Employee Identifier Uniqueness checkpoint.** `normalizeAccountNumber(accountNumber)` (`shared/src/lib/banking.ts`) — uppercased, everything but `[A-Z0-9]` stripped. App-maintained, not a Postgres `GENERATED` column (matches this schema's existing derived-column convention, e.g. `PayrollEntry.correctionBalancePayable` — see §12); set by the one write path every create/update/import flow shares (`employees.service.ts`). Never displayed; exists solely so uniqueness can be enforced on the *canonical* value while `accountNumber` itself keeps whatever formatting was entered |
 | `iban` | varchar(34) | yes | — | **Added 2026-07-11, replacing `accountTitle` (removed the same pass — no longer stored anywhere).** Optional even for a bank employee (many employees operationally don't know or provide one); stored trimmed and uppercase, displayed exactly as stored, never truncated (the permanent Layout Integrity Rule). 34 chars is the ISO 13616 international maximum; a Pakistani IBAN is 24. A cash employee (`bankId` null) always has `accountNumber`/`iban` both null too — enforced the same way |
+| `ibanCanonical` | varchar(34) | yes | — | **added 2026-07-26.** `normalizeIban(iban)` — same convention as `accountNumberCanonical` immediately above (whitespace stripped, uppercased) |
 | `defaultEobiAmount` | numeric(10,2) | no | `400.00` | seeds a new `PayrollEntry.eobiAmount` when this employee is first added to a cycle |
 | `defaultEobiApplicable` | boolean | no | `true` | seeds `PayrollEntry.eobiApplicable`; some employees are exempt |
 | `createdAt` | timestamptz | no | `now()` | |
@@ -131,8 +133,48 @@ cycle (`PayrollEntryWorkLine`, `database/payroll-entry.md §12a`) leaves this de
 
 - **Unique constraints:** `employeeCode` (partial, `WHERE employeeCode IS NOT NULL`); `cnic` (partial,
   `WHERE cnic IS NOT NULL`) — both nullable-but-unique-when-present, per `database/schema-invariants.md
-  §26`; `(unitId, siteId)` composite FK target consumed from `ProjectUnit`, not a uniqueness rule on
-  this table itself
+  §26`; **added 2026-07-26:** `accountNumberCanonical` (partial, `WHERE accountNumberCanonical IS NOT
+  NULL`) and `ibanCanonical` (partial, `WHERE ibanCanonical IS NOT NULL`) — the actual gap this
+  checkpoint closes, since `accountNumber`/`iban` had no uniqueness enforcement at any point in this
+  schema's prior history; `(unitId, siteId)` composite FK target consumed from `ProjectUnit`, not a
+  uniqueness rule on this table itself
+- **Application-layer pre-write check (2026-07-26):** `assertNoDuplicateEmployeeIdentifiers`
+  (`employees.service.ts`) rejects a create/update/reactivate/import row immediately, before any
+  write, for all four fields — the database's partial unique indexes are the real backstop for a
+  concurrent-write race, translated back to the same friendly per-field message
+  (`mapEmployeeUniqueViolation`), never a raw Prisma `P2002`/index name. **Uniqueness is global across
+  active and departed employees for all four fields** — a departed employee's CNIC/Code/Account
+  Number/IBAN remains permanently "claimed"; a rehire reactivates the existing row
+  (`database/schema-invariants.md §26` item 6), it never creates a second one, so a new employee can
+  never legitimately reuse a departed employee's identifiers.
+- **Preflight for existing duplicates before deploying the new constraint:**
+  `backend/scripts/find-employee-identifier-duplicates.ts` (read-only) reports any canonical-level
+  duplicate across all four fields — **must be run against production before this migration is ever
+  applied there** (2026-07-27 refinement); this repository has no production database access, so that
+  run has to happen separately, by someone who does, before deploy. The migration's own self-guarding
+  behavior (its `CREATE UNIQUE INDEX` statements fail outright, rolling back the whole migration, if a
+  duplicate already exists) is a backstop for an *unexpected* duplicate, not a substitute for running
+  this preflight — the goal is knowing about bad data before the deploy step ever attempts it, not
+  merely failing safely if it does.
+- **Account Number canonicalization review (2026-07-27 confirmation):** `normalizeAccountNumber`
+  (`shared/src/lib/banking.ts`) is string-only end to end — `.toUpperCase()` and a character-class
+  `.replace()`, never `Number()`/`parseInt()`/any numeric coercion, anywhere in the create/update/
+  import/uniqueness-check path. Leading zeros are always significant: `"000000065437654"` and
+  `"65437654"` canonicalize to two *different* strings and are correctly allowed as two distinct
+  employees' account numbers (`employee-identifier-uniqueness.test.ts`'s dedicated leading-zero
+  test) — they are never treated as numerically equal. Punctuation and whitespace *are* ignored for
+  uniqueness purposes only (e.g. `"0110-79310689-03"` and `"0110 79310689 03"` canonicalize
+  identically) — documented here explicitly, per the checkpoint's own request: this affects only the
+  `accountNumberCanonical` shadow column used for the uniqueness check, never the raw `accountNumber`
+  value itself, which is stored and displayed exactly as entered.
+- **Employee Code case-sensitivity (2026-07-27 confirmation, deliberately unchanged):**
+  `employeeCode` uniqueness is currently **case-sensitive** — `"ABC123"` and `"abc123"` are treated as
+  two different codes today (confirmed end-to-end, `employee-identifier-uniqueness.test.ts`), since
+  both the partial unique index and `findEmployeeByEmployeeCode`'s equality lookup use Postgres's
+  default (case-sensitive) text comparison with no normalization step. This is **not a recommendation
+  or an oversight** — it is the current, verified behavior, left unchanged deliberately. Whether
+  Employee Code should ever become case-insensitive is a future business-policy decision, not
+  something this checkpoint silently decides.
 - **Check constraints:** `grossPay >= 0`; `defaultEobiAmount >= 0`; `cnic` matches a 13-digit numeric
   pattern when present. **`iban` deliberately has no format/checksum constraint** (2026-07-11) — unlike
   `cnic`, it follows `accountNumber`/`branchCode`'s existing precedent of a free-form, length-capped

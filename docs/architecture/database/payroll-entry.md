@@ -89,7 +89,8 @@ module consumes these columns yet.
 | `eidAdvanceId` | uuid | yes | — | **Deferred to Phase 4 (2026-07-07) — not in Checkpoint 0's migration.** FK → `Advance.id`, `ON DELETE RESTRICT` — same, for the `EID_ADVANCE`-type advance |
 | `fine` | numeric(12,2) | no | `0` | |
 | `hold` | boolean | no | `false` | |
-| `released` | boolean | no | `false` | per-employee release flag — **derived** as of 2026-07-05, see the revision note above; set once every touched `ProjectUnit` has released, or by a Late Entry's own one-off release |
+| `released` | boolean | no | `false` | per-employee release flag — **derived** as of 2026-07-05, see the revision note above; set once every touched `ProjectUnit` has released, or by a Late Entry's own one-off release. **Never redefined by `payoutOutcome` below (2026-07-26)** — still means exactly "money was paid"; only ever set `true` for an entry whose own `netSalary > 0` at release time. |
+| `payoutOutcome` | enum (`NO_PAY_DUE`, `RECOVERY_DUE`) | yes | — | **added 2026-07-26, Negative Payroll Recovery checkpoint** (`database/release.md §12c`). The two non-payment resolutions a Unit release sweep can leave this entry in when its own `netSalary <= 0` — `NULL` for an ordinary Draft entry or one released for payment. Set exactly once, at the same moment `released` would otherwise flip; mutually exclusive with `released = true` by a raw-SQL CHECK constraint. `RECOVERY_DUE` also creates a `BalanceAdjustment(type: RECOVERY, originPayrollEntryId: this entry)` in the same transaction. |
 | `releasedAt` | timestamptz | yes | — | |
 | `releasedBy` | uuid | yes | — | FK → `User.id`, `ON DELETE RESTRICT` — for an ordinary release this is whichever Finance user's `PayrollUnitRelease` action was the *last* of this entry's touched Units to clear; for a Late Entry, the Finance user who performed its one-off release |
 | `lateReason` | text | yes | — | **added 2026-07-05.** Populated *only* when this entry undergoes its own one-off "Late Entry" release (`database/release.md §12b`) — i.e. it was created after every `ProjectUnit` it touches had already released for this cycle, so no future `PayrollUnitRelease` sweep will ever reach it. `NULL` for every ordinarily-released entry. Whether an unreleased entry currently *qualifies* as a Late Entry is not stored — it's derived on demand (`released = false AND every touched unit already has a PayrollUnitRelease row for this cycle`), since the ordinary sweep already correctly handles any entry with at least one still-pending Unit. Mandatory (enforced at the application layer) at the moment of that one-off release, mirroring `Correction.reason`'s "reason mandatory" convention. |
@@ -148,7 +149,9 @@ yet typed the account number must not have that in-progress edit rejected.
   `released = true ⇒ releasedAt IS NOT NULL AND releasedBy IS NOT NULL` (the `days`/`otHours`/
   `cycleDays` range checks moved to `PayrollEntryWorkLine`, §12a); `lateReason IS NOT NULL ⇒ released
   = true` (a `lateReason` only ever gets written at the moment of the one-off release itself — added
-  2026-07-05)
+  2026-07-05); `payoutOutcome IS NULL OR released = false` — added 2026-07-26, `database/release.md
+  §12c` — `released` and `payoutOutcome` can never both be set, keeping "paid" and "resolved without
+  payment" structurally distinct
 - **Indexes:** unique(`cycleId`, `employeeId`); (`cycleId`); (`employeeId`); composite
   (`cycleId`, `hold`, `released`) — the exact filter combination used by Release Salary, Bank Sheets,
   and Cash Receiving, and by the Payroll Cycle finalization precondition check
@@ -163,8 +166,11 @@ yet typed the account number must not have that in-progress edit rejected.
   not `ARCHIVED`**. Between `Draft` and `Released`, immutability is driven **exclusively** by this
   row's own `released` flag — never by cycle status. `hold` has **no bearing on mutability** in either
   state — it only affects downstream inclusion in Release/Bank Sheet/Cash Sheet, and remains an
-  ordinarily-editable field like any other while the entry is unlocked. Once `released = true`, every
-  column on the row — including `hold` — is frozen; there is deliberately no correctable path for
+  ordinarily-editable field like any other while the entry is unlocked. **Added 2026-07-26:** a
+  non-`NULL` `payoutOutcome` (`NO_PAY_DUE`/`RECOVERY_DUE`) locks the row exactly like
+  `released = true` does — `assertEntryEditable` checks both — even though `released` itself stays
+  `false` for these two outcomes. Once `released = true`, every column on the row — including
+  `hold` — is frozen; there is deliberately no correctable path for
   `hold`/`released` themselves (`CorrectionField`, `database/conventions-and-enums.md §1`, excludes
   them, since they are workflow state, not correctable payroll data). A held, unreleased entry
   (`released = false`, `hold = true`) stays **ordinarily editable through `Draft` and `Released`**

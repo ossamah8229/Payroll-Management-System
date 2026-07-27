@@ -7012,6 +7012,113 @@ Project Site import was not touched. No new Payroll Entry import was introduced.
 
 ---
 
+## Negative Payroll Recovery & Employee Identity/Banking Uniqueness Checkpoint
+
+**A standalone stabilization checkpoint against the closed Phase 6 baseline (`origin/main`
+at `5bb55a9`), not part of any phase's own scope. COMPLETE, COMMITTED LOCALLY on `main`
+(6 commits, `6760e83`..`2f15000`, see §5's own commit list). NOT pushed, NOT deployed —
+one deployment blocker remains (see below). Production UAT surfaced two financial-
+correctness gaps; this checkpoint closes both.**
+
+**Gap 1 — negative Net Salary could be released as a payment.** `calcNet()`
+(`shared/src/lib/calc-net.ts`) has no floor at zero — heavy Advance/Eid Advance/Fine/
+correction-recovery deductions can legitimately push `netSalary` below zero — and
+`releaseProjectUnit` had no net-salary check at all: it swept every non-held entry into
+`released = true` regardless of sign. **Fixed without ever redefining `released`** — it
+still means exactly "money was paid," only ever set `true` going forward for `netSalary >
+0`. A new nullable `PayrollEntry.payoutOutcome` enum (`NO_PAY_DUE` | `RECOVERY_DUE`,
+mutually exclusive with `released = true` by CHECK constraint) captures the other two
+outcomes: `netSalary = 0` resolves to `NO_PAY_DUE` (nothing paid, nothing owed);
+`netSalary < 0` resolves to `RECOVERY_DUE` and creates a `BalanceAdjustment(type:
+RECOVERY)` directly from the still-Draft entry — a new `originPayrollEntryId` origin on
+`BalanceAdjustment` (alongside the existing `correctionId` origin, exactly one of the two
+ever set) that reuses the entire existing materialization/settlement/carry-forward
+machinery unchanged, rather than building a second ledger. Full design:
+`docs/architecture/database/release.md §12c`,
+`docs/architecture/workflows/corrections-and-balance-adjustments.md`'s "Negative Payroll
+Recovery" section.
+
+**The core accounting risk — double-counting a carried-forward recovery — was explicitly
+traced and verified, not assumed.** `computeReleaseRecoveryAdjustment`
+(`corrections.materialization.ts`) computes `baseNet = netSalary + correctionBalanceRecovery`
+(this cycle's earnings before the old recovery deduction) and classifies into three cases:
+(1) non-negative, no adjustment; (2) negative but `baseNet >= 0` — the entry floors to
+`NO_PAY_DUE`, only `baseNet` of the old recovery settles, the remainder carries forward
+on the *same* adjustment, never a new one; (3) `baseNet` itself still negative — the old
+recovery settles `0` this cycle (its reservation is cancelled, not recorded as a zero
+settlement) and `baseNet` becomes the basis for a **distinct, new** recovery, never merged
+with the old one. All three cases, including case 3 (added by a dedicated follow-up test
+after the first review round self-identified it as untested), are verified end-to-end with
+an explicit conservation-invariant assertion (opening + newly generated − settled =
+closing, `Decimal`-safe) in
+`backend/tests/payroll-release-recovery-accounting.test.ts` — see the workflow doc's own
+"Preventing double-counted recovery" section for the full worked example.
+
+**One canonical release-eligibility function**, `evaluatePayrollEntryReleaseReadiness`
+(`payroll-release-eligibility.ts`), is the single source of truth for whether an entry may
+release at all — also catching a duplicate CNIC/Employee Code (defense-in-depth) or a
+duplicate Account Number/IBAN (the real gap, see below) or a bank-paid entry missing its
+Account Number. A blocked entry is excluded from the sweep entirely (same tier as `hold`),
+stays visible, and still blocks Finalize. Reused read-only by the Payroll Entry grid (a
+single centered "Needs Attention" badge, tooltip with the same generic, non-sensitive
+reasons — no duplicated frontend validation) and by Salary Release (`blockedEntries`:
+which employees, and why — valid employees on the same Unit still release normally).
+
+**Gap 2 — `accountNumber`/`iban` had zero uniqueness enforcement**, at any point in this
+schema's history (only `cnic`/`employeeCode` had partial unique indexes). Fixed with
+app-maintained `accountNumberCanonical`/`ibanCanonical` shadow columns
+(`shared/src/lib/banking.ts`'s `normalizeAccountNumber`/`normalizeIban` — string-only,
+uppercase, non-alphanumeric characters stripped, leading zeros always significant, raw
+display value never touched) and partial unique indexes on both (`WHERE ... IS NOT NULL`
+— multiple cash employees with null Account Number/IBAN remain valid). Uniqueness is
+global across active *and* departed employees for all four identifiers — a departed
+employee's identifiers stay permanently claimed; a rehire reactivates the existing row,
+never creates a second one. Enforced pre-write in create/update/reactivate/import
+(`assertNoDuplicateEmployeeIdentifiers`, friendly per-field messages, never a raw P2002
+index name) and, defensively, at release time by the same eligibility function above.
+Employee Code uniqueness stays case-sensitive — confirmed as current behavior, recorded
+as a future business-policy decision rather than silently changed. Full design:
+`docs/architecture/database/employee.md §9`.
+
+**Test results:** the new/dedicated recovery-accounting, release-eligibility, and
+employee-identifier-uniqueness suites, plus every directly-related existing suite
+(payroll release, all `corrections-*`, Finalize, Rollover, Bank Sheet, Cash Receiving,
+Advances) — **422/422** on the final verification run; backend `tsc --noEmit` clean. No
+full-suite regression re-run was performed, per explicit instruction — the focused/
+directly-related result was judged sufficient.
+
+**Two new migrations**, applied in order:
+`20260726120000_negative_payroll_recovery_schema` (the `payoutOutcome` enum/column, the
+`BalanceAdjustment` origin-XOR change) and
+`20260726121000_employee_account_iban_canonical_uniqueness` (the two shadow columns and
+their partial unique indexes). **The second migration is the one remaining deployment
+blocker**: its `CREATE UNIQUE INDEX` statements are self-guarding (they fail outright,
+rolling back the whole migration, if a canonical-level duplicate already exists in
+production), but per explicit instruction this checkpoint does not rely on "fails safely"
+alone — a read-only preflight script,
+`backend/scripts/find-employee-identifier-duplicates.ts`, must be run against production
+and confirmed clean (0 duplicate Employee Codes, 0 duplicate CNICs, 0 duplicate canonical
+Account Numbers, 0 duplicate canonical IBANs) **before this repository is pushed to
+`origin/main`** (Render auto-deploys from that branch). No production database access
+exists in this environment, so that run is a separate operator action. A second, non-
+blocking read-only diagnostic, `backend/scripts/find-negative-released-entries.ts`,
+reports any pre-existing `released = true` row with a negative net salary, for manual
+finance reconciliation — Bank Sheets/Cash Receiving are derived-only and never stored, so
+it cannot determine whether such a row was ever actually paid out; that remains a human
+judgment call, not something this checkpoint's code can resolve. **No production data was
+read, mutated, or otherwise touched by this checkpoint.**
+
+**Commits (local `main`, in order, none pushed):** `6760e83` (shared banking
+normalization helpers), `f79f564` (payout outcomes + recovery accounting, migration
+`20260726120000`), `b8e0b54` (employee identifier uniqueness, migration `20260726121000`),
+`d5d2e9f` (release-readiness/Needs Attention), `9e0c5e2` (tests), `2f15000` (read-only
+diagnostic scripts), plus this documentation commit. See `docs/SESSION_HANDOFF.md` §21
+for the full local-commit report (HEAD, ahead-of-`origin/main` count, working-tree status,
+production-preflight procedure). **Phase 7 remains Not Started; this checkpoint does not
+begin it.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -7321,6 +7428,25 @@ Project Site import was not touched. No new Payroll Entry import was introduced.
     13), restated here because the user's instructions this session explicitly asked for it to be
     re-verified against the new Project Unit/Work Line changes. Nothing about either change touches
     the deployment/tenancy model.
+24. **Employee Code case-sensitivity — CONFIRMED 2026-07-27 as current behavior, deliberately left
+    unchanged, and recorded as a future business-policy decision, not an oversight.** `"ABC123"` and
+    `"abc123"` are today treated as two different Employee Codes — both the partial unique index and
+    `findEmployeeByEmployeeCode`'s lookup use Postgres's default case-sensitive comparison, with no
+    normalization step anywhere in the write or read path. Confirmed by dedicated test
+    (`employee-identifier-uniqueness.test.ts`) during the Negative Payroll Recovery & Employee
+    Identity/Banking Uniqueness checkpoint (§1). Whether Employee Code should ever become
+    case-insensitive remains open, deliberately not decided by that checkpoint.
+25. **Negative/zero Net Salary accounting classification — RESOLVED 2026-07-26/27, Negative Payroll
+    Recovery & Employee Identity/Banking Uniqueness checkpoint (§1's own entry has the full design
+    and accounting proof).** `netSalary > 0` releases as a real payment (`released = true`, unchanged
+    meaning); `netSalary = 0` resolves to `PayrollEntry.payoutOutcome = NO_PAY_DUE`; `netSalary < 0`
+    resolves to `RECOVERY_DUE` and creates a `BalanceAdjustment(type: RECOVERY)` directly from the
+    still-Draft entry, reusing the existing Correction-adjacent materialization/settlement machinery
+    rather than a new ledger. A carried-forward recovery larger than a future cycle's own earnings is
+    proven, with a dedicated conservation-invariant test, to never double-count into a second
+    recovery. **Deployment of the accompanying Employee identifier-uniqueness migration
+    (`20260726121000_employee_account_iban_canonical_uniqueness`) remains blocked on a production
+    duplicate preflight — see §1's own entry and `docs/SESSION_HANDOFF.md` §21.**
 
 ---
 
@@ -7349,12 +7475,36 @@ Project Site import was not touched. No new Payroll Entry import was introduced.
   This is the single condition keeping Phase 4 from being marked fully closed (§1's "Phase 4
   close-out review," §2's Phase 4 row). Must be closed with a real deploy (or genuine Linux
   container) smoke test — a further local run does not satisfy it.
+- **Production duplicate preflight — OUTSTANDING, blocks pushing this checkpoint (added
+  2026-07-27, Negative Payroll Recovery & Employee Identity/Banking Uniqueness checkpoint, §1's own
+  entry).** Migration `20260726121000_employee_account_iban_canonical_uniqueness` adds partial
+  unique indexes on Employee `accountNumberCanonical`/`ibanCanonical`. It is self-guarding (fails
+  and rolls back if a canonical duplicate already exists), but per explicit instruction that is not
+  relied on alone: `backend/scripts/find-employee-identifier-duplicates.ts` (read-only) must be run
+  against production and confirmed clean (0 duplicates across all four identifier fields) before
+  this repository is pushed to `origin/main` — Render auto-deploys from that branch. No production
+  database access exists in this environment; this is a separate operator action. See
+  `docs/SESSION_HANDOFF.md` §21 for the exact procedure.
 
 ---
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-07-26 (latest) — Employee Import Template Post-deployment UAT
+**Updated 2026-07-27 (latest) — Negative Payroll Recovery & Employee Identity/Banking
+Uniqueness Checkpoint: COMPLETE, COMMITTED LOCALLY on `main` (6 commits,
+`6760e83`..`2f15000`), NOT pushed, NOT deployed.** See the dedicated "Negative Payroll
+Recovery & Employee Identity/Banking Uniqueness Checkpoint" entry in §1 (immediately
+above §2) for the full record and `docs/SESSION_HANDOFF.md` §21 for the exact
+local-commit report and production-preflight procedure. **The next development session's
+first action, before anything else touches `main`, is: get someone with production
+database access to run `backend/scripts/find-employee-identifier-duplicates.ts` against
+production and confirm 0 duplicates across Employee Code/CNIC/canonical Account
+Number/canonical IBAN — only then push `main` to `origin/main`.** Until that preflight
+passes, do not push, do not deploy, do not run `prisma migrate deploy` against
+production. Phase 7 remains Not Started.
+
+**Updated 2026-07-26 (superseded by the entry above for status purposes, kept for its own
+still-useful record) — Employee Import Template Post-deployment UAT
 Correction: COMPLETE, COMMITTED, and pushed/deployed.** See the dedicated "Employee
 Import Template — Post-deployment UAT Correction" entry in §1 (immediately above §2)
 for the full record and `docs/SESSION_HANDOFF.md` §20 for the exact

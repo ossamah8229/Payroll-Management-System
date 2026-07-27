@@ -4,7 +4,7 @@
 
 **Contains:** `PayrollUnitRelease`, `PayrollUnitReadiness`
 
-**Sections:** §12b · Full index: `database/README.md`
+**Sections:** §12b, §12c · Full index: `database/README.md`
 
 ---
 
@@ -46,12 +46,11 @@ it can release.
   same convention as `Correction`/`AuditLog`/`EmployeeTransferHistory`
 - **Transactions required:** yes, always — inserting this row must, in the same transaction, sweep
   every `PayrollEntry` with a work line touching `unitId` in `cycleId` and, for each one whose *every*
-  distinct touched Unit now has a `PayrollUnitRelease` row, flip `released = true` /
-  `releasedAt` / `releasedBy`, settle any `PENDING` `BalanceAdjustment` for that employee (merged into
-  the Bank Sheet/Cash Sheet payment amount, unchanged from the existing rule,
-  `database/balance-adjustments.md §14`), and write the corresponding `AuditLog` entries (a
-  `payroll_unit.released` entry for this event itself, plus the ordinary `payroll.released` entry for
-  each entry it swept in)
+  distinct touched Unit now has a `PayrollUnitRelease` row, classify it per §12c below, settle any
+  `PENDING` `BalanceAdjustment` for that employee (merged into the Bank Sheet/Cash Sheet payment
+  amount, unchanged from the existing rule, `database/balance-adjustments.md §14`), and write the
+  corresponding `AuditLog` entries (a `payroll_unit.released` entry for this event itself, plus one of
+  `payroll_entry.released` / `.no_pay_due` / `.recovery_due` / `.release_blocked` per swept entry)
 - **Row count:** roughly (Units per Site × Sites) per cycle — comparable in order of magnitude to
   `ProjectUnit` itself (`database/sites-and-units.md §8a`: ~50–300 total), not to `PayrollEntry`
 
@@ -105,5 +104,79 @@ locked; it simply indicates payroll preparation is complete").
   comparable to `PayrollUnitRelease`'s scale, and shrinks further once released (Ready is typically
   cleared or simply superseded by the actual release; nothing requires clearing it, it's just moot
   once released)
+
+## 12c. Negative Payroll Recovery — release outcome classification
+
+**Added 2026-07-26, Negative Payroll Recovery & Employee Identity/Banking Uniqueness checkpoint.**
+Closes a real production gap: `calcNet()` (`shared/src/lib/calc-net.ts`) has no floor at zero — heavy
+`advanceDeduction`/`eidAdvanceDeduction`/`fine`/`correctionBalanceRecovery` can legitimately push
+`netSalary` below zero — and, before this checkpoint, `releaseProjectUnit` swept every non-held entry
+into `released = true` regardless of sign, so a negative-net entry could be marked "Released" and
+(had Bank Sheet/Cash Receiving not independently filtered on `released`) counted as payable.
+
+**`released` is never redefined** — it continues to mean exactly what it always has: money was paid.
+Going forward it is only ever set `true` for an entry whose own `netSalary > 0` at the moment its
+Unit(s) release. The sweep (`payroll-release.service.ts`) now classifies every candidate entry via
+one canonical function, `evaluatePayrollEntryReleaseReadiness` (`payroll-release-eligibility.ts`),
+before writing anything:
+
+| `netSalary` | Outcome | `released` | `PayrollEntry.payoutOutcome` |
+|---|---|---|---|
+| `> 0` | Paid | `true` | `null` |
+| `= 0` | No payment due | `false` | `NO_PAY_DUE` |
+| `< 0` | Employee overpaid/over-deducted | `false` | `RECOVERY_DUE` |
+
+`payoutOutcome` (enum `PayrollEntryPayoutOutcome`, nullable on `PayrollEntry`) is the new column that
+records the two non-payment resolutions — set exactly once, at the same moment `released` would
+otherwise flip, and mutually exclusive with `released = true` by a raw-SQL CHECK constraint
+(`PayrollEntry_payoutOutcome_released_check`). An entry with `payoutOutcome` set is just as locked as
+a released one (`assertEntryEditable`, `database/payroll-entry.md §12`) and just as "resolved" for
+Finalize's purposes (`payroll-processing.service.ts`'s `blockingCount` query) — even though `released`
+itself stays `false`.
+
+**`RECOVERY_DUE` creates a `BalanceAdjustment(type: RECOVERY)`** for `abs(netSalary)`, in the same
+transaction — see `docs/architecture/workflows/corrections-and-balance-adjustments.md`'s own section
+on this. **Mixed-Unit release**: a Unit release sweep processes every eligible candidate entry in one
+pass regardless of sign — a positive-net and a negative-net employee touching the same Unit both
+resolve in the same release event; neither blocks the other.
+
+**Release-eligibility gate (identity/payment-destination validity):** the same
+`evaluatePayrollEntryReleaseReadiness` call also checks, per candidate entry: a duplicate CNIC or
+Employee Code elsewhere (defense-in-depth — the database's own partial unique indexes already
+prevent new duplicates, `database/employee.md §9`), a duplicate Account Number/IBAN elsewhere
+(compared against the entry's own frozen banking snapshot, not the live Employee record — the "copied,
+not linked" convention this schema already uses), and a bank-paid entry (`bankId` set) missing its
+Account Number. A Cash entry (`bankId = null`) is never blocked for missing banking details. A
+non-releasable entry is excluded from the sweep entirely — same tier as `hold` — staying
+`released: false, hold: false, payoutOutcome: null`; it remains visible and still blocks Finalize
+until the underlying master data is fixed or it is manually held. No new "Late Entry"/exceptional
+one-off release mechanism is introduced by this gate — a blocked entry whose Unit(s) have already
+released has the same "addressed forward in a future cycle" limitation an ordinary held entry already
+has (`database/payroll-entry.md §12`'s own documented gap), not a new one.
+
+**Bank Sheet/Cash Receiving** (`bank-sheets.service.ts`/`cash-receiving.service.ts`) add an explicit
+`netSalary > 0` filter on top of their existing `released: true, hold: false` query — defense-in-depth
+only, since `released` is now only ever set for positive-net entries going forward, but cheap
+insurance against a pre-existing bad row (a negative-net entry marked `released` before this
+checkpoint shipped) ever resurfacing as payable if a historical cycle's sheet is regenerated. Neither
+generator nets one employee's recovery against another's payable total — each entry stands alone.
+
+**A carried-forward recovery deduction larger than the target cycle's earnings never double-counts**
+— see `docs/architecture/workflows/corrections-and-balance-adjustments.md`'s "Preventing
+double-counted recovery" section for the full accounting (`computeReleaseRecoveryAdjustment`).
+`payoutOutcome`/`released` classification always uses that adjusted figure, never the raw `calcNet`
+result, whenever `correctionBalanceRecovery > 0`.
+
+**Pre-release "Needs Attention" visibility (2026-07-27 refinement):** a still-unresolved entry the
+release-eligibility gate would block is surfaced in the Payroll Entry grid itself, before an operator
+ever attempts release — `PayrollEntry`'s list/detail responses carry a `releaseBlockReasons: string[]`
+field (empty for a resolved or fully-eligible entry), computed via the exact same
+`RELEASE_BLOCK_REASONS` wording `evaluatePayrollEntryReleaseReadiness` itself throws. The list
+endpoint uses a bulk-batched variant (`attachReleaseBlockReasonsBulk`,
+`payroll-entry.service.ts`) — a handful of batched queries per page instead of up to four sequential
+lookups per row — after an unbatched per-row version measurably regressed this codebase's own
+10,000-employee concurrency suite (`payroll-entry-performance.test.ts`). The Salary Release result
+(`ReleaseUnitResult.blockedEntries`) likewise reports each blocked employee's name and reasons, not
+just a bare count, so a mixed-Unit release's blocked employees are inspectable, not silently excluded.
 
 ---

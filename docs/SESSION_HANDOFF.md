@@ -2504,3 +2504,97 @@ currently accessible Sites appear with no blank entries.
 **Phase 7 remains Not Started; this correction does not begin it. Project Site import was not
 touched. No new Payroll Entry import was introduced.**
 
+## 21. Addendum, 2026-07-27 (latest) — Negative Payroll Recovery & Employee Identity/Banking
+Uniqueness Checkpoint: COMPLETE, COMMITTED LOCALLY on `main`, NOT pushed, NOT deployed
+
+Full architecture/design record: `docs/PROJECT_PROGRESS.md` §1's own dated entry (immediately above
+§2), `docs/architecture/database/release.md §12c`, `docs/architecture/database/employee.md §9`, and
+`docs/architecture/workflows/corrections-and-balance-adjustments.md`'s "Negative Payroll Recovery"
+section (including the full recovery-conservation accounting proof). This addendum is the
+local-commit and production-preflight-procedure record specifically.
+
+**What this checkpoint covers, in one line each:** negative/zero Net Salary can no longer be
+released as a payment (`PayrollEntry.payoutOutcome`: `NO_PAY_DUE`/`RECOVERY_DUE`, `released` never
+redefined); a carried-forward recovery deduction larger than a future cycle's own earnings is
+proven, with a dedicated test, to never double-count into a second recovery; Employee Account
+Number/IBAN gained the uniqueness enforcement they never had (global across active and departed
+employees, same as CNIC/Employee Code); one canonical release-eligibility function replaces
+scattered checks and surfaces a single "Needs Attention" badge pre-release; Bank Sheet/Cash
+Receiving gained a defensive `netSalary > 0` filter; two read-only diagnostic scripts were added for
+production use.
+
+### Local commit list (in order, oldest first)
+
+| Commit | Subject |
+|---|---|
+| `6760e83` | `feat(shared): add banking identifier normalization helpers` |
+| `f79f564` | `feat(payroll): add no-pay/recovery payout outcomes and recovery accounting` |
+| `b8e0b54` | `feat(employees): enforce account number and IBAN uniqueness` |
+| `d5d2e9f` | `feat(payroll-entry): surface release readiness and Needs Attention` |
+| `9e0c5e2` | `test: cover recovery accounting, release eligibility, and employee identifier uniqueness` |
+| `2f15000` | `chore: add read-only production diagnostic scripts` |
+| *(this commit)* | `docs: record Negative Payroll Recovery & Employee Identity/Banking Uniqueness checkpoint` |
+
+No separate `perf:` commit was created — the transaction-boundary/batching fix in
+`payroll-entry.service.ts` (readiness attachment runs after the mutation's own transaction commits,
+not inside it) is inseparable from the feature commit that introduced the attachment call in the
+first place; splitting it would have required fabricating an intermediate historical state that
+never actually shipped as its own commit-able point.
+
+**Local `main` HEAD after this documentation commit is `2f15000`'s child — see the final
+local-commit report the user requested for the exact resolved SHA, ahead-of-`origin/main` count, and
+working-tree status at the time it was produced (that report is the authoritative snapshot; this
+addendum is written before the docs commit itself is created, so it cannot self-reference its own
+hash).**
+
+### Production duplicate preflight — the one remaining deployment blocker
+
+Migration `20260726121000_employee_account_iban_canonical_uniqueness` adds partial unique indexes on
+`Employee.accountNumberCanonical`/`ibanCanonical`. It is self-guarding (its `CREATE UNIQUE INDEX`
+statements fail outright, rolling back the whole migration, if a canonical-level duplicate already
+exists), but per explicit instruction this checkpoint does not rely on "fails safely" alone — the
+goal is knowing about bad data *before* Render ever attempts the migration, not merely surviving a
+failed attempt.
+
+**Exact procedure, for someone with production database access (not performed by this session — no
+such access exists here):**
+
+```bash
+# From a machine/session with a valid production DATABASE_URL (read replica is fine — this script
+# only ever SELECTs, never writes):
+cd backend
+DATABASE_URL="<production connection string>" npx tsx scripts/find-employee-identifier-duplicates.ts
+```
+
+**PASS condition** — the script's own final line reads `No duplicates found — safe, as far as this
+database is concerned, to apply the uniqueness migration.`, which only happens when all four of its
+per-field checks report zero groups:
+- `Employee Code: no canonical-level duplicates found.`
+- `CNIC: no canonical-level duplicates found.`
+- `Account Number: no canonical-level duplicates found.`
+- `IBAN: no canonical-level duplicates found.`
+
+If any field instead reports `N duplicate value(s) found`, the migration must **not** be deployed
+until each reported group is remediated (merge/correct the duplicate records) — do not push `main`
+to `origin/main` in that case, since Render auto-deploys from that branch and would then either fail
+the deploy outright (the migration's own self-guard) or, if remediated incorrectly, silently merge
+two distinct employees' identifiers.
+
+**Second, non-blocking diagnostic** (for historical finance remediation, not a deploy gate):
+
+```bash
+cd backend
+DATABASE_URL="<production connection string>" npx tsx scripts/find-negative-released-entries.ts
+```
+
+This reports any pre-existing `PayrollEntry` row already marked `released = true` whose recomputed
+net salary is negative — bad data from *before* this checkpoint's fix shipped. It does not block the
+uniqueness migration and was not run here (no production access); its output, once obtained, is a
+manual finance reconciliation input, not something either script or this checkpoint can resolve
+programmatically (Bank Sheets/Cash Receiving are derived-only and never stored, so there is no
+historical record of what was actually paid).
+
+**No production data of any kind was read, mutated, or otherwise touched by this checkpoint or this
+session. Do not push `main` to `origin/main` until the first script above has been run against
+production and confirmed clean. Phase 7 remains Not Started; this checkpoint does not begin it.**
+
