@@ -7292,7 +7292,39 @@ its Cache-Control/audit behavior was already correct.
 
 **Phase 7 has only begun — Checkpoint 1 (backend ledger), including its gap-closure pass, is complete;
 the Statement frontend page, Reports, and Dashboard are all still Not Started, each requiring its own
-separate authorization. Not committed, not pushed, not deployed, per explicit instruction.**
+separate authorization.** Committed and pushed — see the landing record immediately below.
+
+#### Phase 7A, Checkpoint 1 — landing record (commit, push, deploy verification), 2026-07-27
+
+Landed as three logical commits: `87e34d1` (`feat(statements): add canonical employee statement
+ledger`), `bdc4bfd` (`test(statements): cover ledger reconciliation, RBAC and sensitive access`,
+28/28), `8d141b7` (`docs: record Phase 7A canonical Statement ledger checkpoint`). Pushed to
+`origin/main` — local `HEAD` and `origin/main` both confirmed at `8d141b7` via `git fetch` +
+`git rev-parse` on both sides; working tree clean throughout.
+
+**No schema or migration change in this checkpoint** — `backend/prisma/schema.prisma` and
+`backend/prisma/migrations/` are untouched by any of the three commits; `prisma validate` was clean
+before commit and no migration exists for Render's `prisma migrate deploy` start-command step to run
+against this push.
+
+**Render deployment verification (read-only, no authenticated production access):**
+- `https://payroll-management-api-wlic.onrender.com/health` → `{"status":"ok"}` / HTTP 200,
+  consistently across 4 checks spaced ~4s apart — no crash loop.
+- `https://payroll-management-app-qa3x.onrender.com/` (root) and `/login` → HTTP 200.
+- **Direct, stronger evidence the new backend build is actually live**: an unauthenticated
+  `GET /api/v1/employees/00000000-0000-0000-0000-000000000000/statement` returned **HTTP 401**
+  (rejected by session auth) rather than 404 — the new route exists and is registered in the running
+  production process, not just "the server didn't crash." This single read-only, unauthenticated probe
+  is also the only production request this checkpoint's landing made — it never reached any data layer
+  (rejected at the session-auth middleware, before the route handler or any database query).
+- **Authenticated production Statement UAT: NOT PERFORMED.** This environment has no production
+  credentials and no authenticated production access — genuinely testing the new endpoint end-to-end
+  (login, fetch a real employee's Statement) was not attempted and is not claimed. If the user has
+  production access, exercising the endpoint once for a real employee is worthwhile follow-up
+  confirmation, not a blocker — the endpoint is read-only by construction (§13's audit-behavior
+  section) and cannot mutate anything even if exercised.
+- **No production data was created, modified, or deleted by this landing** — every check above is
+  either an unauthenticated `GET` rejected before touching any table, or a plain HTTP status check.
 
 ---
 

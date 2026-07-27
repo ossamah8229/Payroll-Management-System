@@ -19,7 +19,15 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 > **Update, 2026-07-27 (latest) — Phase 7 has formally begun. Architecture review COMPLETE (read-only,
 > no code); Phase 7A Checkpoint 1 (canonical Employee Statement of Account ledger, backend only) is
-> COMPLETE, NOT COMMITTED.** New module `backend/src/modules/statements/` — a purely derived,
+> COMPLETE, COMMITTED (`87e34d1`/`bdc4bfd`/`8d141b7`), PUSHED, AND DEPLOYED** — local `HEAD` and
+> `origin/main` both confirmed at `8d141b7`; Render auto-deployed cleanly (no migration needed — no
+> schema/migration change in this checkpoint); `/health` returned `{"status":"ok"}` consistently, the
+> frontend root and `/login` both returned 200, and an unauthenticated probe of the new
+> `/api/v1/employees/:id/statement` route returned `401` (not `404`), directly confirming the new
+> backend build is live — the one production request this landing made, rejected before touching any
+> data. **Authenticated production Statement UAT was NOT performed** (no production credentials in
+> this environment); no production data was created, modified, or deleted. New module
+> `backend/src/modules/statements/` — a purely derived,
 > read-only ledger over `PayrollEntry`/`Correction`/`BalanceAdjustment`/`Advance`, exposing three
 > independent running balances (Payable to Employee / Recoverable from Employee / Advance Outstanding
 > — never combined), a hard informational-vs-financial-movement invariant, full negative-payroll and
@@ -33,9 +41,10 @@ be enough to resume correctly without re-deriving context from scratch — per
 > than silent (zero weakening of the underlying security rule). **Final: 28/28 ledger tests, 123/123
 > across every directly-related regression suite, zero regressions, backend typecheck/lint/build
 > clean.** Full design record: `docs/architecture/workflows/statements-ledger.md`; full build record:
-> `docs/PROJECT_PROGRESS.md`'s "Phase 7A, Checkpoint 1" and "gap-closure pass" entries. **No frontend,
-> print/export, Reports, or Dashboard work was done — each remains a separate, later checkpoint
-> requiring its own explicit authorization. Not committed, not pushed, not deployed.**
+> `docs/PROJECT_PROGRESS.md`'s "Phase 7A, Checkpoint 1", "gap-closure pass", and "landing record"
+> entries. **No frontend, print/export, Reports, or Dashboard work was done — each remains a separate,
+> later checkpoint requiring its own explicit authorization. Next: Phase 7A Checkpoint 2 (Statements
+> frontend page) — not started.**
 
 > **Update, 2026-07-23 (latest same-day update) — Pre-Deployment Reliability Checkpoint (Payslip PDF
 > Full-Suite Flakiness) is COMPLETE, NOT pushed.** `payslips.test.ts`'s intermittent full-suite
