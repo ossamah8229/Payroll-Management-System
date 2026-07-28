@@ -428,3 +428,67 @@ discovers the employee through the new historical endpoint, views their permitte
 and sees the restriction notice render live — no `page.route` interception, replacing this
 checkpoint's own earlier mocked compromise. Full test/build record:
 `docs/PROJECT_PROGRESS.md`'s "Phase 7A Checkpoint 2 correction" entry.
+
+## 17. Phase 7B, Checkpoint 1 — backend Statement PDF export (IMPLEMENTED, awaiting review)
+
+**Status: implemented, not yet committed/pushed/deployed.** Adds a backend-generated PDF export of
+the canonical Statement — `GET /api/v1/employees/:employeeId/statement/pdf` — the first of Phase
+7B's export/print surfaces (Excel, CSV, frontend download/print buttons, Reports, and Dashboard all
+remain separate, later, Not Started checkpoints; see `docs/PROJECT_PROGRESS.md`'s Phase 7 sequence
+note).
+
+**No new export pipeline** — this checkpoint reuses the exact Puppeteer/HTML-to-PDF architecture
+Payslips already established (`lib/pdf/render-pdf.ts`'s `renderHtmlToPdf`, the shared browser
+singleton in `lib/pdf/browser.ts`, the shared `PRINT_STYLES` stylesheet, and the mandatory
+`escapeHtml()` sanitizer), adding one new pure template, `lib/pdf/templates/statement.ts`
+(`renderStatementHtml`), that accepts the already-assembled `EmployeeStatement` DTO and request/
+company metadata only — no Prisma, no I/O, no balance calculation of any kind.
+
+**Permission**: reuses `statements:view` — no new `statements:export` permission was added, matching
+`payslips:view`'s own precedent of gating view and export uniformly (an explicit, approved Phase 7B
+architecture-review decision). The permission's own metadata label was updated (`View & export
+Employee Statements`) to reflect the broadened scope; the grant itself (Master Admin, Payroll Staff,
+Finance) is unchanged.
+
+**Canonical DTO remains the sole financial source of truth**: `generateStatementPdf()`
+(`statements.service.ts`) calls `getEmployeeStatement()` — the exact same function and RBAC/
+historical-site-scope/concealment behavior the JSON route already uses — **exactly once** per export
+request, then passes its output straight into `renderStatementHtml()`. `openingBalances`, every
+entry's own `movement`/`runningBalances`, and `closingBalances` are rendered verbatim; the template
+never sums, nets, or infers a balance from a neighbouring row. The one additional read this checkpoint
+needs beyond the ledger itself is a live `getCompanySettings()` call (the same accepted, documented
+"read live, never snapshotted" gap Payslip's own PDF already carries) for the company name/address in
+the document header — no logo, signature, watermark, or approval block, and no new Company Settings
+field, per this checkpoint's explicit scope boundary.
+
+**Multi-page support**: `renderHtmlToPdf` is called with `displayHeaderFooter: true` and a page-number
+footer template (`STATEMENT_PDF_FOOTER_TEMPLATE`) — the first template in this codebase to need either
+option (a single-page Payslip needed neither). Verified empirically against 1-page, 2-page, 10-page
+(300-entry), long-description, and zero-entry fixtures: table headers repeat correctly on every page,
+no column clipping or horizontal truncation at A4 portrait, no unexpected blank pages, and the Opening/
+Closing Balances sections land correctly relative to the ledger table regardless of how many pages it
+spans. Portrait was sufficient for the approved 7-column ledger layout — no landscape fallback was
+needed or used.
+
+**Audit**: a new `statement.exported` action (metadata: `format: 'pdf'`, `employeeId`, requested and
+resolved `fromCycleId`/`toCycleId`, `entryCount`, `disposition`) — distinct from the existing
+`statement.viewed` (JSON route only); one request never produces both.
+
+**Filename**: `employee-statement-{employee-code-or-short-id}-{period-slug}.pdf`, reusing Payslip's
+own `slugify()` and (now exported) `periodSlug()` helpers rather than adding a fourth independent
+"YYYY-MM, zero-padded" implementation. No CNIC or banking field ever appears in the filename.
+
+**Post-review refinement — always `Content-Disposition: attachment`, no `?disposition=inline` mode.**
+Unlike Payslips' `/pdf` route (which deliberately serves both inline preview and download from one
+route), the Statement PDF endpoint has exactly one responsibility: download the official Employee
+Statement PDF. **Employee Statement PDFs are always downloaded** — there is no in-browser preview
+mode on this endpoint. **Browser Print for Statements will be introduced separately in a later Phase
+7B checkpoint**, reusing the existing `PrintButton`/`useTriggerPrint` system already established for
+other pages (`docs/architecture/print-architecture.md`) — that is a genuinely different mechanism
+(rendering the live on-screen ledger table via the browser's own print dialog), not a second mode of
+this PDF endpoint. `metadata.disposition` in the audit entry is retained as a constant `'attachment'`
+value (audit shape left otherwise unchanged) rather than removed.
+
+**Not included in this checkpoint** (all remain separate, later Phase 7B work): Excel export, CSV
+export, any frontend download button, browser Print integration for Statements, Reports, Dashboard.
+Full build/test/verification record: `docs/PROJECT_PROGRESS.md`'s "Phase 7B, Checkpoint 1" entry.

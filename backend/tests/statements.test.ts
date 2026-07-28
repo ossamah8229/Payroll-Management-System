@@ -1,13 +1,24 @@
+import request from 'supertest';
 import { Decimal } from 'decimal.js';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
 import { searchStatementEmployees } from '../src/modules/statements/statements.service';
 import { loadSessionUser } from '../src/modules/auth/auth.service';
+import { closeBrowser } from '../src/lib/pdf/browser';
+import * as renderPdfModule from '../src/lib/pdf/render-pdf';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
 const PASSWORD = 'CorrectHorseBattery1!';
+
+/** Pre-Deployment Reliability Checkpoint precedent (`payslips.test.ts`'s own identical comment) —
+ * this file now also drives real Puppeteer PDF generation (Phase 7B Checkpoint 1's own PDF export
+ * tests, below), the same real-browser-under-shared-host-contention risk that checkpoint already
+ * measured and responded to for Payslips. Applied here proactively rather than waiting for a
+ * reproduced flake, since the cause (a shared, resource-constrained host) applies identically to
+ * any suite that launches the same singleton Chromium instance. */
+jest.setTimeout(45000);
 
 /**
  * Phase 7A Checkpoint 1 — canonical Employee Statement of Account ledger
@@ -26,6 +37,11 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
   afterAll(async () => {
     await cleanTestData();
     await prisma.$disconnect();
+    // Phase 7B Checkpoint 1 — this file now also launches the shared Puppeteer singleton (PDF
+    // export tests, below); closing it here matches `browser.ts`'s own documented contract ("called
+    // from PDF-related test suites' own afterAll, so neither a real process exit nor a Jest run
+    // leaves an orphaned Chrome process") and mirrors `payslips.test.ts`'s identical call exactly.
+    await closeBrowser();
   });
 
   // --- Agents --------------------------------------------------------------------------------
@@ -1418,5 +1434,318 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
       expect(smallQueries).toBe(3);
       expect(largeQueries).toBe(3);
     });
+  });
+
+  // ==============================================================================================
+  // Phase 7B Checkpoint 1 — Statement PDF export
+  // ==============================================================================================
+
+  /** supertest/superagent only auto-buffers `res.body` for content-types it recognizes as binary —
+   * `application/pdf` isn't reliably one of them — same helper as `payslips.test.ts`'s/
+   * `bank-sheets.test.ts`'s own identically-named, independently duplicated `binaryParser`. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function binaryParser(res: any, callback: (err: Error | null, body: unknown) => void) {
+    res.setEncoding('binary');
+    let data = '';
+    res.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    res.on('end', () => {
+      callback(null, Buffer.from(data, 'binary'));
+    });
+  }
+
+  /** Crude, heuristic page-count estimate from the raw PDF byte stream — counts `/Type /Page`
+   * object entries while excluding `/Type /Pages` (the page-*tree* node, not an individual page).
+   * Empirically verified against this checkpoint's own manually-inspected fixtures (1/2/10-page
+   * cases each matched this count exactly) — good enough for an automated "this is genuinely
+   * multi-page" signal, but not a substitute for the manual visual inspection reported alongside
+   * it (this checkpoint's own report is explicit that the two are not the same kind of evidence). */
+  function estimatePdfPageCount(buffer: Buffer): number {
+    const matches = buffer.toString('latin1').match(/\/Type\s*\/Page[^s]/g);
+    return matches ? matches.length : 0;
+  }
+
+  function getStatementPdf(agent: Agent, employeeId: string, query = '') {
+    return agent.agent.get(`/api/v1/employees/${employeeId}/statement/pdf${query}`).buffer(true).parse(binaryParser);
+  }
+
+  it('A: requires authentication — an unauthenticated request is rejected', async () => {
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF Auth');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Auth Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const res = await request(app).get(`/api/v1/employees/${employee.id}/statement/pdf`);
+    expect(res.status).toBe(401);
+  });
+
+  it('B: requires statements:view — a user without it is rejected', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-noperm-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF NoPerm');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF NoPerm Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const noPerm = await createAuthenticatedAgent(app, {
+      email: 'stmt-pdf-noperm-user@test.local',
+      password: PASSWORD,
+      roleCode: 'TEST_NO_STATEMENTS_VIEW',
+      permissionKeys: [PERMISSIONS.PAYROLL_VIEW],
+      siteIds: [site.id],
+    });
+    const res = await getStatementPdf(noPerm, employee.id);
+    expect(res.status).toBe(403);
+  });
+
+  it('C: Master Admin can export a valid, non-empty PDF, always as an attachment', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF Admin');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Admin Employee', employeeCode: 'PDFADM1', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    const entry = await getEntry(admin, cycle.id, employee.id);
+    await setNetSalary(admin, entry.id, entry.version, '5000');
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await getStatementPdf(admin, employee.id);
+    expect(res.status).toBe(200);
+    const buffer = res.body as Buffer;
+    expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(buffer.length).toBeGreaterThan(0);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename="employee-statement-pdfadm1-[a-z0-9-]+\.pdf"$/);
+  });
+
+  it('post-review refinement: a ?disposition=inline query param has no effect — the response is always an attachment', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-noinline-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF NoInline');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF NoInline Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await getStatementPdf(admin, employee.id, '?disposition=inline');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('attachment');
+    expect(res.headers['content-disposition']).not.toContain('inline');
+  });
+
+  it('H: falls back to a short-id-based filename when the employee has no employeeCode, with no CNIC or unsafe characters', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-filename-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF Filename');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Filename Employee', cnic: '3520299999999', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await getStatementPdf(admin, employee.id);
+    expect(res.status).toBe(200);
+    const disposition = res.headers['content-disposition'] as string;
+    expect(disposition).toMatch(/^attachment; filename="employee-statement-[a-z0-9-]+\.pdf"$/);
+    expect(disposition).not.toContain('9999999');
+    // The filename *value* itself (inside the quotes the header format itself always adds) must
+    // contain no quote/CNIC/unsafe character — checked against the extracted value, not the whole
+    // `filename="..."` header, which legitimately always has two literal quote characters.
+    const filename = /filename="([^"]+)"/.exec(disposition)![1]!;
+    expect(filename).not.toContain('"');
+    expect(filename).not.toMatch(/[<>:'"/\\|?*]/);
+  });
+
+  it('D/E: a historically scoped user exports only their visible history; zero Site overlap preserves the concealed 404', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-scope-admin@test.local');
+    const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Stmt PDF Scope A');
+    const { site: siteB } = await makeSiteWithUnit('Test Site Stmt PDF Scope B');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Scope Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+    });
+
+    const cycle1 = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle1.id, unitA.id);
+
+    const staffA = await payrollStaffAgent('stmt-pdf-scope-staffA@test.local', [siteA.id]);
+    const staffB = await payrollStaffAgent('stmt-pdf-scope-staffB@test.local', [siteB.id]);
+
+    // Site A user: visible history exists (the released cycle above) — exports successfully.
+    const resA = await getStatementPdf(staffA, employee.id);
+    expect(resA.status).toBe(200);
+    expect((resA.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+
+    // Site B user: zero overlap with this employee's history — the same "reveal nothing" 404
+    // `getEmployeeStatement` itself already establishes for the JSON route, never a 403 that would
+    // confirm the employee exists.
+    const resB = await getStatementPdf(staffB, employee.id);
+    expect(resB.status).toBe(404);
+  });
+
+  it('F: the requested range is passed through to the canonical Statement service exactly as the JSON route resolves it', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-range-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF Range');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Range Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle1 = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle1.id, unit.id);
+    await finalizeCycle(admin, cycle1.id);
+    const cycle2 = await rollover(admin, cycle1.id);
+    await releaseUnit(admin, cycle2.id, unit.id);
+
+    const jsonRes = await getStatement(admin, employee.id, `?fromCycleId=${cycle1.id}&toCycleId=${cycle1.id}`);
+    expect(jsonRes.status).toBe(200);
+    expect(jsonRes.body.range.fromCycle.id).toBe(cycle1.id);
+    expect(jsonRes.body.range.toCycle.id).toBe(cycle1.id);
+
+    const pdfRes = await getStatementPdf(admin, employee.id, `?fromCycleId=${cycle1.id}&toCycleId=${cycle1.id}`);
+    expect(pdfRes.status).toBe(200);
+
+    const auditEntry = await prisma.auditLog.findFirst({
+      where: { action: 'statement.exported', entityId: employee.id },
+      orderBy: { occurredAt: 'desc' },
+    });
+    const metadata = auditEntry!.metadata as { resolvedFromCycleId: string; resolvedToCycleId: string };
+    expect(metadata.resolvedFromCycleId).toBe(cycle1.id);
+    expect(metadata.resolvedToCycleId).toBe(cycle1.id);
+  });
+
+  it('S/T: writes exactly one statement.exported audit entry per PDF request, and never statement.viewed', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-audit-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF Audit');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Audit Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const res = await getStatementPdf(admin, employee.id);
+    expect(res.status).toBe(200);
+
+    const exportedEntries = await prisma.auditLog.findMany({
+      where: { action: 'statement.exported', entityId: employee.id },
+    });
+    expect(exportedEntries).toHaveLength(1);
+    expect(exportedEntries[0]!.actorUserId).toBe(admin.userId);
+    expect(exportedEntries[0]!.entityType).toBe('Employee');
+    const metadata = exportedEntries[0]!.metadata as { format: string; disposition: string; entryCount: number };
+    expect(metadata.format).toBe('pdf');
+    // `disposition` is always 'attachment' now (post-review refinement — no inline mode exists),
+    // recorded as a constant rather than removed from the audit metadata shape.
+    expect(metadata.disposition).toBe('attachment');
+    expect(typeof metadata.entryCount).toBe('number');
+
+    // The PDF endpoint must never also log statement.viewed — that action is reserved for the JSON
+    // detail route, which this request never touched.
+    const viewedEntries = await prisma.auditLog.findMany({
+      where: { action: 'statement.viewed', entityId: employee.id },
+    });
+    expect(viewedEntries).toHaveLength(0);
+  });
+
+  it("U: causes no financial mutation — every source table's row count is identical before and after", async () => {
+    const admin = await masterAdminAgent('stmt-pdf-nomut-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF NoMutation');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF NoMutation Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    const entry = await getEntry(admin, cycle.id, employee.id);
+    await setNetSalary(admin, entry.id, entry.version, '5000');
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const before = await snapshotFinancialRowCounts(employee.id);
+    const res = await getStatementPdf(admin, employee.id);
+    expect(res.status).toBe(200);
+    const after = await snapshotFinancialRowCounts(employee.id);
+    expect(after).toEqual(before);
+  });
+
+  it('6: the canonical Statement query is issued once per PDF export, not duplicated by the render path', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-onefetch-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF OneFetch');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF OneFetch Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    // Warm up first (connection/prepared-statement cache) — matches this suite's own established
+    // "No N+1" precedent above.
+    await getStatement(admin, employee.id);
+
+    let queryCount = 0;
+    const listener = () => {
+      queryCount += 1;
+    };
+    prisma.$on('query', listener);
+
+    queryCount = 0;
+    await getStatement(admin, employee.id);
+    const jsonQueries = queryCount;
+
+    queryCount = 0;
+    const pdfRes = await getStatementPdf(admin, employee.id);
+    const pdfQueries = queryCount;
+
+    expect(pdfRes.status).toBe(200);
+    // The PDF path issues the identical set of queries the JSON route does to build the ledger,
+    // plus exactly one additional read (`getCompanySettings()`) — never roughly double, which is
+    // what a second, duplicated `getEmployeeStatement()` call inside the render path would produce.
+    expect(pdfQueries).toBe(jsonQueries + 1);
+  });
+
+  it('V: a PDF renderer failure returns the repository-standard safe failure response, never a stack trace', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-rendererror-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF RenderError');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF RenderError Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+
+    const spy = jest.spyOn(renderPdfModule, 'renderHtmlToPdf').mockRejectedValueOnce(new Error('Simulated Puppeteer render failure'));
+    try {
+      const res = await getStatementPdf(admin, employee.id);
+      expect(res.status).toBe(500);
+      const body = JSON.parse((res.body as Buffer).toString('utf8'));
+      expect(body.error.code).toBe('INTERNAL_ERROR');
+      expect(JSON.stringify(body)).not.toContain('at renderHtmlToPdf');
+      expect(JSON.stringify(body)).not.toContain('.ts:');
+      expect(body.error).not.toHaveProperty('stack');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('W/X: a real, moderately large multi-cycle Statement renders as a genuine multi-page PDF with repeated headers', async () => {
+    const admin = await masterAdminAgent('stmt-pdf-large-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt PDF Large');
+    const employee = await prisma.employee.create({
+      data: { name: 'PDF Large Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+
+    // A real 30-cycle history through the full HTTP/DB stack — deliberately smaller than the
+    // ~300-row synthetic-DTO fixture this checkpoint's own report also generated directly through
+    // `renderStatementHtml`/`renderHtmlToPdf` (real Puppeteer, handcrafted data, not the full HTTP/
+    // DB stack) — this test instead proves the *entire* real pipeline (DB replay →
+    // `getEmployeeStatement` → `renderStatementHtml` → Puppeteer → HTTP response) produces a
+    // genuinely multi-page PDF, not just the template/renderer in isolation.
+    let cycle = await makeDraftCycle(admin);
+    await releaseUnit(admin, cycle.id, unit.id);
+    for (let i = 1; i < 30; i++) {
+      await finalizeCycle(admin, cycle.id);
+      cycle = await rollover(admin, cycle.id);
+      await releaseUnit(admin, cycle.id, unit.id);
+    }
+
+    const res = await getStatementPdf(admin, employee.id);
+    expect(res.status).toBe(200);
+    const buffer = res.body as Buffer;
+    expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    const pageCount = estimatePdfPageCount(buffer);
+    expect(pageCount).toBeGreaterThan(1);
   });
 });

@@ -7552,6 +7552,90 @@ export), Phase 7C (Reports — reusing Statements' own ledger-computation code, 
 2026-07-27 architecture reviews), and Phase 7D (Dashboard) all remain **Not Started**, each
 requiring its own separate, explicit authorization before any work begins.
 
+### Phase 7B, Checkpoint 1 — Backend Employee Statement PDF Export — IMPLEMENTED, 2026-07-28, awaiting review, NOT COMMITTED
+
+A read-only architecture review of the Phase 7B print/export surface ran first (approved, no code —
+see the review's own report), settling: reuse `statements:view` for export (no new
+`statements:export` permission); browser Print and file export remain separate concepts; this
+checkpoint is backend PDF export only (Excel, CSV, frontend buttons, browser Print integration,
+Reports, Dashboard all explicitly out of scope); no logos, signatures, watermarks, approval blocks,
+or new Company Settings fields.
+
+**Implementation**, per that authorization:
+- **New route**: `GET /api/v1/employees/:employeeId/statement/pdf` (`statements.routes.ts`), mounted
+  on the existing `employeeStatementRouter` alongside the JSON route, accepting the identical
+  `fromCycleId`/`toCycleId` range parameters. Gated by the existing `statements:view` permission —
+  `requireAuth` + `requirePermission`, no new permission key, no migration. **Post-review refinement
+  (same day)**: originally shipped with Payslip's own `?disposition=inline|attachment` convention;
+  reviewed and simplified to **always** `Content-Disposition: attachment` — no inline-preview mode —
+  since a Statement will get its own dedicated browser-Print workflow in a later Phase 7B checkpoint,
+  making a second "preview" responsibility on this endpoint unnecessary complexity rather than a
+  useful mode. `metadata.disposition` in the audit entry is retained as a constant `'attachment'`
+  value.
+- **New service functions** (`statements.service.ts`): `generateStatementPdf()` calls the existing,
+  completely unmodified `getEmployeeStatement()` **exactly once**, then a live (never cached)
+  `getCompanySettings()` read (the same accepted "read live, never snapshotted" gap Payslip's own PDF
+  already carries), assembles `StatementPdfMeta`, and calls `renderStatementPdfBuffer()` — the thin
+  `renderStatementHtml` → `renderHtmlToPdf` wrapper mirroring `renderPayslipPdfBuffer` exactly.
+- **New template**: `backend/src/lib/pdf/templates/statement.ts` (`renderStatementHtml`) — pure, no
+  I/O, no Prisma, no balance calculation; reuses the shared `PRINT_STYLES` stylesheet (with a small
+  template-local CSS addition for repeating table headers/row-break-avoidance on a long ledger, never
+  modifying the shared constant itself) and mandatory `escapeHtml()` on every interpolated value.
+  Renders opening/closing balances (Payable/Recoverable/Advance kept visibly separate, never
+  combined), the chronological ledger (SALARY/CORRECTION/ADVANCE categories, informational rows
+  rendered as the literal word "Informational" with no fabricated amount, financial rows rendered
+  with their own direction/amount/balance label verbatim from the DTO), and the Advance-history
+  restriction notice (wording matching the frontend's own `AdvanceRestrictionNotice`) when
+  `scope.advanceHistoryIncluded === false`.
+- **Multi-page support**: `renderHtmlToPdf` called with `displayHeaderFooter: true` and a new
+  page-numbering footer template (`STATEMENT_PDF_FOOTER_TEMPLATE`) — the first template in this
+  codebase to need either option. Verified empirically (real Puppeteer, both a synthetic-DTO script
+  used only for inspection, deleted before this checkpoint's own close, and the real HTTP/DB-backed
+  integration tests below) against 1-page, 2-page, 10-page (300 entries), long-description, and
+  zero-entry fixtures — table headers repeat correctly, no column clipping/horizontal truncation at
+  A4 portrait, closing balances land correctly after the last ledger row regardless of page count.
+  Portrait was sufficient for the approved 7-column layout; no landscape fallback was needed.
+- **Audit**: a new `statement.exported` action (`entityType: 'Employee'`), metadata `{ format: 'pdf',
+  requestedFromCycleId, requestedToCycleId, resolvedFromCycleId, resolvedToCycleId, entryCount,
+  disposition }` — no salary/ledger content ever recorded. Distinct from the existing
+  `statement.viewed` (JSON route only); one request never produces both.
+- **Filename**: `employee-statement-{employee-code-or-short-id}-{period-slug}.pdf`. Reuses Payslip's
+  own `slugify()` (already exported) and `periodSlug()` (now also exported, a one-line additive
+  change — `payslips.routes.ts`) rather than adding a fourth independent duplicate of "YYYY-MM,
+  zero-padded" alongside Payslip's/Bank Sheet's/Cash Receiving's own copies. No CNIC or banking field
+  ever appears in the filename; falls back to the first 8 characters of the employee id when no
+  employee code exists, matching Payslip's own ZIP-archive-entry-name fallback.
+- **Permission metadata**: `PERMISSIONS_METADATA[STATEMENTS_VIEW].label` updated to `"View & export
+  Employee Statements"` (`shared/src/constants/permissions.ts`) — the grant itself (which roles hold
+  it) is unchanged.
+
+**Testing**: 20 new pure-template tests (`backend/tests/statement-pdf-template.test.ts` — HTML-
+injection safety, opening/closing balance verbatim rendering, informational-vs-financial-movement
+rendering, Advance-restriction notice presence/absence, header field rendering) plus 14 new
+integration tests appended to `statements.test.ts`'s own new "Phase 7B Checkpoint 1 — Statement PDF
+export" section, against the real HTTP route, real Puppeteer, and a real database: authentication
+required; `statements:view` required; Master Admin export; a historically-scoped user exports only
+their own visible history while a zero-Site-overlap user gets the same concealed 404 the JSON route
+already establishes; the requested range is passed through and resolved identically to the JSON
+route (proven by comparing the JSON response's own resolved range against the PDF export's audit
+metadata); exactly one `statement.exported` audit entry per request, never `statement.viewed`; zero
+financial-table row-count change before/after; the canonical Statement query is issued once per PDF
+export (proven via the same `prisma.$on('query', ...)` counting technique this file's own "No N+1"
+test already established — the PDF path issues exactly the JSON route's own query count plus one,
+never roughly double); a simulated Puppeteer render failure (`renderHtmlToPdf` mocked to reject)
+returns the repository-standard safe 500 (`INTERNAL_ERROR`, no stack trace); a real 30-cycle fixture
+(created through the full HTTP/DB stack, not synthetic) renders as a genuine multi-page PDF. Full
+backend suite, Payslip PDF regression suite (`payslips.test.ts`/`pdf-template.test.ts`), and
+typecheck/lint/build across shared/backend/frontend all re-confirmed clean — see the checkpoint's own
+final report for exact pass counts and the two pre-existing, unrelated issues found and deliberately
+left untouched (a pre-existing e2e typecheck error in `08-role-administration.spec.ts`, and two
+pre-existing lint errors elsewhere in `statements.test.ts`, both confirmed pre-existing via `git
+status`/an isolated re-run against `HEAD`, neither touched by this checkpoint).
+
+**Not included** (all remain separate, later Phase 7B work, each requiring its own go-ahead): Excel
+export, CSV export, any frontend download button, browser Print integration for Statements, Reports,
+Dashboard. **Do not mark Phase 7B complete.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)

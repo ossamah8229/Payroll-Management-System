@@ -4,11 +4,36 @@ import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { getEmployeeStatement, searchStatementEmployees } from './statements.service';
+import { periodSlug, slugify } from '../payslips/payslips.routes';
+import { generateStatementPdf, getEmployeeStatement, searchStatementEmployees } from './statements.service';
+import type { StatementEmployeeIdentity, StatementRange } from './statements.types';
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
   return id;
+}
+
+/** `{from-period}` or `{from-period}-to-{to-period}` (or `all` when no `PayrollCycle` exists at
+ * all system-wide, the true empty-install case `resolveStatementRange` itself already special-
+ * cases) — reuses Payslip's own `periodSlug` rather than adding a fourth independent "YYYY-MM,
+ * zero-padded" implementation alongside Payslip's, Bank Sheet's, and Cash Receiving's. A single-
+ * cycle Statement range collapses to one period slug, never a degenerate `X-to-X`. */
+function rangeSlug(range: StatementRange): string {
+  if (!range.fromCycle || !range.toCycle) return 'all';
+  const from = periodSlug(range.fromCycle.year, range.fromCycle.month);
+  const to = periodSlug(range.toCycle.year, range.toCycle.month);
+  return from === to ? from : `${from}-to-${to}`;
+}
+
+/** `employee-statement-{employee-code-or-short-id}-{period-slug}.pdf` — deliberately excludes
+ * CNIC and every banking field (§12 of the checkpoint's own requirements), matching Payslip's own
+ * archive-entry-name fallback (`payslips.routes.ts`'s `buildArchiveEntryName`): a blank/all-
+ * stripped employee code (e.g. an all-emoji code, `slugify`'s own edge case) falls back to the
+ * first 8 characters of the employee's id rather than producing an empty filename segment. */
+function buildStatementPdfFilename(employee: StatementEmployeeIdentity, range: StatementRange): string {
+  const codeOrShortId = employee.employeeCode?.trim() || employee.employeeId.slice(0, 8);
+  const base = slugify(codeOrShortId) || 'employee';
+  return `employee-statement-${base}-${rangeSlug(range)}.pdf`;
 }
 
 /**
@@ -58,6 +83,69 @@ employeeStatementRouter.get('/', requirePermission(PERMISSIONS.STATEMENTS_VIEW),
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json(statement);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Phase 7B Checkpoint 1 — Statement PDF export. Mounted at the same `:employeeId/statement` base
+ * as the JSON route above (`/api/v1/employees/:employeeId/statement/pdf`), gated by the identical
+ * `statements:view` permission — no separate `statements:export` key, matching `PAYSLIPS_VIEW`'s
+ * own precedent of gating view and export uniformly (Phase 7B architecture review, approved
+ * decision). Accepts the exact same `fromCycleId`/`toCycleId` range parameters as the JSON route,
+ * resolved by the identical `getEmployeeStatement()` call — every RBAC/historical-site-scope/
+ * concealment rule (including the deliberate "reveal nothing" 404 for zero Site overlap) is
+ * enforced there, never re-implemented or weakened here.
+ *
+ * **Always `Content-Disposition: attachment` — no `?disposition=inline` mode** (Phase 7B
+ * Checkpoint 1 refinement, post-review). Unlike Payslips (whose single `/pdf` route deliberately
+ * serves both in-app preview and download, `payslips.routes.ts`'s own doc comment, §8), a Statement
+ * will get its own dedicated browser-Print workflow in a later Phase 7B checkpoint — this endpoint's
+ * one responsibility is the official downloadable PDF, never an inline preview, so there is nothing
+ * for a second disposition mode to serve here. Standardizing on attachment keeps the route, its
+ * tests, and any future frontend caller simpler than maintaining two rarely-differentiated modes.
+ *
+ * Audited as a distinct `statement.exported` action — never `statement.viewed` (reserved for the
+ * JSON route above), matching Payslip's own `payslip.viewed`/`payslip.exported` split exactly. No
+ * salary/ledger content is ever recorded in the audit metadata, only identifiers/counts/range.
+ */
+employeeStatementRouter.get('/pdf', requirePermission(PERMISSIONS.STATEMENTS_VIEW), async (req, res, next) => {
+  try {
+    const employeeId = requireIdParam(req.params.employeeId);
+    const fromCycleId = typeof req.query.fromCycleId === 'string' ? req.query.fromCycleId : undefined;
+    const toCycleId = typeof req.query.toCycleId === 'string' ? req.query.toCycleId : undefined;
+
+    const { buffer, employee, range, entryCount } = await generateStatementPdf(
+      req.currentUser!,
+      employeeId,
+      { fromCycleId, toCycleId },
+      { generatedByName: req.currentUser!.name, generatedAt: new Date() },
+    );
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'statement.exported',
+      entityType: 'Employee',
+      entityId: employeeId,
+      metadata: {
+        format: 'pdf',
+        requestedFromCycleId: fromCycleId ?? null,
+        requestedToCycleId: toCycleId ?? null,
+        resolvedFromCycleId: range.fromCycle?.id ?? null,
+        resolvedToCycleId: range.toCycle?.id ?? null,
+        entryCount,
+        disposition: 'attachment',
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = buildStatementPdfFilename(employee, range);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send(buffer);
   } catch (error) {
     next(error);
   }

@@ -17,7 +17,44 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-07-28 (latest) — PHASE 7A IS COMPLETE.** Reviewed, approved, committed, pushed, and
+> **Update, 2026-07-28 (latest) — Phase 7B, Checkpoint 1 (Backend Employee Statement PDF Export) is
+> REVIEWED AND APPROVED, with one post-review refinement applied and verified: the endpoint always
+> returns `Content-Disposition: attachment` — the originally-shipped `?disposition=inline|attachment`
+> choice (mirroring Payslip's own dual-mode `/pdf` route) was removed, since a Statement will get its
+> own dedicated browser-Print workflow in a later Phase 7B checkpoint, making a second "preview"
+> responsibility on this one endpoint unnecessary. Employee Statement PDFs are always downloaded;
+> Browser Print for Statements remains a separate, later, Not Started checkpoint. Adds one new
+> backend route,
+> `GET /api/v1/employees/:employeeId/statement/pdf`, reusing Payslip's own established Puppeteer/
+> HTML-to-PDF architecture (`lib/pdf/render-pdf.ts`, the shared browser singleton, `PRINT_STYLES`,
+> `escapeHtml()`) rather than introducing a second pipeline — the only new production code is one
+> pure template (`lib/pdf/templates/statement.ts`) and the route/service wiring around it
+> (`statements.routes.ts`/`statements.service.ts`'s new `generateStatementPdf`). Gated by the
+> existing `statements:view` permission — **no new `statements:export` permission**, matching
+> `payslips:view`'s own precedent of gating view and export uniformly (an explicit, approved Phase
+> 7B architecture-review decision); the permission's metadata label was updated to reflect the
+> broadened scope, the grant itself unchanged. The canonical `EmployeeStatement` DTO
+> (`getEmployeeStatement()`) remains the sole financial source of truth — fetched exactly once per
+> export, opening/running/closing balances rendered verbatim, never recalculated or netted. Supports
+> genuine multi-page output (page-numbered footer, repeating table headers) — verified empirically
+> against 1-page, 2-page, and 10-page (300-entry) fixtures; portrait A4 was sufficient for the
+> approved 7-column ledger layout, no landscape fallback needed. Audited as a new `statement.exported`
+> action, distinct from the existing `statement.viewed`. Excel export, CSV export, frontend download/
+> print buttons, Reports, and Dashboard are all still separate, later, Not Started work — this
+> checkpoint is backend PDF export only. **Testing**: 20 new pure-template tests
+> (`statement-pdf-template.test.ts`) plus 14 new integration tests appended to `statements.test.ts`'s
+> own PDF-export section (auth/RBAC/site-scope/concealment/range/audit/no-mutation/single-fetch/
+> renderer-failure/multi-page) — full backend suite confirmed clean (see
+> `docs/PROJECT_PROGRESS.md`'s "Phase 7B, Checkpoint 1" entry for exact counts); Payslip PDF
+> regression suite re-run clean; typecheck/lint/build clean across shared/backend/frontend (one
+> pre-existing, unrelated e2e typecheck error in `08-role-administration.spec.ts` and two pre-existing
+> lint errors elsewhere in `statements.test.ts` were found, confirmed pre-existing via `git status`/
+> isolated re-run, and left untouched — out of this checkpoint's scope). **Do not mark Phase 7B
+> complete — Checkpoint 1 (this one) covers PDF only; Excel, CSV, frontend integration, and browser
+> Print for Statements all remain separate, later checkpoints, each requiring its own go-ahead.**
+
+> **Update, 2026-07-28 (superseded by the entry above for status purposes) — PHASE 7A IS COMPLETE.**
+> Reviewed, approved, committed, pushed, and
 > deployed. Phase 7A now delivers, end to end: the canonical Statement backend ledger (Checkpoint
 > 1); the Statements frontend page (Checkpoint 2); historical employee discovery via
 > `PayrollEntry.siteId`/`PayrollEntryWorkLine.unitId` (Checkpoint 2's own same-day correction —

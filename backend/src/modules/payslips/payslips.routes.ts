@@ -18,8 +18,11 @@ import {
 
 /** `{year}-{month, zero-padded}` — the shared period-slug convention every historical export
  * filename in this codebase now uses (Phase 5 Checkpoint 4), matching Cash Receiving/Bank Sheet's
- * own identical construction. */
-function periodSlug(year: number, month: number): string {
+ * own identical construction. Exported (Phase 7B Checkpoint 1) so the Statement PDF export
+ * (`statements.routes.ts`) can reuse this single implementation for its own range-based filename
+ * rather than adding a fourth independent copy of "YYYY-MM, zero-padded" alongside this file's own,
+ * Bank Sheet's, and Cash Receiving's. */
+export function periodSlug(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`;
 }
 

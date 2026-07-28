@@ -6,6 +6,9 @@ import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
 import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
+import { getCompanySettings } from '../settings/settings.service';
+import { renderHtmlToPdf } from '../../lib/pdf/render-pdf';
+import { renderStatementHtml, STATEMENT_PDF_FOOTER_TEMPLATE, type StatementPdfMeta } from '../../lib/pdf/templates/statement';
 import type {
   EmployeeStatement,
   GetEmployeeStatementParams,
@@ -14,10 +17,12 @@ import type {
   StatementBalanceKind,
   StatementBalances,
   StatementCycleRef,
+  StatementEmployeeIdentity,
   StatementLedgerCategory,
   StatementLedgerEntry,
   StatementLedgerEventKind,
   StatementLedgerReference,
+  StatementRange,
   StatementScope,
 } from './statements.types';
 
@@ -745,6 +750,77 @@ export async function getEmployeeStatement(
     entries,
     generatedAt: new Date().toISOString(),
   };
+}
+
+// --- PDF export (Phase 7B Checkpoint 1) -------------------------------------------------------
+
+/** Request-specific rendering context — who is generating this PDF and when. Deliberately kept
+ * separate from the `EmployeeStatement` DTO itself, exactly matching `templates/payslip.ts`'s own
+ * `PayslipPdfMeta { generatedByName, generatedAt }` shape: the DTO is a pure function of
+ * `(employeeId, range)` and must stay that way, never polluted with who happens to be asking right
+ * now. Company identity is resolved separately by `generateStatementPdf` below (a live
+ * `CompanySettings` read, the same accepted, documented gap `payslips.service.ts`'s own module doc
+ * comment already carries for Payslip PDFs) and merged into the full `StatementPdfMeta` the
+ * template actually consumes. */
+export interface StatementPdfRequestMeta {
+  generatedByName: string;
+  generatedAt: Date;
+}
+
+export interface StatementPdfResult {
+  buffer: Buffer;
+  employee: StatementEmployeeIdentity;
+  range: StatementRange;
+  entryCount: number;
+}
+
+/**
+ * Assembles one Employee Statement PDF — calls `getEmployeeStatement()` **exactly once** (never
+ * re-queried by the template or the route), matching `payslips.service.ts`'s `generatePayslipPdf`'s
+ * own "no independent Prisma query" contract for a PDF-generating wrapper. `getCompanySettings()`
+ * is the one additional read this needs beyond the canonical Statement itself — called only after
+ * `getEmployeeStatement` has already succeeded (mirroring `getPayslip()`'s own ordering: validate/
+ * authorize the underlying record first, fetch Company Settings second), so the common
+ * unauthorized/concealed-not-found path never pays for a Company Settings read it will never use.
+ *
+ * Every RBAC/historical-site-scope/concealment rule is enforced entirely inside
+ * `getEmployeeStatement` itself — this function adds no authorization logic of its own, exactly
+ * the same "gated by the JSON route's own function, not reimplemented" relationship
+ * `generatePayslipPdf`/`getPayslip` already establish.
+ */
+export async function generateStatementPdf(
+  currentUser: SessionUser,
+  employeeId: string,
+  params: GetEmployeeStatementParams,
+  requestMeta: StatementPdfRequestMeta,
+): Promise<StatementPdfResult> {
+  const statement = await getEmployeeStatement(currentUser, employeeId, params);
+  const companySettings = await getCompanySettings();
+
+  const meta: StatementPdfMeta = {
+    companyName: companySettings.companyName,
+    registeredAddress: companySettings.registeredAddress,
+    generatedByName: requestMeta.generatedByName,
+    generatedAt: requestMeta.generatedAt,
+  };
+
+  const buffer = await renderStatementPdfBuffer(statement, meta);
+  return { buffer, employee: statement.employee, range: statement.range, entryCount: statement.entries.length };
+}
+
+/**
+ * Renders one already-assembled `EmployeeStatement` to a PDF `Buffer` — the thin two-call wrapper
+ * (`renderStatementHtml` then `renderHtmlToPdf`) both `generateStatementPdf()` above and any future
+ * batch caller would share, exactly matching `renderPayslipPdfBuffer`'s own documented role.
+ * `displayHeaderFooter`/`footerTemplate` are turned on here (unlike Payslip's own call, which needs
+ * neither for a single-page document) — a Statement may span many pages, so every rendered PDF
+ * gets a page-number footer regardless of how many pages it actually turns out to be. Stateless:
+ * returns a `Buffer` only, nothing is ever written to disk or persisted (Principle 1 applies to
+ * exports exactly as it does to the ledger data itself).
+ */
+export async function renderStatementPdfBuffer(statement: EmployeeStatement, meta: StatementPdfMeta): Promise<Buffer> {
+  const html = renderStatementHtml(statement, meta);
+  return renderHtmlToPdf(html, { displayHeaderFooter: true, footerTemplate: STATEMENT_PDF_FOOTER_TEMPLATE });
 }
 
 // --- Employee discovery for the Statements picker (Phase 7A Checkpoint 2 correction) ----------

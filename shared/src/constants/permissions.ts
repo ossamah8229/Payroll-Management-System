@@ -66,7 +66,9 @@ export const PERMISSIONS = {
    * advances), a materially more sensitive per-person disclosure than any single-cycle document.
    * Default grant matches `PAYSLIPS_VIEW` exactly (Master Admin, Payroll Staff, Finance) — the
    * closest existing precedent for "per-employee financial detail visibility," per the Phase 7
-   * architecture report's approved decision. */
+   * architecture report's approved decision. **Phase 7B Checkpoint 1 (Statement PDF export)**
+   * reuses this same permission for the PDF download route, matching `PAYSLIPS_VIEW`'s own
+   * precedent of gating view and export uniformly — no separate `statements:export` key. */
   STATEMENTS_VIEW: 'statements:view',
 } as const;
 
@@ -153,7 +155,7 @@ export const PERMISSION_GROUPS: Record<PermissionKey, { group: string; label: st
   [PERMISSIONS.AUDIT_LOG_VIEW]: { group: 'Audit Log', label: 'View audit log' },
   [PERMISSIONS.TASKS_MANAGE]: { group: 'Tasks', label: 'Manage tasks' },
   [PERMISSIONS.PAYSLIPS_VIEW]: { group: 'Payslips', label: 'View & download payslips' },
-  [PERMISSIONS.STATEMENTS_VIEW]: { group: 'Statements', label: 'View employee statements of account' },
+  [PERMISSIONS.STATEMENTS_VIEW]: { group: 'Statements', label: 'View & export Employee Statements' },
 };
 
 /**
