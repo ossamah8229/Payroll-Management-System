@@ -49,6 +49,7 @@ const CorrectionRequestDetailPage = lazy(() =>
 const BalanceAdjustmentDetailPage = lazy(() =>
   import('@/routes/balance-adjustment-detail-page').then((m) => ({ default: m.BalanceAdjustmentDetailPage })),
 );
+const StatementsPage = lazy(() => import('@/routes/statements-page').then((m) => ({ default: m.StatementsPage })));
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -285,6 +286,18 @@ export function App() {
                     permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}
                   >
                     <BalanceAdjustmentDetailPage user={user} />
+                  </RequirePermission>
+                )}
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/statements"
+            element={
+              <RequireSession>
+                {(user) => (
+                  <RequirePermission user={user} permission={PERMISSIONS.STATEMENTS_VIEW}>
+                    <StatementsPage user={user} />
                   </RequirePermission>
                 )}
               </RequireSession>

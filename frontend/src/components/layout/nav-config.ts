@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Banknote,
+  BookOpen,
   Building2,
   ClipboardList,
   FileText,
@@ -99,6 +100,19 @@ export const navSections: NavSection[] = [
         // corrections:approve. The page itself still branches its own in-page UI (Review Queue tab
         // hidden without corrections:approve) rather than relying on nav visibility alone.
         requiredPermission: ['payroll:entry', 'corrections:approve'],
+      },
+      {
+        label: 'Statements',
+        to: '/statements',
+        icon: BookOpen,
+        // Phase 7A Checkpoint 2 — a dedicated permission (statements:view), not a reuse of
+        // payroll:view/payslips:view/corrections:approve: a Statement discloses one employee's
+        // full cross-cycle financial history (salary outcomes, Corrections, Balance Adjustments,
+        // Advances all together), materially more sensitive than any single-cycle document this
+        // app already gates (Phase 7 architecture report, approved decision 8). Default-granted
+        // like payslips:view (Master Admin, Payroll Staff, Finance) — see
+        // shared/src/constants/permissions.ts.
+        requiredPermission: 'statements:view',
       },
     ],
   },
