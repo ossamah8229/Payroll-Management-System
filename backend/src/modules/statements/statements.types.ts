@@ -174,3 +174,46 @@ export interface GetEmployeeStatementParams {
   fromCycleId?: string;
   toCycleId?: string;
 }
+
+/**
+ * Phase 7A Checkpoint 2 correction — the Statements employee picker's own discovery contract.
+ * Deliberately **not** `Employee` (or a subset of it) — this is a minimum-identity search result,
+ * carrying only what a picker needs to tell two similarly-named people apart, matching §7 of
+ * `docs/architecture/workflows/statements-ledger.md`'s privacy posture: no salary, banking,
+ * correction/recovery, or Advance figures ever appear here.
+ *
+ * `currentSiteId`/`currentSiteName` are the employee's *current* assignment, shown for display
+ * only — they are never what made this employee discoverable (see the service's own doc comment:
+ * discovery is driven by historical `PayrollEntry.siteId`, not this field) and selecting an
+ * employee here grants no assumption about which of their history is actually visible; the
+ * Statement endpoint's own row-level filtering remains the sole authority for that.
+ */
+export interface StatementEmployeeCandidate {
+  employeeId: string;
+  employeeCode: string | null;
+  cnic: string | null;
+  name: string;
+  currentSiteId: string;
+  currentSiteName: string;
+}
+
+export interface SearchStatementEmployeesParams {
+  search?: string;
+  /** Optional narrowing filter, matched against each candidate's *historical*
+   * `PayrollEntry.siteId` — never `Employee.siteId` (current). Still independently validated
+   * against the caller's own accessible sites (`assertSiteAccess`) before use. */
+  siteId?: string;
+  /** Optional narrowing filter, matched against `PayrollEntryWorkLine.unitId` on the same
+   * historically-scoped `PayrollEntry` a `siteId` filter would already require — see the service's
+   * own doc comment for why this is safe without a separate unit-belongs-to-site check. */
+  unitId?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface SearchStatementEmployeesResult {
+  total: number;
+  page: number;
+  pageSize: number;
+  employees: StatementEmployeeCandidate[];
+}

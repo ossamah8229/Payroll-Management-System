@@ -4,7 +4,7 @@ import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
-import { getEmployeeStatement } from './statements.service';
+import { getEmployeeStatement, searchStatementEmployees } from './statements.service';
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
@@ -58,6 +58,37 @@ employeeStatementRouter.get('/', requirePermission(PERMISSIONS.STATEMENTS_VIEW),
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json(statement);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Phase 7A Checkpoint 2 correction — the Statements picker's own employee-discovery endpoint.
+ * Mounted separately at `/api/v1/statements/employees` (`app.ts`), deliberately **not** folded
+ * into the general `GET /api/v1/employees` (`employeesRouter`) — that endpoint's own
+ * `Employee.siteId`-based scoping is correct for its real callers (Advances, Corrections) and must
+ * not be weakened or overloaded with a second, historical semantics that would apply everywhere it
+ * mounts. Gated by the same `statements:view` permission as the Statement itself, never
+ * `employees:view` — a caller must already be authorized to view Statements to search for one, and
+ * this is a strictly narrower, minimum-identity result than either permission alone would imply.
+ * `searchStatementEmployees` itself is the sole authority for the historical-site-scoping rule —
+ * see its own doc comment (`statements.service.ts`).
+ */
+export const statementEmployeesRouter = Router();
+
+statementEmployeesRouter.use(requireAuth);
+
+statementEmployeesRouter.get('/', requirePermission(PERMISSIONS.STATEMENTS_VIEW), async (req, res, next) => {
+  try {
+    const result = await searchStatementEmployees(req.currentUser!, {
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      siteId: typeof req.query.siteId === 'string' ? req.query.siteId : undefined,
+      unitId: typeof req.query.unitId === 'string' ? req.query.unitId : undefined,
+      page: req.query.page ? Number(req.query.page) : undefined,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
+    });
+    res.status(200).json(result);
   } catch (error) {
     next(error);
   }

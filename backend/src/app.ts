@@ -39,7 +39,7 @@ import {
   payrollEntryCorrectionsRouter,
 } from './modules/corrections/corrections.routes';
 import { adjustmentTypesRouter } from './modules/adjustment-types/adjustment-types.routes';
-import { employeeStatementRouter } from './modules/statements/statements.routes';
+import { employeeStatementRouter, statementEmployeesRouter } from './modules/statements/statements.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -143,6 +143,11 @@ export function createApp(): Express {
   // below (Payslips, Bank Sheets, Cash Receiving, Corrections).
   app.use('/api/v1/employees/:employeeId/statement', employeeStatementRouter);
   app.use('/api/v1/employees', employeesRouter);
+  // Phase 7A Checkpoint 2 correction — deliberately its own top-level path, not nested under
+  // /api/v1/employees, so it can never be mistaken for (or accidentally merged into) the
+  // current-site-scoped general Employee Lookup mounted just above. See statements.routes.ts's own
+  // doc comment on statementEmployeesRouter for why this stays a separate endpoint.
+  app.use('/api/v1/statements/employees', statementEmployeesRouter);
   app.use('/api/v1/settings', settingsRouter);
   // Mounted before usersRouter's own blanket users:manage gate — /assignable is intentionally
   // gated by tasks:manage instead (System-Wide RBAC Consistency remediation).

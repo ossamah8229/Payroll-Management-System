@@ -9,10 +9,10 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { FilterField } from '@/components/ui/filter-field';
-import { EmployeeLookup } from '@/components/ui/employee-lookup';
+import { StatementEmployeeLookup } from '@/components/statements/statement-employee-lookup';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useProjectUnits } from '@/hooks/use-project-units';
-import { useEmployees } from '@/hooks/use-employees';
+import type { StatementEmployeeCandidate } from '@/hooks/use-statement-employees';
 import { usePayrollCycles, formatCycleOptionLabel } from '@/hooks/use-payroll-cycles';
 import {
   useEmployeeStatement,
@@ -168,26 +168,36 @@ function LedgerTable({ entries }: { entries: StatementLedgerEntry[] }) {
 type RangeMode = 'DEFAULT' | 'CUSTOM';
 
 /**
- * Statements (Phase 7A Checkpoint 2) — the dedicated Employee Statement of Account page over the
- * canonical, read-only ledger `GET /api/v1/employees/:employeeId/statement` already builds
- * (Checkpoint 1, `docs/architecture/workflows/statements-ledger.md`). This page performs no
+ * Statements (Phase 7A Checkpoint 2, corrected) — the dedicated Employee Statement of Account page
+ * over the canonical, read-only ledger `GET /api/v1/employees/:employeeId/statement` already
+ * builds (Checkpoint 1, `docs/architecture/workflows/statements-ledger.md`). This page performs no
  * financial calculation of its own: opening/closing/running balances are rendered exactly as the
  * backend returns them, never recomputed or re-derived from the visible rows.
  *
- * **Selection hierarchy** (Site → Unit → Employee → Statement Period) reuses the app's existing
- * building blocks rather than inventing a second filtering system: `useAccessibleProjectSites`/
- * `useProjectUnits` (the same Site/Unit source every other operational page uses) and
- * `EmployeeLookup` (the one reusable, searchable, scale-safe employee picker — Corrections/RBAC
- * completion checkpoint). Unit narrowing has no dedicated backend query param on the Employee
- * Lookup endpoint, so it's applied the same way Corrections' Request Correction modal already
- * narrows a candidate set — `EmployeeLookup`'s own `restrictToEmployeeIds` prop, computed from one
- * already-established site-scoped employee query, never a second backend endpoint.
+ * **Employee-first selection, corrected from this checkpoint's own original Site → Unit → Employee
+ * design** (an architectural review found that hierarchy made a transferred employee permanently
+ * undiscoverable to the very user who administered their history — see
+ * `docs/architecture/workflows/statements-ledger.md §15` for the full finding). The Employee field
+ * (`StatementEmployeeLookup`, backed by `GET /api/v1/statements/employees`) is always enabled and
+ * discovers candidates by *historical* `PayrollEntry.siteId`/`PayrollEntryWorkLine.unitId`
+ * attribution, never by an employee's *current* site — the same historical-scoping principle
+ * `getEmployeeStatement` itself already enforces at the row level. Site/Unit are **optional
+ * narrowing filters only**: they narrow the search candidates, and changing either after an
+ * employee is already selected clears that selection outright (never silently re-validates it
+ * against a filter it may no longer match) — they never gate whether the Employee field itself can
+ * be used, and selecting an employee here is never a claim that every one of their records is
+ * visible: the Statement endpoint's own row-level filtering remains the sole authority for that
+ * (the Advance-history restriction notice below is the one case this page surfaces explicitly).
+ * This is a deliberately separate picker from `EmployeeLookup` (Advances/Corrections' own,
+ * current-site-scoped component) — see `statement-employee-lookup.tsx`'s own doc comment for why.
  *
  * **Statement Period** is always a `PayrollCycle` range, never an arbitrary date range (the
  * backend's own `fromCycleId`/`toCycleId` contract) — "Latest 12 Cycles" (the same default the
  * backend itself falls back to when neither is supplied) or an explicit From/To Cycle pair, with
  * inline validation mirroring the backend's own "From must not be later than To" rule so a
- * doomed request is never sent in the first place.
+ * doomed request is never sent in the first place. Employee discovery is deliberately
+ * range-independent (an employee never disappears from the picker merely because the *currently
+ * selected* Statement Period has no rows for them) — see the architecture doc's own §15 for why.
  *
  * The Statement query only fires once a complete, valid selection exists (`canLoad`), and its
  * query key is `[employeeId, fromCycleId, toCycleId]` only — changing Site/Unit selection without
@@ -202,35 +212,33 @@ export function StatementsPage({ user }: { user: SessionUser }) {
   const [selectedSiteId, setSelectedSiteId] = useState('');
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [employeeId, setEmployeeId] = useState('');
+  const [selectedCandidate, setSelectedCandidate] = useState<StatementEmployeeCandidate | undefined>(undefined);
   const [rangeMode, setRangeMode] = useState<RangeMode>('DEFAULT');
   const [fromCycleId, setFromCycleId] = useState('');
   const [toCycleId, setToCycleId] = useState('');
 
   const units = useProjectUnits(selectedSiteId || undefined);
 
-  // Site/Unit changing resets everything downstream of it — never carry a stale, potentially
-  // out-of-scope employee selection across a Site/Unit change (mirrors Payslips' own "filter
-  // change clears selection" rule).
+  function handleEmployeeChange(id: string, candidate: StatementEmployeeCandidate | undefined) {
+    setEmployeeId(id);
+    setSelectedCandidate(candidate);
+  }
+
+  // A Unit only ever means something relative to a Site (`ProjectUnit` is itself site-scoped) —
+  // changing Site clears whichever Unit was chosen for the *previous* Site.
   useEffect(() => {
     setSelectedUnitId('');
-    setEmployeeId('');
   }, [selectedSiteId]);
 
+  // Site/Unit are optional *narrowing* filters on the Employee search, never a prerequisite for
+  // it (module doc comment) — but once an employee is already selected, changing either filter
+  // clears that selection outright rather than silently re-validating whether it still matches
+  // (the same "any filter change clears selection" discipline Payslips already established), so a
+  // stale selection can never quietly persist against a filter it may no longer satisfy.
   useEffect(() => {
     setEmployeeId('');
-  }, [selectedUnitId]);
-
-  // Unit narrowing (see the module doc comment) — only fetched once a Unit is actually selected,
-  // scoped to the one already-selected Site, never a company-wide fetch.
-  const siteRoster = useEmployees({
-    siteIds: selectedSiteId ? [selectedSiteId] : undefined,
-    activeOnly: false,
-    enabled: Boolean(selectedSiteId && selectedUnitId),
-  });
-  const restrictToEmployeeIds = useMemo(() => {
-    if (!selectedUnitId) return undefined;
-    return (siteRoster.data ?? []).filter((employee) => employee.unitId === selectedUnitId).map((employee) => employee.id);
-  }, [siteRoster.data, selectedUnitId]);
+    setSelectedCandidate(undefined);
+  }, [selectedSiteId, selectedUnitId]);
 
   const cyclesAscending = useMemo(() => [...(cycles.data ?? [])].reverse(), [cycles.data]);
   const hasAnyCycle = cyclesAscending.length > 0;
@@ -277,7 +285,21 @@ export function StatementsPage({ user }: { user: SessionUser }) {
             <CardTitle>Select Statement</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap items-end gap-3">
-            <FilterField id="statement-site" label="Site">
+            <div className="flex min-w-[260px] flex-col gap-1.5">
+              <Label htmlFor="statement-employee">Employee</Label>
+              <StatementEmployeeLookup
+                id="statement-employee"
+                value={employeeId}
+                selectedCandidate={selectedCandidate}
+                onChange={handleEmployeeChange}
+                siteId={selectedSiteId || undefined}
+                unitId={selectedUnitId || undefined}
+                disabled={controlsDisabled}
+                placeholder="Search by code, CNIC, or name…"
+              />
+            </div>
+
+            <FilterField id="statement-site" label={`Site (optional — narrows search)`}>
               <select
                 id="statement-site"
                 className={selectClassName}
@@ -285,7 +307,7 @@ export function StatementsPage({ user }: { user: SessionUser }) {
                 onChange={(e) => setSelectedSiteId(e.target.value)}
                 disabled={controlsDisabled}
               >
-                <option value="">Select a Site…</option>
+                <option value="">Any Site</option>
                 {(sites.data ?? []).map((site) => (
                   <option key={site.id} value={site.id}>
                     {site.name}
@@ -294,7 +316,7 @@ export function StatementsPage({ user }: { user: SessionUser }) {
               </select>
             </FilterField>
 
-            <FilterField id="statement-unit" label={unitLabel}>
+            <FilterField id="statement-unit" label={`${unitLabel} (optional)`}>
               <select
                 id="statement-unit"
                 className={selectClassName}
@@ -302,7 +324,7 @@ export function StatementsPage({ user }: { user: SessionUser }) {
                 onChange={(e) => setSelectedUnitId(e.target.value)}
                 disabled={controlsDisabled || !selectedSiteId}
               >
-                <option value="">All {unitLabel}s</option>
+                <option value="">Any {unitLabel}</option>
                 {(units.data ?? []).map((unit) => (
                   <option key={unit.id} value={unit.id}>
                     {unit.name}
@@ -310,25 +332,6 @@ export function StatementsPage({ user }: { user: SessionUser }) {
                 ))}
               </select>
             </FilterField>
-
-            <div className="flex min-w-[260px] flex-col gap-1.5">
-              <Label htmlFor="statement-employee">Employee</Label>
-              <EmployeeLookup
-                id="statement-employee"
-                value={employeeId}
-                onChange={(id) => setEmployeeId(id)}
-                // A departed employee can still have a real Statement (their historical Payroll
-                // Entry/Correction/Balance Adjustment/Advance rows don't disappear) — unlike
-                // Advances' Record Advance modal (a *new* Advance only ever targets a currently
-                // active employee), this lookup deliberately does not restrict to active-only.
-                activeOnly={false}
-                siteIds={selectedSiteId ? [selectedSiteId] : undefined}
-                restrictToEmployeeIds={selectedUnitId ? restrictToEmployeeIds : undefined}
-                restrictedEmptyMessage={`found, but none belong to the selected ${unitLabel.toLowerCase()}`}
-                disabled={controlsDisabled || !selectedSiteId || (Boolean(selectedUnitId) && siteRoster.isLoading)}
-                placeholder="Search by code, CNIC, or name…"
-              />
-            </div>
 
             <div className="flex flex-col gap-1.5">
               <Label>Statement Period</Label>
@@ -399,12 +402,17 @@ export function StatementsPage({ user }: { user: SessionUser }) {
               No payroll cycles exist yet — a Statement Period can only be selected once at least one exists.
             </p>
           )}
+          <p className="border-t border-border px-[18px] py-2.5 text-[11px] text-text-muted">
+            Site and {unitLabel} only narrow the Employee search above — they are never required, and selecting an
+            employee never grants visibility into their full history. What you can actually see is decided
+            independently once the Statement loads.
+          </p>
         </Card>
 
         {!canLoad && (
           <Card>
             <CardContent className="flex flex-col items-center gap-1 py-14 text-center">
-              <p className="text-xs font-medium text-text">Select a Site, Unit, and Employee to view a Statement</p>
+              <p className="text-xs font-medium text-text">Search for an Employee to view a Statement</p>
               <p className="text-xs text-text-muted">
                 {rangeMode === 'CUSTOM' && employeeId && !rangeReady
                   ? 'Choose both a From Cycle and a To Cycle, or switch back to Latest 12 Cycles.'
