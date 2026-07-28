@@ -2278,6 +2278,59 @@ Checkpoint 1" and its "gap-closure pass" entries; full design record:
 `docs/architecture/workflows/statements-ledger.md`. **No frontend, print/export, Reports, or
 Dashboard work — each is a separate, later checkpoint requiring its own explicit authorization.**
 
+**Checkpoint 2 — Statements frontend page — IMPLEMENTED, 2026-07-28, awaiting review, NOT
+COMMITTED.** `frontend/src/routes/statements-page.tsx`, `frontend/src/hooks/use-employee-statement.ts`,
+`frontend/src/components/statements/statement-labels.ts` — a purely presentational consumer of
+Checkpoint 1's ledger endpoint, no backend/shared change, no migration. Site → Unit → Employee
+selection reuses the existing `EmployeeLookup`/`useAccessibleProjectSites`/`useProjectUnits` building
+blocks rather than a second filtering system; Statement Period is a `PayrollCycle` range only
+("Latest 12 Cycles" default or an explicit From/To pair), never an arbitrary date range. Opening/
+Closing Balances and every ledger row's running balances are rendered exactly as the backend
+returns them — zero frontend financial recalculation. Informational rows render "Informational,"
+never an invented monetary figure; the Advance-history restriction notice renders on
+`scope.advanceHistoryIncluded === false`, worded to communicate restricted visibility, never "no
+advances." No Print/Excel export, per this checkpoint's own explicit scope boundary. Frontend suite
+**172/172** (50 new/extended: `statement-labels.test.ts`, `use-employee-statement.test.ts`,
+`statements-page.test.tsx`, four new `nav-config.test.ts` cases); typecheck/lint/build clean; a new
+permanent E2E spec (`tests/e2e/specs/15-statements.spec.ts`, 3/3) verified navigation, the real
+selection workflow, a real financial-movement row and a real informational row rendering correctly
+with correct running balances, and that viewing a Statement issues only `GET` requests, against a
+freshly provisioned real backend/database/production frontend build. One discrepancy discovered and
+disclosed (not silently patched): the Advance-restriction-notice's own real trigger scenario is
+unreachable through the Employee Lookup for any non-Master-Admin session, since employee search
+matches only an employee's *current* site — see `docs/PROJECT_PROGRESS.md`'s "Phase 7A, Checkpoint 2"
+entry for the full explanation and recommended follow-up. **Print/Excel export, Reports, and
+Dashboard remain separate, later checkpoints requiring their own explicit authorization.**
+
+**Checkpoint 2 correction — historical employee discovery — IMPLEMENTED, 2026-07-28 (same day),
+awaiting review, NOT COMMITTED.** A dedicated architectural investigation (approved before any code
+changed) confirmed the Advance-restriction reachability gap above was a real, fixable gap, not dead
+functionality — recommended Option A: redesign Statements' own employee selection, leave the
+general Employee Lookup untouched. New `GET /api/v1/statements/employees`
+(`statements.service.ts`'s `searchStatementEmployees`) discovers employees via historical
+`PayrollEntry.siteId`/`PayrollEntryWorkLine.unitId` (the same pattern `payslips.service.ts`/
+`payroll-entry.service.ts` already use), never `Employee.siteId`; `employees.service.ts`/
+`frontend/src/components/ui/employee-lookup.tsx` are completely untouched (confirmed by
+`employees.test.ts`/`advances.test.ts`/`corrections-settlement.test.ts`, 114/114). A new dedicated
+`StatementEmployeeLookup` component (not a flag on `EmployeeLookup`); the Statements page redesigned
+Employee-first, Site/Unit now optional narrowing filters. No schema/migration change, no new index.
+The Advance-history restriction deliberately still follows current site (`Advance` has no
+historical site attribution). The mocked E2E restriction test is replaced with a genuine Site A →
+Site B transfer scenario — no interception. `statements.test.ts` **37/37** (9 new); frontend suite
+**180/180**; E2E **3/3**; typecheck/lint/build clean across shared/backend/frontend. Full record:
+`docs/PROJECT_PROGRESS.md`'s "Phase 7A Checkpoint 2 — architectural investigation and correction"
+entry; full design record: `docs/architecture/workflows/statements-ledger.md §16`.
+
+**Phase 7A — COMPLETE, reviewed and approved, 2026-07-28.** Both checkpoints above, plus the
+same-day correction, are reviewed, approved, committed, pushed, and deployed. Phase 7A now
+includes: the canonical Statement backend ledger (Checkpoint 1); the Statements frontend page
+(Checkpoint 2); historical employee discovery via `PayrollEntry.siteId` (Checkpoint 2 correction);
+Employee-first Statement selection; a naturally-reachable Advance-history restriction workflow
+(no mocking); and full test coverage across backend, frontend, and E2E. Full landing record:
+`docs/PROJECT_PROGRESS.md`'s "Phase 7A — closure and landing" entry. **Phase 7 as a whole is NOT
+complete — Phase 7B (Statement print/export), 7C (Reports), and 7D (Dashboard) are all Not Started,
+each requiring its own separate, explicit authorization before work begins.**
+
 ---
 
 ### Phase 8 — Supporting Features

@@ -2,6 +2,8 @@ import { Decimal } from 'decimal.js';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
+import { searchStatementEmployees } from '../src/modules/statements/statements.service';
+import { loadSessionUser } from '../src/modules/auth/auth.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
@@ -1166,6 +1168,255 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
       const res = await getStatement(admin, employee.id);
       expect(res.status).toBe(200);
       expect(res.body.scope).toEqual({ advanceHistoryIncluded: true });
+    });
+  });
+
+  // ============================================================================================
+  // Statement employee discovery (Phase 7A Checkpoint 2 correction) —
+  // GET /api/v1/statements/employees, historical PayrollEntry.siteId scoping.
+  // ============================================================================================
+
+  describe('Statement employee discovery — historical PayrollEntry.siteId scoping', () => {
+    async function searchEmployees(agent: Agent, query = '') {
+      return agent.agent.get(`/api/v1/statements/employees${query}`);
+    }
+
+    it('A/B/C: a transferred employee is discoverable by the old-site user through historical PayrollEntry.siteId, never by their current Employee.siteId', async () => {
+      const admin = await masterAdminAgent('stmt-discover-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Discover A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Discover B');
+
+      const alpha = await prisma.employee.create({
+        data: { name: 'Discover Alpha Transferred', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      // Beta has always been at Site B — a *real* historical PayrollEntry there (never at Site A).
+      // Created before cycle1 so she is bootstrapped and released exactly like Alpha, proving her
+      // exclusion below is specifically because her own PayrollEntry.siteId is B, not merely
+      // because she happens to have no history at all (that's covered separately by test H).
+      const beta = await prisma.employee.create({
+        data: { name: 'Discover Beta Native', designation: 'Guard', siteId: siteB.id, unitId: unitB.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unitA.id);
+      await releaseUnit(admin, cycle1.id, unitB.id);
+
+      // Transfer Alpha to Site B — her *current* Employee.siteId is now B; cycle1's own entry
+      // (siteId = Site A, frozen at creation) is untouched. After this, Alpha and Beta share the
+      // exact same *current* site — only their history still tells them apart.
+      const transferRes = await admin.agent
+        .patch(`/api/v1/employees/${alpha.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteId: siteB.id, unitId: unitB.id });
+      expect(transferRes.status).toBe(200);
+
+      const siteAOnlyStaff = await payrollStaffAgent('stmt-discover-a-staff@test.local', [siteA.id]);
+
+      const res = await searchEmployees(siteAOnlyStaff, '?search=Discover');
+      expect(res.status).toBe(200);
+      const names = res.body.employees.map((e: { name: string }) => e.name);
+      expect(names).toContain('Discover Alpha Transferred');
+      expect(names).not.toContain('Discover Beta Native');
+
+      // C: the discovered employee's Statement is then genuinely viewable — the picker and the
+      // Statement endpoint agree on what "discoverable" means. No response interception, no
+      // mocking — the same real HTTP path an actual session would take.
+      const found = res.body.employees.find((e: { name: string }) => e.name === 'Discover Alpha Transferred');
+      const stmtRes = await getStatement(siteAOnlyStaff, found.employeeId);
+      expect(stmtRes.status).toBe(200);
+      expect(stmtRes.body.entries.some((e: { kind: string }) => e.kind === 'CYCLE_RECOVERY_DUE' || e.kind === 'CYCLE_PAID' || e.kind === 'CYCLE_PENDING')).toBe(true);
+    });
+
+    it("D: the same Site-A-only user's discovered Statement never includes the transferred employee's Site-B-only rows", async () => {
+      const admin = await masterAdminAgent('stmt-discover-d-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Discover D A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Discover D B');
+
+      const employee = await prisma.employee.create({
+        data: { name: 'Discover D Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unitA.id);
+      await admin.agent
+        .patch(`/api/v1/employees/${employee.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteId: siteB.id, unitId: unitB.id });
+      await finalizeCycle(admin, cycle1.id);
+      const cycle2 = await rollover(admin, cycle1.id); // bootstraps a Site-B entry
+      const bootstrapped2 = await getEntry(admin, cycle2.id, employee.id);
+      await setNetSalary(admin, bootstrapped2.id, bootstrapped2.version, '2000');
+      await releaseUnit(admin, cycle2.id, unitB.id);
+
+      const siteAOnlyStaff = await payrollStaffAgent('stmt-discover-d-staff@test.local', [siteA.id]);
+      const stmtRes = await getStatement(siteAOnlyStaff, employee.id, `?fromCycleId=${cycle1.id}&toCycleId=${cycle2.id}`);
+      expect(stmtRes.status).toBe(200);
+      const kinds = stmtRes.body.entries.map((e: { kind: string }) => e.kind);
+      // cycle2's own CYCLE_PAID outcome is a Site-B row — invisible to the Site-A-only user, the
+      // exact same historical-attribution rule the existing K/L/M test already covers end to end.
+      expect(kinds).not.toContain('CYCLE_PAID');
+    });
+
+    it('G: Master Admin discovers employees at any site, with no site filter required', async () => {
+      const admin = await masterAdminAgent('stmt-discover-g-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Discover G A');
+      const employee = await prisma.employee.create({
+        data: { name: 'Discover G Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unitA.id);
+
+      const res = await searchEmployees(admin, '?search=Discover G');
+      expect(res.status).toBe(200);
+      expect(res.body.employees.some((e: { employeeId: string }) => e.employeeId === employee.id)).toBe(true);
+    });
+
+    it('H: an employee with zero visible historical PayrollEntry is never returned, even to Master Admin', async () => {
+      const admin = await masterAdminAgent('stmt-discover-h-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Discover H');
+      // Deliberately no cycle/entry created for this employee at all.
+      const orphan = await prisma.employee.create({
+        data: { name: 'Discover H Orphan Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+
+      const res = await searchEmployees(admin, '?search=Discover H Orphan');
+      expect(res.status).toBe(200);
+      expect(res.body.employees.some((e: { employeeId: string }) => e.employeeId === orphan.id)).toBe(false);
+    });
+
+    it('J1: an explicit siteId filter narrows the candidate list to that site historical PayrollEntry rows only', async () => {
+      const admin = await masterAdminAgent('stmt-discover-j1-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Discover J1 A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Discover J1 B');
+      const empA = await prisma.employee.create({
+        data: { name: 'Discover J1 At Site A', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      const empB = await prisma.employee.create({
+        data: { name: 'Discover J1 At Site B', designation: 'Guard', siteId: siteB.id, unitId: unitB.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unitA.id);
+      await releaseUnit(admin, cycle.id, unitB.id);
+
+      const res = await searchEmployees(admin, `?search=Discover J1&siteId=${siteA.id}`);
+      expect(res.status).toBe(200);
+      const ids = res.body.employees.map((e: { employeeId: string }) => e.employeeId);
+      expect(ids).toContain(empA.id);
+      expect(ids).not.toContain(empB.id);
+    });
+
+    it('J2: a requested siteId outside the caller own accessible sites is rejected with 403, never silently ignored or widened', async () => {
+      const { site: siteA } = await makeSiteWithUnit('Test Site Discover J2 A');
+      const { site: siteB } = await makeSiteWithUnit('Test Site Discover J2 B');
+      const siteAOnlyStaff = await payrollStaffAgent('stmt-discover-j2-staff@test.local', [siteA.id]);
+
+      const res = await searchEmployees(siteAOnlyStaff, `?siteId=${siteB.id}`);
+      expect(res.status).toBe(403);
+    });
+
+    it('I: search narrows by name/code/CNIC, and pageSize/page bound the result set', async () => {
+      const admin = await masterAdminAgent('stmt-discover-i-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Discover I');
+
+      const created: { id: string; name: string }[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const employee = await prisma.employee.create({
+          data: {
+            name: `Discover I Employee ${i}`,
+            employeeCode: `DISC-I-${i}`,
+            designation: 'Guard',
+            siteId: site.id,
+            unitId: unit.id,
+            grossPay: '30000',
+          },
+        });
+        created.push(employee);
+      }
+      // Employees created above already existed when this cycle bootstraps, so each receives an
+      // entry automatically (the same bootstrap `createPayrollCycle` itself uses) — no need for a
+      // second, explicit per-employee entry-creation call.
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const bySearch = await searchEmployees(admin, '?search=DISC-I-3');
+      expect(bySearch.status).toBe(200);
+      expect(bySearch.body.employees).toHaveLength(1);
+      expect(bySearch.body.employees[0].employeeId).toBe(created[3]!.id);
+
+      const paged = await searchEmployees(admin, '?search=Discover I Employee&pageSize=2&page=1');
+      expect(paged.status).toBe(200);
+      expect(paged.body.employees).toHaveLength(2);
+      expect(paged.body.total).toBe(5);
+      expect(paged.body.page).toBe(1);
+      expect(paged.body.pageSize).toBe(2);
+
+      const page2 = await searchEmployees(admin, '?search=Discover I Employee&pageSize=2&page=2');
+      expect(page2.body.employees).toHaveLength(2);
+      const page1Ids = paged.body.employees.map((e: { employeeId: string }) => e.employeeId);
+      const page2Ids = page2.body.employees.map((e: { employeeId: string }) => e.employeeId);
+      expect(page1Ids.some((id: string) => page2Ids.includes(id))).toBe(false);
+    });
+
+    it('Privacy: the response carries only identity fields — no salary, banking, or Advance/correction figures', async () => {
+      const admin = await masterAdminAgent('stmt-discover-privacy-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Discover Privacy');
+      const employee = await prisma.employee.create({
+        data: { name: 'Discover Privacy Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000', accountNumber: '1234567890', iban: 'PK00TEST0000000000000000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await searchEmployees(admin, '?search=Discover Privacy');
+      expect(res.status).toBe(200);
+      const candidate = res.body.employees[0];
+      expect(Object.keys(candidate).sort()).toEqual(['cnic', 'currentSiteId', 'currentSiteName', 'employeeCode', 'employeeId', 'name'].sort());
+      const serialized = JSON.stringify(candidate);
+      expect(serialized).not.toContain('1234567890');
+      expect(serialized).not.toContain('PK00TEST');
+      expect(serialized).not.toContain('30000');
+    });
+
+    it('No N+1: the query count is fixed (count + one findMany), independent of how many employees match', async () => {
+      const admin = await masterAdminAgent('stmt-discover-perf-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Discover Perf');
+      for (let i = 0; i < 8; i += 1) {
+        const employee = await prisma.employee.create({
+          data: { name: `Discover Perf Employee ${i}`, designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+        });
+        void employee;
+      }
+      // Created before the cycle so each employee receives a bootstrapped entry automatically.
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const sessionUser = await loadSessionUser(admin.userId);
+      if (!sessionUser) throw new Error('expected a loadable session user');
+
+      let queryCount = 0;
+      const listener = () => {
+        queryCount += 1;
+      };
+      prisma.$on('query', listener);
+
+      // Warm up first (connection/prepared-statement cache), matching this suite's own established
+      // precedent (payslips.test.ts's N+1 proof) for why an unwarmed first call isn't measured.
+      await searchStatementEmployees(sessionUser, { search: 'Discover Perf' });
+
+      queryCount = 0;
+      const small = await searchStatementEmployees(sessionUser, { search: 'Discover Perf Employee 0' });
+      const smallQueries = queryCount;
+
+      queryCount = 0;
+      const large = await searchStatementEmployees(sessionUser, { search: 'Discover Perf' });
+      const largeQueries = queryCount;
+
+      expect(small.employees.length).toBe(1);
+      expect(large.employees.length).toBe(8);
+      // A fixed cost of 3 — one COUNT, one main SELECT, and Prisma's own single batched relation
+      // fetch for the joined `site.name` (its default `relationLoadStrategy` issues one extra
+      // round trip for an included relation, never one per row) — identical for 1 match and for 8,
+      // proving this scales with the *shape* of the query, not with how many candidates it finds.
+      // A real per-candidate N+1 would instead show `largeQueries` growing well past `smallQueries`.
+      expect(smallQueries).toBe(3);
+      expect(largeQueries).toBe(3);
     });
   });
 });

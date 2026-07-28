@@ -22,6 +22,12 @@ function correctionsNavItem(): NavItem {
   return item;
 }
 
+function statementsNavItem(): NavItem {
+  const item = navSections.flatMap((section) => section.items).find((navItem) => navItem.to === '/statements');
+  if (!item) throw new Error('Statements nav item not found in navSections');
+  return item;
+}
+
 describe('isNavItemVisible', () => {
   it('is always visible when no permission is required', () => {
     expect(isNavItemVisible({ label: 'Dashboard', to: '/', icon: navSections[0]!.items[0]!.icon }, fakeUser([]))).toBe(
@@ -59,6 +65,30 @@ describe('isNavItemVisible', () => {
 
     it('is hidden when neither permission is held', () => {
       expect(isNavItemVisible(correctionsNavItem(), fakeUser(['payslips:view']))).toBe(false);
+    });
+  });
+
+  // --- Statements sidebar entry (Phase 7A Checkpoint 2) ----------------------------------------
+  // Gated on the dedicated statements:view permission, established by Checkpoint 1 — never
+  // usable/visible without it, regardless of any other payroll permission held.
+
+  describe('the Statements sidebar item', () => {
+    it('requires the statements:view permission', () => {
+      expect(statementsNavItem().requiredPermission).toBe('statements:view');
+    });
+
+    it('is visible when statements:view is held', () => {
+      expect(isNavItemVisible(statementsNavItem(), fakeUser(['statements:view']))).toBe(true);
+    });
+
+    it('is hidden without statements:view, even for a user holding related payroll permissions', () => {
+      expect(
+        isNavItemVisible(statementsNavItem(), fakeUser(['payroll:entry', 'payroll:view', 'payslips:view', 'corrections:approve'])),
+      ).toBe(false);
+    });
+
+    it('is hidden for a user with no permissions at all', () => {
+      expect(isNavItemVisible(statementsNavItem(), fakeUser([]))).toBe(false);
     });
   });
 });
