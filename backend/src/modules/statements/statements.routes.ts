@@ -5,7 +5,13 @@ import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { periodSlug, slugify } from '../payslips/payslips.routes';
-import { generateStatementPdf, getEmployeeStatement, searchStatementEmployees } from './statements.service';
+import {
+  exportStatementToCsv,
+  exportStatementToXlsx,
+  generateStatementPdf,
+  getEmployeeStatement,
+  searchStatementEmployees,
+} from './statements.service';
 import type { StatementEmployeeIdentity, StatementRange } from './statements.types';
 
 function requireIdParam(id: string | undefined): string {
@@ -25,15 +31,38 @@ function rangeSlug(range: StatementRange): string {
   return from === to ? from : `${from}-to-${to}`;
 }
 
-/** `employee-statement-{employee-code-or-short-id}-{period-slug}.pdf` — deliberately excludes
- * CNIC and every banking field (§12 of the checkpoint's own requirements), matching Payslip's own
- * archive-entry-name fallback (`payslips.routes.ts`'s `buildArchiveEntryName`): a blank/all-
- * stripped employee code (e.g. an all-emoji code, `slugify`'s own edge case) falls back to the
- * first 8 characters of the employee's id rather than producing an empty filename segment. */
-function buildStatementPdfFilename(employee: StatementEmployeeIdentity, range: StatementRange): string {
+/** `employee-statement-{employee-code-or-short-id}-{period-slug}` — the shared name stem every
+ * Statement export filename is built from (Phase 7B Checkpoint 1: PDF; Checkpoint 2: XLSX/CSV).
+ * Deliberately excludes CNIC and every banking field (§12 of Checkpoint 1's own requirements),
+ * matching Payslip's own archive-entry-name fallback (`payslips.routes.ts`'s
+ * `buildArchiveEntryName`): a blank/all-stripped employee code (e.g. an all-emoji code, `slugify`'s
+ * own edge case) falls back to the first 8 characters of the employee's id rather than producing an
+ * empty filename segment. Not exported — `buildStatementPdfFilename`/`buildStatementExportFilename`
+ * below are the only public filename builders, each appending its own extension. */
+function buildStatementFilenameStem(employee: StatementEmployeeIdentity, range: StatementRange): string {
   const codeOrShortId = employee.employeeCode?.trim() || employee.employeeId.slice(0, 8);
   const base = slugify(codeOrShortId) || 'employee';
-  return `employee-statement-${base}-${rangeSlug(range)}.pdf`;
+  return `employee-statement-${base}-${rangeSlug(range)}`;
+}
+
+/** `employee-statement-{employee-code-or-short-id}-{period-slug}.pdf` — the dedicated PDF filename
+ * builder, kept as its own named function (rather than a generic `extension` parameter) so the
+ * `/pdf` route's own call site reads as "build the PDF filename," not "build an export filename,
+ * happening to be PDF this time." */
+function buildStatementPdfFilename(employee: StatementEmployeeIdentity, range: StatementRange): string {
+  return `${buildStatementFilenameStem(employee, range)}.pdf`;
+}
+
+/** `employee-statement-{employee-code-or-short-id}-{period-slug}.{extension}` — the shared XLSX/CSV
+ * filename builder (Phase 7B Checkpoint 2). PDF has its own dedicated `buildStatementPdfFilename`
+ * above, not this function — XLSX and CSV are similar enough (both new in the same checkpoint, both
+ * data-export formats) to justify one parameterized builder between the two of them. */
+function buildStatementExportFilename(
+  employee: StatementEmployeeIdentity,
+  range: StatementRange,
+  extension: 'xlsx' | 'csv',
+): string {
+  return `${buildStatementFilenameStem(employee, range)}.${extension}`;
 }
 
 /**
@@ -144,6 +173,105 @@ employeeStatementRouter.get('/pdf', requirePermission(PERMISSIONS.STATEMENTS_VIE
     const filename = buildStatementPdfFilename(employee, range);
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Phase 7B Checkpoint 2 — Statement XLSX/CSV export. Mounted at the same `:employeeId/statement`
+ * base as `/pdf` (Checkpoint 1), gated by the identical `statements:view` permission — no separate
+ * `statements:export` key, matching `/pdf`'s own precedent exactly. Every RBAC/historical-site-
+ * scope/concealment rule is enforced entirely inside `getEmployeeStatement()`, called exactly once
+ * by `exportStatementToXlsx`/`exportStatementToCsv` — never re-implemented or weakened here, the
+ * same relationship `/pdf` already establishes with `generateStatementPdf`.
+ *
+ * Always `Content-Disposition: attachment`, matching `/pdf`'s own "no inline mode" rule — a
+ * Statement export has exactly one responsibility (download), never an inline preview.
+ *
+ * Audited as the same `statement.exported` action `/pdf` already uses — never a per-format action
+ * name (`statement.exported.xlsx`/`.csv`) — with `metadata.format` distinguishing `'xlsx'`/`'csv'`
+ * from `/pdf`'s own `'pdf'`, matching Bank Sheets'/Cash Receiving's own "one action, format in
+ * metadata" convention for a module with more than one export format.
+ */
+employeeStatementRouter.get('/xlsx', requirePermission(PERMISSIONS.STATEMENTS_VIEW), async (req, res, next) => {
+  try {
+    const employeeId = requireIdParam(req.params.employeeId);
+    const fromCycleId = typeof req.query.fromCycleId === 'string' ? req.query.fromCycleId : undefined;
+    const toCycleId = typeof req.query.toCycleId === 'string' ? req.query.toCycleId : undefined;
+
+    const { buffer, employee, range, entryCount } = await exportStatementToXlsx(
+      req.currentUser!,
+      employeeId,
+      { fromCycleId, toCycleId },
+      { generatedByName: req.currentUser!.name, generatedAt: new Date() },
+    );
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'statement.exported',
+      entityType: 'Employee',
+      entityId: employeeId,
+      metadata: {
+        format: 'xlsx',
+        requestedFromCycleId: fromCycleId ?? null,
+        requestedToCycleId: toCycleId ?? null,
+        resolvedFromCycleId: range.fromCycle?.id ?? null,
+        resolvedToCycleId: range.toCycle?.id ?? null,
+        entryCount,
+        disposition: 'attachment',
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = buildStatementExportFilename(employee, range, 'xlsx');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** See the `/xlsx` route's own doc comment above — identical in every respect except format. */
+employeeStatementRouter.get('/csv', requirePermission(PERMISSIONS.STATEMENTS_VIEW), async (req, res, next) => {
+  try {
+    const employeeId = requireIdParam(req.params.employeeId);
+    const fromCycleId = typeof req.query.fromCycleId === 'string' ? req.query.fromCycleId : undefined;
+    const toCycleId = typeof req.query.toCycleId === 'string' ? req.query.toCycleId : undefined;
+
+    const { buffer, employee, range, entryCount } = await exportStatementToCsv(
+      req.currentUser!,
+      employeeId,
+      { fromCycleId, toCycleId },
+      { generatedByName: req.currentUser!.name, generatedAt: new Date() },
+    );
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'statement.exported',
+      entityType: 'Employee',
+      entityId: employeeId,
+      metadata: {
+        format: 'csv',
+        requestedFromCycleId: fromCycleId ?? null,
+        requestedToCycleId: toCycleId ?? null,
+        resolvedFromCycleId: range.fromCycle?.id ?? null,
+        resolvedToCycleId: range.toCycle?.id ?? null,
+        entryCount,
+        disposition: 'attachment',
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = buildStatementExportFilename(employee, range, 'csv');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).send(buffer);
   } catch (error) {

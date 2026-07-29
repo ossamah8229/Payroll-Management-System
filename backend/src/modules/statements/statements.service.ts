@@ -1,14 +1,22 @@
 import { Prisma } from '@prisma/client';
 import { Decimal } from 'decimal.js';
+import ExcelJS from 'exceljs';
 import type { SessionUser } from '@payroll/shared';
 import { normalizeCnic } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
+import { stringifyCsvSafe } from '../../common/import-export';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
 import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
 import { getCompanySettings } from '../settings/settings.service';
 import { renderHtmlToPdf } from '../../lib/pdf/render-pdf';
 import { renderStatementHtml, STATEMENT_PDF_FOOTER_TEMPLATE, type StatementPdfMeta } from '../../lib/pdf/templates/statement';
+import {
+  entryDateLabel,
+  statementBalanceShortLabel,
+  statementCategoryLabel,
+  statementPeriodLabel,
+} from './statement-labels';
 import type {
   EmployeeStatement,
   GetEmployeeStatementParams,
@@ -821,6 +829,263 @@ export async function generateStatementPdf(
 export async function renderStatementPdfBuffer(statement: EmployeeStatement, meta: StatementPdfMeta): Promise<Buffer> {
   const html = renderStatementHtml(statement, meta);
   return renderHtmlToPdf(html, { displayHeaderFooter: true, footerTemplate: STATEMENT_PDF_FOOTER_TEMPLATE });
+}
+
+// --- Excel/CSV export (Phase 7B Checkpoint 2) ---------------------------------------------------
+
+/** Identical shape and role to `StatementPdfRequestMeta` (who is generating this export and when)
+ * — kept as its own type since Excel/CSV are a different rendering path than the PDF template, not
+ * because the shape differs. */
+export interface StatementExportRequestMeta {
+  generatedByName: string;
+  generatedAt: Date;
+}
+
+export interface StatementExportResult {
+  buffer: Buffer;
+  employee: StatementEmployeeIdentity;
+  range: StatementRange;
+  entryCount: number;
+}
+
+interface StatementExportMeta {
+  companyName: string;
+  generatedByName: string;
+  generatedAt: Date;
+}
+
+/** Resolves the same live `CompanySettings` read `generateStatementPdf` already performs, merged
+ * with the caller's request-specific meta — one additional read beyond the canonical Statement
+ * itself, called only after `getEmployeeStatement` has already succeeded (identical ordering to the
+ * PDF path, so the common unauthorized/concealed-not-found path never pays for a read it will never
+ * use). */
+async function resolveStatementExportMeta(requestMeta: StatementExportRequestMeta): Promise<StatementExportMeta> {
+  const companySettings = await getCompanySettings();
+  return {
+    companyName: companySettings.companyName,
+    generatedByName: requestMeta.generatedByName,
+    generatedAt: requestMeta.generatedAt,
+  };
+}
+
+const STATEMENT_LEDGER_EXPORT_HEADERS = [
+  'Date / Period',
+  'Category',
+  'Description',
+  'Movement',
+  'Running Payable',
+  'Running Recovery',
+  'Running Advance',
+] as const;
+
+const STATEMENT_BALANCE_EXPORT_HEADERS = ['Payable to Employee', 'Recoverable from Employee', 'Advance'] as const;
+
+/** A `StatementBalances` triple, flattened to its exported row — **financial invariant**: reads
+ * `payableOutstanding`/`recoveryOutstanding`/`advanceOutstanding` directly off the balances object
+ * passed in, verbatim, never summed or recomputed. The one call site for `statement.openingBalances`
+ * and the one for `statement.closingBalances` (in `exportStatementToCsv`/`exportStatementToXlsx`
+ * below) are therefore the *only* places those two DTO fields are ever read for export — there is no
+ * second, independent balance calculation anywhere in this file. */
+function statementBalanceExportRow(balances: StatementBalances): string[] {
+  return [balances.payableOutstanding, balances.recoveryOutstanding, balances.advanceOutstanding];
+}
+
+/**
+ * One ledger row's Movement cell, as plain text — mirrors `templates/statement.ts`'s own
+ * `movementCell` exactly (same `null` → literal "Informational" rule, same sign-from-`direction`
+ * rule, same `statementBalanceShortLabel` for the trailing balance tag) except the amount is
+ * rendered as `entry.movement.amount`'s own raw decimal string, never passed through a display
+ * formatter — matching Bank Sheets'/Cash Receiving's own export precedent, where `buildExportRow`
+ * exports `row.netSalary` as its own unformatted decimal string rather than a currency-formatted
+ * one (`bank-sheets.service.ts`). `direction` supplies the sign character for display only; the
+ * DTO's own `amount` is always a positive magnitude string (`StatementMovement`'s own doc comment).
+ */
+function statementMovementExportCell(entry: StatementLedgerEntry): string {
+  if (!entry.movement) return 'Informational';
+  const sign = entry.movement.direction === 'INCREASE' ? '+' : '-';
+  return `${sign} ${entry.movement.amount} (${statementBalanceShortLabel(entry.movement.balance)})`;
+}
+
+/**
+ * Flattens one `StatementLedgerEntry` to its exported row shape — the single row-builder shared by
+ * both `exportStatementToCsv` and `exportStatementToXlsx` below, matching Bank Sheets'/Cash
+ * Receiving's own `buildExportRow` precedent (one flattening function per module, never duplicated
+ * per format).
+ *
+ * **Financial invariant (documented exactly as `templates/statement.ts`'s own module doc comment
+ * documents it for the PDF template): every balance cell below is read directly from
+ * `entry.runningBalances` — never summed, inferred from a neighbouring row, or recomputed.** The
+ * canonical `EmployeeStatement` DTO, built once by `getEmployeeStatement()`, is the sole financial
+ * source of truth for every export format (PDF, XLSX, CSV) — this function adds no calculation of
+ * its own, only formatting.
+ */
+export function buildStatementLedgerExportRow(entry: StatementLedgerEntry): string[] {
+  return [
+    entryDateLabel(entry),
+    statementCategoryLabel(entry.category),
+    entry.description,
+    statementMovementExportCell(entry),
+    entry.runningBalances.payableOutstanding,
+    entry.runningBalances.recoveryOutstanding,
+    entry.runningBalances.advanceOutstanding,
+  ];
+}
+
+/** Mirrors `templates/statement.ts`'s own `advanceRestrictionNotice` — identical trigger condition
+ * (`scope.advanceHistoryIncluded === false`) and identical wording, as plain rows instead of an
+ * HTML block. Returns no rows at all when Advance history is not restricted, matching the PDF's own
+ * "renders nothing" behaviour exactly — so Advance restriction behaviour is identical across every
+ * export format, never a divergent notice. */
+function statementAdvanceRestrictionExportRows(statement: EmployeeStatement): string[][] {
+  if (statement.scope.advanceHistoryIncluded) return [];
+  return [
+    ['Advance history restricted.'],
+    [
+      `${statement.employee.name}'s current Site is outside your assigned Site access, so their Advance history is not included in this Statement. Salary and Correction entries you have access to are shown in full below.`,
+    ],
+    [],
+  ];
+}
+
+/**
+ * Assembles the full row-block layout shared by both export formats — company/title/period,
+ * employee identity, the Advance-restriction notice (when applicable), Opening Balances, the
+ * ledger, and Closing Balances — mirroring `renderStatementHtml`'s own section order (Phase 7B
+ * Checkpoint 1) so a CSV/XLSX export and the PDF present the identical structure, never a divergent
+ * shape. Every balance/movement cell traces directly back to the `EmployeeStatement` DTO — see
+ * `buildStatementLedgerExportRow`'s and `statementBalanceExportRow`'s own doc comments for the same
+ * invariant stated at the row level. Returned as a plain `string[][]`; `exportStatementToCsv` passes
+ * it straight to `stringifyCsvSafe`, and `exportStatementToXlsx` writes the identical rows into a
+ * worksheet one at a time so both formats render the same content from the same source.
+ */
+function buildStatementExportBlocks(statement: EmployeeStatement, meta: StatementExportMeta): string[][] {
+  const { employee, range, entries } = statement;
+  const ledgerRows =
+    entries.length > 0 ? entries.map(buildStatementLedgerExportRow) : [['No ledger entries for this Statement Period']];
+
+  return [
+    [meta.companyName],
+    [`Employee Statement of Account — ${statementPeriodLabel(range)}`],
+    [],
+    ['Employee Name', employee.name],
+    ['Employee Code', employee.employeeCode ?? '—'],
+    ['CNIC', employee.cnic ?? '—'],
+    ['Current Site', employee.currentSiteName],
+    [],
+    ...statementAdvanceRestrictionExportRows(statement),
+    ['Opening Balances (brought forward)'],
+    [...STATEMENT_BALANCE_EXPORT_HEADERS],
+    statementBalanceExportRow(statement.openingBalances),
+    [],
+    [...STATEMENT_LEDGER_EXPORT_HEADERS],
+    ...ledgerRows,
+    [],
+    ['Closing Balances'],
+    [...STATEMENT_BALANCE_EXPORT_HEADERS],
+    statementBalanceExportRow(statement.closingBalances),
+    [],
+    [`Generated By: ${meta.generatedByName}`, `Generated On: ${meta.generatedAt.toLocaleString('en-US')}`],
+  ];
+}
+
+/**
+ * Exports one Employee Statement as CSV — calls `getEmployeeStatement()` **exactly once**, exactly
+ * like `generateStatementPdf` does, so every RBAC/historical-site-scope/concealment rule is enforced
+ * entirely inside that function and never reimplemented here. Reuses this codebase's one mandatory
+ * CSV-serialization entry point, `stringifyCsvSafe` (`common/import-export.ts`), which routes every
+ * cell through `sanitizeCsvCell` for formula-injection neutralization — no new serializer, escaping,
+ * quoting, delimiter, or BOM is introduced.
+ */
+export async function exportStatementToCsv(
+  currentUser: SessionUser,
+  employeeId: string,
+  params: GetEmployeeStatementParams,
+  requestMeta: StatementExportRequestMeta,
+): Promise<StatementExportResult> {
+  const statement = await getEmployeeStatement(currentUser, employeeId, params);
+  const meta = await resolveStatementExportMeta(requestMeta);
+  const csv = stringifyCsvSafe(buildStatementExportBlocks(statement, meta));
+  return {
+    buffer: Buffer.from(csv, 'utf-8'),
+    employee: statement.employee,
+    range: statement.range,
+    entryCount: statement.entries.length,
+  };
+}
+
+/** Local duplicate of `bank-sheets.service.ts`'s own `excelColumnWidth` (the Dynamic Width Rule,
+ * 2026-07-13: every column's width comes from its own longest exported value, never a manually
+ * guessed number) — duplicated here rather than extracted into shared infrastructure per this
+ * checkpoint's own explicit scope boundary (Phase 7B Checkpoint 2). */
+function excelColumnWidth(header: string, values: string[]): number {
+  const longest = values.reduce((max, value) => Math.max(max, value.length), header.length);
+  return longest + 3;
+}
+
+/**
+ * Exports one Employee Statement as XLSX — calls `getEmployeeStatement()` **exactly once**, same
+ * RBAC/scope/concealment relationship as `exportStatementToCsv` above. Uses this codebase's existing
+ * export style vocabulary only (bold title/section/header rows via ExcelJS's `font: { bold: true }`,
+ * content-driven column widths): no formulas, no calculated totals, no Excel currency `numFmt`, no
+ * conditional formatting, and no `pageSetup`/print settings, matching Bank Sheets'/Cash Receiving's
+ * own XLSX exports, neither of which use those features either.
+ */
+export async function exportStatementToXlsx(
+  currentUser: SessionUser,
+  employeeId: string,
+  params: GetEmployeeStatementParams,
+  requestMeta: StatementExportRequestMeta,
+): Promise<StatementExportResult> {
+  const statement = await getEmployeeStatement(currentUser, employeeId, params);
+  const meta = await resolveStatementExportMeta(requestMeta);
+  const { employee, range, entries } = statement;
+  const ledgerRows =
+    entries.length > 0 ? entries.map(buildStatementLedgerExportRow) : [['No ledger entries for this Statement Period']];
+
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Employee Statement');
+
+  worksheet.addRow([meta.companyName]).font = { bold: true, size: 13 };
+  worksheet.addRow([`Employee Statement of Account — ${statementPeriodLabel(range)}`]);
+  worksheet.addRow([]);
+
+  worksheet.addRow(['Employee Name', employee.name]);
+  worksheet.addRow(['Employee Code', employee.employeeCode ?? '—']);
+  worksheet.addRow(['CNIC', employee.cnic ?? '—']);
+  worksheet.addRow(['Current Site', employee.currentSiteName]);
+  worksheet.addRow([]);
+
+  for (const row of statementAdvanceRestrictionExportRows(statement)) worksheet.addRow(row);
+
+  worksheet.addRow(['Opening Balances (brought forward)']).font = { bold: true };
+  worksheet.addRow([...STATEMENT_BALANCE_EXPORT_HEADERS]).font = { bold: true };
+  worksheet.addRow(statementBalanceExportRow(statement.openingBalances));
+  worksheet.addRow([]);
+
+  worksheet.addRow([...STATEMENT_LEDGER_EXPORT_HEADERS]).font = { bold: true };
+  for (const row of ledgerRows) worksheet.addRow(row);
+  worksheet.addRow([]);
+
+  worksheet.addRow(['Closing Balances']).font = { bold: true };
+  worksheet.addRow([...STATEMENT_BALANCE_EXPORT_HEADERS]).font = { bold: true };
+  worksheet.addRow(statementBalanceExportRow(statement.closingBalances));
+
+  // Dynamic Width Rule, applied to the 7-column ledger — the dominant content on this sheet. The
+  // narrower company/employee-identity/balance rows above and below are left at these same
+  // widths; a short label in a row with empty trailing cells overflows visually into them exactly
+  // like Cash Receiving's own multi-block XLSX export already does, never truncating.
+  STATEMENT_LEDGER_EXPORT_HEADERS.forEach((header, index) => {
+    const columnValues = ledgerRows.map((row) => row[index] ?? '');
+    worksheet.getColumn(index + 1).width = excelColumnWidth(header, columnValues);
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return {
+    buffer: Buffer.from(buffer),
+    employee: statement.employee,
+    range: statement.range,
+    entryCount: statement.entries.length,
+  };
 }
 
 // --- Employee discovery for the Statements picker (Phase 7A Checkpoint 2 correction) ----------

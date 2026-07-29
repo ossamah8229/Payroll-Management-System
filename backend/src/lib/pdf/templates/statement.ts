@@ -1,12 +1,12 @@
 import { formatDate, formatMoney } from '@payroll/shared';
-import type {
-  EmployeeStatement,
-  StatementBalanceKind,
-  StatementBalances,
-  StatementLedgerCategory,
-  StatementLedgerEntry,
-  StatementRange,
-} from '../../../modules/statements/statements.types';
+import type { EmployeeStatement, StatementBalances, StatementLedgerEntry } from '../../../modules/statements/statements.types';
+import {
+  entryDateLabel,
+  statementBalanceLabel,
+  statementBalanceShortLabel,
+  statementCategoryLabel,
+  statementPeriodLabel,
+} from '../../../modules/statements/statement-labels';
 import { escapeHtml } from '../html-escape';
 import { PRINT_STYLES } from '../print-styles';
 
@@ -49,64 +49,6 @@ export const STATEMENT_PDF_FOOTER_TEMPLATE =
   '<div style="width: 100%; font-family: Times New Roman, Times, Georgia, serif; font-size: 8px; ' +
   'text-align: center; color: #333333;">Page <span class="pageNumber"></span> of ' +
   '<span class="totalPages"></span></div>';
-
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-] as const;
-
-/** "July 2026" — mirrors `frontend/src/components/corrections/correction-labels.ts`'s
- * `cyclePeriodLabel` exactly (a backend PDF template cannot import frontend code across the
- * monorepo's package boundary), so the PDF uses the identical vocabulary the on-screen Statement
- * page already established. Deliberately not extracted into `@payroll/shared` by this checkpoint —
- * a single, small, pure label duplicated in exactly two places is the same tolerated repetition
- * this codebase already accepts elsewhere (`payslips.routes.ts`'s own `chunk()` doc comment); worth
- * revisiting only if a third consumer appears. */
-function cyclePeriodLabel(cycle: { year: number; month: number } | null | undefined): string {
-  if (!cycle) return '—';
-  return `${MONTH_NAMES[cycle.month - 1] ?? ''} ${cycle.year}`;
-}
-
-/** Mirrors `statement-labels.ts`'s `statementPeriodLabel` exactly. */
-function statementPeriodLabel(range: StatementRange): string {
-  if (!range.fromCycle || !range.toCycle) return 'No payroll cycles exist yet';
-  if (range.fromCycle.id === range.toCycle.id) return cyclePeriodLabel(range.fromCycle);
-  return `${cyclePeriodLabel(range.fromCycle)} – ${cyclePeriodLabel(range.toCycle)} (${range.cycleCount} cycle${range.cycleCount === 1 ? '' : 's'})`;
-}
-
-/** Mirrors `statement-labels.ts`'s `statementCategoryLabel` exactly. */
-function statementCategoryLabel(category: StatementLedgerCategory): string {
-  if (category === 'SALARY') return 'Salary';
-  if (category === 'CORRECTION') return 'Correction';
-  return 'Advance';
-}
-
-/** Mirrors `statement-labels.ts`'s `statementBalanceLabel` exactly — the full sentence-length
- * vocabulary `docs/architecture/workflows/statements-ledger.md §2` establishes, never raw
- * Debit/Credit, used for the Opening/Closing Balances section headings. */
-function statementBalanceLabel(balance: StatementBalanceKind): string {
-  if (balance === 'PAYABLE') return 'Payable to Employee';
-  if (balance === 'RECOVERABLE') return 'Recoverable from Employee';
-  return 'Advance';
-}
-
-/** Mirrors `statement-labels.ts`'s `statementBalanceShortLabel` exactly — used inline next to a
- * ledger row's own movement figure, where the full sentence-length label above would not fit. */
-function statementBalanceShortLabel(balance: StatementBalanceKind): string {
-  if (balance === 'PAYABLE') return 'Payable';
-  if (balance === 'RECOVERABLE') return 'Recoverable';
-  return 'Advance';
-}
-
-/** Mirrors `statement-labels.ts`'s `statementEntryDateLabel` exactly — the owning cycle's period
- * when one exists, falling back to the row's own `date` for the handful of kinds with no cycle
- * attribution (Advance Given/Cancelled/Deferred, a standalone Correction Payment). */
-function entryDateLabel(entry: Pick<StatementLedgerEntry, 'date' | 'cycleYear' | 'cycleMonth'>): string {
-  if (entry.cycleYear && entry.cycleMonth) {
-    return cyclePeriodLabel({ year: entry.cycleYear, month: entry.cycleMonth });
-  }
-  return formatDate(entry.date);
-}
 
 /** One `<td>`'s worth of movement rendering — `null` (an informational entry) renders the literal
  * word "Informational", never a fabricated `PKR 0.00` or blank cell that could be misread as a real

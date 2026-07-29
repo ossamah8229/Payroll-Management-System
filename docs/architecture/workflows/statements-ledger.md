@@ -492,3 +492,81 @@ value (audit shape left otherwise unchanged) rather than removed.
 **Not included in this checkpoint** (all remain separate, later Phase 7B work): Excel export, CSV
 export, any frontend download button, browser Print integration for Statements, Reports, Dashboard.
 Full build/test/verification record: `docs/PROJECT_PROGRESS.md`'s "Phase 7B, Checkpoint 1" entry.
+
+## 18. Phase 7B, Checkpoint 2 — backend Statement Excel & CSV export (IMPLEMENTED, awaiting review)
+
+Adds the remaining two backend export formats for the canonical Statement — `GET
+/api/v1/employees/:employeeId/statement/xlsx` and `GET /api/v1/employees/:employeeId/statement/csv`
+— completing Phase 7B's backend export surface alongside Checkpoint 1's PDF route. A read-only
+architecture investigation ran first (approved, no code), settling: no Export DTO (the canonical
+`EmployeeStatement` DTO feeds every export format directly, Option A of the investigation); dedicated
+routes per format (matching `/pdf`'s own precedent, not Bank Sheets'/Cash Receiving's single
+`?format=` route); the existing `statement.exported` audit action reused with `metadata.format`
+distinguishing `'xlsx'`/`'csv'` from `/pdf`'s `'pdf'`; the existing `statements:view` permission,
+unchanged.
+
+**No new export architecture** — reuses this codebase's existing export vocabulary exactly:
+- **CSV**: `stringifyCsvSafe`/`sanitizeCsvCell` (`common/import-export.ts`), the one mandatory
+  CSV-serialization entry point every export in this codebase already routes through — no new
+  serializer, escaping, quoting, delimiter, or BOM.
+- **XLSX**: ExcelJS, styled the same way Bank Sheets'/Cash Receiving's own exports are (bold
+  title/header rows, content-driven column widths via the Dynamic Width Rule) — no formulas, no
+  calculated totals, no Excel currency `numFmt`, no conditional formatting, no `pageSetup`/print
+  settings. `excelColumnWidth` is a local, deliberate duplicate of `bank-sheets.service.ts`'s own
+  helper, not extracted into shared infrastructure — an explicit, scoped decision for this checkpoint
+  (unlike the Import Templates helpers in `common/import-export.ts`, which are a genuinely different,
+  fill-in-and-upload-workbook concern, not a data-export one).
+
+**Financial invariant — documented exactly as Checkpoint 1's PDF template documents it, and enforced
+the same way**: `buildStatementLedgerExportRow()` (`statements.service.ts`) reads every balance cell
+directly from `entry.runningBalances`; `exportStatementToCsv`/`exportStatementToXlsx` read
+`statement.openingBalances`/`statement.closingBalances` directly. No export ever sums, nets, or
+recomputes a balance from a neighbouring row or from a movement amount — the canonical
+`EmployeeStatement` DTO, built once by `getEmployeeStatement()` (called **exactly once** per export
+request, identical to the PDF path), is the sole financial source of truth for all three formats.
+
+**Shared label extraction**: `entryDateLabel`, `statementPeriodLabel`, `statementCategoryLabel`,
+`statementBalanceLabel`, `statementBalanceShortLabel`, and `cyclePeriodLabel` — originally defined
+locally inside `lib/pdf/templates/statement.ts` (Checkpoint 1) as a backend-local mirror of the
+frontend's own `statement-labels.ts` — are now extracted into
+`backend/src/modules/statements/statement-labels.ts`, this checkpoint's own third backend consumer of
+that vocabulary (PDF, XLSX, CSV). The PDF template now imports from this shared module instead of
+defining its own copies; the frontend's own file is unchanged (it lives across the package boundary
+this module cannot cross).
+
+**Content layout** mirrors `renderStatementHtml`'s own section order so all three export formats
+present the identical structure: company name, title/Statement Period, employee identity, the
+Advance-restriction notice (when `scope.advanceHistoryIncluded === false`, identical wording to the
+PDF and JSON), Opening Balances, the 7-column ledger (Date/Period, Category, Description, Movement,
+Running Payable, Running Recovery, Running Advance), and Closing Balances.
+
+**Filename**: reuses the PDF's own filename builder, extension-parameterized —
+`employee-statement-{employee-code-or-short-id}-{period-slug}.xlsx` /
+`.csv`. `buildStatementPdfFilename` was generalized in place to `buildStatementExportFilename(employee,
+range, extension)` rather than adding a second, duplicated builder; the `/pdf` route's own call site
+was updated to pass `'pdf'` explicitly. No CNIC or banking field ever appears in any export filename.
+
+**Security**: identical to `/pdf` — `statements:view` required; every RBAC/historical-site-scope/
+concealment rule enforced entirely inside `getEmployeeStatement()`, never re-implemented; `no-store`
+Cache-Control; in-memory generation only (no temporary files, matching `workbook.xlsx.writeBuffer()`'s
+own Buffer-only contract); Advance-restriction behavior identical to the PDF/JSON.
+
+**Testing**: pure unit tests for `buildStatementLedgerExportRow` (`statement-export.test.ts` — movement
+sign/label rendering, informational-entry handling, running-balance verbatim rendering) plus
+integration tests appended to `statements.test.ts`'s own new "Phase 7B Checkpoint 2" describe blocks
+(CSV, XLSX, and cross-format consistency) against the real HTTP route, real database: authentication;
+`statements:view` requirement; historical site-scope and the concealed 404; filename correctness;
+`statement.exported` audit entries with the correct `format`; `Cache-Control: no-store`; opening/
+running/closing balances compared directly against the JSON route's own DTO values (not
+independently recomputed); the Advance-restriction notice; ledger row counts matching
+`entries.length`; CSV formula-injection neutralization through the shared `stringifyCsvSafe`; and,
+across formats, that PDF/XLSX/CSV all resolve the identical range/entryCount for the same request and
+that the canonical Statement query is issued exactly once per export (never duplicated by the export
+path).
+
+**Not included in this checkpoint** (remain separate, later Phase 7B work, each requiring its own
+go-ahead): **any frontend download button or UI for Statement export** (Checkpoint 1's PDF export
+also shipped with no frontend button yet — `statements-page.tsx` was not modified by either
+checkpoint), **browser Print integration for Statements** (a genuinely different mechanism —
+rendering the live on-screen ledger via the browser's own print dialog — remains a later, separate
+Phase 7B checkpoint), Reports, Dashboard. **Do not mark Phase 7B complete.**

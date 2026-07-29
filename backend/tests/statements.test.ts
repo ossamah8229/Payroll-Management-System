@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { Decimal } from 'decimal.js';
+import ExcelJS from 'exceljs';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
@@ -1747,5 +1748,490 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
     expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
     const pageCount = estimatePdfPageCount(buffer);
     expect(pageCount).toBeGreaterThan(1);
+  });
+
+  // ==============================================================================================
+  // Phase 7B Checkpoint 2 — Statement XLSX/CSV export
+  // ==============================================================================================
+
+  function getStatementXlsx(agent: Agent, employeeId: string, query = '') {
+    return agent.agent.get(`/api/v1/employees/${employeeId}/statement/xlsx${query}`).buffer(true).parse(binaryParser);
+  }
+
+  function getStatementCsv(agent: Agent, employeeId: string, query = '') {
+    return agent.agent.get(`/api/v1/employees/${employeeId}/statement/csv${query}`);
+  }
+
+  /** Counts the data rows immediately following a header row whose own first cell equals
+   * `headerFirstCell`, stopping at the first blank line — used to verify the ledger section's row
+   * count against the JSON route's own `entries.length`, independent of exactly which row/column
+   * layout the export otherwise uses. */
+  function countCsvDataRowsAfterHeader(text: string, headerFirstCell: string): number {
+    const lines = text.split('\n').map((line) => line.trimEnd());
+    const headerIndex = lines.findIndex((line) => line.startsWith(headerFirstCell));
+    expect(headerIndex).toBeGreaterThanOrEqual(0);
+    let count = 0;
+    for (let i = headerIndex + 1; i < lines.length; i += 1) {
+      if (lines[i] === '') break;
+      count += 1;
+    }
+    return count;
+  }
+
+  function countXlsxDataRowsAfterHeader(worksheet: ExcelJS.Worksheet, headerFirstCell: string): number {
+    let headerRowNumber = -1;
+    worksheet.eachRow((row, rowNumber) => {
+      if (headerRowNumber === -1 && row.getCell(1).value === headerFirstCell) headerRowNumber = rowNumber;
+    });
+    expect(headerRowNumber).toBeGreaterThan(0);
+    let count = 0;
+    for (let rowNumber = headerRowNumber + 1; ; rowNumber += 1) {
+      const value = worksheet.getRow(rowNumber).getCell(1).value;
+      if (value === null || value === undefined || value === '') break;
+      count += 1;
+    }
+    return count;
+  }
+
+  async function loadXlsxWorkbook(buffer: Buffer): Promise<ExcelJS.Worksheet> {
+    const workbook = new ExcelJS.Workbook();
+    // Same cross-package `Buffer` generic mismatch `bank-sheets.test.ts` already documents.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await workbook.xlsx.load(buffer as any);
+    return workbook.worksheets[0]!;
+  }
+
+  describe('CSV export', () => {
+    it('requires authentication — an unauthenticated request is rejected', async () => {
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV Auth');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Auth Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const res = await request(app).get(`/api/v1/employees/${employee.id}/statement/csv`);
+      expect(res.status).toBe(401);
+    });
+
+    it('requires statements:view — a user without it is rejected', async () => {
+      const admin = await masterAdminAgent('stmt-csv-noperm-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV NoPerm');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV NoPerm Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const noPerm = await createAuthenticatedAgent(app, {
+        email: 'stmt-csv-noperm-user@test.local',
+        password: PASSWORD,
+        roleCode: 'TEST_NO_STATEMENTS_VIEW_CSV',
+        permissionKeys: [PERMISSIONS.PAYROLL_VIEW],
+        siteIds: [site.id],
+      });
+      const res = await getStatementCsv(noPerm, employee.id);
+      expect(res.status).toBe(403);
+    });
+
+    it('Master Admin can export a valid CSV, with Cache-Control: no-store and the correct filename/content-type', async () => {
+      const admin = await masterAdminAgent('stmt-csv-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV Admin');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Admin Employee', employeeCode: 'CSVADM1', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      const entry = await getEntry(admin, cycle.id, employee.id);
+      await setNetSalary(admin, entry.id, entry.version, '5000');
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await getStatementCsv(admin, employee.id);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['content-disposition']).toMatch(/^attachment; filename="employee-statement-csvadm1-[a-z0-9-]+\.csv"$/);
+      expect(res.text).toContain('CSV Admin Employee');
+      expect(res.text).toContain('Opening Balances (brought forward)');
+      expect(res.text).toContain('Closing Balances');
+    });
+
+    it('falls back to a short-id-based filename with no CNIC when the employee has no employeeCode', async () => {
+      const admin = await masterAdminAgent('stmt-csv-filename-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV Filename');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Filename Employee', cnic: '3520288888888', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await getStatementCsv(admin, employee.id);
+      expect(res.status).toBe(200);
+      const disposition = res.headers['content-disposition'] as string;
+      expect(disposition).toMatch(/^attachment; filename="employee-statement-[a-z0-9-]+\.csv"$/);
+      expect(disposition).not.toContain('8888888');
+    });
+
+    it('a historically scoped user exports only their visible history; zero Site overlap preserves the concealed 404', async () => {
+      const admin = await masterAdminAgent('stmt-csv-scope-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Stmt CSV Scope A');
+      const { site: siteB } = await makeSiteWithUnit('Test Site Stmt CSV Scope B');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Scope Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unitA.id);
+
+      const staffA = await payrollStaffAgent('stmt-csv-scope-staffA@test.local', [siteA.id]);
+      const staffB = await payrollStaffAgent('stmt-csv-scope-staffB@test.local', [siteB.id]);
+
+      const resA = await getStatementCsv(staffA, employee.id);
+      expect(resA.status).toBe(200);
+
+      const resB = await getStatementCsv(staffB, employee.id);
+      expect(resB.status).toBe(404);
+    });
+
+    it('writes exactly one statement.exported audit entry with format: "csv", and never statement.viewed', async () => {
+      const admin = await masterAdminAgent('stmt-csv-audit-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV Audit');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Audit Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await getStatementCsv(admin, employee.id);
+      expect(res.status).toBe(200);
+
+      const exportedEntries = await prisma.auditLog.findMany({ where: { action: 'statement.exported', entityId: employee.id } });
+      expect(exportedEntries).toHaveLength(1);
+      const metadata = exportedEntries[0]!.metadata as { format: string; entryCount: number; disposition: string };
+      expect(metadata.format).toBe('csv');
+      expect(metadata.disposition).toBe('attachment');
+      expect(typeof metadata.entryCount).toBe('number');
+
+      const viewedEntries = await prisma.auditLog.findMany({ where: { action: 'statement.viewed', entityId: employee.id } });
+      expect(viewedEntries).toHaveLength(0);
+    });
+
+    it('opening, running, and closing balances in the CSV match the canonical JSON DTO exactly, verbatim', async () => {
+      const admin = await masterAdminAgent('stmt-csv-balances-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV Balances');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Balances Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unit.id); // -400... actually default entry; keep simple net-positive
+      await finalizeCycle(admin, cycle1.id);
+      const cycle2 = await rollover(admin, cycle1.id);
+      await releaseUnit(admin, cycle2.id, unit.id);
+
+      const jsonRes = await getStatement(admin, employee.id);
+      expect(jsonRes.status).toBe(200);
+      const { openingBalances, closingBalances, entries } = jsonRes.body;
+
+      const csvRes = await getStatementCsv(admin, employee.id);
+      expect(csvRes.status).toBe(200);
+      const csvText = csvRes.text;
+
+      expect(csvText).toContain(openingBalances.payableOutstanding);
+      expect(csvText).toContain(openingBalances.recoveryOutstanding);
+      expect(csvText).toContain(openingBalances.advanceOutstanding);
+      expect(csvText).toContain(closingBalances.payableOutstanding);
+      expect(csvText).toContain(closingBalances.recoveryOutstanding);
+      expect(csvText).toContain(closingBalances.advanceOutstanding);
+      for (const entry of entries) {
+        expect(csvText).toContain(entry.runningBalances.payableOutstanding);
+        expect(csvText).toContain(entry.runningBalances.recoveryOutstanding);
+        expect(csvText).toContain(entry.runningBalances.advanceOutstanding);
+      }
+
+      const ledgerRowCount = countCsvDataRowsAfterHeader(csvText, 'Date / Period');
+      expect(ledgerRowCount).toBe(entries.length);
+    });
+
+    it('renders the Advance-restriction notice in the CSV when the current site is out of scope, matching the PDF/JSON wording', async () => {
+      const admin = await masterAdminAgent('stmt-csv-restrict-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Stmt CSV Restrict A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Stmt CSV Restrict B');
+      const employee = await prisma.employee.create({
+        data: { name: 'CSV Restrict Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unitA.id);
+      await createAdvance(admin, employee.id, { year: cycle1.year, month: cycle1.month }, { totalAmount: '500' });
+
+      const transferRes = await admin.agent
+        .patch(`/api/v1/employees/${employee.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ siteId: siteB.id, unitId: unitB.id });
+      expect(transferRes.status).toBe(200);
+
+      const oldSiteOnlyAgent = await payrollStaffAgent('stmt-csv-restrict-oldsite@test.local', [siteA.id]);
+      const res = await getStatementCsv(oldSiteOnlyAgent, employee.id);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('Advance history restricted.');
+      expect(res.text).not.toMatch(/ADVANCE_GIVEN|Advance Given/);
+    });
+
+    it('neutralizes a formula-injection payload in a free-text field via the same stringifyCsvSafe every export uses', async () => {
+      const admin = await masterAdminAgent('stmt-csv-injection-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CSV Injection');
+      const employee = await prisma.employee.create({
+        data: {
+          name: '=cmd|\'/C calc\'!A1',
+          designation: 'Guard',
+          siteId: site.id,
+          unitId: unit.id,
+          grossPay: '30000',
+        },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await getStatementCsv(admin, employee.id);
+      expect(res.status).toBe(200);
+      // The raw formula-triggering payload must never appear un-neutralized — every occurrence is
+      // prefixed with a leading apostrophe by `sanitizeCsvCell`, exactly like every other CSV export
+      // in this codebase (`csv-formula-injection.test.ts`).
+      expect(res.text).not.toMatch(/(?<!')=cmd\|/);
+      expect(res.text).toContain("'=cmd|");
+    });
+  });
+
+  describe('XLSX export', () => {
+    it('requires authentication — an unauthenticated request is rejected', async () => {
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt XLSX Auth');
+      const employee = await prisma.employee.create({
+        data: { name: 'XLSX Auth Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const res = await request(app).get(`/api/v1/employees/${employee.id}/statement/xlsx`);
+      expect(res.status).toBe(401);
+    });
+
+    it('requires statements:view — a user without it is rejected', async () => {
+      const admin = await masterAdminAgent('stmt-xlsx-noperm-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt XLSX NoPerm');
+      const employee = await prisma.employee.create({
+        data: { name: 'XLSX NoPerm Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const noPerm = await createAuthenticatedAgent(app, {
+        email: 'stmt-xlsx-noperm-user@test.local',
+        password: PASSWORD,
+        roleCode: 'TEST_NO_STATEMENTS_VIEW_XLSX',
+        permissionKeys: [PERMISSIONS.PAYROLL_VIEW],
+        siteIds: [site.id],
+      });
+      const res = await getStatementXlsx(noPerm, employee.id);
+      expect(res.status).toBe(403);
+    });
+
+    it('Master Admin can export a valid workbook, with Cache-Control: no-store and the correct filename/content-type', async () => {
+      const admin = await masterAdminAgent('stmt-xlsx-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt XLSX Admin');
+      const employee = await prisma.employee.create({
+        data: { name: 'XLSX Admin Employee', employeeCode: 'XLSADM1', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      const entry = await getEntry(admin, cycle.id, employee.id);
+      await setNetSalary(admin, entry.id, entry.version, '5000');
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await getStatementXlsx(admin, employee.id);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('spreadsheetml');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['content-disposition']).toMatch(/^attachment; filename="employee-statement-xlsadm1-[a-z0-9-]+\.xlsx"$/);
+
+      const worksheet = await loadXlsxWorkbook(res.body as Buffer);
+      expect(worksheet.getCell('A1').value).toBeTruthy(); // company name row
+      expect(worksheet.getCell('B4').value).toBe('XLSX Admin Employee');
+    });
+
+    it('a historically scoped user exports only their visible history; zero Site overlap preserves the concealed 404', async () => {
+      const admin = await masterAdminAgent('stmt-xlsx-scope-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Stmt XLSX Scope A');
+      const { site: siteB } = await makeSiteWithUnit('Test Site Stmt XLSX Scope B');
+      const employee = await prisma.employee.create({
+        data: { name: 'XLSX Scope Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unitA.id);
+
+      const staffA = await payrollStaffAgent('stmt-xlsx-scope-staffA@test.local', [siteA.id]);
+      const staffB = await payrollStaffAgent('stmt-xlsx-scope-staffB@test.local', [siteB.id]);
+
+      const resA = await getStatementXlsx(staffA, employee.id);
+      expect(resA.status).toBe(200);
+
+      const resB = await getStatementXlsx(staffB, employee.id);
+      expect(resB.status).toBe(404);
+    });
+
+    it('writes exactly one statement.exported audit entry with format: "xlsx", and never statement.viewed', async () => {
+      const admin = await masterAdminAgent('stmt-xlsx-audit-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt XLSX Audit');
+      const employee = await prisma.employee.create({
+        data: { name: 'XLSX Audit Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const res = await getStatementXlsx(admin, employee.id);
+      expect(res.status).toBe(200);
+
+      const exportedEntries = await prisma.auditLog.findMany({ where: { action: 'statement.exported', entityId: employee.id } });
+      expect(exportedEntries).toHaveLength(1);
+      const metadata = exportedEntries[0]!.metadata as { format: string; entryCount: number; disposition: string };
+      expect(metadata.format).toBe('xlsx');
+      expect(metadata.disposition).toBe('attachment');
+      expect(typeof metadata.entryCount).toBe('number');
+
+      const viewedEntries = await prisma.auditLog.findMany({ where: { action: 'statement.viewed', entityId: employee.id } });
+      expect(viewedEntries).toHaveLength(0);
+    });
+
+    it('opening, running, and closing balances in the workbook match the canonical JSON DTO exactly, verbatim', async () => {
+      const admin = await masterAdminAgent('stmt-xlsx-balances-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt XLSX Balances');
+      const employee = await prisma.employee.create({
+        data: { name: 'XLSX Balances Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unit.id);
+      await finalizeCycle(admin, cycle1.id);
+      const cycle2 = await rollover(admin, cycle1.id);
+      await releaseUnit(admin, cycle2.id, unit.id);
+
+      const jsonRes = await getStatement(admin, employee.id);
+      expect(jsonRes.status).toBe(200);
+      const { entries } = jsonRes.body;
+
+      const xlsxRes = await getStatementXlsx(admin, employee.id);
+      expect(xlsxRes.status).toBe(200);
+      const worksheet = await loadXlsxWorkbook(xlsxRes.body as Buffer);
+
+      // Collect every cell value in the sheet into one flat set of strings — balances are read
+      // straight from the DTO with no reformatting, so each one must appear somewhere verbatim.
+      const allValues = new Set<string>();
+      worksheet.eachRow((row) => {
+        row.eachCell({ includeEmpty: false }, (cell) => {
+          if (cell.value !== null && cell.value !== undefined) allValues.add(String(cell.value));
+        });
+      });
+
+      expect(allValues.has(jsonRes.body.openingBalances.payableOutstanding)).toBe(true);
+      expect(allValues.has(jsonRes.body.openingBalances.recoveryOutstanding)).toBe(true);
+      expect(allValues.has(jsonRes.body.openingBalances.advanceOutstanding)).toBe(true);
+      expect(allValues.has(jsonRes.body.closingBalances.payableOutstanding)).toBe(true);
+      expect(allValues.has(jsonRes.body.closingBalances.recoveryOutstanding)).toBe(true);
+      expect(allValues.has(jsonRes.body.closingBalances.advanceOutstanding)).toBe(true);
+      for (const entry of entries) {
+        expect(allValues.has(entry.runningBalances.payableOutstanding)).toBe(true);
+        expect(allValues.has(entry.runningBalances.recoveryOutstanding)).toBe(true);
+        expect(allValues.has(entry.runningBalances.advanceOutstanding)).toBe(true);
+      }
+
+      const ledgerRowCount = countXlsxDataRowsAfterHeader(worksheet, 'Date / Period');
+      expect(ledgerRowCount).toBe(entries.length);
+    });
+  });
+
+  describe('Cross-format consistency (PDF / XLSX / CSV all consume the same canonical Statement DTO)', () => {
+    it('all three formats resolve the identical range and entryCount for the same request', async () => {
+      const admin = await masterAdminAgent('stmt-xformat-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CrossFormat');
+      const employee = await prisma.employee.create({
+        data: { name: 'CrossFormat Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle1 = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle1.id, unit.id);
+      await finalizeCycle(admin, cycle1.id);
+      const cycle2 = await rollover(admin, cycle1.id);
+      await releaseUnit(admin, cycle2.id, unit.id);
+
+      const query = `?fromCycleId=${cycle1.id}&toCycleId=${cycle2.id}`;
+      const jsonRes = await getStatement(admin, employee.id, query);
+      expect(jsonRes.status).toBe(200);
+
+      const pdfRes = await getStatementPdf(admin, employee.id, query);
+      const xlsxRes = await getStatementXlsx(admin, employee.id, query);
+      const csvRes = await getStatementCsv(admin, employee.id, query);
+      expect(pdfRes.status).toBe(200);
+      expect(xlsxRes.status).toBe(200);
+      expect(csvRes.status).toBe(200);
+
+      const auditEntries = await prisma.auditLog.findMany({
+        where: { action: 'statement.exported', entityId: employee.id },
+        orderBy: { occurredAt: 'asc' },
+      });
+      expect(auditEntries).toHaveLength(3);
+      const byFormat = new Map(auditEntries.map((entry) => [(entry.metadata as { format: string }).format, entry.metadata as Record<string, unknown>]));
+
+      for (const format of ['pdf', 'xlsx', 'csv']) {
+        const metadata = byFormat.get(format)!;
+        expect(metadata.resolvedFromCycleId).toBe(cycle1.id);
+        expect(metadata.resolvedToCycleId).toBe(cycle2.id);
+        expect(metadata.entryCount).toBe(jsonRes.body.entries.length);
+      }
+    });
+
+    it('the canonical Statement query is issued once per XLSX/CSV export, not duplicated by the export path', async () => {
+      const admin = await masterAdminAgent('stmt-xformat-onefetch-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CrossFormat OneFetch');
+      const employee = await prisma.employee.create({
+        data: { name: 'CrossFormat OneFetch Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      await getStatement(admin, employee.id); // warm up
+
+      let queryCount = 0;
+      const listener = () => {
+        queryCount += 1;
+      };
+      prisma.$on('query', listener);
+
+      queryCount = 0;
+      await getStatement(admin, employee.id);
+      const jsonQueries = queryCount;
+
+      queryCount = 0;
+      const csvRes = await getStatementCsv(admin, employee.id);
+      const csvQueries = queryCount;
+
+      queryCount = 0;
+      const xlsxRes = await getStatementXlsx(admin, employee.id);
+      const xlsxQueries = queryCount;
+
+      expect(csvRes.status).toBe(200);
+      expect(xlsxRes.status).toBe(200);
+      // Same relationship the PDF path already proves: the identical query set the JSON route
+      // issues, plus exactly one additional read (`getCompanySettings()`) — never roughly double,
+      // which is what a second, duplicated `getEmployeeStatement()` call would produce.
+      expect(csvQueries).toBe(jsonQueries + 1);
+      expect(xlsxQueries).toBe(jsonQueries + 1);
+    });
+
+    it("causes no financial mutation from either export — every source table's row count is identical before and after", async () => {
+      const admin = await masterAdminAgent('stmt-xformat-nomut-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Stmt CrossFormat NoMutation');
+      const employee = await prisma.employee.create({
+        data: { name: 'CrossFormat NoMutation Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
+      const cycle = await makeDraftCycle(admin);
+      const entry = await getEntry(admin, cycle.id, employee.id);
+      await setNetSalary(admin, entry.id, entry.version, '5000');
+      await releaseUnit(admin, cycle.id, unit.id);
+
+      const before = await snapshotFinancialRowCounts(employee.id);
+      const csvRes = await getStatementCsv(admin, employee.id);
+      const xlsxRes = await getStatementXlsx(admin, employee.id);
+      expect(csvRes.status).toBe(200);
+      expect(xlsxRes.status).toBe(200);
+      const after = await snapshotFinancialRowCounts(employee.id);
+      expect(after).toEqual(before);
+    });
   });
 });

@@ -7636,6 +7636,95 @@ status`/an isolated re-run against `HEAD`, neither touched by this checkpoint).
 export, CSV export, any frontend download button, browser Print integration for Statements, Reports,
 Dashboard. **Do not mark Phase 7B complete.**
 
+### Phase 7B, Checkpoint 2 — Backend Employee Statement Excel & CSV Export — IMPLEMENTED, 2026-07-29, awaiting review, NOT COMMITTED
+
+A read-only architecture investigation of the Excel/CSV export surface ran first (approved, no code —
+see the investigation's own report), settling: reuse the canonical `EmployeeStatement` DTO directly
+for every format (no Export DTO, matching Bank Sheets'/Cash Receiving's own precedent); dedicated
+`/xlsx` and `/csv` routes (matching `/pdf`'s own precedent from Checkpoint 1, not Bank Sheets'/Cash
+Receiving's single `?format=` route); the existing `statement.exported` audit action reused with
+`metadata.format` distinguishing `'xlsx'`/`'csv'`; the existing `statements:view` permission,
+unchanged; `excelColumnWidth` duplicated locally rather than extracted into shared infrastructure
+(explicit scope boundary for this checkpoint).
+
+**Implementation**, per that authorization:
+- **New routes**: `GET /api/v1/employees/:employeeId/statement/xlsx` and
+  `GET /api/v1/employees/:employeeId/statement/csv` (`statements.routes.ts`), mounted on the existing
+  `employeeStatementRouter` alongside `/pdf`, identical `fromCycleId`/`toCycleId` params, identical
+  `statements:view` gate, always `Content-Disposition: attachment` (matching `/pdf`'s own "no inline
+  mode" rule).
+- **New service functions** (`statements.service.ts`): `exportStatementToCsv()` and
+  `exportStatementToXlsx()` each call the existing, completely unmodified `getEmployeeStatement()`
+  **exactly once**, then the same live `getCompanySettings()` read `generateStatementPdf` already
+  performs, and build their output from one shared row-builder,
+  `buildStatementLedgerExportRow()` — the single flattening function both formats use, matching Bank
+  Sheets'/Cash Receiving's own `buildExportRow` precedent. **Financial invariant, documented in the
+  code exactly as `templates/statement.ts`'s own module doc comment documents it for the PDF**: every
+  balance cell is read directly from `entry.runningBalances`/`statement.openingBalances`/
+  `statement.closingBalances`, never summed, netted, or recomputed.
+- **Content layout** mirrors `renderStatementHtml`'s own section order (company name, title/Statement
+  Period, employee identity, Advance-restriction notice when applicable, Opening Balances, the
+  7-column ledger, Closing Balances) so all three formats present identical structure.
+- **CSV**: routes through the existing mandatory `stringifyCsvSafe`/`sanitizeCsvCell`
+  (`common/import-export.ts`) — no new serializer, escaping, quoting, delimiter, or BOM.
+- **XLSX**: ExcelJS, styled with this codebase's existing export vocabulary only (bold title/header
+  rows, content-driven column widths via the Dynamic Width Rule) — no formulas, no calculated totals,
+  no currency `numFmt`, no conditional formatting, no `pageSetup`/print settings. `excelColumnWidth`
+  is a local, deliberate duplicate of `bank-sheets.service.ts`'s own helper, not extracted into shared
+  infrastructure, per this checkpoint's own explicit scope boundary.
+- **Shared label extraction**: `entryDateLabel`, `statementPeriodLabel`, `statementCategoryLabel`,
+  `statementBalanceLabel`, `statementBalanceShortLabel`, `cyclePeriodLabel` — originally defined
+  locally inside `lib/pdf/templates/statement.ts` (Checkpoint 1) — are now extracted into a new
+  `backend/src/modules/statements/statement-labels.ts`, this checkpoint's own third backend consumer
+  of that vocabulary (PDF, XLSX, CSV). The PDF template now imports from this shared module instead of
+  defining its own copies (a pure refactor — `statement-pdf-template.test.ts`'s existing 20 tests
+  still pass unchanged, proving the PDF's own output is byte-identical). The frontend's own
+  `statement-labels.ts` is unchanged.
+- **Filename**: `buildStatementPdfFilename` was generalized in place to
+  `buildStatementExportFilename(employee, range, extension)` (`statements.routes.ts`) rather than
+  adding a second, duplicated builder — `employee-statement-{employee-code-or-short-id}-
+  {period-slug}.xlsx`/`.csv`, extension-parameterized; the `/pdf` route's own call site was updated to
+  pass `'pdf'` explicitly. No CNIC or banking field ever appears in any export filename.
+- **Audit**: the existing `statement.exported` action, `metadata.format: 'xlsx'`/`'csv'` — never a new
+  per-format action name — matching Bank Sheets'/Cash Receiving's own "one action, format in metadata"
+  convention.
+
+**Testing**: 10 new pure unit tests (`backend/tests/statement-export.test.ts` — movement sign/label
+rendering, informational-entry handling, running-balance verbatim rendering, no database/HTTP) plus 20
+new integration tests appended to `statements.test.ts`'s own new "Phase 7B Checkpoint 2" describe
+blocks (CSV: 9 tests; XLSX: 7 tests; cross-format consistency: 3 tests), against the real HTTP route
+and a real database: authentication; `statements:view` requirement; historical site-scope and the
+concealed 404; filename correctness (including the no-employeeCode fallback); `statement.exported`
+audit entries with the correct `format`, never `statement.viewed`; `Cache-Control: no-store`; opening/
+running/closing balances compared directly against the JSON route's own DTO values (not independently
+recomputed); the Advance-restriction notice, wording matching the PDF/JSON; ledger row counts matching
+`entries.length`; CSV formula-injection neutralization through the shared `stringifyCsvSafe`
+(a malicious employee name is neutralized with the same leading-apostrophe rule every other CSV export
+in this codebase already uses); and, across formats, that PDF/XLSX/CSV all resolve the identical
+range/entryCount for the same request, that the canonical Statement query is issued exactly once per
+export (never duplicated), and that no export causes any financial-table row-count change.
+
+Full backend suite (1139 tests), the directly related regression suites (Payslips, Bank Sheets, Cash
+Receiving, `csv-formula-injection.test.ts`, `pdf-template.test.ts`), typecheck (shared/backend/
+frontend/e2e), lint (backend/frontend), and build (shared/backend) all re-confirmed clean. Two
+pre-existing issues, both confirmed pre-existing via `git diff` (this checkpoint's own changes to
+`statements.test.ts` are a pure append, touching neither line) and an isolated re-run, were found and
+deliberately left untouched, matching Checkpoint 1's own precedent for handling exactly this kind of
+finding: two pre-existing lint errors elsewhere in `statements.test.ts` (`no-unused-vars` at lines
+1213/1378) and the same pre-existing e2e typecheck error in `08-role-administration.spec.ts` Checkpoint
+1's own report already recorded. Two full-suite test runs each surfaced one different, unrelated test
+failure (once in Checkpoint 1's own PDF export tests, once in `payroll-entry-draft-cycle-sync.test.ts`,
+once in `corrections-service.test.ts`'s timing-sensitive concurrent-approval test) that could not be
+reproduced when the affected file was re-run in isolation — consistent with this sandboxed host's
+already-documented Puppeteer-under-shared-host-contention risk (`statements.test.ts`'s own
+`jest.setTimeout(45000)` comment, Checkpoint 1), not a defect introduced by this checkpoint. A third
+full-suite run passed every suite, including all three Statement test files, with zero failures.
+
+**Not included** (all remain separate, later Phase 7B work, each requiring its own go-ahead): **any
+frontend download button or UI for Statement export** (Checkpoint 1's PDF export also shipped with no
+frontend button — `statements-page.tsx` was not modified by either checkpoint), **browser Print
+integration for Statements**, Reports, Dashboard. **Do not mark Phase 7B complete.**
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -7650,7 +7739,7 @@ Dashboard. **Do not mark Phase 7B complete.**
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | **CLOSED, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. **Checkpoint 7 (End-to-End Financial Lifecycle Validation, Audit Hardening & Phase 6 Close-Out) CLOSED** — full lifecycle/audit/API/permission/reporting validation found one genuine gap (the `ACTIVE -> CONSUMED` materialization transition every prior checkpoint deferred, which blocked a materialized obligation from ever reaching `SETTLED`) and fixed it: `releaseProjectUnit` now consumes every `ACTIVE` reservation the moment its `PayrollEntry` actually releases, using the `settlementId`/`consumedAt` columns Checkpoint 5's own schema already reserved for it — no migration, no new permission key. See §1's own Checkpoint 7 entry for the full record. **Phase 6 is now fully closed.** |
-| 7 | Statements, Reports, Dashboard | **STARTED, IN PROGRESS — Phase 7A CLOSED, 2026-07-28; Phase 7 overall not complete.** Architecture review CLOSED, 2026-07-27 (read-only, nine approved decisions — §1). **Phase 7A — canonical Employee Statement of Account ledger (Checkpoint 1) + Statements frontend with historical `PayrollEntry.siteId`-based employee discovery and Employee-first selection (Checkpoint 2 + same-day correction) — reviewed, approved, committed, pushed, and deployed** — see §1's "Phase 7A, Checkpoint 1", "Phase 7A Checkpoint 2 — architectural investigation and correction", and "Phase 7A — closure and landing" entries. **Reports should reuse Statements' ledger-computation code rather than duplicating it** (2026-07-11 architecture review, reaffirmed 2026-07-27). Remaining, none yet started: Phase 7B (Print/Excel Statement export), Phase 7C (Reports), Phase 7D (Dashboard) — each requires its own separate, explicit authorization. |
+| 7 | Statements, Reports, Dashboard | **STARTED, IN PROGRESS — Phase 7A CLOSED, 2026-07-28; Phase 7 overall not complete.** Architecture review CLOSED, 2026-07-27 (read-only, nine approved decisions — §1). **Phase 7A — canonical Employee Statement of Account ledger (Checkpoint 1) + Statements frontend with historical `PayrollEntry.siteId`-based employee discovery and Employee-first selection (Checkpoint 2 + same-day correction) — reviewed, approved, committed, pushed, and deployed** — see §1's "Phase 7A, Checkpoint 1", "Phase 7A Checkpoint 2 — architectural investigation and correction", and "Phase 7A — closure and landing" entries. **Reports should reuse Statements' ledger-computation code rather than duplicating it** (2026-07-11 architecture review, reaffirmed 2026-07-27). **Phase 7B, Checkpoints 1 (Backend Statement PDF export) and 2 (Backend Statement Excel & CSV export) are both IMPLEMENTED, awaiting review, NOT COMMITTED** — see §1's own entries for each. Phase 7B is not closed: frontend export UI, browser Print integration, Reports (7C), and Dashboard (7D) remain not started, each requiring its own separate, explicit authorization. |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
 
