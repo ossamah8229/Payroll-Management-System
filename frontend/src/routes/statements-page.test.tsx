@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -475,6 +475,166 @@ describe('StatementsPage — Statement rendering', () => {
     expect(screen.getAllByRole('row').length).toBeGreaterThanOrEqual(60);
     const scrollContainer = document.querySelector('.overflow-x-auto');
     expect(scrollContainer).toBeTruthy();
+  });
+});
+
+describe('StatementsPage — Print & Export (Phase 7B Checkpoint 3)', () => {
+  // Radix's Dialog primitive probes a few DOM APIs jsdom doesn't implement (identical workaround
+  // to `print-button.test.tsx`) — needed here since Print opens the same shared `PrintSettingsDialog`.
+  beforeAll(() => {
+    if (!Element.prototype.hasPointerCapture) {
+      Element.prototype.hasPointerCapture = () => false;
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {};
+    }
+  });
+
+  // Only the two static methods are patched, never `vi.stubGlobal('URL', ...)` — replacing the
+  // whole global `URL` constructor also breaks Vite's own module runner (it uses `new URL(...)`
+  // internally for this page's lazy-loaded `Topbar`/`Suspense` boundary), which surfaced as a
+  // flaky "URL is not a constructor" failure attributed to unrelated tests.
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+
+  afterEach(() => {
+    cleanup();
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function mockBlobResponse(headers: Record<string, string> = {}) {
+    const blob = new Blob(['file']);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+      blob: async () => blob,
+    };
+  }
+
+  /** Real download side effects (jsdom doesn't implement `URL.createObjectURL` at all) —
+   * stubbing `click()` also avoids jsdom's "navigation not implemented" noise for an anchor that
+   * isn't actually attached to the document. */
+  function stubDownloadGlobals() {
+    URL.createObjectURL = vi.fn(() => 'blob:mock');
+    URL.revokeObjectURL = vi.fn();
+    return vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  }
+
+  function renderLoadedStatement() {
+    mockUseEmployeeStatement.mockReturnValue({
+      data: fullStatement(),
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderPage();
+    selectEmployee('emp-1');
+  }
+
+  it('does not render Print/Export actions before a Statement has loaded — never a disabled placeholder', () => {
+    mockUseEmployeeStatement.mockReturnValue({ data: undefined, isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+    expect(screen.queryByRole('button', { name: 'Print' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export PDF' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export Excel' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull();
+  });
+
+  it('renders four explicit, clearly labeled buttons once a Statement has loaded — no menu, no icon-only actions', () => {
+    renderLoadedStatement();
+    expect(screen.getByRole('button', { name: 'Print' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export PDF' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export Excel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeTruthy();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('Print opens the shared print settings dialog, recommending Landscape for the Ledger', () => {
+    renderLoadedStatement();
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    expect(screen.getByText('Print settings')).toBeTruthy();
+    expect(screen.getByText('(Landscape)')).toBeTruthy();
+  });
+
+  it('clicking Export PDF fetches the pdf export endpoint (GET, current range) and downloads', async () => {
+    const clickSpy = stubDownloadGlobals();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockBlobResponse({ 'content-disposition': 'attachment; filename="employee-statement-e001-all.pdf"' }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderLoadedStatement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export PDF' }));
+
+    await vi.waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/employees/emp-1/statement/pdf', { credentials: 'include' });
+  });
+
+  it('clicking Export Excel fetches the xlsx export endpoint', async () => {
+    stubDownloadGlobals();
+    const fetchMock = vi.fn().mockResolvedValue(mockBlobResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    renderLoadedStatement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export Excel' }));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/employees/emp-1/statement/xlsx', { credentials: 'include' }));
+  });
+
+  it('clicking Export CSV fetches the csv export endpoint', async () => {
+    stubDownloadGlobals();
+    const fetchMock = vi.fn().mockResolvedValue(mockBlobResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    renderLoadedStatement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/employees/emp-1/statement/csv', { credentials: 'include' }));
+  });
+
+  it('shows a loading spinner only on the active export button, and disables all four actions while it runs', async () => {
+    stubDownloadGlobals();
+    let resolveFetch: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(pending));
+    renderLoadedStatement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export Excel' }));
+
+    expect((screen.getByRole('button', { name: 'Print' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Export PDF' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Export Excel' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Export CSV' }) as HTMLButtonElement).disabled).toBe(true);
+    // Only the active button (Excel) shows the spinner — the other two still show the plain
+    // download icon, never all three at once.
+    expect(screen.getByRole('button', { name: 'Export Excel' }).querySelector('.animate-spin')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Export PDF' }).querySelector('.animate-spin')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Export CSV' }).querySelector('.animate-spin')).toBeNull();
+
+    resolveFetch(mockBlobResponse());
+    await vi.waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Export Excel' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+  });
+
+  it('shows a toast error and re-enables every action when an export fails, without throwing', async () => {
+    const { toast } = await import('sonner');
+    const toastErrorSpy = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, headers: { get: () => null } }));
+    renderLoadedStatement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+
+    await vi.waitFor(() => expect(toastErrorSpy).toHaveBeenCalledTimes(1));
+    expect((screen.getByRole('button', { name: 'Export CSV' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Print' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

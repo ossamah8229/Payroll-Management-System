@@ -570,3 +570,98 @@ also shipped with no frontend button yet — `statements-page.tsx` was not modif
 checkpoint), **browser Print integration for Statements** (a genuinely different mechanism —
 rendering the live on-screen ledger via the browser's own print dialog — remains a later, separate
 Phase 7B checkpoint), Reports, Dashboard. **Do not mark Phase 7B complete.**
+
+## 19. Phase 7B, Checkpoint 3 — frontend Print & Export (IMPLEMENTED, awaiting review)
+
+Wires Checkpoints 1-2's backend routes and the existing shared print system into
+`statements-page.tsx` — no backend, DTO, financial-calculation, export-payload, or permission
+change of any kind; this checkpoint is frontend-only. A read-only architecture investigation ran
+first (approved, no code), settling every question below by reusing an existing repository pattern
+rather than inventing one.
+
+**Actions and placement**: four explicit, always-labeled secondary buttons — Print, Export PDF,
+Export Excel, Export CSV — no dropdown, overflow menu, split button, or icon-only action (matching
+Bank Sheet's/Employees' own existing "individually labeled Export buttons in the toolbar" precedent,
+just with one more format). Rendered once, inside the identity `CardHeader` (`statement.data.employee.name`
++ the "Employee Statement of Account" badge), and only once a Statement has actually loaded
+(`canLoad && statement.data`) — never as a disabled placeholder on the selection form, since no
+other page in this app shows Print/Export before there's anything to act on.
+
+**Print**: Statements is the 9th `PrintButton` call site — `recommendedOrientation="landscape"`
+(the 7-column Ledger matches Advances'/Bank Sheet's/Corrections' own "wide, financial-figures"
+shape). No new print mechanism of any kind: still `window.print()` via the existing
+`PrintButton`/`PrintSettingsDialog`/`useTriggerPrint` chain, printing this page's own live DOM —
+never a dedicated print route, printable HTML, PDF preview, or server-side render. See
+`docs/architecture/print-architecture.md`'s own new "Statements joins the shared architecture"
+section for the exact print-readiness changes (the filter card's `print:hidden`, the Ledger
+wrapper's `print-flow`, `PrintContextHeader`'s employee+period context string, and the one small
+additive `disabled` prop `PrintButton` gained).
+
+**Export download flow** (`downloadEmployeeStatementExport`, new in `use-employee-statement.ts`):
+the same fetch → check `response.ok` → `response.blob()` → `URL.createObjectURL` → temporary
+`<a download>` → `.click()` → `URL.revokeObjectURL` sequence every other export module in this app
+already hand-rolls (`downloadBankSheetExport`, `downloadEmployeeExport`, `downloadPayslipPdf`) —
+**no shared blob-download utility was extracted** for this checkpoint (an explicit, deliberate
+scope boundary; the codebase now has four independent copies of this sequence, a candidate for a
+future, separately-scoped extraction, not this one).
+
+**Filename — the one deliberate departure from every other export module's convention.** Every
+existing module (Bank Sheet, Employees, Payslips) recomputes its own filename client-side and
+always overrides the server's `Content-Disposition`. Statements instead *prefers* the backend's own
+filename: `extractFilenameFromContentDisposition` (new, `use-employee-statement.ts`) parses
+`Content-Disposition: attachment; filename="..."`, falls back to `employee-statement.{format}` for
+a missing or malformed header (never throws — a cosmetic naming miss must never block an otherwise-
+successful download), and defensively keeps only the final path segment of whatever it extracts
+(the backend's own filenames are already `slugify`d ASCII with no separator — this is defense in
+depth, not a fix for anything currently possible). The reasoning for departing from convention:
+Statements' range is an arbitrary from/to `PayrollCycle` pair (`rangeSlug`,
+`statements.routes.ts`), not a single cycle like every module that already accepts the client-side
+duplication — reimplementing that slug logic client-side would be meaningfully more code and a
+second place it could silently drift from the backend's own naming. **No backend filename logic was
+duplicated on the frontend.**
+
+**Known limitation, not fixed by this checkpoint (backend changes are out of scope here)**: the
+backend's CORS config only exposes `x-csrf-token` to browser JS (`exposedHeaders`, `backend/src/app.ts`)
+— not `Content-Disposition`. In any cross-origin deployment (production, and this project's own E2E
+harness, which runs frontend/backend on genuinely separate origins) `response.headers.get('content-disposition')`
+is therefore invisible to this page's own JS, and every download silently takes the fallback
+filename (`employee-statement.pdf`/`.xlsx`/`.csv`) instead of the backend's richer one. This is not
+a bug in this checkpoint's own code — the fallback path is exactly what the checkpoint's own
+requirements call for, and every download still succeeds with correct content — but the "prefer the
+backend's filename" behavior only actually reaches a user today in a same-origin setup (local dev,
+via `vite.config.ts`'s dev-server proxy). A one-line follow-up (`exposedHeaders: ['x-csrf-token',
+'content-disposition']`) would close this gap; deliberately not made here since it touches backend
+CORS configuration, out of this checkpoint's explicit scope.
+
+**State management**: one page-level `activeExport: 'pdf' | 'xlsx' | 'csv' | null` — Print and all
+three Export actions share it, `disabled={activeExport !== null}`, and only the button whose own
+format is currently active swaps its `Download` icon for a spinner. No per-button state, no
+concurrent exports.
+
+**Permissions**: reuses `PERMISSIONS.STATEMENTS_VIEW` exactly as the page's existing `canView` gate
+already does — no `statements:export` permission was introduced, and no button performs its own
+permission check (the route-level `RequirePermission` guard, `App.tsx`, is the actual enforcement
+point for real navigation; the page's own inline `!canView` branch is a second, defense-in-depth
+layer covered by its own existing Vitest RBAC tests).
+
+**Testing**: Vitest unit tests for `employeeStatementExportUrl`/`extractFilenameFromContentDisposition`/
+`downloadEmployeeStatementExport` (`use-employee-statement.test.ts` — quoted/unquoted/missing/
+malformed/path-traversal-defensive filename parsing, the ApiError-on-failure path, the fallback
+filename path); a new `statements-page.test.tsx` describe block (button visibility gated on a
+loaded Statement, the four-explicit-buttons/no-menu shape, Print opening the shared dialog with the
+Landscape hint, each Export button issuing the correct GET request, the mutual-exclusion/spinner
+behavior, and the toast-and-recover path on a failed export); a new
+`tests/e2e/specs/15-statements.spec.ts` describe block against the real compiled stack (actions
+absent before load, present after; Print's dialog-then-`window.print()` lifecycle with the same
+"dialog gone before print" regression discipline `13-print-architecture.spec.ts` established; a
+real download per format, asserting the fallback filename this cross-origin harness actually
+produces today, per the CORS limitation above; the mutual-exclusion/disabled-during-export
+behavior via a throttled route; the print-readiness audit — filter/search controls hidden, identity/
+balances/ledger visible, no horizontal overflow; and the route-level permission gate for a
+genuinely zero-permission user).
+
+**Not included in this checkpoint**: any backend change (CORS `exposedHeaders`, DTOs, export
+payloads, permissions); a shared blob-download utility; Reports; Dashboard. **This closes Phase 7B's
+three planned checkpoints for Employee Statement print/export** — Checkpoint 1 (PDF), Checkpoint 2
+(XLSX/CSV), Checkpoint 3 (frontend), though closing out Phase 7B as a whole is a separate decision
+this document does not make.

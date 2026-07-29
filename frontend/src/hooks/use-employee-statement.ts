@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { apiRequest } from '@/lib/api-client';
+import { apiRequest, ApiError, API_BASE_URL } from '@/lib/api-client';
 
 /**
  * Phase 7A Checkpoint 2 — the frontend's own copy of the canonical Statement DTO shape
@@ -143,4 +143,96 @@ export function useEmployeeStatement(employeeId: string | undefined, range: Empl
     queryFn: () => apiRequest<EmployeeStatement>(employeeStatementUrl(employeeId!, range)),
     enabled: Boolean(employeeId),
   });
+}
+
+/**
+ * Phase 7B Checkpoint 3 — Employee Statement Print & Export (frontend). PDF/XLSX/CSV are the
+ * three dedicated export routes `statements.routes.ts` already serves (Checkpoints 1-2); Browser
+ * Print is a separate capability entirely (the shared `PrintButton`/`useTriggerPrint` system,
+ * printing this page's own live DOM) and has no `StatementExportFormat` of its own.
+ */
+export type StatementExportFormat = 'pdf' | 'xlsx' | 'csv';
+
+/** Builds the exact URL `GET /api/v1/employees/:employeeId/statement/{format}` accepts — the same
+ * `fromCycleId`/`toCycleId` range contract `employeeStatementUrl` above already builds for the JSON
+ * route, just against the dedicated PDF/XLSX/CSV export routes. Absolute (via `API_BASE_URL`),
+ * since this is used directly as a `fetch` target for a blob download rather than only relative
+ * navigation — mirrors `payslipPdfUrl`'s own reasoning (`use-payslips.ts`). */
+export function employeeStatementExportUrl(
+  employeeId: string,
+  range: EmployeeStatementRangeParams,
+  format: StatementExportFormat,
+): string {
+  const params = new URLSearchParams();
+  if (range.fromCycleId) params.set('fromCycleId', range.fromCycleId);
+  if (range.toCycleId) params.set('toCycleId', range.toCycleId);
+  const query = params.toString();
+  return `${API_BASE_URL}/api/v1/employees/${employeeId}/statement/${format}${query ? `?${query}` : ''}`;
+}
+
+/**
+ * Parses a `Content-Disposition: attachment; filename="..."` header value into just the filename.
+ *
+ * Unlike every other export module in this app (`downloadBankSheetExport`, `downloadEmployeeExport`,
+ * `downloadPayslipPdf` — each recomputes its own filename client-side and always overrides the
+ * server's own `Content-Disposition`), Statements deliberately *prefers* the backend's own filename
+ * (`buildStatementPdfFilename`/`buildStatementExportFilename`, `statements.routes.ts`) instead of
+ * duplicating that logic a second time here: Statements' range is an arbitrary from/to `PayrollCycle`
+ * pair (`rangeSlug`, same file), not a single cycle like every module that already accepts the
+ * duplication — reimplementing that slug logic client-side would be meaningfully more code and a
+ * second place it could drift from the backend's own naming.
+ *
+ * Falls back to `defaultFilename` for a missing or malformed header rather than throwing — a
+ * cosmetic naming miss must never block a download that otherwise succeeded.
+ */
+export function extractFilenameFromContentDisposition(
+  header: string | null | undefined,
+  defaultFilename: string,
+): string {
+  if (!header) return defaultFilename;
+  // The quoted pattern allows an empty capture (`filename=""`) so that case falls through to the
+  // same "no usable candidate" check below, rather than accidentally matching the unquoted pattern
+  // instead and keeping the literal quote characters as part of the filename.
+  const quotedMatch = header.match(/filename="([^"]*)"/i);
+  const unquotedMatch = quotedMatch ? null : header.match(/filename=([^;]+)/i);
+  const candidate = (quotedMatch?.[1] ?? unquotedMatch?.[1])?.trim();
+  if (!candidate) return defaultFilename;
+  // Defensive only — this backend's own filenames are already `slugify`d ASCII with no path
+  // separator (statements.routes.ts's `buildStatementFilenameStem`); this just guarantees a
+  // malformed/unexpected header value can never be read as anything other than a bare filename.
+  const safeName = candidate.split(/[/\\]/).pop()?.trim();
+  return safeName || defaultFilename;
+}
+
+function triggerStatementBlobDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Triggers a browser download of one Employee Statement export (PDF/XLSX/CSV) — bypasses
+ * `apiRequest` since the response is a file, mirroring every other export module's own fetch/blob
+ * download flow (`downloadBankSheetExport`, `downloadEmployeeExport`, `downloadPayslipPdf`). See
+ * `extractFilenameFromContentDisposition` above for why Statements' own filename handling
+ * deliberately differs from those.
+ */
+export async function downloadEmployeeStatementExport(
+  employeeId: string,
+  range: EmployeeStatementRangeParams,
+  format: StatementExportFormat,
+): Promise<void> {
+  const response = await fetch(employeeStatementExportUrl(employeeId, range, format), { credentials: 'include' });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'EXPORT_FAILED', `Failed to export the Statement as ${format.toUpperCase()}`);
+  }
+  const blob = await response.blob();
+  const filename = extractFilenameFromContentDisposition(
+    response.headers.get('content-disposition'),
+    `employee-statement.${format}`,
+  );
+  triggerStatementBlobDownload(blob, filename);
 }

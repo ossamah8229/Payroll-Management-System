@@ -1,22 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Info } from 'lucide-react';
+import { Download, Info, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { formatMoney, PERMISSIONS, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { PrintButton } from '@/components/ui/print-button';
+import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { FilterField } from '@/components/ui/filter-field';
 import { StatementEmployeeLookup } from '@/components/statements/statement-employee-lookup';
+import { ApiError } from '@/lib/api-client';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useProjectUnits } from '@/hooks/use-project-units';
 import type { StatementEmployeeCandidate } from '@/hooks/use-statement-employees';
 import { usePayrollCycles, formatCycleOptionLabel } from '@/hooks/use-payroll-cycles';
 import {
+  downloadEmployeeStatementExport,
   useEmployeeStatement,
+  type EmployeeStatementRangeParams,
   type StatementBalances,
+  type StatementExportFormat,
   type StatementLedgerEntry,
 } from '@/hooks/use-employee-statement';
 import {
@@ -26,6 +33,12 @@ import {
   statementEntryDateLabel,
   statementPeriodLabel,
 } from '@/components/statements/statement-labels';
+
+const EXPORT_BUTTON_LABEL: Record<StatementExportFormat, string> = {
+  pdf: 'Export PDF',
+  xlsx: 'Export Excel',
+  csv: 'Export CSV',
+};
 
 const selectClassName =
   'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light disabled:cursor-not-allowed disabled:opacity-50';
@@ -124,7 +137,11 @@ function LedgerRowMovement({ entry }: { entry: StatementLedgerEntry }) {
 
 function LedgerTable({ entries }: { entries: StatementLedgerEntry[] }) {
   return (
-    <div className="overflow-x-auto">
+    // print-flow (Phase 7B Checkpoint 3, Print Readiness) — the same Fit-to-page unclamping
+    // utility every other print-enabled data table already carries (Bank Sheet, Payslips); without
+    // it, `PrintButton`'s "Fit to page" option has no `table-layout: fixed` container to apply to
+    // here, and Landscape alone would not guarantee this 7-column table stays within page width.
+    <div className="print-flow overflow-x-auto">
       <Table density="compact" className="min-w-full">
         <TableHeader>
           <TableRow>
@@ -252,15 +269,35 @@ export function StatementsPage({ user }: { user: SessionUser }) {
   // A partial/invalid Custom Range selection must never leak into the request, even though the
   // query itself is already independently disabled by `canLoad ? employeeId : undefined` below —
   // keeping both arguments consistent avoids a misleading intermediate call shape while the user
-  // is still mid-selection.
-  const statement = useEmployeeStatement(canLoad ? employeeId : undefined, {
+  // is still mid-selection. Shared verbatim with `handleExport` below (Phase 7B Checkpoint 3) so
+  // an export can never silently request a different range than the Statement currently on screen.
+  const statementRangeParams: EmployeeStatementRangeParams = {
     fromCycleId: canLoad && rangeMode === 'CUSTOM' ? fromCycleId : undefined,
     toCycleId: canLoad && rangeMode === 'CUSTOM' ? toCycleId : undefined,
-  });
+  };
+  const statement = useEmployeeStatement(canLoad ? employeeId : undefined, statementRangeParams);
 
   const selectedSite = sites.data?.find((site) => site.id === selectedSiteId);
   const unitLabel = selectedSite?.unitLabel ?? 'Unit';
   const controlsDisabled = statement.isFetching;
+
+  // Phase 7B Checkpoint 3 — one page-level export state, never per-button: Print and all three
+  // Export actions are mutually exclusive while any one of them is in flight (below, each button's
+  // own `disabled={activeExport !== null}`), and only the button whose own format is active shows
+  // a spinner in place of its icon.
+  const [activeExport, setActiveExport] = useState<StatementExportFormat | null>(null);
+
+  async function handleExport(format: StatementExportFormat) {
+    if (!canLoad || activeExport) return;
+    setActiveExport(format);
+    try {
+      await downloadEmployeeStatementExport(employeeId, statementRangeParams, format);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : `Statement ${format.toUpperCase()} export failed`);
+    } finally {
+      setActiveExport(null);
+    }
+  }
 
   if (!canView) {
     return (
@@ -280,7 +317,11 @@ export function StatementsPage({ user }: { user: SessionUser }) {
   return (
     <AppShell user={user} title="Statements" subtitle="Salary, Correction, and Advance history for one employee">
       <div className="flex flex-col gap-4">
-        <Card>
+        {/* print:hidden (Phase 7B Checkpoint 3, Print Readiness) — selection/search controls
+            describe how the on-screen view was found, not something a printed Statement needs to
+            show alongside its data; matches `PayrollPageToolbar`'s own identical treatment of
+            filters on every other print-enabled page. */}
+        <Card className="print:hidden">
           <CardHeader>
             <CardTitle>Select Statement</CardTitle>
           </CardHeader>
@@ -448,11 +489,47 @@ export function StatementsPage({ user }: { user: SessionUser }) {
 
         {canLoad && !statement.isLoading && !errorPresentation && statement.data && (
           <>
+            {/* Print-only heading (Phase 7B Checkpoint 3) — placed once, ahead of every card this
+                Statement renders, so it appears first on the printed page; `hidden print:block`
+                (`print-context-header.tsx`) keeps it invisible on screen. Context carries the
+                employee identity *and* period, since — unlike every other `PrintContextHeader`
+                caller, which is a filtered list — this page is already about one specific employee
+                by the time anything is printable. */}
+            <PrintContextHeader
+              title="Statements"
+              context={`${statement.data.employee.name} — ${statementPeriodLabel(statement.data.range)}`}
+            />
             <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center gap-2.5">
                   <CardTitle>{statement.data.employee.name}</CardTitle>
                   <Badge tone="blue">Employee Statement of Account</Badge>
+                </div>
+                {/* Print/Export actions (Phase 7B Checkpoint 3) — rendered only once a Statement has
+                    actually loaded, never as a disabled placeholder while the page is still on the
+                    selection form (module doc comment). One page-level `activeExport` state governs
+                    all four: mutually exclusive, and only the active button shows a spinner. Ledger
+                    is 7 columns of mostly financial figures plus a description column — the same
+                    "wide report" shape Advances/Bank Sheet/Corrections already recommend Landscape
+                    for, so Statements follows that same precedent here rather than the narrower-
+                    report Portrait default. */}
+                <div className="flex flex-wrap items-center gap-2 print:hidden">
+                  <PrintButton recommendedOrientation="landscape" disabled={activeExport !== null} />
+                  {(['pdf', 'xlsx', 'csv'] as const).map((format) => (
+                    <Button
+                      key={format}
+                      variant="secondary"
+                      onClick={() => handleExport(format)}
+                      disabled={activeExport !== null}
+                    >
+                      {activeExport === format ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      ) : (
+                        <Download className="h-3.5 w-3.5" aria-hidden />
+                      )}
+                      {EXPORT_BUTTON_LABEL[format]}
+                    </Button>
+                  ))}
                 </div>
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">

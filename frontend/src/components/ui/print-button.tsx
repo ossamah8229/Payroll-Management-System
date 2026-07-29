@@ -30,8 +30,15 @@ import type { PrintSettings, ResolvedPrintOrientation } from '@/components/print
  */
 export function PrintButton({
   recommendedOrientation = 'portrait',
+  disabled = false,
 }: {
   recommendedOrientation?: ResolvedPrintOrientation;
+  /** Optional, additive (Phase 7B Checkpoint 3) — every existing call site omits this and is
+   * unaffected. Statements passes this while one of its own Export actions is in flight, so a user
+   * can never open Print mid-export; the reverse (Export disabled while the print settings dialog
+   * is open) needs no equivalent plumbing here, since `PrintSettingsDialog`'s own `Modal` overlay
+   * (`modal.tsx`) already blocks pointer events on everything behind it while open. */
+  disabled?: boolean;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const triggerPrint = useTriggerPrint(recommendedOrientation);
@@ -45,7 +52,7 @@ export function PrintButton({
 
   return (
     <>
-      <Button variant="secondary" onClick={() => setSettingsOpen(true)}>
+      <Button variant="secondary" onClick={() => setSettingsOpen(true)} disabled={disabled}>
         <Printer className="h-3.5 w-3.5" aria-hidden />
         Print
       </Button>

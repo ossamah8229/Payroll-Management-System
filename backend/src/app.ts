@@ -63,11 +63,19 @@ export function createApp(): Express {
       origin: env.CORS_ORIGIN,
       credentials: true,
       // Frontend and backend are separate origins in production (docs/architecture/deployment.md);
-      // without this, the browser's Fetch API silently hides the `x-csrf-token` response header
-      // from JS on a cross-origin response even though CORS otherwise allows reading the body
-      // (only a small built-in set of headers is exposed by default) — see
-      // common/middleware/csrf.ts and frontend/src/lib/api-client.ts.
-      exposedHeaders: ['x-csrf-token'],
+      // without this, the browser's Fetch API silently hides these response headers from JS on a
+      // cross-origin response even though CORS otherwise allows reading the body (only a small
+      // built-in set of headers is exposed by default) — see common/middleware/csrf.ts and
+      // frontend/src/lib/api-client.ts for `x-csrf-token`.
+      //
+      // `content-disposition` (Phase 7B Checkpoint 3 refinement) — every file-download route in
+      // this backend (Statements' `/pdf`/`/xlsx`/`/csv`, Payslips, Bank Sheet, Employees export,
+      // etc.) already sets a real `Content-Disposition: attachment; filename="..."` header; without
+      // exposing it here, the frontend's own `extractFilenameFromContentDisposition`
+      // (`use-employee-statement.ts`) could never see it cross-origin (production, and this
+      // project's own E2E harness) and silently used its fallback filename instead. Purely additive
+      // — `x-csrf-token` stays exposed exactly as before, no other CORS behavior changes.
+      exposedHeaders: ['x-csrf-token', 'content-disposition'],
     }),
   );
   app.use(

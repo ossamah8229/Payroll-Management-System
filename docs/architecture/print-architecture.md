@@ -270,6 +270,37 @@ rewrite:
   printable columns) and Employees (7, moderate-width) keep the `'portrait'` default deliberately,
   confirmed appropriate for their column count.
 
+## Statements joins the shared architecture (Phase 7B Checkpoint 3)
+
+Statements is the 9th `PrintButton` call site, added alongside its own PDF/XLSX/CSV export actions
+(`docs/architecture/workflows/statements-ledger.md`'s own Checkpoint 3 section covers export/
+filename handling — this section covers only what's specific to *print*). No architectural change
+was made to reach it — the same mechanical consequence every other page already got by using
+`PrintButton`/`PrintContextHeader` as-is:
+
+- **`recommendedOrientation="landscape"`** — the Ledger table is 7 columns (Date/Period, Category,
+  Description, Movement, Running Payable, Running Recovery, Running Advance), the same "wide,
+  mostly-financial-figures" shape Advances/Bank Sheet/Corrections already recommend Landscape for,
+  rather than Payslips'/Employees'/Salary Release's narrower Portrait default.
+- **`print:hidden` on the whole "Select Statement" filter card** — the same treatment
+  `PayrollPageToolbar`'s own `filters` slot already gives every other page's search/selection
+  controls, applied by hand here since Statements' multi-card layout (filter card, then identity/
+  balances/ledger cards once loaded) doesn't use `PayrollPageToolbar` at all.
+- **`print-flow` added to the Ledger table's scroll wrapper** — every other print-enabled data
+  table already carries this (Bank Sheet, Payslips); Statements' own table was missing it before
+  this checkpoint, which would have left "Fit to page" with no `table-layout: fixed` container to
+  apply to.
+- **`PrintContextHeader`'s `context` string carries the employee identity and period** (`"{employee
+  name} — {statement period}"`), not just a cycle/site string like every other caller — Statements
+  is inherently about one specific employee by the time anything on the page is printable, unlike
+  every other `PrintContextHeader` caller, which is a filtered list.
+- **`PrintButton` gained one small, additive `disabled?: boolean` prop** (default `false`,
+  `print-button.tsx`) — Statements passes it while one of its own Export actions is in flight, so a
+  user can never open Print mid-export. Every other existing call site omits the prop and is
+  completely unaffected; the reverse direction (Export disabled while the print settings dialog is
+  open) needed no equivalent change, since `PrintSettingsDialog`'s own `Modal` overlay already
+  blocks pointer events on everything behind it while open.
+
 ## Auto orientation — exact resolution
 
 Auto was already fully deterministic and application-driven before this verification pass, not
@@ -278,12 +309,12 @@ function — `orientation === 'auto' ? recommended : orientation` — and `useTr
 (`use-print.ts`) always calls it and always injects the resulting `@page` rule; there is no code
 path where `'auto'` skips resolution and leaves `@page` unset. `recommendedOrientation` is supplied
 per page as a `PrintButton` prop (e.g. `recommendedOrientation="landscape"` on Payroll Entry/Bank
-Sheet/Cash Receiving/Advances/Corrections, `"portrait"` on Salary Release/Payslips/Employees — the
-prop's own default). The dialog's "Auto" option shows the resolved recommendation as a hint (e.g.
-"Auto (Landscape)"); the user can still override it with an explicit Portrait/Landscape choice,
-which always wins over the recommendation. No automatic width-measurement was added or is needed —
-a page-level recommendation, chosen once by whoever built that page's print output, is sufficient
-and matches every other example in this document.
+Sheet/Cash Receiving/Advances/Corrections/Statements, `"portrait"` on Salary Release/Payslips/
+Employees — the prop's own default). The dialog's "Auto" option shows the resolved recommendation
+as a hint (e.g. "Auto (Landscape)"); the user can still override it with an explicit Portrait/
+Landscape choice, which always wins over the recommendation. No automatic width-measurement was
+added or is needed — a page-level recommendation, chosen once by whoever built that page's print
+output, is sufficient and matches every other example in this document.
 
 ## Print context
 

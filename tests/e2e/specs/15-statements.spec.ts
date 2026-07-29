@@ -262,3 +262,228 @@ test.describe('Statements — Employee Statement of Account', () => {
     await siteAContext.close();
   });
 });
+
+/**
+ * Phase 7B Checkpoint 3 — Employee Statement Print & Export, real-browser verification. Frontend
+ * only: PDF/XLSX/CSV export routes and Browser Print were already exercised at the backend/
+ * PDF-template level (Checkpoints 1-2, `backend/tests/statement-export.test.ts`,
+ * `statement-pdf-template.test.ts`); this file drives the real UI — the shared `PrintButton`/
+ * `PrintSettingsDialog` architecture (`docs/architecture/print-architecture.md`) and three real
+ * file downloads — against the real backend, no mocking.
+ *
+ * **Filename note (Phase 7B Checkpoint 3 post-review refinement)**: unlike the component-level unit
+ * tests, this suite runs frontend (port 4200) and backend (port 4100) as genuinely separate origins
+ * (`tests/e2e/setup/config.ts`), the same cross-origin shape production uses — so this is also the
+ * real-browser proof that `backend/src/app.ts`'s `exposedHeaders` now includes
+ * `content-disposition` (alongside the pre-existing `x-csrf-token`, unchanged): `fetch`'s
+ * `response.headers.get('content-disposition')` is visible to this page's own JS here, and
+ * `downloadEmployeeStatementExport` (`use-employee-statement.ts`) actually uses the backend's own
+ * filename rather than its `employee-statement.{format}` fallback. Before this refinement, the
+ * header was not CORS-exposed and every download below used the fallback name instead — see this
+ * checkpoint's earlier final report for that prior state.
+ */
+test.describe('Statements — Print & Export (Phase 7B Checkpoint 3)', () => {
+  test('Print/Export actions are absent before a Statement loads, and all four appear once it does', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const label = `stmt-actions-${Date.now()}`;
+    await createSiteWithEmployee(context, label);
+
+    await page.goto('/statements');
+    await expect(page.getByRole('button', { name: 'Print' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Export PDF' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Export Excel' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Export CSV' })).toHaveCount(0);
+
+    await pickStatementEmployee(page, `E2E Employee ${label}`);
+    await expect(page.getByText('Employee Statement of Account')).toBeVisible();
+
+    await expect(page.getByRole('button', { name: 'Print' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Export PDF' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Export Excel' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Export CSV' })).toBeVisible();
+    // No dropdown/overflow/split-button menu was introduced — four explicit, always-visible buttons.
+    await expect(page.getByRole('menu')).toHaveCount(0);
+  });
+
+  test('Print opens the shared print settings dialog (Landscape recommended for the Ledger) and completes with the dialog unmounted before window.print()', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const label = `stmt-print-${Date.now()}`;
+    await createSiteWithEmployee(context, label);
+
+    // Captures state *inside* the `window.print()` stub itself — the same synchronous instant a
+    // real print engine would capture — matching `13-print-architecture.spec.ts`'s own regression
+    // discipline for the Production Print Defect (a settings dialog left mounted at print time).
+    await page.addInitScript(() => {
+      (window as unknown as { __printCapture: unknown }).__printCapture = null;
+      window.print = () => {
+        (window as unknown as { __printCapture: unknown }).__printCapture = {
+          dialogPresent: document.querySelector('[role="dialog"]') !== null,
+        };
+      };
+    });
+
+    await page.goto('/statements');
+    await pickStatementEmployee(page, `E2E Employee ${label}`);
+    await expect(page.getByText('Employee Statement of Account')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Print' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Print settings')).toBeVisible();
+    await expect(dialog.getByText('Auto')).toBeVisible();
+    await expect(dialog.getByText('(Landscape)')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Print', exact: true }).click();
+
+    const capture = await page.evaluate(
+      () => (window as unknown as { __printCapture: { dialogPresent: boolean } | null }).__printCapture,
+    );
+    expect(capture?.dialogPresent).toBe(false);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  for (const { format, buttonName, extension } of [
+    { format: 'pdf', buttonName: 'Export PDF', extension: 'pdf' },
+    { format: 'xlsx', buttonName: 'Export Excel', extension: 'xlsx' },
+    { format: 'csv', buttonName: 'Export CSV', extension: 'csv' },
+  ] as const) {
+    test(`Export ${format.toUpperCase()} downloads a real file from the backend export endpoint`, async ({
+      authenticatedPage: page,
+    }) => {
+      const context = page.context();
+      const label = `stmt-export-${format}-${Date.now()}`;
+      await createSiteWithEmployee(context, label);
+
+      await page.goto('/statements');
+      await pickStatementEmployee(page, `E2E Employee ${label}`);
+      await expect(page.getByText('Employee Statement of Account')).toBeVisible();
+
+      const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        page.getByRole('button', { name: buttonName }).click(),
+      ]);
+
+      expect(await download.failure()).toBeNull();
+      // See this file's own module doc comment — now that `content-disposition` is CORS-exposed,
+      // the backend's own richer filename (`employee-statement-{code-or-id}-{period-slug}.{ext}`,
+      // `statements.routes.ts`'s `buildStatementFilenameStem`) is what the frontend actually uses.
+      // Matched by pattern, not exact string — the code-or-id/period-slug segment legitimately
+      // varies with fixture data and this suite's shared database state — but the hyphenated shape
+      // is unambiguous proof this is the backend's name, not the bare `employee-statement.{ext}`
+      // fallback (no hyphen after "statement") that ran before this refinement.
+      expect(download.suggestedFilename()).toMatch(new RegExp(`^employee-statement-.+\\.${extension}$`));
+      expect(download.suggestedFilename()).not.toBe(`employee-statement.${extension}`);
+    });
+  }
+
+  test('actions are mutually exclusive: exporting one format disables Print and every other format until it finishes', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const label = `stmt-mutex-${Date.now()}`;
+    await createSiteWithEmployee(context, label);
+
+    await page.goto('/statements');
+    await pickStatementEmployee(page, `E2E Employee ${label}`);
+    await expect(page.getByText('Employee Statement of Account')).toBeVisible();
+
+    // Throttle the export response just enough to observe the mid-flight disabled state — the
+    // real backend response is otherwise too fast in a local/E2E environment to reliably catch.
+    await page.route('**/statement/csv**', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.continue();
+    });
+
+    const exportCsvButton = page.getByRole('button', { name: 'Export CSV' });
+    const downloadPromise = page.waitForEvent('download');
+    await exportCsvButton.click();
+
+    await expect(page.getByRole('button', { name: 'Print' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Export Excel' })).toBeDisabled();
+    await expect(exportCsvButton).toBeDisabled();
+
+    await downloadPromise;
+    await expect(page.getByRole('button', { name: 'Print' })).toBeEnabled();
+    await expect(exportCsvButton).toBeEnabled();
+  });
+
+  test('print-readiness: selection/search controls hidden and Statement content visible under print media, no horizontal overflow', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const label = `stmt-printready-${Date.now()}`;
+    await createSiteWithEmployee(context, label);
+
+    await page.goto('/statements');
+    await pickStatementEmployee(page, `E2E Employee ${label}`);
+    await expect(page.getByText('Employee Statement of Account')).toBeVisible();
+
+    await page.emulateMedia({ media: 'print' });
+
+    // Filter/search controls (Checkpoint 3's own Print Readiness audit item) — the whole "Select
+    // Statement" card is print:hidden.
+    await expect(page.getByRole('heading', { name: 'Select Statement' })).toBeHidden();
+    await expect(page.locator('#statement-employee')).toBeHidden();
+
+    // Statement content itself — identity, balances, ledger — stays visible and self-describing.
+    await expect(page.getByRole('heading', { name: `E2E Employee ${label}` })).toBeVisible();
+    await expect(page.getByText('Opening Balances')).toBeVisible();
+    await expect(page.getByText('Closing Balances')).toBeVisible();
+    await expect(page.locator('.print-flow table').first()).toBeVisible();
+
+    // Actions themselves never print.
+    await expect(page.getByRole('button', { name: 'Print' })).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Export PDF' })).toBeHidden();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
+
+    await page.emulateMedia({ media: 'screen' });
+  });
+
+  test('a user without statements:view never sees the Print/Export actions (page-level permission gate, no per-button check)', async ({
+    authenticatedPage: adminPage,
+    browser,
+  }) => {
+    const context = adminPage.context();
+    const label = `stmt-noaccess-${Date.now()}`;
+    const email = `e2e-stmt-noaccess-${label}@example.test`;
+    const password = 'E2EStatementsNoAccess1!';
+    // A brand-new role code, never a seeded one (`PAYROLL_STAFF`/`FINANCE`) — `createScopedUser`
+    // upserts by role code, so reusing a seeded code would keep that role's own real, already-
+    // granted permissions (including `statements:view`) rather than producing genuine zero access.
+    // `Role.code` is `varchar(40)`, so this stays short rather than embedding the full `label`.
+    await createScopedUser({
+      email,
+      password,
+      roleCode: `E2E_NOACCESS_${Date.now()}`,
+      permissionKeys: [],
+      siteIds: [],
+      name: 'E2E No-Access Statements User',
+    });
+
+    const noAccessContext = await browser.newContext();
+    const noAccessPage = await noAccessContext.newPage();
+    await login(noAccessPage, email, password);
+
+    await noAccessPage.goto('/statements');
+    // The route-level `RequirePermission` guard (`App.tsx`) intercepts before `StatementsPage`
+    // itself ever mounts — its own inline `!canView` message (covered by the Vitest RBAC suite,
+    // which renders the component directly, bypassing the router) is unreachable via real
+    // navigation. This is the actual page-level gate a real user without `statements:view` hits.
+    await expect(noAccessPage.getByText(/you do not have permission to access this page/i)).toBeVisible();
+    await expect(noAccessPage.getByRole('button', { name: 'Print' })).toHaveCount(0);
+    await expect(noAccessPage.getByRole('button', { name: 'Export PDF' })).toHaveCount(0);
+    await expect(noAccessPage.getByRole('button', { name: 'Export Excel' })).toHaveCount(0);
+    await expect(noAccessPage.getByRole('button', { name: 'Export CSV' })).toHaveCount(0);
+
+    await noAccessContext.close();
+  });
+});
