@@ -45,14 +45,20 @@ jobs:
       - name: Build shared package
         run: npm run build:shared
 
+      # Must run before Typecheck/Lint: backend source imports Prisma-generated types
+      # (Prisma.PayrollEntryWhereInput, Prisma.AdvanceGetPayload, PrismaClientKnownRequestError,
+      # etc.) that only exist once `prisma generate` has produced node_modules/.prisma/client.
+      # Running type-aware steps before this point fails with TS2694/TS2339/TS7006 against an
+      # empty/unresolvable Prisma namespace — this ordering bug caused every CI run to fail
+      # (100% failure rate, unrelated to any application code change) until this fix.
+      - name: Prisma generate
+        run: npm run prisma:generate
+
       - name: Typecheck
         run: npm run typecheck
 
       - name: Lint
         run: npm run lint
-
-      - name: Prisma generate
-        run: npm run prisma:generate
 
       - name: Prisma migrate deploy
         run: npm run prisma:migrate --workspace backend -- deploy
