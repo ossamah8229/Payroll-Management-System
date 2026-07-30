@@ -139,7 +139,7 @@ export function BankSheetPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {cycle && (
             <div className="px-[18px] pt-[18px]">
-              <PrintContextHeader title="Bank Sheet" context={formatCycleLabel(cycle)} />
+              <PrintContextHeader title="Bank Sheet" context={formatCycleLabel(cycle)} showLogo />
             </div>
           )}
           {isLoading && (

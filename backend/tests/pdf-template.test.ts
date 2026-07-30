@@ -231,3 +231,29 @@ describe('renderPayslipHtml — formatting parity with the JSON endpoint', () =>
     }
   });
 });
+
+describe('renderPayslipHtml — company logo (Phase 7C)', () => {
+  it('embeds the logo as an <img> inline with the company name when companyLogoDataUri is set', () => {
+    const dataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const html = renderPayslipHtml(basePayslip(), { ...baseMeta, companyLogoDataUri: dataUri });
+
+    expect(html).toContain(`<img src="${dataUri}" class="doc-header-logo" alt="" />`);
+    // Rendered inside the same .doc-header block as the company name, not as a separate row.
+    const headerBlockMatch = html.match(/<div class="doc-header">[\s\S]*?<\/div>\s*<\/div>/);
+    expect(headerBlockMatch?.[0]).toContain('doc-header-logo');
+    expect(headerBlockMatch?.[0]).toContain('doc-company-name');
+  });
+
+  it('renders no <img> tag at all when companyLogoDataUri is null/undefined — never a broken image placeholder', () => {
+    const htmlWithNull = renderPayslipHtml(basePayslip(), { ...baseMeta, companyLogoDataUri: null });
+    expect(htmlWithNull).not.toContain('<img');
+
+    const htmlWithoutField = renderPayslipHtml(basePayslip(), baseMeta);
+    expect(htmlWithoutField).not.toContain('<img');
+  });
+
+  it('never widens the header-logo CSS rule\'s fixed height, regardless of caller input (layout-integrity guard)', () => {
+    const html = renderPayslipHtml(basePayslip(), { ...baseMeta, companyLogoDataUri: 'data:image/png;base64,x' });
+    expect(html).toContain('height: 18px');
+  });
+});

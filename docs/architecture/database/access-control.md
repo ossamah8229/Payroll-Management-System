@@ -159,7 +159,7 @@ Staff's.
 | `registeredAddress` | varchar(300) | yes | — | |
 | `phone` | varchar(30) | yes | — | |
 | `email` | varchar(255) | yes | — | |
-| `logoStorageKey` | text | yes | — | `StorageProvider` key |
+| `logoStorageKey` | text | yes | — | A **version identifier** (a fresh UUID minted per upload/replace), not a literal `StorageProvider` key (Phase 7C reinterpretation — see `backend/src/modules/settings/company-logo-keys.ts`'s own doc comment for why this needed no schema change: one canonical version derives all three approved derived-asset keys — original/UI/print) |
 | `updatedAt` | timestamptz | no | `now()` | |
 | `updatedById` | uuid | yes | — | FK → `User.id`, `ON DELETE SET NULL` |
 
@@ -179,6 +179,13 @@ Staff's.
   individual employee's name changing, and closing it would mean snapshotting `CompanySettings`
   onto every `PayrollEntry`/`PayrollCycle` — real schema scope outside a PDF-*engine* checkpoint.
   Not fixed without a future, separately-authorized decision.
+- **Company Logo upload workflow (Phase 7C).** Upload/replace writes the complete new asset set
+  (original/UI/print) under a brand-new `logoStorageKey` version first, then updates this row, then
+  best-effort deletes the previous version's objects — never the reverse order, so a mid-upload
+  failure can never leave the working logo deleted. `GET /api/v1/settings/company/logo/{ui,print}`
+  are the only routes that ever serve the bytes back, deliberately unauthenticated (the Login page
+  has no session) and exposing image bytes only, never this row's other fields or the raw storage
+  key — see `modules/settings/company-logo.service.ts` and `company-logo-public.routes.ts`.
 
 ## 20. `Session` (external, library-owned)
 

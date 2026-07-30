@@ -56,6 +56,22 @@ services:
         sync: false
       - key: PORT
         value: 4000
+      # Phase 7C — Company Logo storage. The R2_* credentials are provisioned manually in the
+      # Render dashboard (sync: false, same as SESSION_SECRET/CSRF_SECRET above); this blueprint
+      # only declares that they exist and flips STORAGE_PROVIDER to select R2 in production. Local
+      # dev/test keeps STORAGE_PROVIDER="local" (backend/.env.example's own default) — unaffected.
+      - key: STORAGE_PROVIDER
+        value: r2
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
 
   - type: web
     name: payroll-frontend

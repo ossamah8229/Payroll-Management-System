@@ -9,6 +9,7 @@ import { stringifyCsvSafe } from '../../common/import-export';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
 import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
 import { getCompanySettings } from '../settings/settings.service';
+import { getCompanyLogoDataUri } from '../settings/company-logo.service';
 import { renderHtmlToPdf } from '../../lib/pdf/render-pdf';
 import { renderStatementHtml, STATEMENT_PDF_FOOTER_TEMPLATE, type StatementPdfMeta } from '../../lib/pdf/templates/statement';
 import {
@@ -804,12 +805,16 @@ export async function generateStatementPdf(
 ): Promise<StatementPdfResult> {
   const statement = await getEmployeeStatement(currentUser, employeeId, params);
   const companySettings = await getCompanySettings();
+  // Passes the already-fetched row's own `logoStorageKey` through — avoids a second, redundant
+  // `getCompanySettings()` read (see `getCompanyLogoDataUri`'s own doc comment).
+  const companyLogoDataUri = await getCompanyLogoDataUri(companySettings.logoStorageKey);
 
   const meta: StatementPdfMeta = {
     companyName: companySettings.companyName,
     registeredAddress: companySettings.registeredAddress,
     generatedByName: requestMeta.generatedByName,
     generatedAt: requestMeta.generatedAt,
+    companyLogoDataUri,
   };
 
   const buffer = await renderStatementPdfBuffer(statement, meta);

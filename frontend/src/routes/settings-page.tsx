@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import { MoreHorizontal, Plus } from 'lucide-react';
+import { MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { CASH_BANK_CODE, PERMISSIONS, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,13 @@ import {
 import { cn } from '@/lib/cn';
 import { ApiError } from '@/lib/api-client';
 import { LogoPlaceholder } from '@/components/logo-placeholder';
-import { useCompanySettings, useUpdateCompanySettings } from '@/hooks/use-company-settings';
+import {
+  COMPANY_LOGO_UI_URL,
+  useCompanySettings,
+  useRemoveCompanyLogo,
+  useUpdateCompanySettings,
+  useUploadCompanyLogo,
+} from '@/hooks/use-company-settings';
 import { useChangePassword, useUpdateProfile } from '@/hooks/use-session';
 import { useAllBanks, useCreateBank, useDeleteBank, useUpdateBank, type Bank } from '@/hooks/use-banks';
 
@@ -55,6 +61,141 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     >
       {children}
     </button>
+  );
+}
+
+/** Renders the real logo (public `/company/logo/ui` route) when one is set, falling back to
+ * `LogoPlaceholder` otherwise — and also on the image request itself failing (network hiccup, or a
+ * `hasLogo: true` row whose storage object went missing server-side; `onError` catches both without
+ * this component needing to know which). Resets its own failed-load state whenever `hasLogo` flips
+ * (a fresh upload after a previous failure/removal must always get a fresh attempt, not a stuck
+ * fallback from a stale `imgFailed`). */
+function CompanyLogoPreview({ hasLogo, size = 'lg' }: { hasLogo: boolean; size?: 'sm' | 'md' | 'lg' }) {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [hasLogo]);
+
+  if (!hasLogo || imgFailed) return <LogoPlaceholder size={size} />;
+
+  const sizeClass = { sm: 'h-10 w-10', md: 'h-14 w-14', lg: 'h-16 w-16' }[size];
+  return (
+    <img
+      src={COMPANY_LOGO_UI_URL}
+      alt="Company logo"
+      className={cn('shrink-0 rounded-lg border border-border bg-bg object-contain p-1.5', sizeClass)}
+      onError={() => setImgFailed(true)}
+    />
+  );
+}
+
+function RemoveLogoModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const removeLogo = useRemoveCompanyLogo();
+
+  async function handleRemove() {
+    try {
+      await removeLogo.mutateAsync();
+      toast.success('Company logo removed');
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Something went wrong removing the logo');
+    }
+  }
+
+  return (
+    <Modal open={open} onOpenChange={(next) => !removeLogo.isPending && onOpenChange(next)}>
+      <ModalContent title="Remove Company Logo" widthClassName="max-w-[420px]">
+        <p className="text-xs text-text-muted">
+          Remove the company logo? The login screen and printed documents will show no logo until a
+          new one is uploaded.
+        </p>
+        <ModalFooter>
+          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={removeLogo.isPending}>
+            Cancel
+          </Button>
+          <Button
+            className="bg-danger hover:brightness-110"
+            onClick={handleRemove}
+            disabled={removeLogo.isPending}
+          >
+            {removeLogo.isPending ? 'Removing…' : 'Remove'}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+/** PNG/JPG/SVG matching the accepted-format copy this section has always shown, even while the
+ * upload button was disabled — never widened or narrowed here without updating that copy too. */
+const LOGO_ACCEPT = '.png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml';
+const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+
+function CompanyLogoSection({ hasLogo }: { hasLogo: boolean }) {
+  const uploadLogo = useUploadCompanyLogo();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
+
+  async function handleFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    if (file.size > LOGO_MAX_BYTES) {
+      toast.error('Logo file exceeds the 2 MB maximum upload size');
+      return;
+    }
+
+    try {
+      await uploadLogo.mutateAsync(file);
+      toast.success(hasLogo ? 'Company logo replaced' : 'Company logo uploaded');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Something went wrong uploading the logo');
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3.5 border-t border-border pt-7">
+      <TabIntro title="Company Logo" description="Shown on the login screen and printed documents." />
+      <div className="flex items-center gap-4">
+        <CompanyLogoPreview hasLogo={hasLogo} />
+        <div className="flex flex-col gap-1.5">
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadLogo.isPending}
+            >
+              <Upload className="h-3.5 w-3.5" aria-hidden />
+              {uploadLogo.isPending ? 'Uploading…' : hasLogo ? 'Replace Logo' : 'Upload Logo'}
+            </Button>
+            {hasLogo && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setRemoveOpen(true)}
+                disabled={uploadLogo.isPending}
+              >
+                Remove
+              </Button>
+            )}
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={LOGO_ACCEPT}
+            className="hidden"
+            onChange={handleFileSelected}
+          />
+          <p className="text-[11px] text-text-faint">Maximum file size: 2 MB (PNG, JPG, or SVG)</p>
+        </div>
+      </div>
+      <RemoveLogoModal open={removeOpen} onOpenChange={setRemoveOpen} />
+    </section>
   );
 }
 
@@ -122,10 +263,12 @@ function CompanyDetailsTab({ user }: { user: SessionUser }) {
           </div>
         </dl>
         <div className="flex items-center gap-4 border-t border-border pt-6">
-          <LogoPlaceholder size="lg" />
+          <CompanyLogoPreview hasLogo={settings?.hasLogo ?? false} />
           <div>
             <p className="text-xs font-medium text-text">Company logo</p>
-            <p className="text-[11px] text-text-muted">No logo uploaded yet.</p>
+            <p className="text-[11px] text-text-muted">
+              {settings?.hasLogo ? 'Set by Master User.' : 'No logo uploaded yet.'}
+            </p>
           </div>
         </div>
       </div>
@@ -181,24 +324,7 @@ function CompanyDetailsTab({ user }: { user: SessionUser }) {
         </Button>
       </form>
 
-      <section className="flex flex-col gap-3.5 border-t border-border pt-7">
-        <TabIntro
-          title="Company Logo"
-          description="Shown on the login screen and printed documents once available."
-        />
-        <div className="flex items-center gap-4">
-          <LogoPlaceholder size="lg" />
-          <div className="flex flex-col gap-1.5">
-            <Button type="button" variant="secondary" size="sm" disabled>
-              Upload Logo
-            </Button>
-            <p className="text-[11px] text-text-faint">Maximum file size: 2 MB (PNG, JPG, or SVG)</p>
-          </div>
-        </div>
-        <p className="text-[11px] text-text-faint">
-          Logo upload becomes available once Storage Provider is implemented.
-        </p>
-      </section>
+      <CompanyLogoSection hasLogo={settings?.hasLogo ?? false} />
     </div>
   );
 }

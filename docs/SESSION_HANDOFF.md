@@ -2951,3 +2951,38 @@ the 3 legacy rows.
 **Phase 7 remains Not Started; this checkpoint's deployment does not begin it. No further feature
 work follows this deployment without a separate go-ahead.**
 
+## 23. Addendum, 2026-07-30 — Phase 7C: Company Logo Storage and Safe Document Integration — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own Phase 7C entry — this is the handoff summary.
+
+**What shipped**: `R2StorageProvider` (a second, S3-compatible `StorageProvider` implementation,
+selected via `STORAGE_PROVIDER=r2`, `local` stays default); company logo upload/replace/remove/
+retrieve, wired into Company Settings, Login page, Sidebar, and (print-only, layout-verified) Payslip/
+Statement PDFs and Bank Sheet/Cash Receiving. No schema migration — `logoStorageKey` reinterpreted as
+a version identifier. Theme (`--accent`) untouched throughout, verified in a real browser.
+
+**Two real bugs found only by real-browser (Playwright) verification, both fixed**:
+1. `projectUnitsRouter`'s blanket `requireAuth` (mounted broadly at `/api/v1`) intercepted the
+   logo-serving routes before they ever matched — fixed by mounting the public logo router
+   immediately after `authRouter`, ahead of every other authenticated router. If any *future* route
+   needs to be unauthenticated, check this ordering issue first — it will recur for the same reason.
+2. `helmet()`'s default `Cross-Origin-Resource-Policy: same-origin` silently blocked the frontend
+   from embedding the logo via `<img>` (cross-origin in production, and in this repo's own Playwright
+   harness's two-port topology) — fixed with a per-route override to `cross-origin`, not an app-wide
+   change. **Any future route intended to be loaded as a cross-origin `<img>`/media subresource will
+   need the same explicit override** — this is not automatic.
+
+**Verification**: full backend suite (60/60 suites, 1188/1188 tests), full frontend suite (24/24
+files, 218/218 tests), new Playwright spec (4/4 passing, real browser/backend/DB/storage). Typecheck
+and lint clean except two pre-existing, unrelated failures already documented in the Phase 7B/7C
+PROJECT_PROGRESS entries (confirmed via `git diff` to predate this session).
+
+**Known gap, not fixed (out of scope)**: this repo's shared Playwright `createSiteWithEmployee` E2E
+fixture produces a zero-worked-days/negative-net-salary entry that Salary Release silently excludes
+from bulk release — reproduced identically against the pre-existing, unmodified
+`13-print-architecture.spec.ts` Bank Sheet/Cash Receiving tests. Any future Playwright spec needing a
+*released* entry should be aware of this before assuming the shared fixture "just works."
+
+**Not started**: Reports, Dashboard. **No commit, push, or deploy occurred this session** — stopped
+deliberately for review, per explicit instruction.
+

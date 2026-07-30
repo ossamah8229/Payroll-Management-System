@@ -88,21 +88,25 @@ during RC1 preparation (2026-07-19/20), not assumed.
 
 ## KI-3 — No cloud object-storage `StorageProvider` implementation
 
-- **Description**: Only `LocalFilesystemStorageProvider` exists. Backup packages, and any future file
-  uploads, are written to the application server's own local disk (`STORAGE_ROOT`).
-- **Impact**: On a platform where the application server's filesystem is ephemeral or not
+- **Status: Resolved (Phase 7C).** `R2StorageProvider` (`backend/src/lib/storage/r2-storage-provider.ts`)
+  is now a second, S3-compatible implementation of the same `StorageProvider` interface, selected via
+  `STORAGE_PROVIDER=r2` (`docs/release/CONFIGURATION_REFERENCE.md`) — exactly the "intended future
+  treatment" this entry originally called for. `LocalFilesystemStorageProvider` remains the `local`
+  default for dev/test; setting `STORAGE_PROVIDER=r2` in production moves **every** consumer (Backup
+  Packages, Company Logo assets, and anything else built against `storageProvider` later) onto
+  durable, non-ephemeral storage at once — no per-module change needed, since none of them branch on
+  which implementation is active.
+- **Original description** (kept for history): Only `LocalFilesystemStorageProvider` existed. Backup
+  packages, and any future file uploads, were written to the application server's own local disk
+  (`STORAGE_ROOT`).
+- **Original impact**: On a platform where the application server's filesystem is ephemeral or not
   network-shared (typical for PaaS web services, including Render's own web-service tier unless a
   persistent disk is explicitly attached), generated files would not survive a redeploy/restart, and
   would not be shared across multiple instances if the service is ever scaled horizontally.
-- **Trigger**: Any production deployment on infrastructure with an ephemeral or non-shared filesystem.
-- **Workaround**: Attach a persistent disk to the Render web service, or avoid horizontal scaling,
-  until a cloud provider is implemented.
-- **Release-blocking status**: Not a release blocker for RC1/UAT (a single-instance environment with
-  a persistent or long-lived disk is sufficient for UAT). Should be resolved before production
-  go-live if the deployment target's filesystem isn't guaranteed persistent.
-- **Intended future treatment**: Implement a cloud-object-storage `StorageProvider` (e.g. S3-compatible)
-  behind the existing abstraction (`docs/architecture/system-conventions.md §2`) — the abstraction was
-  specifically designed for this swap.
+- **Remaining action for a real go-live**: `STORAGE_PROVIDER` still defaults to `local` — an operator
+  must explicitly set `STORAGE_PROVIDER=r2` and provision the five `R2_*` credentials in the Render
+  dashboard (`render.yaml` declares them as `sync: false`) for production to actually benefit from
+  this fix. Until that's done, this known issue's original impact still applies as-configured.
 
 ---
 
@@ -426,7 +430,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 |---|---|---|
 | KI-1 | `CANCELLED` materialization lifecycle not implemented — held+materialized entries stay reserved | No |
 | KI-2 | Cross-site cookie behavior unverified on real Render two-service deployment | No (gates production, not RC1) |
-| KI-3 | No cloud `StorageProvider` implementation | No (gates production if filesystem is ephemeral) |
+| KI-3 | No cloud `StorageProvider` implementation | No — **RESOLVED** (Phase 7C, `R2StorageProvider`); still requires `STORAGE_PROVIDER=r2` + credentials to be configured in production |
 | KI-4 | 6 pre-existing cosmetic lint warnings | No |
 | KI-5 | One timing-dependent test flake (confirmed non-deterministic) | No |
 | KI-6 | Puppeteer/embedded-Postgres manual install step in script-restricted environments | No (now documented) |

@@ -17,6 +17,7 @@ import { projectUnitsRouter } from './modules/project-units/project-units.routes
 import { banksRouter } from './modules/banks/banks.routes';
 import { employeesRouter } from './modules/employees/employees.routes';
 import { settingsRouter } from './modules/settings/settings.routes';
+import { companyLogoPublicRouter } from './modules/settings/company-logo-public.routes';
 import { usersLookupRouter, usersRouter } from './modules/users/users.routes';
 import { rolesRouter } from './modules/roles/roles.routes';
 import { payrollCyclesRouter } from './modules/payroll-processing/payroll-processing.routes';
@@ -140,6 +141,16 @@ export function createApp(): Express {
   });
 
   app.use('/api/v1/auth', authRouter);
+  // Phase 7C — mounted immediately after authRouter and, critically, *before*
+  // `projectUnitsRouter` below: that router (and several others further down) is mounted at a
+  // broad prefix with its own path-less `.use(requireAuth)`, which runs for *any* request that
+  // reaches it regardless of whether one of its own routes actually matches — an earlier version
+  // of this mount order placed this router immediately before `settingsRouter` instead, and every
+  // request for GET /company/logo/ui|print was rejected 401 by `projectUnitsRouter`'s blanket
+  // `requireAuth` before Express ever tried this router at all. Mounting it here, ahead of every
+  // other authenticated router under /api/v1, is what actually makes it unauthenticated in
+  // practice, not just in its own doc comment.
+  app.use('/api/v1/settings', companyLogoPublicRouter);
   // Mounted before projectSitesRouter: its routes (/sites/:siteId/units, /units/:id) are more
   // specific than anything projectSitesRouter matches, so there's no ambiguity either way, but
   // registering the more specific paths first keeps the intent obvious.

@@ -130,6 +130,25 @@ In production this shell maps to a persistent layout route (e.g. a React Router 
 prototype's `.page` / `.page.active` show/hide toggling should **not** be replicated; use real
 client-side routes so URLs, back/forward, and deep-linking work.
 
+### 2.1a Company Logo — identity, not theme (Phase 7C)
+
+The company logo (an uploaded image, `CompanySettings.logoStorageKey`) and the accent color (§1.1,
+Theme settings, user-customizable) are **two entirely separate concepts** and must never be
+conflated:
+
+- **Theme (`--accent`)** stays exactly as specified above — user-controlled, per-session, applied
+  via a CSS custom property. Nothing about the logo feature reads, writes, or gates on it.
+- **Logo** is company *identity*, shown only in identity locations: the sidebar's company-name
+  block (§2.1, this section — a small icon beside the existing text, never replacing it), the Login
+  page, the Settings → Company Details preview, and (print-only, see
+  `docs/architecture/print-architecture.md`'s own Company Logo section) printed-document headers.
+- **Explicitly out of scope, by design, permanently**: the logo must never drive button colors,
+  navigation colors, page backgrounds, or any other UI chrome — those remain governed by `--accent`
+  alone. A future request to "brand the app" with logo-derived colors is a **different, unapproved**
+  feature, not an extension of this one.
+- Falls back to `LogoPlaceholder` (a neutral icon) whenever no logo is set or the image request
+  fails — never blocks rendering, never shows a broken-image icon.
+
 ### 2.2 Section / Card
 
 The single most-reused structural unit. A "section" is: white surface, `radius-lg`, 1px border, a

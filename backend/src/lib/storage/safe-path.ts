@@ -1,5 +1,6 @@
 import path from 'path';
 import { StorageKeyError } from './errors';
+import { assertValidStorageKey } from './key-validation';
 
 /**
  * Resolves an application-generated storage `key` to an absolute filesystem path beneath `root`,
@@ -8,41 +9,19 @@ import { StorageKeyError } from './errors';
  * (docs/architecture/system-conventions.md §2). This is the one place key validation happens; every
  * `LocalFilesystemStorageProvider` operation goes through it before touching the filesystem.
  *
- * Deliberately conservative: keys must be a `/`-separated relative path with no `.`/`..` segments,
- * no empty segments, no null bytes, and no backslashes — the last of these is rejected outright
- * (not merely normalized) so a key's meaning never depends on which OS the process happens to be
- * running on, per the portability requirement (a `\` is a literal filename character on POSIX but a
- * separator on Windows; the only way to make it safe on both is to disallow it everywhere).
+ * Lexical validation itself (`assertValidStorageKey`, `./key-validation.ts`) is shared with
+ * `r2-storage-provider.ts`'s `resolveObjectKey` (Phase 7C) — deliberately conservative: keys must
+ * be a `/`-separated relative path with no `.`/`..` segments, no empty segments, no null bytes, and
+ * no backslashes — the last of these is rejected outright (not merely normalized) so a key's
+ * meaning never depends on which OS the process happens to be running on, per the portability
+ * requirement (a `\` is a literal filename character on POSIX but a separator on Windows; the only
+ * way to make it safe on both is to disallow it everywhere). Filesystem containment (below) is
+ * specific to this implementation — an S3-compatible key has no such concept.
  */
 export function resolveObjectPath(root: string, key: string): string {
-  if (typeof key !== 'string' || key.length === 0) {
-    throw new StorageKeyError('Storage key must be a non-empty string');
-  }
-  if (key.includes('\0')) {
-    throw new StorageKeyError('Storage key must not contain null bytes');
-  }
-  if (key.includes('\\')) {
-    throw new StorageKeyError('Storage key must not contain backslashes — use forward slashes only');
-  }
-  if (key.startsWith('/')) {
-    throw new StorageKeyError('Storage key must be relative, not an absolute path');
-  }
-  // Windows drive-letter prefix (e.g. "C:\..." or "C:/...") — rejected even on a POSIX host, since
-  // this codebase's self-hosted deployment target is not fixed to one platform (§3 item 13).
-  if (/^[A-Za-z]:/.test(key)) {
-    throw new StorageKeyError('Storage key must not contain a drive-letter prefix');
-  }
+  assertValidStorageKey(key);
 
   const segments = key.split('/');
-  for (const segment of segments) {
-    if (segment.length === 0) {
-      throw new StorageKeyError('Storage key must not contain empty path segments');
-    }
-    if (segment === '.' || segment === '..') {
-      throw new StorageKeyError('Storage key must not contain "." or ".." path segments');
-    }
-  }
-
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(resolvedRoot, ...segments);
 

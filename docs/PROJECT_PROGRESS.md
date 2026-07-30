@@ -7727,6 +7727,111 @@ integration for Statements**, Reports, Dashboard. **Do not mark Phase 7B complet
 
 ---
 
+### Phase 7C — Company Logo Storage and Safe Document Integration — IMPLEMENTED, 2026-07-30, awaiting review, NOT COMMITTED
+
+A read-only architecture investigation ran first (Phase 7B checkpoint, not separately logged above
+since it produced no code), settling the approved architecture this checkpoint implements: R2 as a
+second `StorageProvider` implementation (never a replacement); the R2 bucket stays private, served
+only through backend routes; `CompanySettings.logoStorageKey` reinterpreted as a version identifier
+rather than expanded with new columns; Theme (`--accent`) remains fully untouched and authoritative;
+no watermarking; layout integrity outranks branding for every printable document.
+
+**Storage layer**: `R2StorageProvider` (`backend/src/lib/storage/r2-storage-provider.ts`, S3-compatible
+via `@aws-sdk/client-s3`) implements the existing five-method `StorageProvider` interface with no
+change to any caller. Selected via new `STORAGE_PROVIDER` env var (`local` default, `r2` requires all
+five `R2_*` credentials — enforced via `env.ts`'s own `.superRefine`, fails fast at startup, never
+mid-request). `lib/storage/index.ts`'s `createStorageProvider()` is the one place selection happens.
+Lexical key validation (`assertValidStorageKey`) extracted into `key-validation.ts`, shared by both
+`safe-path.ts` (local, adds filesystem containment) and the new `safe-key.ts` (R2, no containment
+concept needed) — one validation rule set, not two independently-drifting copies.
+
+**Schema**: no migration. `logoStorageKey` (already existed, always `null` in every row before this
+checkpoint) now holds a version UUID; `company-logo-keys.ts`'s `companyLogoObjectKeys(version)`
+derives `company-assets/logo/{version}/{original,ui.png,print.png}` deterministically — the one
+canonical base key identifying all three approved derived assets, per the checkpoint's own explicit
+"prefer avoiding schema expansion" instruction.
+
+**Image processing** (`lib/image/logo-image.service.ts`, new `sharp` dependency): validates real
+decoded bytes (never trusts client MIME/extension), 2MB cap, 4096px input-dimension cap
+(decompression-bomb defense via `sharp`'s `limitInputPixels`), a fast-fail pattern check rejecting
+`<script>`/event-handler/`javascript:` content in SVG before ever decoding it. **Both derived assets
+are always rasterized to PNG regardless of source format** — the actual safety guarantee against
+executable SVG content ever reaching a browser (never "sanitize and re-serve SVG"). UI asset capped
+256px, Print asset capped 480px (print gets its own, higher-resolution derivative — never the UI
+asset reused at a different CSS size). Metadata (EXIF/ICC) stripped for free (no `.withMetadata()`
+call).
+
+**Routes** (`modules/settings/`): `POST`/`DELETE /company/logo` (authenticated, `settings:manage`,
+CSRF — inherited automatically from the existing global middleware, `multer` memory storage) added to
+`settingsRouter`. Upload/replace order is write-new-then-flip-DB-then-delete-old, never the reverse —
+a mid-upload failure can never leave the working logo deleted; verified by a dedicated integration
+test that injects a `storageProvider.write` failure and confirms `logoStorageKey` stays `null`.
+`GET /company/logo/{ui,print}` (`company-logo-public.routes.ts`) are deliberately unauthenticated — the
+Login page has no session — and expose image bytes only, never a `CompanySettings` field or the raw
+storage key; ETag/Cache-Control/conditional-304 support. **Critical mount-order bug found and fixed
+during Playwright verification** (not caught by `supertest`-only integration tests): `projectUnitsRouter`
+is mounted at the broad `/api/v1` prefix with its own path-less `requireAuth`, which ran for *any*
+`/api/v1/*` request reaching it regardless of route match — the public logo router had to be mounted
+immediately after `authRouter`, ahead of every other authenticated router, or every request was
+rejected 401 before ever reaching it. **Second bug found and fixed the same way**: `helmet()`'s
+app-wide default `Cross-Origin-Resource-Policy: same-origin` blocked the frontend (a different origin
+in production, and a different port in this test harness) from embedding the logo via `<img>` at all
+(`net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin`) — overridden to `cross-origin` on these two routes only,
+never weakened app-wide. `serializeCompanySettings()` strips `logoStorageKey` from every settings
+response and adds `hasLogo: boolean` — the one thing a client needs to decide whether to attempt
+loading the image.
+
+**Audit**: `company.logo.uploaded` / `.replaced` / `.removed`, metadata includes content type and each
+asset's byte size and whether a previous logo existed — never raw image bytes or credentials.
+
+**Frontend**: `use-company-settings.ts` gained `useUploadCompanyLogo`/`useRemoveCompanyLogo` (multipart
+upload bypasses `apiRequest`'s JSON-only shape, mirroring `use-employees.ts`'s existing CSV-import
+pattern) and `COMPANY_LOGO_UI_URL`/`COMPANY_LOGO_PRINT_URL` constants. Settings → Company Details: the
+stale disabled "Upload Logo" stub and its "becomes available once Storage Provider is implemented"
+copy are gone, replaced with a real upload/replace/remove flow (removal requires a confirmation
+modal). Login page and Sidebar render the real logo with `LogoPlaceholder` fallback on any load
+failure — neither ever blocks on it. Theme (`--accent`) is untouched by any of this, confirmed by a
+real-browser Playwright assertion across upload/replace/remove.
+
+**Printable documents** (see `docs/architecture/print-architecture.md`'s own new Company Logo section
+for full detail): Payslip and Statement PDFs get an inline header logo, capped below the shortest
+existing text line so the header can never grow. Bank Sheet and Cash Receiving get the same treatment
+via an explicit `<PrintContextHeader showLogo>` opt-in (never a blind default on a component shared by
+four pages). **No document's logo was disabled for a layout-integrity reason** — all four measured
+clean. Watermarking was evaluated (Phase 7B investigation) and rejected as higher engineering risk than
+a small in-flow logo for every document type in this system.
+
+**Testing**: 18 new backend integration tests (`settings.test.ts`'s "Company Logo" describe block —
+upload/replace/remove/retrieve, permission gating, CSRF, oversized/invalid uploads, the CORP-header
+regression, the write-failure/DB-consistency case), 9 new unit tests for the image-processing service,
+19 for `R2StorageProvider` (mocked S3 transport via `aws-sdk-client-mock`), 4 for `STORAGE_PROVIDER`
+selection (`jest.isolateModules`), plus logo-specific additions to the existing Payslip/Statement PDF
+template test files — full backend suite 60 suites / 1188 tests, zero failures. 4 new frontend Vitest
+files (Settings logo section, Login fallback, Sidebar gating, `PrintContextHeader showLogo`) — full
+frontend suite 24 files / 218 tests, zero failures. New Playwright spec
+`tests/e2e/specs/16-company-logo.spec.ts` (real browser, real backend/database/storage) covers the
+full upload → Settings preview → unauthenticated Login-page display → replace → remove →
+placeholder-restored flow, permission-gated rejection (both UI and a direct API 403), Theme
+non-interference, and Bank Sheet/Cash Receiving header-height-unchanged verification — all passing.
+**Payslip PDF logo-embedding was not covered by a Playwright test**: this harness's shared
+`createSiteWithEmployee` E2E fixture produces a zero-worked-days, negative-net-salary entry that
+Salary Release silently excludes from bulk release — a pre-existing gap in shared E2E fixture
+infrastructure (reproduced identically against the current, unmodified `13-print-architecture.spec.ts`
+Bank Sheet/Cash Receiving tests), unrelated to this checkpoint and out of scope to fix here; that
+specific behavior is instead covered by the backend PDF-template unit tests and the full upload/
+retrieval integration tests.
+
+Typecheck (backend/frontend/e2e — one pre-existing, unrelated e2e typecheck error in
+`08-role-administration.spec.ts`, confirmed via `git diff` to predate this checkpoint), lint
+(backend/frontend — two pre-existing, unrelated errors in `statements.test.ts` at lines 1213/1378,
+same pre-existing-confirmation method), and this checkpoint's own new/touched files all clean.
+
+**Not included**: Reports and Dashboard were not started (confirmed out of scope, per the checkpoint's
+own explicit instruction). No commit, push, or deployment occurred — **do not mark Phase 7C
+complete** until this report is reviewed.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

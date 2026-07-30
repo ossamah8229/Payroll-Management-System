@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { ApiError } from '@/lib/api-client';
 import { useCompanySettings } from '@/hooks/use-company-settings';
+import { DocumentLogo } from '@/components/ui/document-logo';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
@@ -146,7 +147,7 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
         <CardContent className="p-0">
           {cycle && (
             <div className="px-[18px] pt-[18px]">
-              <PrintContextHeader title="Cash Receiving" context={cycleLabel} />
+              <PrintContextHeader title="Cash Receiving" context={cycleLabel} showLogo />
             </div>
           )}
           {isLoading && (
@@ -210,8 +211,11 @@ export function CashReceivingPage({ user }: { user: SessionUser }) {
                 className="border-b border-border px-[18px] py-3.5 text-center"
                 style={{ fontFamily: '"Times New Roman", serif' }}
               >
-                <div className="text-sm font-bold text-text">
-                  {companySettings.data?.companyName ?? 'Company'}
+                <div className="flex items-center justify-center gap-1.5">
+                  {companySettings.data?.hasLogo && <DocumentLogo />}
+                  <div className="text-sm font-bold text-text">
+                    {companySettings.data?.companyName ?? 'Company'}
+                  </div>
                 </div>
                 <div className="text-xs text-text-muted">Cash Receiving Sheet — {cycleLabel}</div>
                 <div className="mt-1 text-[11px] text-text-faint">

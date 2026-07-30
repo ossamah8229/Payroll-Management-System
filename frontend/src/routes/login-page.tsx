@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Navigate } from 'react-router-dom';
@@ -8,8 +9,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { LogoPlaceholder } from '@/components/logo-placeholder';
+import { COMPANY_LOGO_UI_URL } from '@/hooks/use-company-settings';
 import { useLogin, useSession } from '@/hooks/use-session';
 import { ApiError } from '@/lib/api-client';
+
+/**
+ * The Login page has no session yet, so it cannot call the authenticated `GET /company` endpoint
+ * to learn `hasLogo` up front (Phase 7C) — unlike the Sidebar/Settings preview, it always attempts
+ * the public `/company/logo/ui` image request and falls back to `LogoPlaceholder` on `onError`
+ * (covers both "no logo set" — a 404 — and any other request failure alike). This can never block
+ * or delay login itself: it's a plain `<img>` tag, not something `onSubmit` awaits.
+ */
+function LoginLogo() {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <LogoPlaceholder size="md" />;
+  return (
+    <img
+      src={COMPANY_LOGO_UI_URL}
+      alt="Company logo"
+      className="h-14 w-14 shrink-0 rounded-lg border border-border bg-bg object-contain p-1.5"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 export function LoginPage() {
   // `isSessionLoading` also gates the submit button below: this query's GET /api/v1/auth/me is
@@ -44,7 +66,7 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <Card className="w-full max-w-[380px]">
         <CardHeader className="flex-col items-center gap-2 text-center">
-          <LogoPlaceholder size="md" />
+          <LoginLogo />
           <div className="flex flex-col items-center gap-0.5">
             <CardTitle>Payroll Management System</CardTitle>
             <span className="text-xs text-text-muted">Sign in to continue</span>

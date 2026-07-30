@@ -1,8 +1,35 @@
+import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/cn';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { COMPANY_LOGO_UI_URL, useCompanySettings } from '@/hooks/use-company-settings';
 import { isNavItemVisible, navSections } from './nav-config';
 import type { SessionUser } from '@payroll/shared';
+
+/**
+ * Company identity icon (Phase 7C) — only rendered once `hasLogo` is known true, so the common
+ * "no logo set" case never even issues the image request; falls back safely (renders nothing, the
+ * existing text block is untouched either way) if the request itself fails after that. Resets its
+ * own failed-load state when `hasLogo` flips, same reasoning as Settings' `CompanyLogoPreview`.
+ */
+function SidebarLogo({ hasLogo }: { hasLogo: boolean }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [hasLogo]);
+
+  if (!hasLogo || failed) return null;
+
+  return (
+    <img
+      src={COMPANY_LOGO_UI_URL}
+      alt=""
+      className="h-8 w-8 shrink-0 rounded bg-white/10 object-contain p-1"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 /**
  * docs/design-system.md §2.1 App Shell: fixed 220px sidebar, solid accent background, company
@@ -11,6 +38,7 @@ import type { SessionUser } from '@payroll/shared';
  * as specified, not approximated.
  */
 export function Sidebar({ user }: { user: SessionUser }) {
+  const companySettings = useCompanySettings();
   const initials = user.name
     .split(' ')
     .map((part) => part[0])
@@ -20,13 +48,16 @@ export function Sidebar({ user }: { user: SessionUser }) {
 
   return (
     <aside className="fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col bg-accent print:hidden">
-      <div className="border-b border-white/10 px-4 pb-4 pt-5">
-        <div className="text-[13px] font-bold leading-tight text-white">
-          Payroll Management
-          <br />
-          System
+      <div className="flex items-center gap-2.5 border-b border-white/10 px-4 pb-4 pt-5">
+        <SidebarLogo hasLogo={companySettings.data?.hasLogo ?? false} />
+        <div>
+          <div className="text-[13px] font-bold leading-tight text-white">
+            Payroll Management
+            <br />
+            System
+          </div>
+          <div className="mt-0.5 text-[11px] text-white/55">HR &amp; Payroll</div>
         </div>
-        <div className="mt-0.5 text-[11px] text-white/55">HR &amp; Payroll</div>
       </div>
 
       <nav className="flex-1 overflow-y-auto py-3">

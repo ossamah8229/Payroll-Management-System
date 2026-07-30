@@ -27,3 +27,18 @@ export async function updateCompanySettings(userId: string, input: UpdateCompany
     },
   });
 }
+
+/**
+ * The one place `logoStorageKey` is stripped before a `CompanySettings` row ever crosses the HTTP
+ * boundary (Phase 7C's own explicit requirement: "do not return storage keys to the frontend") —
+ * every settings route response (`GET`/`PATCH /company`, the logo upload/remove routes) goes
+ * through this, mirroring `backup-packages.routes.ts`'s own `serializeBackupPackage` doing the same
+ * for `storageKey`. `hasLogo` is all a client needs to know — whether to render the real `<img>`
+ * (via the public `/company/logo/ui` route) or fall back to `LogoPlaceholder`.
+ */
+export function serializeCompanySettings<T extends { logoStorageKey: string | null }>(
+  settings: T,
+): Omit<T, 'logoStorageKey'> & { hasLogo: boolean } {
+  const { logoStorageKey, ...rest } = settings;
+  return { ...rest, hasLogo: logoStorageKey !== null };
+}

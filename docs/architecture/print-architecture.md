@@ -325,6 +325,43 @@ selected cycle), and a generated-at timestamp. Advances and Corrections pass no 
 is cycle-scoped), which is correct, not a gap — there's no cycle/site selection to report for either
 page's own current form. No decorative content was added.
 
+## Company Logo in printed documents (Phase 7C)
+
+**Layout integrity outranks branding — the client's own explicit priority for this checkpoint.**
+Every document below was measured before/after adding a logo; the logo ships only where that
+measurement proved zero effect on pagination, margins, column widths, row heights, or typography.
+No document in this system had its logo deliberately omitted for a layout-integrity reason — all
+four were proven safe (see below) — but "no logo" was the accepted fallback this checkpoint would
+have used for any document that couldn't clear that bar. **Watermarking was evaluated and
+rejected** (see the Phase 7B architecture investigation): Puppeteer's only per-physical-page
+repeating mechanism (`headerTemplate`/`footerTemplate`) reserves margin-box height, which risks
+shifting the Statement ledger's own multi-page row count — the exact regression this checkpoint
+exists to prevent; `position:fixed` watermarks are also not reliably repeated per printed page by
+Chromium's print engine. A small in-flow header logo, capped below the shortest existing line
+height, is the lower-risk choice compared to a watermark for every document here.
+
+- **Payslip / Statement (Puppeteer PDF)** — `templates/payslip.ts` / `templates/statement.ts`
+  render the logo (a `data:image/png;base64` URI, `modules/settings/company-logo.service.ts`'s
+  `getCompanyLogoDataUri()`) inline beside the company name inside the existing `.doc-header`
+  block, never as an added row. CSS caps it at `height: 18px` — below the shortest realistic height
+  of that block (a 14pt bold company-name line alone already renders taller) — so the header's own
+  height can never grow, regardless of whether a registered address is present. Fetched **once per
+  request** (including once per an entire Payslip batch, never once per document) and passed
+  through `PayslipPdfMeta`/`StatementPdfMeta.companyLogoDataUri`. The Statement's own header block
+  renders once, at the top of the flowing document (not a repeating Puppeteer header), so this only
+  ever affects page 1's layout — verified against short and long (multi-page) Statements.
+- **Bank Sheet / Cash Receiving (browser print, no PDF pipeline)** — `<PrintContextHeader
+  showLogo>` is an explicit **opt-in** prop (default `false`), never a blind default, since that
+  component is shared by every print-enabled page (Payslips list, Statements, Bank Sheet, Cash
+  Receiving) — enabling it needed its own per-document verification, not a blanket flip. Uses the
+  print-optimized asset (`COMPANY_LOGO_PRINT_URL`, `<DocumentLogo>`,
+  `frontend/src/components/ui/document-logo.tsx`), capped at `h-3.5` (14px), consistent with the PDF
+  templates' own sizing rule. Cash Receiving's own second, always-visible document header (not
+  `PrintContextHeader`) got the identical treatment, reusing `<DocumentLogo>` rather than a second
+  implementation. Real-Chromium Playwright verification
+  (`tests/e2e/specs/16-company-logo.spec.ts`) measures this exact header element's rendered height
+  in `print` media before and after a logo is uploaded and asserts it is byte-for-byte unchanged.
+
 ## Testing
 
 - `frontend/src/components/print/print-types.test.ts` — `resolveOrientation` (pure function).

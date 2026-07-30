@@ -88,14 +88,28 @@ check) before any filesystem operation is attempted (`backend/src/lib/storage/sa
   `message` — see `backend/src/lib/storage/errors.ts`'s log-hygiene note on `StorageIOError.cause`
   for the one field that still carries a raw underlying filesystem error (kept for local debugging,
   not meant to be logged wholesale).
-- Cloud implementation (e.g. S3 or R2-backed) — introduced when production hosting is finalized.
-  Selected via configuration/environment variable; business logic that calls `StorageProvider` never
-  changes when the implementation swaps.
+- **`R2StorageProvider` (`backend/src/lib/storage/r2-storage-provider.ts`) — implemented Phase 7C.**
+  An S3-compatible implementation backed by Cloudflare R2, satisfying the exact same five-method
+  interface with no caller-visible difference from `LocalFilesystemStorageProvider`. Selected via
+  `STORAGE_PROVIDER=r2` (env var, `backend/src/config/env.ts`; `local` remains the default) — the
+  one place this selection happens is `lib/storage/index.ts`'s `createStorageProvider()`; no module
+  that imports `storageProvider` branches on which implementation is active, confirming the
+  "business logic never changes when the implementation swaps" promise this section always made.
+  Requires five R2 credentials (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+  `R2_BUCKET_NAME`, `R2_ENDPOINT`) — enforced present together via the env schema's own
+  `.superRefine`, so a misconfigured `STORAGE_PROVIDER=r2` fails at startup, never mid-request. The
+  R2 bucket itself stays **private** — this interface still has no signed-URL/public-URL concept
+  (deliberately, per this section's own "no signed URLs... deliberately excluded as speculative"
+  rule above, which still holds); a route that needs to expose an object's bytes to an unauthenticated
+  browser (e.g. the Company Logo public routes, `modules/settings/company-logo-public.routes.ts`)
+  reads through `storageProvider.read()`/`createReadStream()` as any other caller would and proxies
+  the bytes itself — the interface was never extended, only used exactly as designed.
 
 Every feature that produces a **persisted** file — backup packages, company logo/avatar uploads —
-depends on this interface only. This is what lets development run entirely on the local filesystem
-while production later moves to cloud object storage with no business-logic changes, per the
-approved architecture.
+depends on this interface only. This is what let development run entirely on the local filesystem
+while production later moved to cloud object storage with no business-logic changes, per the
+approved architecture (`STORAGE_PROVIDER=r2` still needs to be explicitly configured per-environment
+— see `docs/release/KNOWN_ISSUES_v1.0.md` KI-3 and `docs/release/CONFIGURATION_REFERENCE.md`).
 
 **Cross-system atomicity (Phase 5 Checkpoint 0 architecture decision — implemented Phase 5
 Checkpoint 2, `backup-packages.service.ts`'s `generateBackupPackage`).** A backup package's

@@ -288,3 +288,16 @@ describe('renderStatementHtml — header fields (employee/company/period)', () =
     expect(html).not.toContain('null');
   });
 });
+
+describe('renderStatementHtml — company logo (Phase 7C)', () => {
+  it('embeds the logo inline with the company name when companyLogoDataUri is set', () => {
+    const dataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const html = renderStatementHtml(baseStatement(), { ...baseMeta, companyLogoDataUri: dataUri });
+    expect(html).toContain(`<img src="${dataUri}" class="doc-header-logo" alt="" />`);
+  });
+
+  it('renders no <img> tag when companyLogoDataUri is null/undefined', () => {
+    expect(renderStatementHtml(baseStatement(), { ...baseMeta, companyLogoDataUri: null })).not.toContain('<img');
+    expect(renderStatementHtml(baseStatement(), baseMeta)).not.toContain('<img');
+  });
+});

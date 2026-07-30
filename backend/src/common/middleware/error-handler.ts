@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
+import { MulterError } from 'multer';
 import { Prisma } from '@prisma/client';
 import { HttpError } from '../http-error';
 import { logger } from '../../lib/logger';
@@ -102,6 +103,18 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
       error: { code: err.code ?? 'ERROR', message: err.message },
     };
     res.status(err.statusCode).json(body);
+    return;
+  }
+
+  // A `multer` upload middleware (CSV import, Company Logo upload) throws this itself, before the
+  // route handler ever runs — a client-error (oversized file, wrong field name), not a server
+  // fault, so it gets the same clean 4xx shape as every other validation error rather than falling
+  // through to the generic 500 below. Every `multer` instance in this codebase already sets its own
+  // `limits.fileSize`; this is the one place that limit's rejection is translated to a response.
+  if (err instanceof MulterError) {
+    const message =
+      err.code === 'LIMIT_FILE_SIZE' ? 'Uploaded file exceeds the maximum allowed size' : err.message;
+    res.status(400).json({ error: { code: 'BAD_REQUEST', message } });
     return;
   }
 

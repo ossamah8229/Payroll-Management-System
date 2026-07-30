@@ -34,6 +34,12 @@ export interface StatementPdfMeta {
   registeredAddress: string | null;
   generatedByName: string;
   generatedAt: Date;
+  /** Print-optimized logo, pre-encoded as a `data:image/png;base64,...` URI (Phase 7C —
+   * `modules/settings/company-logo.service.ts`'s `getCompanyLogoDataUri()`), or `null`/`undefined`
+   * when no company logo is set. This header block is rendered once, at the top of the flowing
+   * HTML document (not a repeating Puppeteer header — `STATEMENT_PDF_FOOTER_TEMPLATE` above is the
+   * only thing that actually repeats per page), so this only ever affects page 1's own layout. */
+  companyLogoDataUri?: string | null;
 }
 
 /**
@@ -184,6 +190,22 @@ const STATEMENT_EXTRA_STYLES = `
     font-style: italic;
     text-align: center;
   }
+
+  /* Same reasoning as templates/payslip.ts's identical rule: capped below the shortest realistic
+     height of the existing company-name/address block, so a logo can never grow .doc-header's own
+     height regardless of whether a registered address is present. */
+  .doc-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .doc-header-logo {
+    display: block;
+    height: 18px;
+    width: auto;
+  }
 `;
 
 /**
@@ -212,8 +234,13 @@ export function renderStatementHtml(statement: EmployeeStatement, meta: Statemen
         <span>Statement Period: ${escapeHtml(statementPeriodLabel(range))}</span>
       </div>
       <div class="doc-header">
-        <div class="doc-company-name">${escapeHtml(meta.companyName)}</div>
-        ${meta.registeredAddress ? `<div class="doc-company-detail">${escapeHtml(meta.registeredAddress)}</div>` : ''}
+        <div class="doc-header-row">
+          ${meta.companyLogoDataUri ? `<img src="${meta.companyLogoDataUri}" class="doc-header-logo" alt="" />` : ''}
+          <div>
+            <div class="doc-company-name">${escapeHtml(meta.companyName)}</div>
+            ${meta.registeredAddress ? `<div class="doc-company-detail">${escapeHtml(meta.registeredAddress)}</div>` : ''}
+          </div>
+        </div>
       </div>
 
       <div class="info-grid">

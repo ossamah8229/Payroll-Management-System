@@ -20,6 +20,43 @@ const envSchema = z.object({
   // second, storage-specific safety check on top of this one (rejects a value that resolves to the
   // process's own working directory).
   STORAGE_ROOT: z.string().min(1, 'STORAGE_ROOT is required'),
+  // Phase 7C — selects which `StorageProvider` implementation `lib/storage/index.ts` constructs.
+  // Defaults to `local` (the only implementation before this checkpoint) so every existing
+  // deployment/dev setup keeps working with zero configuration change. `r2` requires the five
+  // R2_* variables below (enforced by this schema's own `.superRefine` — see it for why they stay
+  // individually optional here).
+  STORAGE_PROVIDER: z.enum(['local', 'r2']).default('local'),
+  // Cloudflare R2 (S3-compatible) credentials — kept individually optional in the base schema
+  // (rather than `.min(1)` required) because they must be *absent-tolerant* when
+  // `STORAGE_PROVIDER=local` (the default local/dev/test setup, matching every environment this
+  // codebase already runs in) — `.superRefine` below is what actually enforces "all five present"
+  // the moment `STORAGE_PROVIDER=r2` is chosen, so a production misconfiguration still fails fast
+  // at startup exactly like `STORAGE_ROOT` already does, never silently.
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET_NAME: z.string().optional(),
+  R2_ENDPOINT: z.string().optional(),
+}).superRefine((value, ctx) => {
+  if (value.STORAGE_PROVIDER !== 'r2') return;
+
+  const required = [
+    'R2_ACCOUNT_ID',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+    'R2_BUCKET_NAME',
+    'R2_ENDPOINT',
+  ] as const;
+
+  for (const key of required) {
+    if (!value[key]) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [key],
+        message: `${key} is required when STORAGE_PROVIDER=r2`,
+      });
+    }
+  }
 });
 
 function loadEnv() {
