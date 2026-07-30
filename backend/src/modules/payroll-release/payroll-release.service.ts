@@ -236,7 +236,24 @@ export async function releaseProjectUnit(
           workLines: { some: { unitId } },
         },
         include: {
-          employee: { select: { name: true, cnic: true, employeeCode: true } },
+          employee: {
+            select: {
+              name: true,
+              cnic: true,
+              employeeCode: true,
+              // Master Data Boundary (Phase 7D, 2026-07-30) — `designation`/`bankId`/`branchCode`/
+              // `accountNumber`/`iban` are no longer Draft-editable on `PayrollEntry` itself (Employee
+              // Registry is now the sole editable source); release is therefore the one remaining
+              // moment these get synced onto the entry's own frozen columns, from Employee Registry's
+              // *current* values, not whatever this entry happened to be bootstrapped with. See the
+              // `liveMasterByEntryId` sync below.
+              designation: true,
+              bankId: true,
+              branchCode: true,
+              accountNumber: true,
+              iban: true,
+            },
+          },
           workLines: WORK_LINES_INCLUDE,
         },
       });
@@ -287,6 +304,17 @@ export async function releaseProjectUnit(
         const noPayDueIds: string[] = [];
         const recoveryEntries: Array<{ id: string; employeeId: string; netSalary: string }> = [];
         const releasedAt = new Date();
+        // Master Data Boundary (Phase 7D, 2026-07-30) — release is now the moment
+        // `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` get synced from Employee
+        // Registry's *current* record onto the entry's own frozen columns (rather than relying on
+        // whatever the entry happened to be bootstrapped or last edited with, now that ordinary
+        // Payroll Entry edits can no longer touch these fields at all). Keyed by entry id so the
+        // per-outcome persistence below (paid / no-pay-due / recovery-due) can apply the exact same
+        // synced values it was evaluated against.
+        const liveMasterByEntryId = new Map<
+          string,
+          { designation: string; bankId: string | null; branchCode: string | null; accountNumber: string | null; iban: string | null }
+        >();
 
         for (const entry of toRelease) {
           const calc = computeEntryCalc(entry);
@@ -298,12 +326,20 @@ export async function releaseProjectUnit(
           // accounting. Every downstream decision (eligibility classification, and how much of the
           // materialization actually settles) uses this adjusted figure, never the raw one.
           const { adjustedNetSalary } = computeReleaseRecoveryAdjustment(calc);
+          const liveMaster = {
+            designation: entry.employee.designation,
+            bankId: entry.employee.bankId,
+            branchCode: entry.employee.branchCode,
+            accountNumber: entry.employee.accountNumber,
+            iban: entry.employee.iban,
+          };
+          liveMasterByEntryId.set(entry.id, liveMaster);
           const readiness = await evaluatePayrollEntryReleaseReadiness(
             {
               employeeId: entry.employeeId,
-              bankId: entry.bankId,
-              accountNumber: entry.accountNumber,
-              iban: entry.iban,
+              bankId: liveMaster.bankId,
+              accountNumber: liveMaster.accountNumber,
+              iban: liveMaster.iban,
             },
             entry.employee,
             adjustedNetSalary,
@@ -343,10 +379,23 @@ export async function releaseProjectUnit(
         }
 
         if (paidIds.length > 0) {
-          await tx.payrollEntry.updateMany({
-            where: { id: { in: paidIds } },
-            data: { released: true, releasedAt, releasedBy: currentUser.id, version: { increment: 1 } },
-          });
+          // Master Data Boundary (Phase 7D, 2026-07-30) — per-entry `update` rather than the
+          // previous single `updateMany`, since each entry's frozen `liveMasterByEntryId` snapshot
+          // differs by employee; bounded by this one Unit's own headcount, same as the audit-log
+          // loop immediately below, so this stays small even at the 10,000-employee design floor
+          // (Principle 10).
+          for (const id of paidIds) {
+            await tx.payrollEntry.update({
+              where: { id },
+              data: {
+                released: true,
+                releasedAt,
+                releasedBy: currentUser.id,
+                version: { increment: 1 },
+                ...liveMasterByEntryId.get(id)!,
+              },
+            });
+          }
           // One `payroll_entry.released` entry per swept entry (release.md §12b's explicit
           // requirement) — bounded by this one Unit's own headcount, not the whole cycle's, so
           // this loop stays small even at the 10,000-employee design floor (Principle 10).
@@ -367,10 +416,15 @@ export async function releaseProjectUnit(
         }
 
         if (noPayDueIds.length > 0) {
-          await tx.payrollEntry.updateMany({
-            where: { id: { in: noPayDueIds } },
-            data: { payoutOutcome: 'NO_PAY_DUE', version: { increment: 1 } },
-          });
+          // Same per-entry rationale as `paidIds` above — `NO_PAY_DUE` is just as much a resolution
+          // event as a paid release (`withLiveMasterData`'s own `payoutOutcome !== null` gate treats
+          // it identically), so its master-data snapshot gets frozen here too.
+          for (const id of noPayDueIds) {
+            await tx.payrollEntry.update({
+              where: { id },
+              data: { payoutOutcome: 'NO_PAY_DUE', version: { increment: 1 }, ...liveMasterByEntryId.get(id)! },
+            });
+          }
           for (const id of noPayDueIds) {
             await recordAuditLog(
               {
@@ -390,7 +444,7 @@ export async function releaseProjectUnit(
         for (const entry of recoveryEntries) {
           await tx.payrollEntry.update({
             where: { id: entry.id },
-            data: { payoutOutcome: 'RECOVERY_DUE', version: { increment: 1 } },
+            data: { payoutOutcome: 'RECOVERY_DUE', version: { increment: 1 }, ...liveMasterByEntryId.get(entry.id)! },
           });
           const adjustment = await createNegativePayrollRecoveryAdjustment(
             { id: entry.id, employeeId: entry.employeeId, cycleId },

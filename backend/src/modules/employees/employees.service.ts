@@ -20,6 +20,7 @@ import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { syncEmployeeIntoCurrentDraftCycle } from '../payroll-processing/payroll-processing.service';
+import { syncEobiApplicability } from '../payroll-entry/eobi-sync.service';
 
 export type { RequestMeta };
 
@@ -598,6 +599,25 @@ export async function updateEmployee(
     data as unknown as Record<string, unknown>,
   );
 
+  // EOBI Bidirectional Synchronisation (Phase 7D refinement, 2026-07-30, permissions/audit
+  // revision) — changing this field also writes to the employee's current Draft Payroll Entry
+  // (`eobi-sync.service.ts`), but that write is an *internal system synchronisation*, not a second
+  // user edit: the user is authorised to change EOBI applicability because they hold this route's
+  // own `employees:edit` permission (already enforced by the route), and that authorisation alone
+  // is sufficient — `payroll:entry` is deliberately never checked here. This does not weaken
+  // Payroll Entry's own protection: a user cannot reach `PATCH /payroll-entries/:id` itself, or any
+  // *other* Payroll Entry field, without holding `payroll:entry` in the ordinary way; only the
+  // synchronised EOBI write is exempt, and only because it is not an independent edit of that
+  // resource.
+  //
+  // `defaultEobiApplicable` is excluded from the generic `employee.updated` changes bundle below
+  // (same convention as the `siteId`/`unitId` exclusion immediately below it) and given its own
+  // dedicated `employee.eobi_updated` audit entry instead — every EOBI applicability change on this
+  // entity, whichever screen originates it, is recorded exactly once under that one consistent
+  // action name.
+  const changesEobiApplicable =
+    'defaultEobiApplicable' in data && data.defaultEobiApplicable !== existing.defaultEobiApplicable;
+
   const employee = await prisma.$transaction(async (tx) => {
     let updated;
     try {
@@ -627,7 +647,9 @@ export async function updateEmployee(
 
     // siteId/unitId already have their own dedicated employee.transferred entry above when
     // they're the reason for this update — never double-logged into the generic entry too.
-    const genericChanges = omitKeys(allChanges, ['siteId', 'unitId']);
+    // defaultEobiApplicable gets its own dedicated employee.eobi_updated entry below, for the same
+    // reason.
+    const genericChanges = omitKeys(allChanges, ['siteId', 'unitId', 'defaultEobiApplicable']);
     if (Object.keys(genericChanges).length > 0) {
       await recordAuditLog(
         {
@@ -641,6 +663,37 @@ export async function updateEmployee(
         },
         tx,
       );
+    }
+
+    if (changesEobiApplicable) {
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'employee.eobi_updated',
+          entityType: 'Employee',
+          entityId: id,
+          metadata: {
+            previousValue: existing.defaultEobiApplicable,
+            newValue: data.defaultEobiApplicable,
+            origin: 'employee_registry',
+          },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    }
+
+    // EOBI Bidirectional Synchronisation — same transaction as the Employee write itself.
+    if (changesEobiApplicable) {
+      await syncEobiApplicability({
+        tx,
+        employeeId: id,
+        newValue: data.defaultEobiApplicable as boolean,
+        origin: 'employee_registry',
+        actorUserId: currentUser.id,
+        requestMeta,
+      });
     }
 
     return updated;

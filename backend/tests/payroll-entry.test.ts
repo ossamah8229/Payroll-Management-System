@@ -218,7 +218,7 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     expect(metadata.changes).toHaveProperty('allowance');
   });
 
-  it('banking refinement (2026-07-11): stores IBAN trimmed/uppercase, and clearing the bank also clears Account Number/IBAN', async () => {
+  it('Master Data Boundary (Phase 7D, 2026-07-30): banking/designation are seeded from Employee at creation, but a PATCH attempting to edit them has no effect — Employee Registry is the sole editable source', async () => {
     const admin = await masterAdminAgent('entry-banking@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Entry Banking');
     const cycle = await makeDraftCycle(admin, 6);
@@ -244,23 +244,36 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     expect(created.body.entry.bankId).toBe(bank.id);
     expect(created.body.entry.accountNumber).toBe('5551234567');
 
-    const withIban = await admin.agent
+    // A PATCH that also includes banking/designation fields (as an old client, or a hostile
+    // request, might still send) is silently ignored for those specific fields — the schema no
+    // longer recognizes them — while any legitimate financial field in the same request still
+    // applies normally. This is the checkpoint's "Payroll Entry APIs must not accept or persist
+    // changes to employee banking fields" requirement.
+    const attempted = await admin.agent
       .patch(`/api/v1/payroll-entries/${entryId}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ version: created.body.entry.version, iban: '  pk36scbl0000001123456702  ' });
-    expect(withIban.status).toBe(200);
-    expect(withIban.body.entry.iban).toBe('PK36SCBL0000001123456702');
+      .send({
+        version: created.body.entry.version,
+        allowance: '1500',
+        iban: 'PK36SCBL0000001123456702',
+        bankId: null,
+        branchCode: 'HACKED',
+        accountNumber: '0000000000',
+        designation: 'Hacked Designation',
+      });
+    expect(attempted.status).toBe(200);
+    expect(Number(attempted.body.entry.allowance)).toBe(1500);
+    // Untouched — still Employee Registry's live values, exactly as before the attempted edit.
+    expect(attempted.body.entry.bankId).toBe(bank.id);
+    expect(attempted.body.entry.accountNumber).toBe('5551234567');
+    expect(attempted.body.entry.iban).toBeNull();
+    expect(attempted.body.entry.designation).toBe('Guard');
 
-    // Clearing the bank in this request must also clear Account Number/IBAN, even though this
-    // request only mentions bankId — a cash entry never carries stale bank details.
-    const cleared = await admin.agent
-      .patch(`/api/v1/payroll-entries/${entryId}`)
-      .set('x-csrf-token', admin.csrfToken)
-      .send({ version: withIban.body.entry.version, bankId: null });
-    expect(cleared.status).toBe(200);
-    expect(cleared.body.entry.bankId).toBeNull();
-    expect(cleared.body.entry.accountNumber).toBeNull();
-    expect(cleared.body.entry.iban).toBeNull();
+    const persisted = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryId } });
+    expect(persisted.bankId).toBe(bank.id);
+    expect(persisted.accountNumber).toBe('5551234567');
+    expect(persisted.iban).toBeNull();
+    expect(persisted.designation).toBe('Guard');
   });
 
   it('rejects editing a released entry — released payroll is immutable (driven by PayrollEntry.released, not cycle status)', async () => {

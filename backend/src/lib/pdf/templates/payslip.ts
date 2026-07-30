@@ -7,38 +7,17 @@ import { PRINT_STYLES } from '../print-styles';
  * separate from the `Payslip` DTO itself (`payslips.service.ts`'s own `getPayslip()`): the DTO is
  * a pure function of `(cycleId, employeeId)`, and must stay that way, not polluted with who
  * happens to be asking right now. Mirrors `cash-receiving.service.ts`'s own
- * `CashReceivingDocumentMeta { generatedByName, generatedAt }` shape exactly. */
+ * `CashReceivingDocumentMeta { generatedByName, generatedAt }` shape exactly.
+ *
+ * Phase 7D (2026-07-30) — `companyLogoDataUri` removed: the client does not want the company logo
+ * on Payslips at all (never rendered, never a placeholder), so there is nothing left for this
+ * template to accept a logo through. Statement/Bank Sheet/Cash Receiving are unaffected — each
+ * renders its own logo independently (never shared code with this template, see each one's own
+ * meta type), so this removal's blast radius stays limited to Payslip alone. */
 export interface PayslipPdfMeta {
   generatedByName: string;
   generatedAt: Date;
-  /** Print-optimized logo, pre-encoded as a `data:image/png;base64,...` URI (Phase 7C —
-   * `modules/settings/company-logo.service.ts`'s `getCompanyLogoDataUri()`), or `null`/`undefined`
-   * when no company logo is set. Fetched once per request by the route/batch caller, never here —
-   * this stays a pure rendering function, matching this module's own "no I/O" invariant above. */
-  companyLogoDataUri?: string | null;
 }
-
-/** Rendered only next to the company name, capped at a height (18px) that stays below the
- * shortest realistic content height of the existing two-line company-name/address block (a 14pt
- * bold line alone is already ~19-20px tall in the Times New Roman print stylesheet) — this
- * guarantees the logo can never grow `.doc-header`'s own height, regardless of whether a
- * registered address is present. Deliberately local to this template (not added to the shared
- * `PRINT_STYLES`, which Bank Sheet/Cash Sheet templates also use) so this change's blast radius
- * stays limited to the Payslip template alone. */
-const PAYSLIP_EXTRA_STYLES = `
-  .doc-header-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-  }
-
-  .doc-header-logo {
-    display: block;
-    height: 18px;
-    width: auto;
-  }
-`;
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -122,7 +101,7 @@ export function renderPayslipHtml(payslip: Payslip, meta: PayslipPdfMeta): strin
 <html>
   <head>
     <meta charset="utf-8" />
-    <style>${PRINT_STYLES}${PAYSLIP_EXTRA_STYLES}</style>
+    <style>${PRINT_STYLES}</style>
   </head>
   <body>
     <div class="doc-paper">
@@ -131,13 +110,8 @@ export function renderPayslipHtml(payslip: Payslip, meta: PayslipPdfMeta): strin
         <span>Pay Period: ${escapeHtml(formatDate(payslip.periodStartDate))} &ndash; ${escapeHtml(formatDate(payslip.periodEndDate))}</span>
       </div>
       <div class="doc-header">
-        <div class="doc-header-row">
-          ${meta.companyLogoDataUri ? `<img src="${meta.companyLogoDataUri}" class="doc-header-logo" alt="" />` : ''}
-          <div>
-            <div class="doc-company-name">${escapeHtml(company.companyName)}</div>
-            ${company.registeredAddress ? `<div class="doc-company-detail">${escapeHtml(company.registeredAddress)}</div>` : ''}
-          </div>
-        </div>
+        <div class="doc-company-name">${escapeHtml(company.companyName)}</div>
+        ${company.registeredAddress ? `<div class="doc-company-detail">${escapeHtml(company.registeredAddress)}</div>` : ''}
       </div>
 
       <div class="info-grid">

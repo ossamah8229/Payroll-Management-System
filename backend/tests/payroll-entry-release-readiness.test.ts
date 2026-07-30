@@ -47,72 +47,78 @@ describe('Payroll Entry — pre-release readiness visibility', () => {
 
   // --- Items A/B: Needs Attention reasons surfaced, without leaking another employee's data ------
 
-  it('surfaces releaseBlockReasons for a duplicate-account entry in the Payroll Entry list, without revealing the other employee\'s identity', async () => {
-    const admin = await masterAdminAgent('readiness-list-admin@test.local');
-    const { site, unit } = await makeSiteWithUnit('Test Site Readiness List');
-    const bank = await prisma.bank.create({ data: { code: 'TBREADY1', name: 'Test Bank Readiness 1' } });
+  it(
+    'Master Data Boundary (Phase 7D, 2026-07-30): a stale entry-column snapshot no longer produces a ' +
+      'false "Duplicate Account Number" warning in the Payroll Entry list — the check now reads Employee ' +
+      "Registry's current, live value",
+    async () => {
+      const admin = await masterAdminAgent('readiness-list-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site Readiness List');
+      const bank = await prisma.bank.create({ data: { code: 'TBREADY1', name: 'Test Bank Readiness 1' } });
 
-    // Both employees created (and given an entry via the cycle bootstrap) BEFORE the account
-    // number is ever shuffled, so entryA's own frozen snapshot ("copied, not linked") captures
-    // "SHARED-ACC" at the moment it's still legitimately A's own value.
-    const employeeA = await prisma.employee.create({
-      data: {
-        name: 'Readiness Employee A',
-        designation: 'Guard',
-        siteId: site.id,
-        unitId: unit.id,
-        grossPay: '30000',
-        bankId: bank.id,
-        accountNumber: 'SHARED-ACC',
-        accountNumberCanonical: 'SHAREDACC',
-      },
-    });
-    const employeeC = await prisma.employee.create({
-      data: { name: 'Readiness Employee C', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
-    });
+      // Both employees created (and given an entry via the cycle bootstrap) BEFORE the account
+      // number is ever shuffled, so entryA's own *stored* column captures "SHARED-ACC" at the
+      // moment it's still legitimately A's own value.
+      const employeeA = await prisma.employee.create({
+        data: {
+          name: 'Readiness Employee A',
+          designation: 'Guard',
+          siteId: site.id,
+          unitId: unit.id,
+          grossPay: '30000',
+          bankId: bank.id,
+          accountNumber: 'SHARED-ACC',
+          accountNumberCanonical: 'SHAREDACC',
+        },
+      });
+      const employeeC = await prisma.employee.create({
+        data: { name: 'Readiness Employee C', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+      });
 
-    const cycle = await makeDraftCycle(admin, 1);
-    const entryA = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employeeA.id } });
-    const entryC = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employeeC.id } });
-    expect(entryA.accountNumber).toBe('SHARED-ACC');
+      const cycle = await makeDraftCycle(admin, 1);
+      const entryA = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employeeA.id } });
+      const entryC = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employeeC.id } });
+      expect(entryA.accountNumber).toBe('SHARED-ACC');
 
-    // employeeA legitimately moves to a new account afterward — its own live record no longer
-    // conflicts with anyone, but entryA's frozen snapshot is unaffected by that later change.
-    await prisma.employee.update({ where: { id: employeeA.id }, data: { accountNumber: 'A-NEW-ACC', accountNumberCanonical: 'ANEWACC' } });
-    // employeeB now legitimately takes "SHARED-ACC" — no entry needed for this test, since the
-    // duplicate check compares against the *Employee* table directly, not other entries.
-    await prisma.employee.create({
-      data: {
-        name: 'Readiness Employee B',
-        designation: 'Guard',
-        siteId: site.id,
-        unitId: unit.id,
-        grossPay: '30000',
-        bankId: bank.id,
-        accountNumber: 'SHARED-ACC',
-        accountNumberCanonical: 'SHAREDACC',
-      },
-    });
+      // employeeA legitimately moves to a new account afterward. Before Phase 7D, entryA's own
+      // stored column was unaffected by this (nothing re-synced it until a manual PATCH or the
+      // next cycle's bootstrap) — that PATCH path no longer exists, so the stored column is simply
+      // never consulted for display/eligibility purposes while the entry is unreleased.
+      await prisma.employee.update({ where: { id: employeeA.id }, data: { accountNumber: 'A-NEW-ACC', accountNumberCanonical: 'ANEWACC' } });
+      // employeeB now legitimately takes "SHARED-ACC" — no entry needed for this test, since the
+      // duplicate check compares against the *Employee* table directly, not other entries.
+      await prisma.employee.create({
+        data: {
+          name: 'Readiness Employee B',
+          designation: 'Guard',
+          siteId: site.id,
+          unitId: unit.id,
+          grossPay: '30000',
+          bankId: bank.id,
+          accountNumber: 'SHARED-ACC',
+          accountNumberCanonical: 'SHAREDACC',
+        },
+      });
 
-    const listRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?siteId=${site.id}`);
-    expect(listRes.status).toBe(200);
-    const listedA = listRes.body.entries.find((e: { id: string }) => e.id === entryA.id);
-    expect(listedA.releaseBlockReasons).toEqual(['Duplicate Account Number']);
+      const listRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries?siteId=${site.id}`);
+      expect(listRes.status).toBe(200);
+      const listedA = listRes.body.entries.find((e: { id: string }) => e.id === entryA.id);
+      // The list itself already reflects Employee A's live account ("A-NEW-ACC"), which collides
+      // with no one — no false-positive duplicate warning, and the entry's own stored column
+      // (still "SHARED-ACC" on disk) is provably never what the list actually displayed.
+      expect(listedA.accountNumber).toBe('A-NEW-ACC');
+      expect(listedA.releaseBlockReasons).toEqual([]);
 
-    // The reason is a generic, field-named string — never the other employee's name, id, or
-    // account number itself.
-    const serializedReasons = JSON.stringify(listedA.releaseBlockReasons);
-    expect(serializedReasons).not.toContain('Readiness Employee B');
-    expect(serializedReasons).not.toContain('SHARED-ACC');
+      const detailRes = await admin.agent.get(`/api/v1/payroll-entries/${entryA.id}`);
+      expect(detailRes.status).toBe(200);
+      expect(detailRes.body.entry.accountNumber).toBe('A-NEW-ACC');
+      expect(detailRes.body.entry.releaseBlockReasons).toEqual([]);
 
-    const detailRes = await admin.agent.get(`/api/v1/payroll-entries/${entryA.id}`);
-    expect(detailRes.status).toBe(200);
-    expect(detailRes.body.entry.releaseBlockReasons).toEqual(['Duplicate Account Number']);
-
-    // The unaffected employee (no duplicate) shows no reasons at all.
-    const listedC = listRes.body.entries.find((e: { id: string }) => e.id === entryC.id);
-    expect(listedC.releaseBlockReasons).toEqual([]);
-  });
+      // The unaffected employee shows no reasons either, as before.
+      const listedC = listRes.body.entries.find((e: { id: string }) => e.id === entryC.id);
+      expect(listedC.releaseBlockReasons).toEqual([]);
+    },
+  );
 
   // --- Items F/G: a blocked entry remains unresolved after release, and blocks Finalize ----------
 
@@ -123,9 +129,15 @@ describe('Payroll Entry — pre-release readiness visibility', () => {
 
     // Employee Code/CNIC duplicates are already prevented by the database's own partial unique
     // indexes (pre-dating this checkpoint) — there is no way to construct two employees sharing
-    // one live, so this test exercises the actual gap this checkpoint closes instead: a duplicate
-    // Account Number, via the same "A's own frozen entry snapshot outlives A's own later account
-    // change" mechanism proven in `payroll-release-eligibility.test.ts`.
+    // one live. A duplicate Account Number is *also* no longer constructible this way as of Phase
+    // 7D (2026-07-30, `payroll-release-eligibility.test.ts`'s own rewritten coverage): the release
+    // gate now evaluates Employee Registry's live value, never an entry's own possibly-stale
+    // column, so "A's frozen snapshot outlives A's own later account change" can no longer produce
+    // a false collision. This test instead exercises the release gate's other still-fully-live
+    // rule — a bank-paid employee with no Account Number on file (simulated via a direct Prisma
+    // write to Employee, bypassing `employees.service.ts`'s own `applyBankingInvariant`, which
+    // would otherwise reject this state at the ordinary API boundary) — to prove a genuinely
+    // blocked entry still blocks Finalize exactly as before.
     const employeeA = await prisma.employee.create({
       data: {
         name: 'Finalize Employee A',
@@ -134,8 +146,8 @@ describe('Payroll Entry — pre-release readiness visibility', () => {
         unitId: unit.id,
         grossPay: '30000',
         bankId: bank.id,
-        accountNumber: 'FINALIZE-SHARED',
-        accountNumberCanonical: 'FINALIZESHARED',
+        accountNumber: 'FINALIZE-ACC',
+        accountNumberCanonical: 'FINALIZEACC',
       },
     });
     const cycle = await makeDraftCycle(admin, 2);
@@ -143,22 +155,10 @@ describe('Payroll Entry — pre-release readiness visibility', () => {
 
     await prisma.employee.update({
       where: { id: employeeA.id },
-      data: { accountNumber: 'FINALIZE-A-NEW', accountNumberCanonical: 'FINALIZEANEW' },
-    });
-    await prisma.employee.create({
-      data: {
-        name: 'Finalize Employee B',
-        designation: 'Guard',
-        siteId: site.id,
-        unitId: unit.id,
-        grossPay: '30000',
-        bankId: bank.id,
-        accountNumber: 'FINALIZE-SHARED',
-        accountNumberCanonical: 'FINALIZESHARED',
-      },
+      data: { accountNumber: null, accountNumberCanonical: null },
     });
 
-    // A positive net salary, so the *only* thing blocking A is the identity duplicate, not
+    // A positive net salary, so the *only* thing blocking A is the missing Account Number, not
     // net-salary sign.
     await admin.agent
       .patch(`/api/v1/payroll-entries/${entryA.id}`)
@@ -172,7 +172,7 @@ describe('Payroll Entry — pre-release readiness visibility', () => {
     expect(releaseRes.status).toBe(201);
     expect(releaseRes.body.blockedCount).toBe(1);
     expect(releaseRes.body.blockedEntries).toEqual([
-      { id: entryA.id, employeeId: employeeA.id, employeeName: 'Finalize Employee A', blockReasons: ['Duplicate Account Number'] },
+      { id: entryA.id, employeeId: employeeA.id, employeeName: 'Finalize Employee A', blockReasons: ['Missing Account Number'] },
     ]);
 
     const finalA = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryA.id } });

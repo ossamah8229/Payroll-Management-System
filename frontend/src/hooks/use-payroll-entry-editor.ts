@@ -29,8 +29,10 @@ type LineDraft = Partial<Pick<UpdateWorkLineInput, 'unitId' | 'days' | 'otHours'
 
 /** Which `EntryDraft` keys are decimal-string fields, and whether an empty string is itself a
  * valid value for that field (the nullable rate fields — Leave Rate) vs. not yet a value to save
- * (every other numeric field). Non-decimal keys (designation, bankId, hold, remarks, …) pass
- * through `sanitizeEntryDraft` unchanged — there is nothing to validate. */
+ * (every other numeric field). Non-decimal keys (hold, remarks, …) pass through
+ * `sanitizeEntryDraft` unchanged — there is nothing to validate. (Phase 7D, 2026-07-30:
+ * `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` are no longer part of `EntryDraft` at
+ * all — Employee Registry is now the sole editable source for them.) */
 const ENTRY_DECIMAL_FIELDS: { key: keyof EntryDraft; nullable: boolean }[] = [
   { key: 'grossPay', nullable: false },
   { key: 'allowance', nullable: false },

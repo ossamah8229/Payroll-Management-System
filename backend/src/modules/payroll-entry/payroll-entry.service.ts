@@ -10,13 +10,14 @@ import type {
 import { calcNet, normalizeAccountNumber, normalizeIban, type CalcNetResult, type PayrollEntryCalcInput } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../common/http-error';
-import { diffFields } from '../../common/audit-diff';
+import { diffFields, omitKeys } from '../../common/audit-diff';
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertUnitBelongsToSite } from '../employees/employees.service';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { evaluatePayrollEntryReleaseReadiness, RELEASE_BLOCK_REASONS } from '../payroll-release/payroll-release-eligibility';
+import { syncEobiApplicability } from './eobi-sync.service';
 
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 50;
@@ -71,6 +72,54 @@ export function computeEntryCalc(entry: EntryWithWorkLines): CalcNetResult {
 // of the type it requires, only of what this function happens to be passed and preserves.
 function withCalc<T extends EntryWithWorkLines>(entry: T): T & { calc: CalcNetResult } {
   return { ...entry, calc: computeEntryCalc(entry) };
+}
+
+/**
+ * Master Data Boundary (Phase 7D, 2026-07-30) — Employee Registry is now the sole authoritative,
+ * editable source for `designation`/`bankId`/`branchCode`/`accountNumber`/`iban`
+ * (docs/architecture/database/employee.md); `updatePayrollEntrySchema` no longer accepts writes to
+ * any of them. `PayrollEntry` still *stores* its own copy of these columns — that copy is what
+ * gets frozen permanently at release time (`payroll-release.service.ts`'s `releaseProjectUnit`) so
+ * Payslips/Bank Sheets/every other historical document keeps reading a stable, never-rewritten
+ * snapshot (Principle 9) — but while an entry is still unreleased, that stored copy is no longer
+ * the *display* source of truth. This overwrites it with the live `Employee` record on every read,
+ * so a Draft/Open cycle always reflects whatever Employee Registry currently says (a corrected bank
+ * account, a title change) the moment the page is refreshed — no separate "resync" action, and no
+ * possibility of Payroll Entry silently showing a stale duplicate. Once `released = true` — or
+ * once a Unit release sweep has otherwise *resolved* the entry without setting `released` itself
+ * (`payoutOutcome = NO_PAY_DUE`/`RECOVERY_DUE`, the same "locked" tier `assertEntryEditable`/
+ * `withReleaseBlockReasons` already treat identically to `released`) — this is a no-op: the
+ * entry's own frozen columns (synced to Employee Registry's live values at the moment of that
+ * resolution, `payroll-release.service.ts`) are returned exactly as stored, untouched by whatever
+ * Employee Registry says today.
+ */
+function withLiveMasterData<
+  T extends {
+    released: boolean;
+    payoutOutcome: string | null;
+    designation: string;
+    bankId: string | null;
+    branchCode: string | null;
+    accountNumber: string | null;
+    iban: string | null;
+    employee: {
+      designation: string;
+      bankId: string | null;
+      branchCode: string | null;
+      accountNumber: string | null;
+      iban: string | null;
+    };
+  },
+>(entry: T): T {
+  if (entry.released || entry.payoutOutcome !== null) return entry;
+  return {
+    ...entry,
+    designation: entry.employee.designation,
+    bankId: entry.employee.bankId,
+    branchCode: entry.employee.branchCode,
+    accountNumber: entry.employee.accountNumber,
+    iban: entry.employee.iban,
+  };
 }
 
 /**
@@ -356,7 +405,7 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
     total,
     page,
     pageSize,
-    entries: await attachReleaseBlockReasonsBulk(entries.map((entry) => withCalc(entry))),
+    entries: await attachReleaseBlockReasonsBulk(entries.map((entry) => withCalc(withLiveMasterData(entry)))),
   };
 }
 
@@ -378,7 +427,7 @@ export async function getPayrollEntry(currentUser: SessionUser, id: string) {
     throw notFound('Payroll entry not found');
   }
   assertSiteAccess(currentUser, entry.siteId);
-  return withReleaseBlockReasons(withCalc(entry));
+  return withReleaseBlockReasons(withCalc(withLiveMasterData(entry)));
 }
 
 /**
@@ -504,16 +553,15 @@ export async function createPayrollEntry(
 /** Fields on `UpdatePayrollEntryInput` that map 1:1 onto a Prisma update payload. `version` is
  * handled separately (the optimistic-locking guard), never written as an ordinary field. Exported
  * so the Payroll Entry import path (Checkpoint 5) reuses this exact mapping rather than
- * redefining it — one implementation of "which fields does an ordinary entry edit touch." */
+ * redefining it — one implementation of "which fields does an ordinary entry edit touch."
+ *
+ * Phase 7D (2026-07-30) — `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` deliberately
+ * absent: `updatePayrollEntrySchema` no longer accepts them at all (Employee Registry is now the
+ * sole editable source for these fields), so there is nothing for this mapper to translate. */
 export function mapUpdateInputToEntryData(
   input: Omit<UpdatePayrollEntryInput, 'version'>,
 ): Prisma.PayrollEntryUncheckedUpdateInput {
   return {
-    ...(input.designation !== undefined && { designation: input.designation }),
-    ...(input.bankId !== undefined && { bankId: input.bankId }),
-    ...(input.branchCode !== undefined && { branchCode: input.branchCode }),
-    ...(input.accountNumber !== undefined && { accountNumber: input.accountNumber }),
-    ...(input.iban !== undefined && { iban: input.iban }),
     ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
     ...(input.allowance !== undefined && { allowance: input.allowance }),
     ...(input.leaveDays !== undefined && { leaveDays: input.leaveDays }),
@@ -549,21 +597,30 @@ export async function updatePayrollEntry(
 
   const { version, ...fields } = input;
   const data = mapUpdateInputToEntryData(fields);
-  // Banking rule (2026-07-11 refinement): clearing the bank on this request also clears Account
-  // Number/IBAN — a cash entry never carries stale bank details. Deliberately *not* the mirror
-  // "bank set ⇒ Account Number required" hard rejection `employees.service.ts` applies: this grid
-  // autosaves one field at a time (docs/architecture/database/payroll-entry.md §12's Draft-editable
-  // convention), so a user who has just picked a bank and hasn't typed the account number yet must
-  // not have that in-progress edit rejected — the same tolerance `InlineNumberCell`'s `invalid` prop
-  // already gives every other field here.
-  if (data.bankId === null) {
-    data.accountNumber = null;
-    data.iban = null;
-  }
-  const changes = diffFields(
+  const allChanges = diffFields(
     existing as unknown as Record<string, unknown>,
     data as unknown as Record<string, unknown>,
   );
+
+  // EOBI Bidirectional Synchronisation (Phase 7D refinement, 2026-07-30, permissions/audit
+  // revision) — changing this field also writes to the employee's own Employee Registry record
+  // (`eobi-sync.service.ts`), but that write is an *internal system synchronisation*, not a second
+  // user edit: the user is authorised to change EOBI applicability because they hold this route's
+  // own `payroll:entry` permission (already enforced by the route), and that authorisation alone is
+  // sufficient — `employees:edit` is deliberately never checked here. This does not weaken
+  // Employee Registry's own protection: a user cannot reach `PATCH /employees/:id` itself, or any
+  // *other* Employee field, without holding `employees:edit` in the ordinary way; only the
+  // synchronised EOBI write is exempt, and only because it is not an independent edit of that
+  // resource.
+  //
+  // `eobiApplicable` is excluded from the generic `payroll_entry.updated` changes bundle below and
+  // given its own dedicated `payroll_entry.eobi_updated` audit entry instead (mirrors
+  // `employees.service.ts`'s own `siteId`/`unitId` exclusion for `employee.transferred`) — every
+  // EOBI applicability change on this entity, whichever screen originates it, is recorded exactly
+  // once under that one consistent action name, never folded into (or duplicated alongside) the
+  // generic bundle.
+  const changesEobiApplicable = data.eobiApplicable !== undefined && data.eobiApplicable !== existing.eobiApplicable;
+  const changes = omitKeys(allChanges, ['eobiApplicable']);
 
   // Negative Payroll Recovery checkpoint (2026-07-27, performance fix) — `withReleaseBlockReasons`
   // does its own DB round trips; running it *inside* this interactive transaction extended the
@@ -596,12 +653,47 @@ export async function updatePayrollEntry(
       );
     }
 
+    if (changesEobiApplicable) {
+      await recordAuditLog(
+        {
+          actorUserId: currentUser.id,
+          action: 'payroll_entry.eobi_updated',
+          entityType: 'PayrollEntry',
+          entityId: id,
+          metadata: { previousValue: existing.eobiApplicable, newValue: data.eobiApplicable, origin: 'payroll_entry' },
+          ipAddress: requestMeta.ipAddress,
+          userAgent: requestMeta.userAgent,
+        },
+        tx,
+      );
+    }
+
+    // EOBI Bidirectional Synchronisation — same transaction as the entry write itself, so both
+    // records update together or not at all (a version conflict above already threw before this
+    // point, so this only runs once the entry write is guaranteed to commit).
+    if (changesEobiApplicable) {
+      await syncEobiApplicability({
+        tx,
+        employeeId: existing.employeeId,
+        newValue: data.eobiApplicable as boolean,
+        origin: 'payroll_entry',
+        actorUserId: currentUser.id,
+        requestMeta,
+        sourcePayrollEntryId: id,
+      });
+    }
+
     return tx.payrollEntry.findUniqueOrThrow({
       where: { id },
-      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
+      include: {
+        workLines: WORK_LINES_INCLUDE,
+        employee: {
+          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+        },
+      },
     });
   });
-  return withReleaseBlockReasons(withCalc(updated));
+  return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
 
 /**
@@ -704,10 +796,15 @@ export async function addWorkLine(
 
     return tx.payrollEntry.findUniqueOrThrow({
       where: { id: entryId },
-      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
+      include: {
+        workLines: WORK_LINES_INCLUDE,
+        employee: {
+          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+        },
+      },
     });
   });
-  return withReleaseBlockReasons(withCalc(updated));
+  return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
 
 /** Fields on `UpdateWorkLineInput` that map 1:1 onto a Prisma update payload — the work-line
@@ -780,10 +877,15 @@ export async function updateWorkLine(
 
     return tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
-      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
+      include: {
+        workLines: WORK_LINES_INCLUDE,
+        employee: {
+          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+        },
+      },
     });
   });
-  return withReleaseBlockReasons(withCalc(updated));
+  return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
 
 /**
@@ -836,10 +938,15 @@ export async function deleteWorkLine(
 
     return tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
-      include: { workLines: WORK_LINES_INCLUDE, employee: { select: { cnic: true, employeeCode: true } } },
+      include: {
+        workLines: WORK_LINES_INCLUDE,
+        employee: {
+          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+        },
+      },
     });
   });
-  return withReleaseBlockReasons(withCalc(updated));
+  return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
 
 export interface BulkUpdatePayrollEntriesResult {
