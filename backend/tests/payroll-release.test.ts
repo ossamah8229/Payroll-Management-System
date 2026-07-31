@@ -453,6 +453,57 @@ describe('Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation', 
     expect(afterEmployeeChange.released).toBe(true);
   });
 
+  it('Master Data Boundary (Phase 7D, 2026-07-30): release freezes whatever Employee Registry says at the moment of release, not whatever the entry was created with — Payroll Entry can no longer PATCH these fields to keep them in sync itself', async () => {
+    const admin = await masterAdminAgent('release-fresh-snapshot-admin@test.local');
+    const { site, units } = await makeSiteWithUnits('Test Site Release Fresh Snapshot', ['Alpha']);
+    const cycle = await makeDraftCycle(admin, 1);
+    const bankAtCreation = await prisma.bank.create({ data: { code: 'TB3', name: 'Test Bank At Creation' } });
+    const bankBeforeRelease = await prisma.bank.create({ data: { code: 'TB4', name: 'Test Bank Before Release' } });
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Fresh Snapshot Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: units[0]!.id,
+        grossPay: '30000',
+        bankId: bankAtCreation.id,
+        accountNumber: '3333333333',
+      },
+    });
+    const entry = await createEntry(admin, cycle.id, employee.id);
+
+    const atCreation = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+    expect(atCreation.bankId).toBe(bankAtCreation.id);
+    expect(atCreation.accountNumber).toBe('3333333333');
+
+    // Employee Registry is corrected *before* release (a real Draft-cycle scenario: HR fixes a
+    // wrong account number mid-cycle) — the entry's own stored columns are never PATCHable to pick
+    // this up anymore, so release itself must be the moment that re-syncs them from the live
+    // Employee record, not whatever was true back when the entry was first created/bootstrapped.
+    await prisma.employee.update({
+      where: { id: employee.id },
+      data: { bankId: bankBeforeRelease.id, accountNumber: '4444444444', designation: 'Senior Guard' },
+    });
+
+    await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/units/${units[0]!.id}/release`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+
+    const released = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+    expect(released.released).toBe(true);
+    expect(released.bankId).toBe(bankBeforeRelease.id);
+    expect(released.accountNumber).toBe('4444444444');
+    expect(released.designation).toBe('Senior Guard');
+
+    // And now that it's released, a *further* Employee Registry change never propagates — the
+    // exact "preserves the exact released snapshot" guarantee the test above already covers, just
+    // reconfirmed on top of a freshly-synced-at-release snapshot rather than a creation-time one.
+    await prisma.employee.update({ where: { id: employee.id }, data: { accountNumber: '5555555555' } });
+    const stillFrozen = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+    expect(stillFrozen.accountNumber).toBe('4444444444');
+  });
+
   // --- Release status summary tests -------------------------------------------------------------
 
   it('reports entryCount and willReleaseCount correctly before and after a partial release', async () => {

@@ -1,8 +1,9 @@
-import { calcNet, formatMoney } from '@payroll/shared';
+import { calcNet, formatMoney, formatNumber } from '@payroll/shared';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { buildCalcInput } from './calc-input';
+import { buildCalcInput, computeServerSnapshot } from './calc-input';
 import { measureColumnWidth } from './measure-column-width';
+import { LIVE_TOTAL_KEYS, type LiveTotals } from './live-totals-store';
 
 export type ColumnAlign = 'left' | 'center' | 'right';
 
@@ -170,6 +171,61 @@ function extractBalanceLabelValue(columnId: string, entry: PayrollEntry): string
   return advance ? `Bal: ${formatMoney(advance.outstandingBalance)}` : '';
 }
 
+/** Column ids the sticky totals row (`PayrollEntryTotalsRow`) sums and displays — the single
+ * source of truth reused by both that component (which formats/renders it) and
+ * `computeColumnWidths` below (which must know a total's *rendered text* to size the column
+ * correctly). Re-exported from `live-totals-store.ts`'s own canonical list rather than redefined. */
+export const NUMERIC_TOTAL_COLUMN_IDS = new Set<PayrollColumnId>(LIVE_TOTAL_KEYS as PayrollColumnId[]);
+
+/** Which totals-row columns render with the "PKR " money format vs. a plain number (docs/design-system.md
+ * §4 — only genuine payment amounts get the prefix). Single source of truth, reused by
+ * `PayrollEntryTotalsRow` for both its displayed text and its styling, and by `computeColumnWidths`
+ * below so the *measured* width matches the *rendered* format exactly. */
+export const MONEY_TOTAL_COLUMN_IDS = new Set<PayrollColumnId>([
+  'grossPay',
+  'allowance',
+  'eobiAmount',
+  'advanceDeduction',
+  'eidAdvanceDeduction',
+  'fine',
+  'netSalary',
+]);
+
+/**
+ * Sums every numeric total column across the *full* loaded `entries` array, purely from
+ * server-cache truth (`computeServerSnapshot` — never a live, not-yet-saved draft), mirroring
+ * exactly what `LiveTotalsStore.getTotals()` produces once seeded via `setBase`. Used only to
+ * measure how wide the footer's summed totals will render (below) — the totals row itself still
+ * gets its live, editing-aware figures from the store, not from this function.
+ */
+function computeStaticFooterTotals(entries: PayrollEntry[]): LiveTotals {
+  const totals = {} as LiveTotals;
+  for (const key of LIVE_TOTAL_KEYS) totals[key] = 0;
+  for (const entry of entries) {
+    const snapshot = computeServerSnapshot(entry);
+    for (const key of LIVE_TOTAL_KEYS) {
+      const value = snapshot[key];
+      if (value !== null) totals[key] += value;
+    }
+  }
+  return totals;
+}
+
+/** The totals row's own rendered text for one column, given the full dataset's summed totals — must
+ * match `PayrollEntryTotalsRow`'s `cellContent` exactly, or the measured width would silently drift
+ * from what's actually displayed (the same discipline `extractColumnValue`/`extractBalanceLabelValue`
+ * already follow for body-row content). Returns `null` for a column with no footer content at all. */
+function extractFooterValue(columnId: PayrollColumnId, footerTotals: LiveTotals, rowCount: number): string | null {
+  if (columnId === 'employeeName') {
+    return `${rowCount} ${rowCount === 1 ? 'employee' : 'employees'}`;
+  }
+  if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId)) {
+    const value = footerTotals[columnId as keyof LiveTotals];
+    return MONEY_TOTAL_COLUMN_IDS.has(columnId) ? formatMoney(value) : formatNumber(value);
+  }
+  return null;
+}
+
 /**
  * Resolves every column's real width from the full loaded `entries` array — not just whichever
  * rows the virtualizer currently has mounted (Layout Integrity Rule, corrected 2026-07-13: "the
@@ -177,9 +233,20 @@ function extractBalanceLabelValue(columnId: string, entry: PayrollEntry): string
  * reused as-is by the grouped header, the column header, every virtualized body row, and the
  * totals row (`gridTemplateColumns`/`totalGridWidth` below) — a single shared calculation, never
  * four independent ones that could drift out of alignment.
+ *
+ * **Also measures the sticky totals row's own summed content** (2026-07-30 fix — production UAT
+ * reported overlapping totals): a summed total (e.g. "1,502 employees", or a Gross Pay sum across
+ * hundreds of rows) is very often wider than any single row's own value, since column widths used
+ * to be measured from individual row values only. The totals row deliberately never truncates a
+ * financial figure (`overflow-visible whitespace-nowrap`, `payroll-entry-totals-row.tsx`), so a
+ * too-narrow column meant the total visibly overlapped the next column instead. Feeding the footer's
+ * own rendered text into this same measurement pass — the same trick `BALANCE_LABEL_COLUMN_IDS`
+ * already uses for the Advance/Eid Advance balance sub-text — makes every column structurally wide
+ * enough for its own total, without a font-size reduction or any special-cased footer layout.
  */
 export function computeColumnWidths(entries: PayrollEntry[], banks: Bank[]): ResolvedPayrollColumnDef[] {
   const bankCodeById = new Map(banks.map((b) => [b.id, b.code]));
+  const footerTotals = computeStaticFooterTotals(entries);
   // Annotated as the wider `PayrollColumnDef` (rather than letting TS infer `PAYROLL_COLUMNS`'s own
   // narrow per-element literal union) — `fixedWidth`/`minWidth` are optional on that interface, so
   // every column can be handled by one shared branch below regardless of which literal member of
@@ -196,6 +263,8 @@ export function computeColumnWidths(entries: PayrollEntry[], banks: Bank[]): Res
     if (BALANCE_LABEL_COLUMN_IDS.has(column.id as PayrollColumnId)) {
       values.push(...entries.map((entry) => extractBalanceLabelValue(column.id, entry)));
     }
+    const footerValue = extractFooterValue(column.id as PayrollColumnId, footerTotals, entries.length);
+    if (footerValue !== null) values.push(footerValue);
     const width = measureColumnWidth({ header: column.label, values, minimumPx: column.minWidth });
     return { ...column, width };
   });
@@ -211,9 +280,13 @@ export function totalGridWidth(columns: ResolvedPayrollColumnDef[]): number {
 
 /** Column ids that are plain text/number editable inputs and therefore participate in Arrow-key
  * grid navigation (`data-col` index). Toggle/select cells are included too — navigation just needs
- * to reach and focus them, not necessarily type into them the same way. */
+ * to reach and focus them, not necessarily type into them the same way.
+ *
+ * `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` removed (Master Data Boundary, Phase
+ * 7D, 2026-07-30) — now plain `ReadOnlyCell`s (Employee Registry's data, display-only here), with
+ * no focusable input to navigate to. */
 export const NAVIGABLE_COLUMN_IDS = PAYROLL_COLUMNS.filter((c) =>
-  ['designation', 'bankId', 'branchCode', 'accountNumber', 'iban', 'grossPay', 'days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'eobiApplicable', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'hold', 'remarks'].includes(
+  ['grossPay', 'days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'eobiApplicable', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'hold', 'remarks'].includes(
     c.id,
   ),
 ).map((c) => c.id);

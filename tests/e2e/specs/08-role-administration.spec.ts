@@ -53,7 +53,10 @@ test.describe('Role & Permission Administration', () => {
     await page.screenshot({ path: `${SCREENSHOT_DIR}/01-roles-list.png`, fullPage: true });
 
     const label = Date.now();
-    const roles: { name: string; permissionLabels: string[] }[] = [
+    type E2ERole = { name: string; permissionLabels: string[] };
+    // Fixed-length tuple (not `E2ERole[]`) so `roles[0]` below is statically known to exist
+    // under `noUncheckedIndexedAccess`, rather than typed `E2ERole | undefined`.
+    const roles: [E2ERole, E2ERole, E2ERole, E2ERole, E2ERole, E2ERole] = [
       { name: `E2E Employee Registry Tester ${label}`, permissionLabels: ['View employees'] },
       { name: `E2E Payroll Entry Tester ${label}`, permissionLabels: ['Edit payroll entries'] },
       { name: `E2E Finance Release Tester ${label}`, permissionLabels: ['View payroll & salary release', 'Release payroll by unit'] },

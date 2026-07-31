@@ -7832,6 +7832,384 @@ complete** until this report is reviewed.
 
 ---
 
+### Phase 7D — Payroll Master-Data Integrity & Payroll Entry UI Refinements — IMPLEMENTED, 2026-07-30, awaiting review, NOT COMMITTED
+
+A production UAT checkpoint, not a new roadmap phase in `docs/IMPLEMENTATION_PLAN.md`'s numbering —
+closes a defect class discovered during authenticated production use of the Payroll Entry grid.
+
+**Master data boundary audit (repository evidence, before any change).** `PayrollEntry` (schema)
+duplicated five `Employee` columns as its own — `designation`, `bankId`, `branchCode`,
+`accountNumber`, `iban` — copied at entry-creation/cycle-bootstrap time, then independently
+Draft-editable via the ordinary `PATCH /payroll-entries/:id` route
+(`updatePayrollEntrySchema`/`mapUpdateInputToEntryData`), with none of `employees.service.ts`'s own
+uniqueness/banking-invariant validation applied at that write path. `employeeNameSnapshot`/
+`fatherNameSnapshot` are a *separate*, deliberate, already-correct historical-snapshot mechanism
+(frozen at creation, read by Payslips/Bank Sheets for historical stability) — not touched by this
+checkpoint. `cnic`/`employeeCode` were never duplicated at all — always read live via the `employee`
+relation, already correct. `eobiAmount`/`eobiApplicable` are duplicated too, but by explicit design
+(a legitimate payroll-cycle-specific toggle) — this checkpoint's classification: **A. Employee master
+data** = designation/bankId/branchCode/accountNumber/iban/name/fatherName/cnic/employeeCode;
+**B. Payroll-cycle transaction data** = cycle days/hours/rates/leave/allowance/advances/fine/hold/
+remarks/eobiAmount/eobiApplicable; **C. Historical payroll snapshot data** = the entry's own frozen
+columns once released, and `employeeNameSnapshot`/`fatherNameSnapshot` always.
+
+**Fix — Employee Registry as sole authoritative, editable source (Part 1).**
+`shared/src/schemas/payroll-entry.ts`'s `updatePayrollEntrySchema` no longer declares
+`designation`/`bankId`/`branchCode`/`accountNumber`/`iban` at all (Zod strips unrecognized keys by
+default — a PATCH still sending them has them silently ignored, verified by a dedicated test rather
+than assumed). `payroll-entry.service.ts` gains `withLiveMasterData()`: for any entry with
+`released = false` and `payoutOutcome = null`, it overwrites those five stored columns with the
+*live* `Employee` record's current values before the response is returned — applied in
+`listPayrollEntries`, `getPayrollEntry`, and every mutation's own re-fetch (`updatePayrollEntry`,
+`addWorkLine`, `updateWorkLine`, `deleteWorkLine`); each of those queries' `employee` include was
+widened to select the five fields. This is display-time only — it never writes back to the entry's
+own stored column — so a Draft/Open cycle always reflects Employee Registry after an ordinary
+refresh, with zero separate "resync" action, and the entry can never independently drift from it.
+`payroll-release.service.ts`'s `releaseProjectUnit` gains the write-time half:
+`liveMasterByEntryId`, computed from each release candidate's live `Employee` record *before*
+`evaluatePayrollEntryReleaseReadiness` runs (so eligibility itself is checked against current data,
+never a stale column), then spread into the `paidIds`/`noPayDueIds`/`recoveryEntries` per-entry
+`update()` calls (switched from bulk `updateMany` to per-entry `update`, since each entry's synced
+values differ — still bounded by one Unit's own headcount, matching this file's own audit-log loop
+immediately below it). This is the moment the entry's stored columns get frozen permanently,
+accurate as-of-release rather than as-of-creation — the historical-snapshot guarantee Payslips/Bank
+Sheets already rely on (`entry.designation`/`.bankId`/etc., read directly, unaffected by this
+checkpoint) now starts from a materially more accurate baseline. `payroll-entry-import-export.
+service.ts` was audited and confirmed export-only — no import/mutation path exists for these fields,
+nothing to change there.
+
+**EOBI applicability (explicit exception).** Confirmed still fully editable via the ordinary PATCH
+route (`eobiAmount`/`eobiApplicable` remain in `updatePayrollEntrySchema`), confirmed functionally
+correct in a new dedicated test (toggled off for one cycle without touching Employee Registry's own
+default, and a later Employee Registry default change does not silently re-flip an already-set
+entry). Never moved to Employee Registry, never made read-only, per this checkpoint's explicit
+instruction. **Superseded the same day** — see "Phase 7D refinement — EOBI Bidirectional
+Synchronisation," below: the client's own follow-up instruction requires Employee Registry and the
+current Draft entry to stay *consistent*, not merely both independently editable, so a Draft-entry
+toggle change now also writes back to Employee Registry (and vice versa). `eobiApplicable` remains a
+fully Payroll-Entry-editable, never-read-only toggle exactly as this paragraph found; only the
+"changes to it never propagate" half of this paragraph's claim no longer holds.
+
+**Frontend (Part 1 cont'd).** `payroll-entry-row.tsx`: `designation`/`bankId`/`branchCode`/
+`accountNumber`/`iban` cells changed from `InlineTextCell`/`InlineSelectCell` to `ReadOnlyCell`
+(same pattern `employeeCode`/`employeeName` already used), reading `entry.*` directly rather than
+`effectiveEntry.*` (no local draft state for these fields any more — `EntryDraft`'s type, derived
+from `UpdatePayrollEntryInput`, no longer has them at all). The now-unused `InlineSelectCell` import
+was removed. `columns.ts`'s `NAVIGABLE_COLUMN_IDS` (Arrow-key grid navigation) no longer lists these
+five ids — nothing focusable remains in those cells to navigate to.
+
+**Totals-row overlap (Part 2).** Root cause confirmed via repository evidence: `computeColumnWidths`
+measured every column's width purely from individual body-row values (plus, for
+Advance/Eid-Advance, their balance sub-label) — never from the *summed footer total* the totals row
+actually displays, which can legitimately be far wider than any single row's value (e.g.
+"1,502 employees", or a Gross Pay sum across hundreds of rows). The totals row is deliberately
+`overflow-visible`/`whitespace-nowrap` (financial values are never truncated), so a too-narrow
+column meant the total visibly overlapped the next column. Fix: `computeColumnWidths` now also
+computes each numeric total column's actual summed value from the full loaded dataset (a new
+`computeStaticFooterTotals`, reusing `computeServerSnapshot` — the same server-truth snapshot
+`LiveTotalsStore` itself seeds from) and the Employee column's "N employees" footer text, formats
+each exactly as `PayrollEntryTotalsRow` would (`extractFooterValue`), and feeds that formatted text
+into the same `measureColumnWidth` pass column values are already measured against — the identical
+technique `BALANCE_LABEL_COLUMN_IDS` already used for the Advance-balance sub-label. `MONEY_TOTAL_
+COLUMN_IDS`/`NUMERIC_TOTAL_COLUMN_IDS` are now exported from `columns.ts` and imported by
+`payroll-entry-totals-row.tsx` (previously two independently-defined, potentially-drifting copies)
+— no duplicated source of truth for "which columns get a summed total" or "which are money-
+formatted." No font-size reduction anywhere; no new horizontal scrolling introduced (the fix widens
+columns within the grid's own existing measured-width architecture).
+
+**Advance Balance presentation (Part 3).** Root cause: the stacked "amount input + Bal: PKR X" label
+block's total content height (`InlineNumberCell`'s `py-1` + the input's own line-height, plus
+`BalanceLabel`'s `mt-0.5` + its own line-height) landed almost exactly at the fixed `ROW_HEIGHT`
+(40px), leaving no real clearance from the row's own `border-b` — any minor font-metric variance
+pushed the balance text flush against/touching the border. Fix: `InlineNumberCell` gained a
+`compact` prop (`py-0.5` instead of `py-1`, applied only when a balance label is present, via
+`tailwind-merge`-safe `cn()`), and `BalanceLabel` changed `mt-0.5` → `mt-0` plus added
+`leading-none` — together shaving enough height to give the two-line block genuine breathing room
+inside the unchanged 40px row (`ROW_HEIGHT` itself, and the row's own `items-center` vertical
+centering, both untouched). Applied identically to `advanceDeduction` and `eidAdvanceDeduction`; an
+advance/eid-advance cell with no linked balance is unaffected (ordinary non-compact padding).
+Financial value/calculation completely untouched — presentation only, as required.
+
+**Payslip PDF logo removal (Part 4).** `lib/pdf/templates/payslip.ts`: the `<img>` embed, the local
+`PAYSLIP_EXTRA_STYLES` block (`.doc-header-row`/`.doc-header-logo`), and the `companyLogoDataUri`
+field on `PayslipPdfMeta` are deleted entirely — the client does not want the logo on Payslips at
+all, never a logo, never a placeholder. `.doc-header` now renders `.doc-company-name`/
+`.doc-company-detail` directly (no wrapping flex row), relying on the shared `PRINT_STYLES`'s own
+`.doc-header { text-align: center; }` — identical centering to before, since the logo was always
+capped below the two-line company-name block's own height specifically so it could never affect
+`.doc-header`'s height (confirmed via a rewritten geometry-preservation test). `payslips.routes.ts`'s
+two call sites (`/pdf` and `/batch`) no longer fetch `getCompanyLogoDataUri()` at all — removed
+along with its now-unused import. **Statement PDFs, Bank Sheets, Cash Receiving, Login, Sidebar, and
+Company Settings are completely untouched** — confirmed via repository audit that Statement's own
+`.doc-header-logo` CSS/embed is an independent, deliberately-uncoupled copy (its own doc comment
+says so explicitly), never shared code with Payslip's template; Bank Sheet/Cash Receiving are
+ExcelJS/CSV exports with no logo rendering of any kind to begin with.
+
+**A pre-existing test-construction technique became obsolete, and was rewritten rather than left
+silently broken.** Four tests — two in `payroll-entry-release-readiness.test.ts`, two in
+`payroll-release-eligibility.test.ts` — constructed a "duplicate/missing banking data" release-block
+scenario by directly mutating a `PayrollEntry`'s own stored column via raw Prisma (bypassing the app
+layer entirely), simulating "the entry's frozen snapshot outlives the employee's own later
+correction." That is precisely the stale-duplication defect this checkpoint's architecture change
+eliminates for an unreleased entry (display and release-eligibility both now read Employee
+Registry's live value, never the entry's own possibly-stale column) — under the new architecture the
+old test setup has no effect at all. Two tests were rewritten to construct the equivalent state on
+the *Employee* record instead (a direct Prisma write bypassing `employees.service.ts`'s own
+`applyBankingInvariant`, which would otherwise reject a bank-with-no-account-number at the ordinary
+API boundary — still a genuine defense-in-depth scenario for corrupt data, the same "construct a
+state the app itself would never normally produce" pattern already used elsewhere in this suite for
+CNIC/Employee-Code duplicates). Two tests were rewritten to explicitly assert the fix itself: a
+stale entry column no longer produces a false block, and release/Finalize now succeed cleanly where
+they previously (incorrectly, under the old architecture) failed.
+
+**Testing.** New: `payroll-entry-master-data-boundary.test.ts` (backend, 6 tests — live Draft
+refresh for banking/designation, EOBI toggle independence, ordinary financial-field editability,
+released-entry immutability) and `master-data-boundary.test.tsx` (frontend, 16 tests — read-only
+cells render no `<input>`/`<select>`, financial fields and EOBI/Hold toggles remain interactive,
+totals-row width widens for large sums/headcounts and stays sane at zero, `ROW_HEIGHT` unchanged,
+Advance Balance `compact`/`mt-0`/`leading-none` classes). Updated: `payroll-entry.test.ts` (the old
+"banking refinement" PATCH test rewritten to prove PATCH-attempted banking/identity edits are now
+silently ignored, both in the response and on disk), `payroll-release.test.ts` (new test proving
+release freezes Employee Registry's value *as of release time*, capturing a pre-release correction,
+not whatever the entry was bootstrapped with — plus the pre-existing "already-released entry stays
+frozen" test re-confirmed unchanged), `pdf-template.test.ts` (Payslip's old three logo-presence
+tests replaced with three logo-absence/geometry-preservation tests; Statement's own logo tests
+untouched), and the four rewritten eligibility/readiness tests above.
+
+**Results.** Backend: **61 suites / 1195 tests, all passing** — verified via two full sequential
+runs against an isolated, freshly-provisioned local PostgreSQL (embedded-postgres, this session's
+own scratchpad, migrated + seeded fresh, per `docs/PROJECT_PROGRESS.md`'s existing "Local Postgres
+provisioning" convention). The first full run showed 15 failures; root-caused to this session's own
+earlier debug-script data having landed on a *different*, unintentionally-targeted Postgres instance
+(`tests/env.setup.ts`'s `DATABASE_URL` fallback resolves to port 5432 whenever the real env var
+isn't already set before Jest starts, which silently redirected several ad hoc debug commands to a
+stale instance from an unrelated prior session rather than this session's own isolated one) — cleaned
+up (only this session's own "Debug"-prefixed rows removed, nothing else touched), confirmed the
+fallback database was otherwise essentially empty, and the full suite re-run clean on the correct,
+isolated instance. Frontend: **25 files / 234 tests, all passing** (Vitest). Typecheck: shared/
+backend/frontend all clean; one pre-existing, unrelated e2e typecheck error in
+`08-role-administration.spec.ts` (confirmed via `git diff` — untouched by this checkpoint). Lint:
+backend/frontend both clean; two pre-existing, unrelated errors in `tests/statements.test.ts` at
+lines 1213/1378 (same confirmation method), plus the same harmless pre-existing
+`react-refresh/only-export-components` warnings already on record. Build: shared/backend/frontend
+all build successfully.
+
+**Known limitation.** Playwright/real-browser E2E verification could not be executed this session —
+this sandboxed environment has no network access to download the Playwright Chromium binary
+(`playwright install chromium` completes with no download and no browser materializes), the same
+category of environment constraint already on record for this project's deployment-verification
+gaps (Phase 4, Phase 7C). Compensating evidence: every UI requirement in this checkpoint's scope is
+covered by real-DOM `@testing-library/react` component tests (not shallow rendering) —
+`master-data-boundary.test.tsx` renders the actual `PayrollEntryRow`/`PayrollEntryTotalsRow`
+components and asserts real DOM structure/class names — and the full master-data-boundary contract
+(live Draft refresh, PATCH rejection, release-time freeze, released-entry immutability) is covered
+by real HTTP requests against a real running Express app and a real PostgreSQL database, not mocks.
+No pixel-level browser screenshot exists for this checkpoint's changes, and Payslip PDF generation
+with a configured company logo was verified only insofar as: (a) the logo can no longer be embedded
+at all (structural HTML assertions), and (b) real Puppeteer-rendered PDF generation for a Payslip
+succeeds end to end (`payslips.test.ts`'s existing PDF-generation tests, unrelated to logo, all
+still pass) — not via a dedicated "upload a logo, then generate a Payslip and visually confirm its
+absence" real-browser flow.
+
+**Regression scope confirmed unaffected** (audited, not merely assumed): Salary Release, Bank
+Sheets, Cash Receiving, Statements, Corrections, Advances, payroll calculations (`calcNet` itself
+untouched), Theme system, R2 logo storage, Login/Sidebar logo, Company Settings logo workflow — none
+of this checkpoint's changes touch any of those modules' own files; the full backend/frontend suites
+covering all of them pass unchanged.
+
+**No commit, push, or deployment occurred — do not mark Phase 7D complete** until this report is
+reviewed.
+
+---
+
+### Phase 7D refinement — EOBI Bidirectional Synchronisation — IMPLEMENTED, 2026-07-30, awaiting review, NOT COMMITTED
+
+A same-day follow-up to the Phase 7D checkpoint above, which had confirmed EOBI applicability stays
+Payroll-Entry-editable and *independent* of Employee Registry. The client's own explicit instruction
+overrides that: because both screens must stay consistent, a change on either side must now also
+write to the other. Employee Registry remains the source of truth for the employee's current/default
+value; the current Draft entry may still operate on it operationally, but after any successful
+change:
+
+```
+Employee.defaultEobiApplicable === current Draft PayrollEntry.eobiApplicable
+```
+
+**Design — one shared service function, no recursive calls.** A new module,
+`backend/src/modules/payroll-entry/eobi-sync.service.ts`, exports `syncEobiApplicability()` — the
+single place either direction's write happens. It has no dependency on `employees.service.ts` or
+`payroll-entry.service.ts` (only `prisma`'s transaction type and `audit-log.service.ts`), so both of
+those modules can import it with no circular-import risk. `employees.service.ts`'s `updateEmployee`
+and `payroll-entry.service.ts`'s `updatePayrollEntry` each call it, once, from inside their own
+existing `prisma.$transaction` — never a second, independent transaction, never an HTTP call to the
+other module's own route. Each direction is a plain, targeted Prisma write:
+
+- **Payroll Entry → Employee Registry**: `tx.employee.update({ data: { defaultEobiApplicable } })`,
+  unconditional (the employee always exists — the entry's own FK guarantees it).
+- **Employee Registry → current Draft entry**: `tx.payrollCycle.findFirst({ status: 'DRAFT' })` then
+  `tx.payrollEntry.findUnique({ cycleId_employeeId })`; a no-op if no Draft cycle exists, no entry
+  exists yet, or the entry is no longer editable (`released` or `payoutOutcome` set) — **never
+  creates a PayrollEntry**, satisfying the explicit "do not create an incomplete/unintended entry"
+  requirement. `Employee.defaultEobiApplicable` is retained regardless and is exactly what
+  `createPayrollCycle`/`createPayrollEntry`/`syncEmployeeIntoCurrentDraftCycle` already copy onto a
+  *newly created* entry, so the value is correctly used as the default the next time one is made.
+
+Both directions are also genuine no-ops (no write, no audit entry) when the target's current value
+already matches — an already-consistent pair produces zero churn, and there is no path from either
+write back into this function, so an update loop is structurally impossible, not merely avoided by
+convention.
+
+**Historical safety.** The Employee→entry direction only ever looks up the *current* Draft cycle
+(`status: 'DRAFT'`) — a Released or Archived cycle's entries are never reachable by that query, full
+stop, not merely skipped by a secondary check. The entry-editability check
+(`released`/`payoutOutcome`) additionally guards a Draft-cycle entry a Unit release sweep has already
+resolved, even though its parent cycle hasn't been Finalized yet. Verified directly: a Released entry
+(cycle still nominally Draft) is untouched by a later Employee Registry change; an Archived entry
+(post-Finalize, post-rollover) is untouched, while the *new* Draft cycle's own carried-forward entry
+for the same employee correctly *is* reached.
+
+**Transactions.** Both writes for one logical change commit or roll back together, because both
+happen inside the one transaction the primary edit already opens — proved with a real, reachable
+forced failure (the sync's own audit-log call made to throw via `jest.spyOn`, not a mock of Prisma
+itself), confirming neither the primary field nor the synced field persists, and neither audit entry
+is written, when the second half fails.
+
+**Permission analysis (investigated, not assumed).** `PATCH /employees/:id` requires
+`employees:edit`; `PATCH /payroll-entries/:id` requires `payroll:entry` — two genuinely different
+permission keys. The seeded `PAYROLL_STAFF` role happens to hold both today, but RBAC roles are
+user-configurable, so a custom role could hold only one. Since a Draft-entry EOBI change now also
+writes to Employee Registry (and vice versa), each service function now additionally requires the
+*other* screen's permission **specifically when `eobiApplicable`/`defaultEobiApplicable` is part of
+the request** — checked in the service layer (`currentUser.permissions.includes(...)`), not as a
+blanket route-level change, so it never affects any other field on either route. A `payroll:entry`
+holder without `employees:edit` gets a 403 attempting to change EOBI applicability via Payroll Entry
+(their other financial-field edits are completely unaffected); symmetrically for
+`employees:edit` without `payroll:entry` via Employee Registry. No existing permission was widened
+or weakened — this is an additional, narrower requirement layered on top of the existing ones,
+verified by two dedicated tests using bespoke single-permission roles (the real seeded roles can't
+prove "lacks a permission," since `createTestUser` upserts them additively).
+
+**Audit.** Two distinct actions, `employee.eobi_synced` and `payroll_entry.eobi_synced`, each
+recorded only on the entity actually written, with `actorUserId`, `previousValue`, `newValue`,
+`sourceScreen` (`'payroll_entry'`/`'employee_registry'`), and either the originating
+`sourcePayrollEntryId` or the target `employeeId`/`cycleId` — never a second, duplicate-looking entry
+for the same field on the same entity. The *primary* edit keeps using the exact audit mechanism that
+route already had (`payroll_entry.updated`/`employee.updated`); only the *cascaded* write to the
+other entity gets the new, distinctly-named action, so a reviewer can never mistake a synchronised
+side effect for a direct user edit of that entity.
+
+**Testing.** New file `backend/tests/eobi-bidirectional-sync.test.ts`, 13 tests covering all 12
+requested scenarios (permission-bypass prevention split into 9a/9b, one per direction): both sync
+directions, Released/Archived immunity (the latter also proving the *new* Draft cycle created by
+rollover correctly receives the sync), the no-Draft-entry retention/later-default case, transaction
+rollback under a forced failure, both permission-bypass directions, cross-screen refresh consistency,
+unchanged `calcNet` deduction math, and release freezing the final value historically. One of this
+session's own earlier tests (`payroll-entry-master-data-boundary.test.ts`'s EOBI test) asserted the
+now-superseded "independent" behavior and was corrected, not merely relaxed, to assert the new
+contract — with an explicit note explaining why the expectation changed.
+
+**Results.** Backend: **1207/1208 tests passing** across 62 suites — the sole failure
+(`corrections-service.test.ts`'s "Concurrent approval... two different requests... serialize" test)
+is a pre-existing timing-sensitive race test, confirmed via `git diff` to be in a module this session
+never touched, and confirmed to pass cleanly every time when run in isolation — the same category of
+full-suite-only, sandbox-load-sensitive flakiness already on record elsewhere in this codebase, not a
+regression. Frontend: **234/234 tests passing**, unaffected (this refinement is backend-service-layer
+only; the Employee Registry and Payroll Entry EOBI checkboxes already existed and needed no frontend
+change to pick up the new server-side behavior). Typecheck/lint/build all clean across shared/
+backend/frontend, same two pre-existing unrelated issues already on record.
+
+**Known limitation.** No live, same-session cross-screen UI update — the requirement was explicitly
+"frontend refresh should show the same value in both locations" (satisfied: both screens' ordinary
+GETs already reflect the synced DB state), not real-time cross-tab propagation without a refresh,
+which was not implemented and not requested.
+
+**No commit, push, or deployment occurred — do not mark this refinement complete** until reviewed.
+
+---
+
+### Phase 7D final refinement — EOBI Synchronisation Permissions & Audit — IMPLEMENTED, 2026-07-30, awaiting review, NOT COMMITTED
+
+A same-day follow-up to the EOBI Bidirectional Synchronisation entry immediately above, which had
+required the acting user to hold **both** `employees:edit` and `payroll:entry` before the
+synchronised write would proceed. The client's own explicit instruction overrides that: the
+synchronised write is an **internal system synchronisation**, not a second user edit, so only the
+originating screen's own permission should ever be required.
+
+**Permission model — before.** Changing `eobiApplicable` via `PATCH /payroll-entries/:id` required
+`payroll:entry` (the route's own gate) **and** `employees:edit` (checked in the service layer,
+specifically for this field), or a 403. Symmetrically, changing `defaultEobiApplicable` via
+`PATCH /employees/:id` required `employees:edit` **and** `payroll:entry`, or a 403.
+
+**Permission model — after.** Each route now requires only its own, pre-existing permission —
+`payroll:entry` alone for Payroll Entry, `employees:edit` alone for Employee Registry. The
+cross-permission checks (`payroll-entry.service.ts`'s `!currentUser.permissions.includes(EMPLOYEES_EDIT)`
+throw, and `employees.service.ts`'s mirrored `!currentUser.permissions.includes(PAYROLL_ENTRY)` throw)
+are deleted outright, not merely relaxed — `eobi-sync.service.ts`'s `syncEobiApplicability()` itself
+never took a `currentUser` and never performed a permission check of its own; it only ever needed an
+`actorUserId` to audit with, so removing the *callers'* extra checks required no change to the shared
+function's own contract.
+
+**This is not a permission bypass, verified explicitly.** The distinction the client drew — "the user
+is authorised only to edit the originating resource; the second write exists solely to preserve data
+consistency" — is exactly what the tests below prove: a `payroll:entry`-only user can change
+`eobiApplicable` via Payroll Entry (and the sync to Employee Registry happens, performed by the
+backend, not by that user editing Employee Registry themselves), but that same user still gets a 403
+attempting to `PATCH /employees/:id` directly, for *any* field, EOBI or otherwise — the route's own
+`employees:edit` gate is completely untouched. Symmetrically for an `employees:edit`-only user against
+`PATCH /payroll-entries/:id`. Both directions were re-verified with bespoke single-permission test
+roles (new tests 9c/9d, alongside the updated 9a/9b that now assert *success*, not rejection).
+
+**Audit — before.** Two distinct, synchronisation-specific action names: `employee.eobi_synced` and
+`payroll_entry.eobi_synced`, each recorded only on the *cascaded* entity (the one the direct edit
+wasn't made to); the *directly-edited* entity's own change was folded into the ordinary generic
+bundle (`payroll_entry.updated`/`employee.updated`), indistinguishable from any other field edit.
+
+**Audit — after.** One consistent action per entity, regardless of which screen originated the
+change: `employee.eobi_updated` and `payroll_entry.eobi_updated`, each carrying
+`metadata: { previousValue, newValue, origin }` where `origin` is `'employee_registry'` or
+`'payroll_entry'` — identifying which screen triggered the operation, whether *this* entity was the
+one directly edited or the one synchronised as a result. `eobiApplicable`/`defaultEobiApplicable` are
+now excluded from the generic `payroll_entry.updated`/`employee.updated` changes bundle (the same
+`omitKeys` exclusion convention `employees.service.ts` already used for `siteId`/`unitId` ahead of
+its own dedicated `employee.transferred` entry) — every EOBI applicability change, on either entity,
+produces **exactly one** `*.eobi_updated` entry for that entity, never zero (folded silently into a
+generic bundle) and never two (a generic entry plus a duplicate dedicated one). A single logical
+change (e.g. toggling the Draft-entry checkbox) now writes exactly two audit rows total — one
+`payroll_entry.eobi_updated` (origin: `payroll_entry`) on the entry actually edited, one
+`employee.eobi_updated` (origin: `payroll_entry`) on the synchronised employee — both clearly
+attributable to the same operation via the shared `origin` tag, never duplicate or misleading.
+
+**Transaction behaviour — unchanged.** Both writes (and both new dedicated audit entries) still
+happen inside the one transaction the primary edit already opens; `syncEobiApplicability()` is still
+called exactly once, from inside that same transaction, by each of `updatePayrollEntry`/
+`updateEmployee` — no recursive service/route calls, no frontend request chaining. Re-verified with
+the same forced-failure technique as before (the sync's own audit write made to throw), now updated
+to check for the renamed action (`employee.eobi_updated`) and to additionally confirm the
+*originating* entity's own new `*.eobi_updated` entry (written moments earlier, same transaction)
+also fails to persist — proving the whole operation, not just the counterpart write, rolls back
+atomically.
+
+**Testing.** `backend/tests/eobi-bidirectional-sync.test.ts` rewritten: 15 tests (up from 13) —
+tests 1–8 and 10–12 keep their original scenarios with updated audit assertions (action names,
+`origin` metadata, and explicit checks that both the directly-edited and synchronised entities each
+get their own `*.eobi_updated` entry); the permission section is now four tests instead of two —
+9a/9b now assert that a single-permission user *succeeds* (the corrected desired behaviour) while
+also confirming the counterpart entity's sync and its audit `origin`, and new 9c/9d confirm the
+*opposite* route (any field, not just EOBI) remains fully blocked for a user lacking that route's own
+permission, directly proving the "not a bypass" distinction.
+
+**Results.** Backend: **62 suites / 1210 tests, all passing** on this run — the `corrections-service.test.ts`
+concurrency-timing test that flaked intermittently under full-suite load in the prior two entries'
+runs (a pre-existing, `git diff`-confirmed-unrelated race test, in a module this revision never
+touched) did not flake this run, consistent with load-dependent, not deterministic, flakiness.
+`eobi-bidirectional-sync.test.ts` itself: 15/15. Typecheck/lint/build clean across shared/backend
+(frontend unaffected — no frontend file touched by this revision either), same two pre-existing,
+unrelated lint errors already on record.
+
+**No commit, push, or deployment occurred — do not mark this refinement complete** until reviewed.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -7844,7 +8222,7 @@ complete** until this report is reviewed.
 | 4 | Release (now per Project Unit), Bank Sheets, Cash Receiving, Advances, Payslips | **All six checkpoints implemented, tested, and committed — CODE-COMPLETE, NOT fully closed.** Checkpoints 1–5 (Bank Registry, Salary Release foundation, Bank Sheets, Cash Receiving Sheets, Advances) CLOSED — `7c2cdb5`, `cedf386`, Checkpoint 3's commit, `477fbb1`, and `75c5e64`; Post-Phase-4 banking/layout refinement — `3b74c32`, `9d9bc32`, `372eeba`; Payslips split into Checkpoint 6.1 (backend foundation), 6.2 (PDF engine), 6.3 (frontend, batch generation, Phase Close-Out) — 6.1/6.2 committed as `093a9df`, 6.3 committed per §1's own entry; see §1. Cash Advances/Advance-only Bank Sheets/Company Bank Account management confirmed out of scope. **Employee Statements confirmed NOT part of this phase's scope (2026-07-11 architecture review, §1) — it was never in Phase 4's frozen scope and remains Phase 7 work.** **Held open by exactly one condition: real Render/Linux-container deployment verification was genuinely attempted and could not be completed in this sandboxed environment (no Docker/Podman/Colima, no Render API token, no git remote) — see §1's "Phase 4 close-out review" and Checkpoint 6.3's own "Mandatory deployment verification" note. Not falsely marked passed.** |
 | 5 | Cycle Finalization, Archiving, Backups | **COMPLETE AND CLOSED, 2026-07-16.** Architecture review complete (2026-07-14, no redesign required). Checkpoint 0 (`StorageProvider` foundation) CLOSED, committed as `d87b9b0` — see §1. Checkpoint 1 (Finalize Cycle) CLOSED, committed as `cad93bc` — see §1. Checkpoint 2 (Backup Packages reusable domain/generator) CLOSED, committed as `3ea879e` — see §1. Checkpoint 3 (cycle archiving, automatic backup generation, and new-cycle rollover) CLOSED, committed as `957ab9d` — see §1's Checkpoint 3 entry. Checkpoint 4 (Historical Payroll Cycle Selector) CLOSED, committed as `10e3194` — includes a `passwordHash` response-serialization fix found during final review (Users module, not Checkpoint 4's own code) — see §1's Checkpoint 4 entries. **Final browser verification (real Playwright/Chromium, 108/108 assertions, zero unexpected console errors) closed the one remaining gap — see §1's "Phase 5 — final browser verification and close-out" entry. No code changes were required; the working tree needed no new commit for this pass.** Phase 4's own Render/Linux-container Chromium deployment smoke test remains separately open — not part of Phase 5's own scope |
 | 6 | Corrections & Balance Adjustments (highest-risk logic) | **CLOSED, 2026-07-19.** Architecture Review + Product Decision Resolution (review-only) complete. Checkpoint 1 (Domain & Schema Foundation) CLOSED, `ac58748`. Checkpoint 2 (Baseline Reconstruction & Delta Calculation Engine) CLOSED, `1002209`; Checkpoint 2A (review-only) CLOSED, `1aede0a`. Checkpoint 3 (Transactional Correction Approval & Balance Adjustment Creation) CLOSED, `6189ba9`. Checkpoint 4 (Settlement, Payment Recording & Outstanding Balance Lifecycle) CLOSED, `9f9c88d`. Checkpoint 5 (Draft-Cycle Materialization) CLOSED, `3bab54a`. Checkpoint 5A (review-only — found and fixed a genuine reservation-vs-settlement double-processing defect) CLOSED, `9d19cbb`/`b8a3e81`. Checkpoint 6 (Corrections Ledger, Review Queue & Frontend Operational Workflow — the frontend now exists: request/preview/approve/reject, Ledger, BalanceAdjustment/materialization/settlement presentation, reservation-aware settlement UX, two minimal read-only backend additions) CLOSED — see §1. Checkpoint 6A (review-only — found and fixed a real Corrections-sidebar-visibility gap: a `corrections:approve`-only reviewer could not see the sidebar item at all; frontend-only fix, no backend/schema change) CLOSED, `9d6a39b`. **Checkpoint 7 (End-to-End Financial Lifecycle Validation, Audit Hardening & Phase 6 Close-Out) CLOSED** — full lifecycle/audit/API/permission/reporting validation found one genuine gap (the `ACTIVE -> CONSUMED` materialization transition every prior checkpoint deferred, which blocked a materialized obligation from ever reaching `SETTLED`) and fixed it: `releaseProjectUnit` now consumes every `ACTIVE` reservation the moment its `PayrollEntry` actually releases, using the `settlementId`/`consumedAt` columns Checkpoint 5's own schema already reserved for it — no migration, no new permission key. See §1's own Checkpoint 7 entry for the full record. **Phase 6 is now fully closed.** |
-| 7 | Statements, Reports, Dashboard | **STARTED, IN PROGRESS — Phase 7A CLOSED, 2026-07-28; Phase 7 overall not complete.** Architecture review CLOSED, 2026-07-27 (read-only, nine approved decisions — §1). **Phase 7A — canonical Employee Statement of Account ledger (Checkpoint 1) + Statements frontend with historical `PayrollEntry.siteId`-based employee discovery and Employee-first selection (Checkpoint 2 + same-day correction) — reviewed, approved, committed, pushed, and deployed** — see §1's "Phase 7A, Checkpoint 1", "Phase 7A Checkpoint 2 — architectural investigation and correction", and "Phase 7A — closure and landing" entries. **Reports should reuse Statements' ledger-computation code rather than duplicating it** (2026-07-11 architecture review, reaffirmed 2026-07-27). **Phase 7B, Checkpoints 1 (Backend Statement PDF export) and 2 (Backend Statement Excel & CSV export) are both IMPLEMENTED, awaiting review, NOT COMMITTED** — see §1's own entries for each. Phase 7B is not closed: frontend export UI, browser Print integration, Reports (7C), and Dashboard (7D) remain not started, each requiring its own separate, explicit authorization. |
+| 7 | Statements, Reports, Dashboard | **STARTED, IN PROGRESS — Phase 7A CLOSED, 2026-07-28; Phase 7 overall not complete.** Architecture review CLOSED, 2026-07-27 (read-only, nine approved decisions — §1). **Phase 7A — canonical Employee Statement of Account ledger (Checkpoint 1) + Statements frontend with historical `PayrollEntry.siteId`-based employee discovery and Employee-first selection (Checkpoint 2 + same-day correction) — reviewed, approved, committed, pushed, and deployed** — see §1's "Phase 7A, Checkpoint 1", "Phase 7A Checkpoint 2 — architectural investigation and correction", and "Phase 7A — closure and landing" entries. **Reports should reuse Statements' ledger-computation code rather than duplicating it** (2026-07-11 architecture review, reaffirmed 2026-07-27). **Phase 7B, Checkpoints 1 (Backend Statement PDF export) and 2 (Backend Statement Excel & CSV export) are both IMPLEMENTED, awaiting review, NOT COMMITTED** — see §1's own entries for each. Phase 7B is not closed: frontend export UI, browser Print integration, Reports (7C), and Dashboard (7D) remain not started, each requiring its own separate, explicit authorization. **Naming note (2026-07-30): a separate, out-of-band production-UAT checkpoint was also labeled "Phase 7D" by its own requester — that checkpoint (Payroll Master-Data Integrity & Payroll Entry UI Refinements, §1) is unrelated to this roadmap's Phase 7D (Dashboard) and does not advance or substitute for it; Dashboard itself remains Not Started.** |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
 

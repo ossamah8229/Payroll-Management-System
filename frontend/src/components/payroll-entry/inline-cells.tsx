@@ -67,6 +67,12 @@ interface InlineNumberCellProps {
    * never blocks typing itself, and the value is simply not sent until it becomes valid (see
    * `usePayrollEntryEditor`'s `sanitizeEntryDraft`/`sanitizeWorkLineDraft`). */
   invalid?: boolean;
+  /** Tighter vertical padding (Advance Balance presentation fix, 2026-07-30) — used only when this
+   * cell also stacks a `BalanceLabel` beneath it (`advanceDeduction`/`eidAdvanceDeduction`), so the
+   * combined two-line block has genuine headroom within the fixed 40px row instead of its content
+   * height consuming the row almost exactly, which left the balance line touching the row border.
+   * Every other numeric cell keeps the default `py-1`. */
+  compact?: boolean;
   nav: GridNavProps;
   ariaLabel: string;
 }
@@ -81,6 +87,7 @@ export function InlineNumberCell({
   placeholder,
   deduct,
   invalid,
+  compact,
   nav,
   ariaLabel,
 }: InlineNumberCellProps) {
@@ -91,6 +98,7 @@ export function InlineNumberCell({
       className={cn(
         baseInputClassName,
         'text-right tabular-nums',
+        compact && 'py-0.5',
         deduct && 'text-danger',
         invalid && 'border-danger bg-danger-light/40 focus:border-danger',
       )}
@@ -181,7 +189,16 @@ export function ReadOnlyCell({
  * column hosting it is measured to already fit this text (`columns.ts`'s `BALANCE_LABEL_COLUMN_IDS`
  * / `extractBalanceLabelValue`, the single place that width decision is made), so `whitespace-nowrap`
  * here is a guarantee, not a truncation risk.
+ *
+ * `leading-none` + `mt-0` (Advance Balance presentation fix, 2026-07-30) — paired with
+ * `InlineNumberCell`'s `compact` prop above, this is what gives the two-line
+ * amount-plus-balance block real clearance within the fixed 40px row instead of the balance text
+ * crowding/touching the row's bottom border.
  */
 export function BalanceLabel({ amount }: { amount: string }) {
-  return <p className="mt-0.5 whitespace-nowrap text-center text-[10px] text-text-faint">Bal: {formatMoney(amount)}</p>;
+  return (
+    <p className="mt-0 whitespace-nowrap text-center text-[10px] leading-none text-text-faint">
+      Bal: {formatMoney(amount)}
+    </p>
+  );
 }

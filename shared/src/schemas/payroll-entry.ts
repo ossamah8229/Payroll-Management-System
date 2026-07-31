@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { decimalString, emptyToNull, optionalTrimmedString, optionalUppercaseString } from './common';
+import { decimalString, emptyToNull, optionalTrimmedString } from './common';
 
 /**
  * The initial work line(s) supplied at `PayrollEntry` creation time (docs/architecture/
@@ -49,18 +49,21 @@ export type CreatePayrollEntryInput = z.infer<typeof createPayrollEntrySchema>;
  * Rule — see `payroll-processing.service.ts`'s `createPayrollCycle`), never a manual Payroll Entry
  * edit.
  *
+ * **Phase 7D (2026-07-30) — `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` removed**:
+ * these were previously Draft-editable *duplicated* columns on `PayrollEntry` itself, independent
+ * of `Employee`'s own record — the exact "stale duplication / independent editing" defect this
+ * checkpoint closes. `Employee` (Employee Registry) is now the sole authoritative, editable source
+ * for these fields; a Draft entry's own copy is refreshed from the live `Employee` record for
+ * display (`payroll-entry.service.ts`) and re-frozen from it at release time
+ * (`payroll-release.service.ts`), never accepted from this route again. `eobiAmount`/
+ * `eobiApplicable` deliberately stay below, unaffected — EOBI applicability remains a
+ * payroll-cycle-specific toggle owned by Payroll Entry, not Employee Registry.
+ *
  * `version` is mandatory — the optimistic-locking token the caller must echo back from whatever
  * read produced the value being edited (docs/architecture/database/schema-invariants.md §22).
  */
 export const updatePayrollEntrySchema = z.object({
   version: z.number().int(),
-  designation: z.string().trim().min(1).max(80).optional(),
-  bankId: z.preprocess(emptyToNull, z.string().uuid().nullable().optional()),
-  branchCode: optionalTrimmedString(20),
-  accountNumber: optionalTrimmedString(40),
-  /** Banking refinement (2026-07-11): replaces `accountTitle`. Same "copied, not linked" snapshot
-   * convention as every other field here — see `payroll-entry.service.ts`. */
-  iban: optionalUppercaseString(34),
   grossPay: decimalString.optional(),
   allowance: decimalString.optional(),
   leaveDays: decimalString.optional(),

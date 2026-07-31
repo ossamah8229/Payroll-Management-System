@@ -7,7 +7,7 @@ import type { Bank } from '@/hooks/use-banks';
 import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import { PAYROLL_COLUMNS, type PayrollColumnId } from './columns';
-import { BalanceLabel, gridNavProps, InlineNumberCell, InlineSelectCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
+import { BalanceLabel, gridNavProps, InlineNumberCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
 import { SaveStatusIndicator } from './save-status-indicator';
 import { SplitWorkLinesModal } from './split-work-lines-modal';
 import { toNumberOrNull, type LiveTotalsStore } from './live-totals-store';
@@ -166,18 +166,13 @@ function PayrollEntryRowImpl({
       </ReadOnlyCell>
     ),
 
-    designation: (
-      <div role="cell" data-col-id="designation">
-        <InlineTextCell
-          value={effectiveEntry.designation}
-          onChange={(v) => editor.setEntryField('designation', v)}
-          disabled={disabled}
-          maxLength={80}
-          nav={nav('designation')}
-          ariaLabel={`Designation for ${entry.employee.name}`}
-        />
-      </div>
-    ),
+    // Master Data Boundary (Phase 7D, 2026-07-30) — designation is Employee Registry's identity
+    // data (same tier as employeeCode/employeeName above), never independently editable here. While
+    // unreleased, the value shown is already the *live* Employee Registry value (the backend
+    // overwrites the entry's own stored column with it on every read, `payroll-entry.service.ts`'s
+    // `withLiveMasterData`) — editing it in Employee Registry and refreshing this page is the only
+    // way to change it.
+    designation: <ReadOnlyCell colId="designation">{entry.designation}</ReadOnlyCell>,
 
     site: <ReadOnlyCell colId="site">{entry.site.name}</ReadOnlyCell>,
     // "Deputed Branch" — the deputed branch/site code for this entry's primary work line, its
@@ -187,66 +182,18 @@ function PayrollEntryRowImpl({
     // column below.
     unitCode: <ReadOnlyCell colId="unitCode">{entry.workLines[0]?.unit.code ?? '—'}</ReadOnlyCell>,
 
+    // Master Data Boundary (Phase 7D, 2026-07-30) — bankId/branchCode/accountNumber/iban are
+    // Employee Registry's banking data (docs/architecture/database/employee.md), display-only here
+    // for the same reason `designation` above is: the checkpoint's explicit requirement that
+    // Payroll Entry "must display them but must not allow them to be edited," with all banking
+    // changes flowing exclusively through Employee Registry. Bank Code display keeps the same
+    // "Code only in this dense grid" rule the removed `InlineSelectCell` used (2026-07-13).
     bankId: (
-      <div role="cell" data-col-id="bankId">
-        <InlineSelectCell
-          value={effectiveEntry.bankId ?? ''}
-          onChange={(v) => editor.setEntryField('bankId', v || null)}
-          disabled={disabled}
-          // Bank Code only in this dense grid — the approved Bank display rule (2026-07-13,
-          // superseding the 2026-07-11 attempt that showed the full "{name} ({code})" here). The
-          // Master User already defines both Bank Name and Bank Code (Settings → Banks); the full
-          // name stays useful in Employee Registry's own dropdown where a user is picking a bank
-          // and needs the context, but a dense transaction grid displays the Code specifically so
-          // the column stays compact without losing meaning — the Code's whole purpose.
-          options={[
-            { value: '', label: 'Cash' },
-            ...banks.map((b) => ({ value: b.id, label: b.code })),
-          ]}
-          nav={nav('bankId')}
-          ariaLabel={`Bank for ${entry.employee.name}`}
-        />
-      </div>
+      <ReadOnlyCell colId="bankId">{entry.bankId ? (banks.find((b) => b.id === entry.bankId)?.code ?? '—') : 'Cash'}</ReadOnlyCell>
     ),
-    branchCode: (
-      <div role="cell" data-col-id="branchCode">
-        <InlineTextCell
-          value={effectiveEntry.branchCode ?? ''}
-          onChange={(v) => editor.setEntryField('branchCode', v || null)}
-          disabled={disabled}
-          maxLength={20}
-          nav={nav('branchCode')}
-          ariaLabel={`Branch code for ${entry.employee.name}`}
-        />
-      </div>
-    ),
-    accountNumber: (
-      <div role="cell" data-col-id="accountNumber">
-        <InlineTextCell
-          value={effectiveEntry.accountNumber ?? ''}
-          onChange={(v) => editor.setEntryField('accountNumber', v || null)}
-          disabled={disabled}
-          maxLength={40}
-          nav={nav('accountNumber')}
-          ariaLabel={`Account number for ${entry.employee.name}`}
-        />
-      </div>
-    ),
-    iban: (
-      <div role="cell" data-col-id="iban">
-        <InlineTextCell
-          value={effectiveEntry.iban ?? ''}
-          // Stored uppercase, displayed exactly as entered (2026-07-11 banking refinement) —
-          // uppercased live here too, so what's on screen always matches what gets saved; never
-          // required, since many employees operationally don't know or provide one.
-          onChange={(v) => editor.setEntryField('iban', v ? v.toUpperCase() : null)}
-          disabled={disabled}
-          maxLength={34}
-          nav={nav('iban')}
-          ariaLabel={`IBAN for ${entry.employee.name}`}
-        />
-      </div>
-    ),
+    branchCode: <ReadOnlyCell colId="branchCode">{entry.branchCode ?? '—'}</ReadOnlyCell>,
+    accountNumber: <ReadOnlyCell colId="accountNumber">{entry.accountNumber ?? '—'}</ReadOnlyCell>,
+    iban: <ReadOnlyCell colId="iban">{entry.iban ?? '—'}</ReadOnlyCell>,
 
     grossPay: (
       <div role="cell" data-col-id="grossPay">
@@ -387,12 +334,13 @@ function PayrollEntryRowImpl({
     ),
 
     advanceDeduction: (
-      <div role="cell" data-col-id="advanceDeduction">
+      <div role="cell" data-col-id="advanceDeduction" className="flex flex-col justify-center">
         <InlineNumberCell
           value={effectiveEntry.advanceDeduction}
           onChange={(v) => editor.setEntryField('advanceDeduction', v)}
           disabled={disabled}
           deduct
+          compact={Boolean(entry.advance)}
           invalid={!isValidDecimalDraft(effectiveEntry.advanceDeduction, false)}
           nav={nav('advanceDeduction')}
           ariaLabel={`Advance deduction for ${entry.employee.name}`}
@@ -401,17 +349,21 @@ function PayrollEntryRowImpl({
             requirement ("visible... in Payroll Entry, small balance indicator under the advance/eid
             input"). Read-only here; managed from the Advances page. The column is measured to
             already fit this label (`columns.ts`'s `BALANCE_LABEL_COLUMN_IDS`), so it never
-            overflows the cell. */}
+            overflows the cell. `compact` above + this stacked block being vertically centered by
+            the parent row's own `items-center` (Advance Balance presentation fix, 2026-07-30) is
+            what keeps the balance line clear of the row's bottom border without growing
+            `ROW_HEIGHT`. */}
         {entry.advance && <BalanceLabel amount={entry.advance.outstandingBalance} />}
       </div>
     ),
     eidAdvanceDeduction: (
-      <div role="cell" data-col-id="eidAdvanceDeduction">
+      <div role="cell" data-col-id="eidAdvanceDeduction" className="flex flex-col justify-center">
         <InlineNumberCell
           value={effectiveEntry.eidAdvanceDeduction}
           onChange={(v) => editor.setEntryField('eidAdvanceDeduction', v)}
           disabled={disabled}
           deduct
+          compact={Boolean(entry.eidAdvance)}
           invalid={!isValidDecimalDraft(effectiveEntry.eidAdvanceDeduction, false)}
           nav={nav('eidAdvanceDeduction')}
           ariaLabel={`Eid advance deduction for ${entry.employee.name}`}

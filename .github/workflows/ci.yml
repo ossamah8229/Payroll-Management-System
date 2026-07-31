@@ -45,17 +45,41 @@ jobs:
       - name: Build shared package
         run: npm run build:shared
 
+      # Must run before Typecheck/Lint: backend source imports Prisma-generated types
+      # (Prisma.PayrollEntryWhereInput, Prisma.AdvanceGetPayload, PrismaClientKnownRequestError,
+      # etc.) that only exist once `prisma generate` has produced node_modules/.prisma/client.
+      # Running type-aware steps before this point fails with TS2694/TS2339/TS7006 against an
+      # empty/unresolvable Prisma namespace — this ordering bug caused every CI run to fail
+      # (100% failure rate, unrelated to any application code change) until this fix.
+      - name: Prisma generate
+        run: npm run prisma:generate
+
       - name: Typecheck
         run: npm run typecheck
 
       - name: Lint
         run: npm run lint
 
-      - name: Prisma generate
-        run: npm run prisma:generate
-
       - name: Prisma migrate deploy
         run: npm run prisma:migrate --workspace backend -- deploy
+
+      # docs/architecture/testing.md's documented recipe (migrate, then seed, then test) —
+      # backend/tests/roles.test.ts's "Seed idempotency" suite and its final-administrator
+      # safeguard tests assert against the real seeded Master Admin/Finance roles and
+      # permissions, not just what each test's own fixtures grant ad hoc.
+      - name: Prisma seed
+        run: npm run prisma:seed --workspace backend
+
+      # backend/.puppeteerrc.cjs points Puppeteer's cacheDirectory at a project-local path
+      # (backend/.cache/puppeteer), which only `.puppeteerrc.cjs`-aware invocations with `backend/`
+      # as their own cwd can discover — plain `npm install` at the repo root downloads Chrome to
+      # `~/.cache/puppeteer` instead (see that file's own comment), which nothing at runtime reads.
+      # render.yaml's buildCommand already runs this same step for production; CI needs its own
+      # copy or every PDF-generating test (statements.test.ts, payslips.test.ts) 500s on a fresh
+      # runner with no pre-existing `backend/.cache/puppeteer`.
+      - name: Install Puppeteer Chrome
+        working-directory: backend
+        run: npx puppeteer browsers install chrome
 
       - name: Run backend tests
         run: npm run test --workspace backend

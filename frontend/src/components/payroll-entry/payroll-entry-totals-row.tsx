@@ -1,17 +1,10 @@
 import { useSyncExternalStore } from 'react';
 import { formatMoney, formatNumber } from '@payroll/shared';
 import { cn } from '@/lib/cn';
-import { PAYROLL_COLUMNS } from './columns';
-import { LIVE_TOTAL_KEYS, type LiveTotals, type LiveTotalsStore } from './live-totals-store';
+import { MONEY_TOTAL_COLUMN_IDS, NUMERIC_TOTAL_COLUMN_IDS, PAYROLL_COLUMNS, type PayrollColumnId } from './columns';
+import type { LiveTotals, LiveTotalsStore } from './live-totals-store';
 
-// Only genuine payment amounts get the PKR prefix (docs/design-system.md §4) — rates (OT Rate,
-// Leave Rate) and counts (days, hours, cycle days) are plain numbers, consistent with each other.
-const MONEY_COLUMNS = new Set(['grossPay', 'allowance', 'eobiAmount', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'netSalary']);
 const DEDUCTION_COLUMNS = new Set(['advanceDeduction', 'eidAdvanceDeduction', 'fine']);
-// A live-total column is a genuine JS `Set`, but `LIVE_TOTAL_KEYS` is the single already-existing
-// source of truth for "which columns get a summed total" — reused here rather than a second,
-// independently-maintained list that could itself drift from `live-totals-store.ts`.
-const NUMERIC_TOTAL_COLUMN_IDS = new Set<string>(LIVE_TOTAL_KEYS);
 
 /**
  * Sticky totals row — subscribes directly to the live-totals store (`useSyncExternalStore`) so it
@@ -51,9 +44,9 @@ export function PayrollEntryTotalsRow({
     // 2026-07-25): the count still rendered somewhere in the row, in `PAYROLL_COLUMNS` order, just
     // one column left of the one it labels.
     if (columnId === 'employeeName') return `${store.rowCount} ${store.rowCount === 1 ? 'employee' : 'employees'}`;
-    if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId)) {
+    if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId as PayrollColumnId)) {
       const value = totals[columnId as keyof LiveTotals];
-      return MONEY_COLUMNS.has(columnId) ? formatMoney(value) : formatNumber(value);
+      return MONEY_TOTAL_COLUMN_IDS.has(columnId as PayrollColumnId) ? formatMoney(value) : formatNumber(value);
     }
     return null;
   }
@@ -70,7 +63,7 @@ export function PayrollEntryTotalsRow({
     const base = 'overflow-visible px-1.5 py-2';
     if (columnId === 'serial') return cn(base, 'text-center text-text-muted');
     if (columnId === 'employeeName') return cn(base, 'text-text');
-    if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId)) {
+    if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId as PayrollColumnId)) {
       return cn(
         base,
         'text-right tabular-nums',

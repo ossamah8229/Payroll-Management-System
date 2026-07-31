@@ -7,7 +7,6 @@ import { badRequest } from '../../common/http-error';
 import { logger } from '../../lib/logger';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
-import { getCompanyLogoDataUri } from '../settings/company-logo.service';
 import {
   generatePayslipPdf,
   getPayslip,
@@ -171,13 +170,11 @@ payslipsRouter.get('/:employeeId/pdf', requirePermission(PERMISSIONS.PAYSLIPS_VI
     const employeeId = requireIdParam(req.params.employeeId);
     const disposition = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
 
-    const companyLogoDataUri = await getCompanyLogoDataUri();
     const [cycle, { buffer, entryId, employeeName }] = await Promise.all([
       getPayrollCycle(cycleId),
       generatePayslipPdf(req.currentUser!, cycleId, employeeId, {
         generatedByName: req.currentUser!.name,
         generatedAt: new Date(),
-        companyLogoDataUri,
       }),
     ]);
 
@@ -251,10 +248,7 @@ payslipsRouter.post('/batch', requirePermission(PERMISSIONS.PAYSLIPS_VIEW), asyn
       );
     }
 
-    // Fetched once for the entire batch — never once per employee — same "no avoidable
-    // per-document storage read" reasoning as `getCompanyLogoDataUri()`'s own doc comment.
-    const companyLogoDataUri = await getCompanyLogoDataUri();
-    const meta = { generatedByName: req.currentUser!.name, generatedAt: new Date(), companyLogoDataUri };
+    const meta = { generatedByName: req.currentUser!.name, generatedAt: new Date() };
 
     let firstBuffer: Buffer;
     try {

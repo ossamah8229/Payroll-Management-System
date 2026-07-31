@@ -232,28 +232,30 @@ describe('renderPayslipHtml — formatting parity with the JSON endpoint', () =>
   });
 });
 
-describe('renderPayslipHtml — company logo (Phase 7C)', () => {
-  it('embeds the logo as an <img> inline with the company name when companyLogoDataUri is set', () => {
-    const dataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-    const html = renderPayslipHtml(basePayslip(), { ...baseMeta, companyLogoDataUri: dataUri });
+describe('renderPayslipHtml — no company logo (Phase 7D, 2026-07-30)', () => {
+  // The client does not want the company logo on Payslips at all — `PayslipPdfMeta` no longer even
+  // accepts a logo (Phase 7C's `companyLogoDataUri` field was removed entirely), so there is no
+  // caller input that could reintroduce it. Statement/Bank Sheet/Cash Receiving logo behavior is
+  // untouched — each renders its own logo independently (`statement-pdf-template.test.ts` covers
+  // Statement's own, unchanged, logo tests).
 
-    expect(html).toContain(`<img src="${dataUri}" class="doc-header-logo" alt="" />`);
-    // Rendered inside the same .doc-header block as the company name, not as a separate row.
-    const headerBlockMatch = html.match(/<div class="doc-header">[\s\S]*?<\/div>\s*<\/div>/);
-    expect(headerBlockMatch?.[0]).toContain('doc-header-logo');
-    expect(headerBlockMatch?.[0]).toContain('doc-company-name');
+  it('never renders an <img> tag — no logo, and never a broken-image placeholder either', () => {
+    const html = renderPayslipHtml(basePayslip(), baseMeta);
+    expect(html).not.toContain('<img');
   });
 
-  it('renders no <img> tag at all when companyLogoDataUri is null/undefined — never a broken image placeholder', () => {
-    const htmlWithNull = renderPayslipHtml(basePayslip(), { ...baseMeta, companyLogoDataUri: null });
-    expect(htmlWithNull).not.toContain('<img');
-
-    const htmlWithoutField = renderPayslipHtml(basePayslip(), baseMeta);
-    expect(htmlWithoutField).not.toContain('<img');
+  it('never renders any logo-related class name, confirming the removal is structural, not just a hidden image', () => {
+    const html = renderPayslipHtml(basePayslip(), baseMeta);
+    expect(html).not.toContain('doc-header-logo');
+    expect(html).not.toContain('doc-header-row');
   });
 
-  it('never widens the header-logo CSS rule\'s fixed height, regardless of caller input (layout-integrity guard)', () => {
-    const html = renderPayslipHtml(basePayslip(), { ...baseMeta, companyLogoDataUri: 'data:image/png;base64,x' });
-    expect(html).toContain('height: 18px');
+  it('preserves the established header geometry — company name and address render directly inside .doc-header, same as every other document without a logo', () => {
+    const html = renderPayslipHtml(basePayslip(), baseMeta);
+    // .doc-header's own CSS (print-styles.ts, shared with every other document) already centers
+    // and sizes this block; with no logo and no wrapping flex row left behind, it renders exactly
+    // the same structure Statement/Bank Sheet already use for a header with no logo.
+    expect(html).toMatch(/<div class="doc-header">\s*<div class="doc-company-name">/);
+    expect(html).toContain('doc-company-detail');
   });
 });
