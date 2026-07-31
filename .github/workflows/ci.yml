@@ -70,6 +70,17 @@ jobs:
       - name: Prisma seed
         run: npm run prisma:seed --workspace backend
 
+      # backend/.puppeteerrc.cjs points Puppeteer's cacheDirectory at a project-local path
+      # (backend/.cache/puppeteer), which only `.puppeteerrc.cjs`-aware invocations with `backend/`
+      # as their own cwd can discover — plain `npm install` at the repo root downloads Chrome to
+      # `~/.cache/puppeteer` instead (see that file's own comment), which nothing at runtime reads.
+      # render.yaml's buildCommand already runs this same step for production; CI needs its own
+      # copy or every PDF-generating test (statements.test.ts, payslips.test.ts) 500s on a fresh
+      # runner with no pre-existing `backend/.cache/puppeteer`.
+      - name: Install Puppeteer Chrome
+        working-directory: backend
+        run: npx puppeteer browsers install chrome
+
       - name: Run backend tests
         run: npm run test --workspace backend
 
