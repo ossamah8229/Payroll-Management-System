@@ -63,6 +63,13 @@ jobs:
       - name: Prisma migrate deploy
         run: npm run prisma:migrate --workspace backend -- deploy
 
+      # docs/architecture/testing.md's documented recipe (migrate, then seed, then test) —
+      # backend/tests/roles.test.ts's "Seed idempotency" suite and its final-administrator
+      # safeguard tests assert against the real seeded Master Admin/Finance roles and
+      # permissions, not just what each test's own fixtures grant ad hoc.
+      - name: Prisma seed
+        run: npm run prisma:seed --workspace backend
+
       - name: Run backend tests
         run: npm run test --workspace backend
 

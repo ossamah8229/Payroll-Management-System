@@ -1210,7 +1210,7 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
       // Created before cycle1 so she is bootstrapped and released exactly like Alpha, proving her
       // exclusion below is specifically because her own PayrollEntry.siteId is B, not merely
       // because she happens to have no history at all (that's covered separately by test H).
-      const beta = await prisma.employee.create({
+      await prisma.employee.create({
         data: { name: 'Discover Beta Native', designation: 'Guard', siteId: siteB.id, unitId: unitB.id, grossPay: '30000' },
       });
       const cycle1 = await makeDraftCycle(admin);
@@ -1375,7 +1375,7 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
     it('Privacy: the response carries only identity fields — no salary, banking, or Advance/correction figures', async () => {
       const admin = await masterAdminAgent('stmt-discover-privacy-admin@test.local');
       const { site, unit } = await makeSiteWithUnit('Test Site Discover Privacy');
-      const employee = await prisma.employee.create({
+      await prisma.employee.create({
         data: { name: 'Discover Privacy Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000', accountNumber: '1234567890', iban: 'PK00TEST0000000000000000' },
       });
       const cycle = await makeDraftCycle(admin);
