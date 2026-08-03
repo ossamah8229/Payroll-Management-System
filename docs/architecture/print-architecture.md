@@ -362,7 +362,110 @@ height, is the lower-risk choice compared to a watermark for every document here
   (`tests/e2e/specs/16-company-logo.spec.ts`) measures this exact header element's rendered height
   in `print` media before and after a logo is uploaded and asserts it is byte-for-byte unchanged.
 
+## Payroll Summary — field-selectable print (Post-deployment Print Usability Refinement)
+
+Production UAT found Payroll Summary's printed output illegible: its site-level table has 19
+columns (Project Site plus 18 mostly-financial figures) — too many for any single landscape page to
+render at a readable size, so headings and monetary values were truncated/squashed. The chosen fix
+is deliberately **not** a variant of `.print-fit`'s existing `table-layout: fixed`/8.5px-font
+shrink-everything approach (that CSS is exactly what made the *full* 19-column table illegible in
+the first place) — it's letting the user choose which columns/summary cards actually need to appear
+on paper, then sizing that smaller column set naturally.
+
+**Architecture — an extra step in front of the same shared engine, not a new one.** Payroll
+Summary's own Print button (`reports-payroll-summary-page.tsx`) does not render the generic
+`PrintButton` component every other print-enabled page uses. Clicking it opens a new
+`PayrollSummaryPrintOptionsDialog` (`components/reports/payroll-summary-print-options-dialog.tsx`)
+first — presets (Compact Summary / Deductions / Release Status) and individual checkboxes for 8
+summary cards and 19 table columns (Project Site locked, always selected). Confirming it calls
+`useTriggerPrint('landscape')` directly — the exact same shared hook `PrintButton`/
+`PrintSettingsDialog` already call — fixed to landscape/fit-to-page rather than re-exposing an
+orientation/fit choice the checkpoint brief didn't ask for. The Production Print Defect's own fix
+(`flushSync`-ordered dialog-close-then-print, `PrintButton`'s own doc comment above) is mirrored
+exactly in `handlePrintConfirm`, since this dialog is just as capable of still being mounted at the
+exact synchronous instant `window.print()` fires.
+
+**What actually prints.** A second, `hidden print:block` cards/table block (mirroring Payroll
+Entry's own "dedicated print-only markup, on-screen version `print:hidden`" pattern, §"Payroll
+Entry — the acceptance case" above) renders only the user's selected fields, reading them directly
+off the exact same already-loaded `PayrollSummaryReport` (`report.data`) the on-screen table and
+CSV/XLSX exports already use — no second fetch, no recalculated figure; column selection is
+presentation-only. The on-screen table itself is unchanged and always shows all 19 columns; it just
+gained its own `print:hidden` so it no longer doubles as the print artifact. CSV/XLSX export is
+completely untouched — both still call the same unpaginated `buildPayrollSummaryData` and always
+return the complete filtered report, exactly as before this refinement.
+
+**Legibility without a global font-size reduction.** The print-only table is deliberately never
+given the `print-fit` class (`handlePrintConfirm` passes `fit: 'normal'` to `useTriggerPrint`), so
+`table-layout` stays the browser default (`auto`) and column widths are sized from content, not
+forced into an equal, shrunk division of the page width.
+
+**Presets map to both cards and columns.** Each preset (`PRINT_PRESETS`) is a paired
+`{ cards, columns }` selection — e.g. Compact Summary selects the 5 summary cards *and* the matching
+6 table columns (Project Site, Employees, Gross Pay, Net Salary, Released Amount, Pending Release
+Amount) in one action. Every field id is a real `PayrollSummaryFigures` key (never a display label),
+so selection state, presets, and the browser-local last-used-selection (`localStorage`, key
+`payroll-summary-print-fields:v1` — never persisted to PostgreSQL) all stay stable across a future
+label wording change.
+
+**Final Print UX Refinement — the default is the complete report, not a pre-narrowed one.** The
+dialog's own initial state (`FULL_REPORT_SELECTION`, `payroll-summary-print-fields.ts`) is every
+summary card and every table column selected — the application must never silently hide report
+data, so a smaller printout is now something a user explicitly opts into (a preset, or a hand-picked
+selection), never the unexplained starting point. "Reset to Default" restores this same complete
+selection, not a preset. Compact Summary/Deductions/Release Status remain exactly as before, as
+opt-in shortcuts. A saved browser-local preference (an earlier, narrower selection a user already
+chose) still wins over this default on the dialog's next open — the default only applies when
+nothing is stored yet, or after an explicit Reset.
+
+**Print Readability indicator** (`getReadabilityLevel`, replacing the prior pass's plain "N columns
+selected" text) — four column-count-derived tiers, purely informational, never a selection change:
+
+| Columns | Status | Tone | Explanation |
+|---|---|---|---|
+| ≤ 8 | Excellent | green | "This layout should print clearly." |
+| 9–11 | Good | blue | "Suitable for most A4 landscape prints." |
+| 12–15 | Wide | amber | "Some columns may become compressed." |
+| 16+ | Very Wide | red | "This layout is likely to reduce readability. Consider using a preset." |
+
+Only the Very Wide tier additionally surfaces a prominent warning banner ("You have selected many
+columns. The report may be difficult to read when printed on A4 paper. Consider using one of the
+built-in presets.") — printing remains allowed regardless; the selection itself is never altered.
+Because the new default is the full 19-column report, a first-time user opening the dialog sees
+Very Wide and this banner immediately — a deliberate tradeoff (never hiding data by default) over a
+quieter first impression; the three presets exist precisely to give that user an easy, one-click way
+down to Excellent/Good.
+
 ## Testing
+
+- `frontend/src/components/reports/payroll-summary-print-options-dialog.test.tsx` — jsdom/RTL: the
+  dialog opens with every card/column already selected (Full Report), never a pre-narrowed one; each
+  preset still selects its own exact field set and updates the readability indicator immediately;
+  Project Site is selected and disabled and cannot be toggled off; Select All / Clear Optional
+  Fields / Reset to Default (Reset now restores Full Report, not a preset); the Print Readability
+  indicator's four tiers (Excellent/Good/Wide/Very Wide) each verified at their own column count;
+  the prominent Very Wide warning appears only at 16+ columns and never alters the selection; the
+  "no meaningful columns" guard blocks Print when only Project Site remains selected; local
+  -preference restoration (a stored selection pre-populates the dialog and wins over the Full Report
+  default; confirming Print saves the current selection; Reset overwrites a saved narrower
+  preference with Full Report only once confirmed, never migrating storage on its own).
+- `frontend/src/routes/reports-payroll-summary-page.test.tsx` — Print opens the options dialog
+  instead of calling `window.print()` immediately, defaulting to Full Report; confirming a preset
+  (or confirming with no preset picked, printing the complete report) calls `window.print()` with
+  the print-only cards/table already reflecting that selection; the on-screen table/cards
+  (`data-testid="on-screen-table"`/`"on-screen-cards"`) always show every column/card regardless of
+  what was just printed; CSV/XLSX export is unaffected by print field selection.
+- `tests/e2e/specs/17-reports.spec.ts` — real Chromium: the dialog defaults to Full Report (Very
+  Wide, warning banner visible) and printing it without picking a preset renders every column;
+  Compact Summary/Deductions/Release Status/a custom selection each print exactly their own
+  headings, verified via `getByRole('columnheader', { name, exact: true })` (an ellipsis-truncated
+  heading would fail an exact accessible-name match even though *some* text node still exists);
+  measurable geometry proof — the print-only table's `scrollWidth` never exceeds its container's
+  `clientWidth` (no horizontal clipping), no individual header cell's `scrollWidth` exceeds its own
+  `clientWidth` (no per-cell ellipsis truncation — the direct DOM proof `print-fit` was never
+  applied), and no two adjacent totals-row cells' bounding boxes overlap; the on-screen table still
+  shows every column under real `@media screen`; Excel export still succeeds and is unaffected after
+  using Print.
 
 - `frontend/src/components/print/print-types.test.ts` — `resolveOrientation` (pure function).
 - `frontend/src/components/ui/print-button.test.tsx` — jsdom/RTL: dialog opens instead of an

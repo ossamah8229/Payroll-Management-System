@@ -196,11 +196,34 @@ export endpoint accepts no `page`/`pageSize` parameter at all.
 
 ## 11. Print
 
-Client-side browser print only (`PrintButton`/`useTriggerPrint`/`PrintContextHeader`) — Reports gets
-its own print layout; no existing document's (Payslip/Statement/Bank Sheet/Cash Receiving) print
-geometry was touched. No server-side PDF export for Reports in this checkpoint (Phase 8A found no
-strong case for one beyond CSV/XLSX for an aggregate summary table; a future report closer to a
-per-employee document may revisit this).
+Client-side browser print only (`useTriggerPrint`/`PrintContextHeader`) — Reports gets its own print
+layout; no existing document's (Payslip/Statement/Bank Sheet/Cash Receiving) print geometry was
+touched. No server-side PDF export for Reports in this checkpoint (Phase 8A found no strong case for
+one beyond CSV/XLSX for an aggregate summary table; a future report closer to a per-employee
+document may revisit this).
+
+**Post-deployment Print Usability Refinement** — Payroll Summary's own site-level table has 19
+columns, too many to print legibly at once (a real production UAT finding, not a hypothetical).
+Rather than reuse the generic `PrintButton`, Payroll Summary's own Print action opens a
+`PayrollSummaryPrintOptionsDialog` first (presets — Compact Summary/Deductions/Release Status/Custom
+— plus individual summary-card and table-column checkboxes, Project Site always locked selected),
+then confirms into the exact same shared `useTriggerPrint` engine, fixed to landscape/fit-to-page.
+The full `docs/architecture/print-architecture.md` §"Payroll Summary — field-selectable print" is
+the canonical write-up; the short version: on-screen and CSV/XLSX are completely unaffected and
+always complete; only the printed layout is field-selectable; no calculation is duplicated for
+print — every selected field renders directly from the same already-loaded report DTO; the last-used
+selection is remembered in browser `localStorage` only, never persisted to PostgreSQL.
+
+**Final Print UX Refinement** — the dialog's own default (and what "Reset to Default" restores) is
+now the *complete* report: every summary card, every table column. The application must never
+silently hide report data, so a smaller printout is something a user now explicitly opts into — a
+preset (Compact Summary/Deductions/Release Status remain exactly as before, as opt-in shortcuts) or
+a hand-picked selection — never the unexplained starting point. A saved browser-local preference
+still wins over this default on the dialog's next open; only a fresh, never-configured dialog or an
+explicit Reset lands on Full Report. The prior pass's plain "N columns selected" text is now a Print
+Readability indicator (Excellent/Good/Wide/Very Wide, purely informational, never a selection
+change), with a prominent — but still non-blocking — warning once a selection reaches Very Wide
+(16+ columns). No report calculation changed; this remains presentation-only.
 
 ## 12. Permissions
 
