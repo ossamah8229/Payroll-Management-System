@@ -30,6 +30,7 @@ docs/                        # Project documentation — source of truth for dec
       payroll-lifecycle.md            # Draft/Released/Archived, new-cycle creation, cycle selector, backups
       outstanding-obligations.md      # the carry-forward predicate / Payroll Materialization Hook seam
       corrections-and-balance-adjustments.md  # the full Corrections + Balance Adjustments workflow
+      reports.md                       # Reports module foundation + Payroll Summary Report (Phase 8B Checkpoint 1)
     database/                 # the formal schema specification, split by bounded context
       README.md                # navigation, ownership map, §→file lookup — see database/README.md
       conventions-and-enums.md
@@ -70,7 +71,9 @@ backend/                     # Express + TypeScript API
       bank-sheets/           # Bank Sheets — derived, read-only
       cash-receiving/        # Cash Receiving — derived, read-only
       statements/            # Statements — per-employee ledger (read/aggregation only)
-      reports/               # Reports — Fines & EOBI and future reports, isolated read-only queries
+      reports/               # Reports (Phase 8B Checkpoint 1) — Payroll Summary Report built; Fines & EOBI
+                             # and the rest of the Phase 8A-investigated catalogue remain isolated
+                             # read-only queries for a future checkpoint
       dashboard/              # Dashboard — summary stats, read-only, cache candidate
       settings/               # Settings — company details, user profile, theme, User Management
       audit-log/              # Audit Log — append-only writes and queries (no update/delete exposed)
