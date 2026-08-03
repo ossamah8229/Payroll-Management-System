@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { calcNet, type AddWorkLineInput, type UpdatePayrollEntryInput, type UpdateWorkLineInput } from '@payroll/shared';
 import { ApiError } from '@/lib/api-client';
+import { payrollEntrySaveStatusStore } from '@/lib/payroll-entry-save-status-store';
 import {
   isEntryEditable,
   reloadPayrollEntry,
@@ -151,11 +152,24 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const retryTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const savedResetTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  /** Always points at the latest `retryNow` below, even from a closure captured before it existed
+   * (`report`'s own declaration comes first) or after this component has unmounted — a stable
+   * indirection so `payrollEntrySaveStatusStore`'s per-row retry callback never goes stale. */
+  const retryNowRef = useRef<() => void>(() => {});
 
+  /** Phase 7E durability fix — this cleanup used to `clearTimeout` the save-debounce and retry
+   * timers unconditionally, which meant a row edited and then scrolled out of the virtualizer's
+   * mounted window (`PayrollEntryGrid` only renders `TanStack Virtual`'s current window + overscan
+   * — a real, ordinary unmount, not a crash) silently discarded whatever was still dirty or mid
+   * backoff, with zero user-facing signal. `saveTimerRef`/`retryTimerRef` are deliberately left
+   * running: their closures read entirely through refs and the mutation hooks' own stable
+   * functions, so `commit()` still runs to completion and still reaches Postgres (and still
+   * reports into `payrollEntrySaveStatusStore`, which is exactly what lets that still-in-flight
+   * save stay visible to the page-level banner/guards even though this component is gone). Only
+   * `savedResetTimerRef` — purely cosmetic (fades this row's own "Saved" icon back to idle) — has
+   * nothing left to do once unmounted and is safe to drop. */
   useEffect(() => {
     return () => {
-      clearTimeout(saveTimerRef.current);
-      clearTimeout(retryTimerRef.current);
       clearTimeout(savedResetTimerRef.current);
     };
   }, []);
@@ -175,37 +189,65 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     }
   }, [entry, entryDraft, lineDrafts]);
 
-  const clearSavedEntryKeys = useCallback((sent: EntryDraft) => {
-    setEntryDraftState((current) => {
-      const next = { ...current };
-      for (const key of Object.keys(sent)) {
-        if (next[key as keyof EntryDraft] === sent[key as keyof EntryDraft]) {
-          delete next[key as keyof EntryDraft];
-        }
+  /** Computes and assigns `entryDraftRef.current` synchronously, as plain JS, *before* handing the
+   * same already-computed value to `setEntryDraftState` — deliberately not a `setEntryDraftState`
+   * updater function itself. A real bug this fix closes (found via `use-payroll-entry-editor.test.tsx`,
+   * item 6/11): React does not guarantee an updater-function's own side effects (the old code's
+   * `entryDraftRef.current = next;` *inside* `setEntryDraftState((current) => {...})`) run
+   * synchronously when the call happens outside a plain event handler — `commit()` runs from a
+   * `setTimeout`/retry-backoff continuation, exactly such a context. When the eager-bailout path
+   * doesn't fire, the ref stayed stale for the rest of *this* synchronous `commit()` call, so the
+   * `stillDirty` check a few lines below it read the pre-clear value and permanently reported
+   * `'dirty'` for a row that had, in fact, fully saved — with nothing left to ever correct it,
+   * since no further edit exists to retrigger `scheduleSave()`. Computing the ref update as an
+   * ordinary synchronous assignment removes any dependency on React's own update-batching timing. */
+  const clearSavedEntryKeys = useCallback((sent: EntryDraft): EntryDraft => {
+    const next = { ...entryDraftRef.current };
+    for (const key of Object.keys(sent)) {
+      if (next[key as keyof EntryDraft] === sent[key as keyof EntryDraft]) {
+        delete next[key as keyof EntryDraft];
       }
-      entryDraftRef.current = next;
-      return next;
-    });
+    }
+    entryDraftRef.current = next;
+    setEntryDraftState(next);
+    return next;
   }, []);
 
-  const clearSavedLineKeys = useCallback((lineId: string, sent: LineDraft) => {
-    setLineDraftsState((current) => {
-      const currentLine = current[lineId];
-      if (!currentLine) return current;
-      const nextLine = { ...currentLine };
-      for (const key of Object.keys(sent) as (keyof LineDraft)[]) {
-        if (nextLine[key] === sent[key]) delete nextLine[key];
-      }
-      const next = { ...current };
-      if (Object.keys(nextLine).length === 0) {
-        delete next[lineId];
-      } else {
-        next[lineId] = nextLine;
-      }
-      lineDraftsRef.current = next;
-      return next;
-    });
+  /** Same fix as `clearSavedEntryKeys` above, for one work line's draft. */
+  const clearSavedLineKeys = useCallback((lineId: string, sent: LineDraft): Record<string, LineDraft> => {
+    const current = lineDraftsRef.current;
+    const currentLine = current[lineId];
+    if (!currentLine) return current;
+    const nextLine = { ...currentLine };
+    for (const key of Object.keys(sent) as (keyof LineDraft)[]) {
+      if (nextLine[key] === sent[key]) delete nextLine[key];
+    }
+    const next = { ...current };
+    if (Object.keys(nextLine).length === 0) {
+      delete next[lineId];
+    } else {
+      next[lineId] = nextLine;
+    }
+    lineDraftsRef.current = next;
+    setLineDraftsState(next);
+    return next;
   }, []);
+
+  /** Every status transition flows through here — updates this row's own local UI state (as
+   * before) *and* imperatively mirrors the exact same transition into `payrollEntrySaveStatusStore`
+   * (Phase 7E — the aggregate cycle-level banner, the `beforeunload`/navigation guards, and the
+   * Release interlock all read that store). Imperative, not a `useEffect` keyed on `status`: an
+   * effect can only re-run while this component is still mounted, but a retry that resolves after
+   * the row has scrolled out of the virtualizer's window (see the unmount-cleanup fix above) must
+   * still update the aggregate — a plain function call does that; an effect never would. */
+  const report = useCallback(
+    (next: SaveStatus, message?: string) => {
+      setStatus(next);
+      setErrorMessage(message);
+      payrollEntrySaveStatusStore.set(entry.id, cycleId, next, message, () => retryNowRef.current());
+    },
+    [entry.id, cycleId],
+  );
 
   const dropLineDraft = useCallback((lineId: string) => {
     setLineDraftsState((current) => {
@@ -242,8 +284,7 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     }
 
     savingRef.current = true;
-    setStatus('saving');
-    setErrorMessage(undefined);
+    report('saving');
 
     try {
       let version = entryRef.current.version;
@@ -280,20 +321,21 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
       const stillDirty =
         Object.keys(entryDraftRef.current).length > 0 || Object.keys(lineDraftsRef.current).length > 0;
       if (stillDirty) {
-        setStatus('dirty');
+        report('dirty');
       } else {
-        setStatus('saved');
+        report('saved');
         savedResetTimerRef.current = setTimeout(() => {
           setStatus((current) => (current === 'saved' ? 'idle' : current));
         }, SAVED_INDICATOR_MS);
       }
     } catch (error) {
       if (isConflict(error)) {
-        setStatus('conflict');
-        setErrorMessage('This row was changed elsewhere — reload it to keep editing.');
+        report('conflict', 'This row was changed elsewhere — reloading discards your local, unsaved edit to this row. Reload to see the current server value and keep editing.');
       } else {
-        setStatus('error');
-        setErrorMessage(error instanceof ApiError ? error.message : 'Save failed — will retry automatically.');
+        report(
+          'error',
+          error instanceof ApiError ? error.message : 'Save failed — will retry automatically.',
+        );
         if (!isValidationError(error)) {
           retryCountRef.current += 1;
           if (retryCountRef.current <= MAX_AUTO_RETRIES) {
@@ -310,15 +352,17 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
         void commit();
       }
     }
-  }, [entry.id, updateEntry, updateWorkLine, clearSavedEntryKeys, clearSavedLineKeys]);
+  }, [entry.id, updateEntry, updateWorkLine, clearSavedEntryKeys, clearSavedLineKeys, report]);
 
   const scheduleSave = useCallback(() => {
-    setStatus((current) => (current === 'conflict' ? current : 'dirty'));
+    if (statusRef.current !== 'conflict') {
+      report('dirty');
+    }
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       void commit();
     }, SAVE_DEBOUNCE_MS);
-  }, [commit]);
+  }, [commit, report]);
 
   const setEntryField = useCallback(
     <K extends keyof EntryDraft>(key: K, value: EntryDraft[K]) => {
@@ -360,6 +404,7 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     retryCountRef.current = 0;
     void commit();
   }, [commit]);
+  retryNowRef.current = retryNow;
 
   const reload = useCallback(async () => {
     clearTimeout(saveTimerRef.current);
@@ -372,10 +417,9 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     setLineDraftsState({});
     entryDraftRef.current = {};
     lineDraftsRef.current = {};
-    setStatus('idle');
-    setErrorMessage(undefined);
+    report('idle');
     await reloadPayrollEntry(queryClient, cycleId, entry.id);
-  }, [cycleId, entry.id, queryClient]);
+  }, [cycleId, entry.id, queryClient, report]);
 
   /** Adds a new `PayrollEntryWorkLine` — a structural, immediate action (not a debounced field
    * edit), consistent with how every other structural action in this app persists instantly rather
@@ -386,25 +430,22 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
     async (input: Omit<AddWorkLineInput, 'version'>) => {
       if (statusRef.current === 'conflict' || savingRef.current) return;
       savingRef.current = true;
-      setStatus('saving');
-      setErrorMessage(undefined);
+      report('saving');
       try {
         await addWorkLineMutation.mutateAsync({
           entryId: entry.id,
           input: { version: entryRef.current.version, ...input },
         });
         retryCountRef.current = 0;
-        setStatus('saved');
+        report('saved');
         savedResetTimerRef.current = setTimeout(() => {
           setStatus((current) => (current === 'saved' ? 'idle' : current));
         }, SAVED_INDICATOR_MS);
       } catch (error) {
         if (isConflict(error)) {
-          setStatus('conflict');
-          setErrorMessage('This entry was changed elsewhere — reload it to keep editing.');
+          report('conflict', 'This entry was changed elsewhere — reloading discards your local, unsaved edit. Reload to see the current server value and keep editing.');
         } else {
-          setStatus('error');
-          setErrorMessage(error instanceof ApiError ? error.message : 'Adding the line failed — try again.');
+          report('error', error instanceof ApiError ? error.message : 'Adding the line failed — try again.');
         }
       } finally {
         savingRef.current = false;
@@ -414,7 +455,7 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
         }
       }
     },
-    [entry.id, addWorkLineMutation, commit],
+    [entry.id, addWorkLineMutation, commit, report],
   );
 
   /** Removes a work line — same immediate, non-debounced pattern as `addLine`. Clears any pending
@@ -427,22 +468,19 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
       clearTimeout(saveTimerRef.current);
       dropLineDraft(lineId);
       savingRef.current = true;
-      setStatus('saving');
-      setErrorMessage(undefined);
+      report('saving');
       try {
         await deleteWorkLineMutation.mutateAsync({ id: lineId, version: entryRef.current.version });
         retryCountRef.current = 0;
-        setStatus('saved');
+        report('saved');
         savedResetTimerRef.current = setTimeout(() => {
           setStatus((current) => (current === 'saved' ? 'idle' : current));
         }, SAVED_INDICATOR_MS);
       } catch (error) {
         if (isConflict(error)) {
-          setStatus('conflict');
-          setErrorMessage('This entry was changed elsewhere — reload it to keep editing.');
+          report('conflict', 'This entry was changed elsewhere — reloading discards your local, unsaved edit. Reload to see the current server value and keep editing.');
         } else {
-          setStatus('error');
-          setErrorMessage(error instanceof ApiError ? error.message : 'Deleting the line failed — try again.');
+          report('error', error instanceof ApiError ? error.message : 'Deleting the line failed — try again.');
         }
       } finally {
         savingRef.current = false;
@@ -452,7 +490,7 @@ export function usePayrollEntryEditor(entry: PayrollEntry, cycleId: string, cycl
         }
       }
     },
-    [deleteWorkLineMutation, dropLineDraft, commit],
+    [deleteWorkLineMutation, dropLineDraft, commit, report],
   );
 
   const effectiveEntry = useMemo(() => ({ ...entry, ...entryDraft }), [entry, entryDraft]);

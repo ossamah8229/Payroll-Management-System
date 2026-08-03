@@ -83,6 +83,15 @@ export function SplitWorkLinesModal({
     onOpenChange(next);
   }
 
+  // Phase 7E durability checkpoint (A6) — same discard-confirmation guard as the grid's own
+  // inline conflict icon (`payroll-entry-row.tsx`'s `handleReload`), since this modal shares the
+  // identical `editor` instance and its `reload()` call discards the exact same local draft.
+  function handleReload() {
+    if (window.confirm('This entry was changed elsewhere. Reloading replaces it with the current server value and discards your local, unsaved edit. Continue?')) {
+      void reload();
+    }
+  }
+
   return (
     <Modal open={open} onOpenChange={handleOpenChange}>
       <ModalContent title={`Split by ${unitLabel} — ${entry.employee.name}`} widthClassName="max-w-[680px]">
@@ -95,7 +104,7 @@ export function SplitWorkLinesModal({
               </button>
             )}
             {status === 'conflict' && (
-              <button type="button" className="font-semibold underline" onClick={() => void reload()}>
+              <button type="button" className="font-semibold underline" onClick={handleReload}>
                 Reload
               </button>
             )}

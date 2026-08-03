@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SessionUser } from '@payroll/shared';
 import type { PayrollCycle } from '@/hooks/use-payroll-cycles';
@@ -67,6 +67,7 @@ vi.mock('@/hooks/use-project-sites', () => ({
 
 // Imported after the mocks above so the module graph resolves to the mocked hooks.
 const { PayrollEntryPage } = await import('./payroll-entry-page');
+const { payrollEntrySaveStatusStore } = await import('@/lib/payroll-entry-save-status-store');
 
 const testUser: SessionUser = {
   id: 'user-1',
@@ -80,17 +81,27 @@ const testUser: SessionUser = {
   themeAccentColor: '#000000',
 };
 
-function renderPage() {
+// A data router (not plain `<MemoryRouter>`/`<Routes>`) — required as of the Phase 7E navigation
+// guard (A3): `PayrollEntryPage` now calls `useBlocker`, which throws outside a data router's
+// context. `otherPath` gives the nav-guard tests below something to navigate *to* and assert
+// against.
+function renderPage(initialPath = `/payroll-cycles/${testCycle.id}/payroll-entry`) {
   const queryClient = new QueryClient();
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/payroll-cycles/${testCycle.id}/payroll-entry`]}>
-        <Routes>
-          <Route path="/payroll-cycles/:cycleId/payroll-entry" element={<PayrollEntryPage user={testUser} />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+  const router = createMemoryRouter(
+    [
+      { path: '/payroll-cycles/:cycleId/payroll-entry', element: <PayrollEntryPage user={testUser} /> },
+      { path: '/other-page', element: <div>Other Page</div> },
+    ],
+    { initialEntries: [initialPath] },
   );
+  return {
+    router,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 describe('Payroll Entry page — import removed, export preserved', () => {
@@ -113,5 +124,55 @@ describe('Payroll Entry page — import removed, export preserved', () => {
     const exportExcel = screen.getByRole('button', { name: /export excel/i });
     expect(exportCsv.hasAttribute('disabled')).toBe(false);
     expect(exportExcel.hasAttribute('disabled')).toBe(false);
+  });
+});
+
+/**
+ * Phase 7E durability checkpoint (A3, item 4) — the in-app navigation guard. Seeds
+ * `payrollEntrySaveStatusStore` directly (the same store the real grid rows report into) rather
+ * than driving actual keystrokes through the grid, since this page's own `entries` are mocked
+ * empty above (Import-removal suite's concern, not this one's) — the guard itself only ever reads
+ * the store, never the grid, so this is a faithful test of the exact code path `PayrollEntryPage`
+ * runs.
+ */
+describe('Payroll Entry page — in-app navigation guard while unsaved (Phase 7E, A3)', () => {
+  afterEach(() => {
+    cleanup();
+    payrollEntrySaveStatusStore.clear('nav-guard-entry', testCycle.id);
+  });
+
+  it('blocks navigating away while the cycle has unsaved work, and lets the user stay', async () => {
+    payrollEntrySaveStatusStore.set('nav-guard-entry', testCycle.id, 'dirty');
+    const { router } = renderPage();
+
+    router.navigate('/other-page');
+    const stayButton = await screen.findByRole('button', { name: /stay on this page/i });
+    expect(screen.getByText(/unsaved changes/i)).not.toBeNull();
+
+    stayButton.click();
+    expect(screen.queryByText('Other Page')).toBeNull();
+    expect(router.state.location.pathname).toBe(`/payroll-cycles/${testCycle.id}/payroll-entry`);
+  });
+
+  it('navigates away once the user confirms "Leave anyway"', async () => {
+    payrollEntrySaveStatusStore.set('nav-guard-entry', testCycle.id, 'dirty');
+    const { router } = renderPage();
+
+    router.navigate('/other-page');
+    const leaveButton = await screen.findByRole('button', { name: /leave anyway/i });
+    leaveButton.click();
+
+    await screen.findByText('Other Page');
+    expect(router.state.location.pathname).toBe('/other-page');
+  });
+
+  it('never blocks navigation when everything is already saved', async () => {
+    payrollEntrySaveStatusStore.clear('nav-guard-entry', testCycle.id);
+    const { router } = renderPage();
+
+    router.navigate('/other-page');
+
+    await screen.findByText('Other Page');
+    expect(screen.queryByText(/unsaved changes/i)).toBeNull();
   });
 });
