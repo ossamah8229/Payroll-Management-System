@@ -28,6 +28,12 @@ function statementsNavItem(): NavItem {
   return item;
 }
 
+function reportsNavItem(): NavItem {
+  const item = navSections.flatMap((section) => section.items).find((navItem) => navItem.to === '/reports');
+  if (!item) throw new Error('Reports nav item not found in navSections');
+  return item;
+}
+
 describe('isNavItemVisible', () => {
   it('is always visible when no permission is required', () => {
     expect(isNavItemVisible({ label: 'Dashboard', to: '/', icon: navSections[0]!.items[0]!.icon }, fakeUser([]))).toBe(
@@ -89,6 +95,30 @@ describe('isNavItemVisible', () => {
 
     it('is hidden for a user with no permissions at all', () => {
       expect(isNavItemVisible(statementsNavItem(), fakeUser([]))).toBe(false);
+    });
+  });
+
+  // --- Reports sidebar entry (Phase 8B Checkpoint 1) --------------------------------------------
+  // Reuses the existing, previously-unused reports:view permission (Phase 8A investigation report
+  // §11) — never a newly-created permission.
+
+  describe('the Reports sidebar item', () => {
+    it('requires the reports:view permission', () => {
+      expect(reportsNavItem().requiredPermission).toBe('reports:view');
+    });
+
+    it('is visible when reports:view is held', () => {
+      expect(isNavItemVisible(reportsNavItem(), fakeUser(['reports:view']))).toBe(true);
+    });
+
+    it('is hidden without reports:view, even for a user holding related payroll permissions', () => {
+      expect(
+        isNavItemVisible(reportsNavItem(), fakeUser(['payroll:entry', 'payroll:view', 'bank-sheets:view'])),
+      ).toBe(false);
+    });
+
+    it('is hidden for a user with no permissions at all', () => {
+      expect(isNavItemVisible(reportsNavItem(), fakeUser([]))).toBe(false);
     });
   });
 });

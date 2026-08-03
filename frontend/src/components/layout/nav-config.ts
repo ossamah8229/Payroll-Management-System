@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   ClipboardList,
+  FileBarChart,
   FileText,
   HandCoins,
   Landmark,
@@ -120,6 +121,20 @@ export const navSections: NavSection[] = [
     label: 'Employees',
     items: [
       { label: 'Employee Registry', to: '/employees', icon: Users, requiredPermission: 'employees:view' },
+    ],
+  },
+  {
+    label: 'Reports',
+    items: [
+      {
+        label: 'Reports',
+        to: '/reports',
+        icon: FileBarChart,
+        // Phase 8B Checkpoint 1 — reuses the existing, previously-unused `reports:view` permission
+        // (already seeded, already default-granted to Payroll Staff — Phase 8A investigation report
+        // §11), never a newly-created permission this checkpoint.
+        requiredPermission: 'reports:view',
+      },
     ],
   },
   {
