@@ -66,8 +66,8 @@ interface PayrollCycleRow {
 
 interface EntryRow {
   id: string;
-  employeeId: string;
   siteId: string;
+  released: boolean;
   site: { id: string; name: string };
   employee: { id: string; name: string; employeeCode: string | null };
 }
@@ -78,22 +78,36 @@ function statusBadge(page: import('@playwright/test').Page, text: string) {
   return page.locator('span').filter({ hasText: text });
 }
 
+/**
+ * The Correction workflow only ever applies to an entry that's actually `released` (Payroll
+ * Entry's own `hasReleasedEntries` gate on the Request Correction button; the backend's own
+ * `ENTRY_NOT_RELEASED` guard). By the time later scenarios in this file run, more than one
+ * cycle may already be Archived (Scenario 4 below archives a second one via its own rollover)
+ * — and not every entry in every Archived cycle is necessarily `released` (an entry with 0
+ * worked days resolves as RECOVERY_DUE instead, Negative Payroll Recovery checkpoint,
+ * 2026-07-27). Scanning every Archived cycle's entries for one that's genuinely `released`,
+ * rather than assuming the first cycle's first entry always qualifies, is what actually matches
+ * this helper's own name and every caller's own assumption.
+ */
 async function findCorrectableEntry(context: import('@playwright/test').BrowserContext) {
   const cycles = await apiGet<{ cycles: PayrollCycleRow[] }>(context, '/api/v1/payroll-cycles');
-  const archived = cycles.body.cycles?.find((c) => c.status === 'ARCHIVED');
-  if (!archived) return null;
+  const archivedCycles = cycles.body.cycles?.filter((c) => c.status === 'ARCHIVED') ?? [];
 
-  const entries = await apiGet<{ entries: EntryRow[] }>(context, `/api/v1/payroll-cycles/${archived.id}/entries`);
-  const entry = entries.body.entries?.[0];
-  if (!entry) return null;
+  for (const cycle of archivedCycles) {
+    const entries = await apiGet<{ entries: EntryRow[] }>(context, `/api/v1/payroll-cycles/${cycle.id}/entries`);
+    const entry = entries.body.entries?.find((e) => e.released);
+    if (entry) {
+      return {
+        cycleId: cycle.id,
+        entryId: entry.id,
+        siteId: entry.siteId,
+        siteName: entry.site.name,
+        employeeName: entry.employee.name,
+      };
+    }
+  }
 
-  return {
-    cycleId: archived.id,
-    entryId: entry.id,
-    siteId: entry.siteId,
-    siteName: entry.site.name,
-    employeeName: entry.employee.name,
-  };
+  return null;
 }
 
 /**

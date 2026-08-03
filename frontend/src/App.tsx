@@ -50,6 +50,10 @@ const BalanceAdjustmentDetailPage = lazy(() =>
   import('@/routes/balance-adjustment-detail-page').then((m) => ({ default: m.BalanceAdjustmentDetailPage })),
 );
 const StatementsPage = lazy(() => import('@/routes/statements-page').then((m) => ({ default: m.StatementsPage })));
+const ReportsPage = lazy(() => import('@/routes/reports-page').then((m) => ({ default: m.ReportsPage })));
+const ReportsPayrollSummaryPage = lazy(() =>
+  import('@/routes/reports-payroll-summary-page').then((m) => ({ default: m.ReportsPayrollSummaryPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -333,6 +337,45 @@ export function App() {
                 {(user) => (
                   <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
                     <RolesPage user={user} />
+                  </RequirePermission>
+                )}
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/reports"
+            element={
+              <RequireSession>
+                {(user) => (
+                  <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+                    <ReportsPage user={user} />
+                  </RequirePermission>
+                )}
+              </RequireSession>
+            }
+          />
+          {/* Historical Payroll Cycle Selector routing (same shape as every other cycle-aware page,
+              e.g. /bank-sheet above) — the flat route redirects to the canonical
+              /payroll-cycles/:cycleId/reports/payroll-summary URL via useSelectedPayrollCycle. */}
+          <Route
+            path="/reports/payroll-summary"
+            element={
+              <RequireSession>
+                {(user) => (
+                  <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+                    <ReportsPayrollSummaryPage user={user} />
+                  </RequirePermission>
+                )}
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/payroll-cycles/:cycleId/reports/payroll-summary"
+            element={
+              <RequireSession>
+                {(user) => (
+                  <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+                    <ReportsPayrollSummaryPage user={user} />
                   </RequirePermission>
                 )}
               </RequireSession>

@@ -532,7 +532,7 @@ same permission classified inconsistently across its own domain's own routes**.
 | `employees:view` / `:create` / `:edit` | **Site-scoped operational** | `UserSiteAssignment` | Deliberately **not** widened by also holding `sites:manage` — see the worked example below. |
 | `payroll:entry`, `payroll:view`, `payroll:release`, `advances:manage`, `bank-sheets:view`, `payslips:view`, `corrections:approve` | Site-scoped operational | `UserSiteAssignment` | Same rule as Employees — verified unchanged, all import the same `common/authz-policy.ts` helpers. |
 | `payroll-cycle:manage`, `banks:manage` | Global administrative | none | Unchanged (no site concept for either). |
-| `reports:view` | Not yet enforced | — | No `reports` module/routes exist yet; permission key is seedable/grantable but has zero enforcement points and zero frontend consumers. Not a defect — nothing to enforce yet. |
+| `reports:view` | **Site-scoped operational** (Phase 8B Checkpoint 1) | `UserSiteAssignment`, via `common/authz-policy.ts`'s `assertSiteAccess`/`getAccessibleSiteIds` — the same helpers every other site-scoped domain uses | Gates both viewing and exporting the Reports module (`backend/src/modules/reports/`) — one permission for both, matching `payslips:view`/`bank-sheets:view`'s own precedent; no separate `reports:export` key. First consumer: the Payroll Summary Report (`GET /api/v1/reports/payroll-summary`). Default-granted to Payroll Staff (unchanged from the original seed); Finance's default grant still excludes it — an open question for a future checkpoint, not decided here. |
 
 **The worked example the audit centered on:** a "Payroll Manager" custom role holding both
 `sites:manage` (global, for Project Sites/Units administration) and `employees:view`/`:create`

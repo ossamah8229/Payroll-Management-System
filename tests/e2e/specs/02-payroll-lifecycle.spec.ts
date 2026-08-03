@@ -1,5 +1,5 @@
 import { test, expect } from '../fixtures/auth';
-import { apiGet, apiPost } from '../helpers/api';
+import { apiGet, apiPatch, apiPost } from '../helpers/api';
 import { createSiteWithEmployee } from '../helpers/fixtures';
 
 /**
@@ -41,6 +41,24 @@ test.describe('Payroll lifecycle smoke', () => {
       month: 1,
     });
     const draftCycleId = created.cycle.id;
+
+    // `createSiteWithEmployee` never sets worked days on the entry it auto-syncs into this Draft
+    // cycle, so its net salary is negative (grossPay earned over 0 days, minus EOBI) — since the
+    // Negative Payroll Recovery checkpoint (2026-07-27, `payroll-release.service.ts`), Release Unit
+    // now correctly excludes a negative/zero-net entry from `released` (payoutOutcome: RECOVERY_DUE
+    // instead). This spec's whole point is producing a genuinely *released* (paid) entry for every
+    // downstream spec that reuses this cycle once Archived (07-corrections.spec.ts,
+    // 13-print-architecture.spec.ts's Bank Sheet/Cash Receiving cases) — so give the entry's primary
+    // work line a full cycle of worked days first, making its net salary positive.
+    const entriesBeforeRelease = await apiGet<{
+      entries: { id: string; version: number; workLines: { id: string; cycleDays: number }[] }[];
+    }>(context, `/api/v1/payroll-cycles/${draftCycleId}/entries`);
+    const entry = entriesBeforeRelease.body.entries[0]!;
+    const primaryLine = entry.workLines[0]!;
+    await apiPatch(context, `/api/v1/work-lines/${primaryLine.id}`, {
+      version: entry.version,
+      days: String(primaryLine.cycleDays),
+    });
 
     // --- 1. Draft view ---
     await page.goto(`/payroll-cycles/${draftCycleId}/release`);

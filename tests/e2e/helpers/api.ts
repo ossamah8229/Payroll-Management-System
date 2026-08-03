@@ -30,6 +30,18 @@ export async function apiPost<T = unknown>(context: BrowserContext, path: string
   return res.json() as Promise<T>;
 }
 
+export async function apiPatch<T = unknown>(context: BrowserContext, path: string, body: unknown): Promise<T> {
+  const csrfToken = await getCsrfToken(context);
+  const res = await context.request.patch(`${BACKEND_URL}${path}`, {
+    data: body,
+    headers: { 'x-csrf-token': csrfToken },
+  });
+  if (!res.ok()) {
+    throw new Error(`PATCH ${path} failed: ${res.status()} ${await res.text()}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function apiGet<T = unknown>(context: BrowserContext, path: string): Promise<{ status: number; body: T }> {
   const res = await context.request.get(`${BACKEND_URL}${path}`);
   const body = (await res.json().catch(() => undefined)) as T;

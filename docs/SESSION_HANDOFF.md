@@ -3100,6 +3100,61 @@ from bulk release — reproduced identically against the pre-existing, unmodifie
 `13-print-architecture.spec.ts` Bank Sheet/Cash Receiving tests. Any future Playwright spec needing a
 *released* entry should be aware of this before assuming the shared fixture "just works."
 
-**Not started**: Reports, Dashboard. **No commit, push, or deploy occurred this session** — stopped
-deliberately for review, per explicit instruction.
+**Not started (at the time)**: Reports, Dashboard. **No commit, push, or deploy occurred this
+session** — stopped deliberately for review, per explicit instruction.
+
+## 24. Addendum, 2026-07-31 — Phase 8A (Reports Investigation) + Phase 8B Checkpoint 1 (Reporting Foundation + Payroll Summary Report) — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own "Phase 8A" and "Phase 8B Checkpoint 1" entries
+(inserted just before its §2 "Remaining work" table) — this is the handoff summary.
+
+**Naming note, read first**: "Phase 8A"/"Phase 8B" are this work's own out-of-band requester's
+session labels, not this roadmap's numbering — the actual work is this roadmap's **Phase 7** Reports
+sub-scope (`docs/IMPLEMENTATION_PLAN.md`'s Phase 7 = "Statements, Reports, Dashboard"). This roadmap's
+own Phase 8 (Team Collaboration panel, Audit Log viewer UI) is untouched and still Not Started —
+same kind of naming collision already on record for "Phase 7D" in Addendum 23.
+
+**Phase 8A** was investigation-only (no code/schema/DB change, no commit): an architecture audit of
+the actual existing Prisma schema, backend modules, frontend components, export/print infrastructure,
+and RBAC, producing a full report catalogue, filter matrix, drill-down architecture, financial-
+correctness rules, and test strategy — delivered as a published artifact. Key finding: `PayrollEntry`
+is only partially snapshotted, and Bank Sheet's own "Account Title" already, knowingly, reads live
+`Employee.name` even for archived cycles — a pre-existing, already-shipped gap, not something this
+investigation introduced.
+
+**Phase 8B Checkpoint 1** implements the Reports module foundation (reusing the existing, previously-
+unused `reports:view` permission — no new permission; a new, module-scoped server-side pagination
+utility, since none existed anywhere in this codebase) and the first production report, Payroll
+Summary — grouped Payroll Cycle → Project Site → totals, every net-salary-derived figure computed via
+the single canonical `calcNet`, `cycleTotals` always reflecting the complete filtered scope (never
+just the current page), CSV/XLSX export sharing one query/aggregation with the on-screen view, browser
+print via the existing `PrintButton`/`PrintContextHeader` system. "Outstanding/balance amount" is
+deliberately answered as this cycle's own not-yet-released net salary, not the live, cross-cycle
+`BalanceAdjustment.remainingAmount` — see `docs/architecture/workflows/reports.md §5` for the full
+reasoning; that figure is left for a future, dedicated report.
+
+**One genuine test-authoring pitfall found and fixed**: reusing the real `ROLE_CODES.PAYROLL_STAFF`
+role code for a "lacks `reports:view`" test agent (both in the Jest suite and the Playwright fixture)
+silently inherited that role's real seeded default grant, which already includes `reports:view` —
+fixed with a dedicated `TEST_`-coded role in both places, matching `bank-sheets.test.ts`'s own
+established precedent. A second, minor fixture-ordering lesson in the Playwright spec: creating an
+Employee while a Draft cycle already exists auto-syncs them into its roster
+(`syncEmployeeIntoCurrentDraftCycle`), so the spec must not also explicitly create a payroll entry for
+that employee.
+
+**Verification**: full repo typecheck/lint/build all clean. Backend: 1220/1242 (the 22 failures are
+`git diff`-confirmed pre-existing, reproduce identically with the new `reports.test.ts` entirely
+absent, and split into two known, unrelated classes — Puppeteer/Chrome PDF rendering unavailable in
+this sandbox, and one concurrency-timing flake under full-suite connection-pool load that passes
+53/53 in isolation). Frontend: 256/256 (up from 246). Playwright: the new `17-reports.spec.ts`, 2/2
+passing against the real stack (real browser, backend, and Postgres) — real data rendering plus a
+real CSV download, and a real permission-revocation Access-Denied check mirroring
+`10-site-visibility.spec.ts`'s own established "never a false empty state" assertion.
+
+**Not started**: the remaining Phase 8A-catalogued reports (Employee Payroll History, Project Site
+Payroll Report, Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report,
+Variance/Month-on-Month Report) and Dashboard. No existing module's behavior (Payroll Entry, Salary
+Release, Employee Registry, Advances, Corrections, Statements, Payslips, Bank Sheets, Cash Receiving,
+company logo, theme system) was modified. **No commit, push, or deploy occurred this session** —
+stopped deliberately for review, per explicit instruction.
 

@@ -41,6 +41,7 @@ import {
 } from './modules/corrections/corrections.routes';
 import { adjustmentTypesRouter } from './modules/adjustment-types/adjustment-types.routes';
 import { employeeStatementRouter, statementEmployeesRouter } from './modules/statements/statements.routes';
+import { reportsRouter } from './modules/reports/reports.routes';
 
 const PgSession = connectPgSimple(session);
 
@@ -215,6 +216,10 @@ export function createApp(): Express {
   app.use('/api/v1/advances', advancesRouter);
   app.use('/api/v1/tasks', tasksRouter);
   app.use('/api/v1/task-notifications', taskNotificationsRouter);
+  // Phase 8B Checkpoint 1 — flat top-level resource; read-only, derived reporting endpoints, never
+  // nested under a specific payroll cycle route (a report's own ?cycleId= query parameter selects the
+  // cycle instead, since a report is a lens over existing data, not a sub-resource of one cycle).
+  app.use('/api/v1/reports', reportsRouter);
   // Phase 5 Checkpoint 2 — id-scoped detail/download routes, a flat top-level resource (a package/
   // file is looked up by its own id, matching Advances' own "not nested under a specific parent
   // route" pattern above).
