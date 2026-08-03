@@ -167,6 +167,14 @@ export async function releaseProjectUnit(
   currentUser: SessionUser,
   cycleId: string,
   unitId: string,
+  /** Phase 7E durability checkpoint (A4) — the `{entryId, version}` pairs the Salary Release page
+   * last displayed for this Unit, when it provides them (optional, backward-compatible — see
+   * `releaseProjectUnitSchema`). Verified inside this same locked transaction, below, against
+   * whatever this sweep is about to actually release; a mismatch means a save landed on one of
+   * these entries after the operator's own read and before this click, so the release is rejected
+   * outright rather than proceeding against entries the operator never actually saw in their final
+   * form. */
+  expectedVersions: { entryId: string; version: number }[] | undefined,
   requestMeta: RequestMeta,
 ): Promise<ReleaseUnitResult> {
   const unit = await prisma.projectUnit.findUnique({ where: { id: unitId } });
@@ -257,6 +265,25 @@ export async function releaseProjectUnit(
           workLines: WORK_LINES_INCLUDE,
         },
       });
+
+      // Phase 7E durability checkpoint (A4) — reject the whole release (the transaction rolls
+      // back, including the `PayrollUnitRelease` row and audit entry already written above) if any
+      // entry the operator's own last read expected to be part of this sweep has since changed
+      // version, or is no longer a live candidate for it at all (held, already resolved via
+      // another path, etc.) — either way, the world moved since the operator looked, so this must
+      // not silently release entries in a form they never actually saw. Skipped entirely when the
+      // caller sends nothing (backward-compatible — see `releaseProjectUnitSchema`).
+      if (expectedVersions && expectedVersions.length > 0) {
+        const candidateVersionById = new Map(candidates.map((candidate) => [candidate.id, candidate.version]));
+        const staleEntryIds = expectedVersions
+          .filter(({ entryId, version }) => candidateVersionById.get(entryId) !== version)
+          .map(({ entryId }) => entryId);
+        if (staleEntryIds.length > 0) {
+          throw conflict(
+            'Payroll data at this Unit changed since it was last loaded — refresh the Release page and try again',
+          );
+        }
+      }
 
       let releasedEntryCount = 0;
       let noPayDueCount = 0;

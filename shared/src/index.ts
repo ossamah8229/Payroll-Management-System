@@ -70,6 +70,9 @@ export type {
   UpdateWorkLineInput,
 } from './schemas/payroll-entry';
 
+export { releaseProjectUnitSchema } from './schemas/payroll-release';
+export type { ReleaseProjectUnitInput } from './schemas/payroll-release';
+
 export {
   advanceRepaymentTypeSchema,
   advanceStatusSchema,

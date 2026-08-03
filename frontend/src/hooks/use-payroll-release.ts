@@ -50,12 +50,23 @@ export function useUnitReleaseStatus(cycleId: string | undefined, siteId: string
   });
 }
 
+export interface ReleaseProjectUnitVariables {
+  unitId: string;
+  /** Phase 7E durability checkpoint (A4) — the `{entryId, version}` pairs of every entry the
+   * Salary Release page currently shows as touching this Unit, so the backend can reject the
+   * release outright if any of them changed since this page last loaded (`payroll-release.service.ts`'s
+   * own doc comment on `releaseProjectUnit`). Optional — omitting it (or an empty array) releases
+   * exactly as before this checkpoint. */
+  expectedVersions?: { entryId: string; version: number }[];
+}
+
 export function useReleaseProjectUnit(cycleId: string, siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (unitId: string) =>
+    mutationFn: ({ unitId, expectedVersions }: ReleaseProjectUnitVariables) =>
       apiRequest<ReleaseUnitResult>(`/api/v1/payroll-cycles/${cycleId}/units/${unitId}/release`, {
         method: 'POST',
+        body: expectedVersions && expectedVersions.length > 0 ? { expectedVersions } : undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: unitReleaseStatusQueryKey(cycleId, siteId) });

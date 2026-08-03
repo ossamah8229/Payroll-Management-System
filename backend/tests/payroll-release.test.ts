@@ -539,4 +539,106 @@ describe('Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation', 
     expect(betaAfter.entryCount).toBe(1); // only the split entry touches Beta
     expect(betaAfter.willReleaseCount).toBe(1); // its only remaining Unit is Beta now
   });
+
+  // --- Phase 7E durability checkpoint (A4) — expectedVersions release preflight ------------------
+
+  describe('expectedVersions preflight (Phase 7E durability checkpoint, A4)', () => {
+    it('rejects the whole release when a provided expected version is stale — nothing changes', async () => {
+      const admin = await masterAdminAgent('release-expver-admin1@test.local');
+      const { site, units } = await makeSiteWithUnits('Test Site Release ExpVer 1', ['Alpha']);
+      const cycle = await makeDraftCycle(admin, 4);
+      const employee = await makeEmployee(site.id, units[0]!.id, 'ExpVer Stale');
+      const entry = await createEntry(admin, cycle.id, employee.id);
+
+      // A save lands on this entry after the Release page's own "last read" — exactly the race
+      // this preflight exists to catch. The entry's version is now ahead of whatever
+      // `expectedVersions` below (deliberately) still claims.
+      const updated = await admin.agent
+        .patch(`/api/v1/payroll-entries/${entry.id}`)
+        .set('x-csrf-token', admin.csrfToken)
+        .send({ version: entry.version, remarks: 'Late edit the Release page never saw' });
+      expect(updated.status).toBe(200);
+      expect(updated.body.entry.version).toBe(entry.version + 1);
+
+      const finance = await financeAgent('release-expver-finance1@test.local', [site.id]);
+      const release = await finance.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/units/${units[0]!.id}/release`)
+        .set('x-csrf-token', finance.csrfToken)
+        .send({ expectedVersions: [{ entryId: entry.id, version: entry.version }] });
+
+      expect(release.status).toBe(409);
+
+      // Nothing was released, and the remark survives untouched — the whole transaction rolled
+      // back, including the PayrollUnitRelease row that would otherwise have been created.
+      const status = await finance.agent.get(`/api/v1/payroll-cycles/${cycle.id}/units?siteId=${site.id}`);
+      const alpha = status.body.units.find((u: { unit: { id: string } }) => u.unit.id === units[0]!.id);
+      expect(alpha.released).toBe(false);
+
+      const stillCurrent = await admin.agent.get(`/api/v1/payroll-entries/${entry.id}`);
+      expect(stillCurrent.body.entry.released).toBe(false);
+      expect(stillCurrent.body.entry.remarks).toBe('Late edit the Release page never saw');
+      expect(stillCurrent.body.entry.version).toBe(entry.version + 1);
+    });
+
+    it('releases normally when every provided expected version still matches current state', async () => {
+      const admin = await masterAdminAgent('release-expver-admin2@test.local');
+      const { site, units } = await makeSiteWithUnits('Test Site Release ExpVer 2', ['Alpha']);
+      const cycle = await makeDraftCycle(admin, 5);
+      const employee = await makeEmployee(site.id, units[0]!.id, 'ExpVer Current');
+      const entry = await createEntry(admin, cycle.id, employee.id);
+
+      const finance = await financeAgent('release-expver-finance2@test.local', [site.id]);
+      const release = await finance.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/units/${units[0]!.id}/release`)
+        .set('x-csrf-token', finance.csrfToken)
+        .send({ expectedVersions: [{ entryId: entry.id, version: entry.version }] });
+
+      expect(release.status).toBe(201);
+      expect(release.body.releasedEntryCount).toBe(1);
+
+      const afterRelease = await admin.agent.get(`/api/v1/payroll-entries/${entry.id}`);
+      expect(afterRelease.body.entry.released).toBe(true);
+    });
+
+    it('is skipped entirely (backward-compatible) when expectedVersions is omitted', async () => {
+      const admin = await masterAdminAgent('release-expver-admin3@test.local');
+      const { site, units } = await makeSiteWithUnits('Test Site Release ExpVer 3', ['Alpha']);
+      const cycle = await makeDraftCycle(admin, 6);
+      const employee = await makeEmployee(site.id, units[0]!.id, 'ExpVer Omitted');
+      await createEntry(admin, cycle.id, employee.id);
+
+      const finance = await financeAgent('release-expver-finance3@test.local', [site.id]);
+      const release = await finance.agent
+        .post(`/api/v1/payroll-cycles/${cycle.id}/units/${units[0]!.id}/release`)
+        .set('x-csrf-token', finance.csrfToken)
+        .send({});
+
+      expect(release.status).toBe(201);
+    });
+  });
+
+  // --- Phase 7E durability checkpoint — refresh reloads the committed value from Postgres --------
+
+  it('a fresh GET after a successful PATCH always reflects the exact value that was saved, from a brand-new request', async () => {
+    const admin = await masterAdminAgent('release-refresh-admin@test.local');
+    const { site, units } = await makeSiteWithUnits('Test Site Refresh Durability', ['Alpha']);
+    const cycle = await makeDraftCycle(admin, 7);
+    const employee = await makeEmployee(site.id, units[0]!.id, 'Refresh Durability');
+    const entry = await createEntry(admin, cycle.id, employee.id);
+
+    const patched = await admin.agent
+      .patch(`/api/v1/payroll-entries/${entry.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: entry.version, remarks: 'Committed before refresh' });
+    expect(patched.status).toBe(200);
+
+    // A brand-new authenticated session/agent, not the one that sent the PATCH — the closest
+    // equivalent an integration test has to "a different browser tab hitting refresh": nothing
+    // about this read can be served from anything the PATCH's own caller cached client-side.
+    const freshSession = await masterAdminAgent('release-refresh-viewer@test.local');
+    const reloaded = await freshSession.agent.get(`/api/v1/payroll-entries/${entry.id}`);
+    expect(reloaded.status).toBe(200);
+    expect(reloaded.body.entry.remarks).toBe('Committed before refresh');
+    expect(reloaded.body.entry.version).toBe(entry.version + 1);
+  });
 });
