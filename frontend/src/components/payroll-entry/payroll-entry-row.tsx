@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useState } from 'react';
 import { formatMoney, pluralize } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 import { ToggleSwitch } from '@/components/ui/toggle-switch';
@@ -93,6 +93,18 @@ function PayrollEntryRowImpl({
   const disabled = !editable || status === 'conflict';
   const nav = (col: string) => gridNavProps(rowIndex, col);
 
+  // Phase 7E durability checkpoint (A6) — a 409 conflict's "Reload row" action discards whatever
+  // local, unsaved draft this row still has (`editor.reload`'s own doc comment,
+  // `use-payroll-entry-editor.ts`) — that must never happen from one accidental click with no
+  // chance to back out. `window.confirm` matches this app's own existing pattern for a
+  // discard-in-progress-work confirmation (`task-list-item.tsx`'s delete-task guard), rather than
+  // inventing a second confirmation mechanism just for this row action.
+  const handleReload = useCallback(() => {
+    if (window.confirm('This row was changed elsewhere. Reloading replaces it with the current server value and discards your local, unsaved edit to this row. Continue?')) {
+      void editor.reload();
+    }
+  }, [editor]);
+
   // One cell per `PAYROLL_COLUMNS` entry, keyed by column id (Presentation & Workflow
   // Stabilization Checkpoint, 2026-07-25) — the row used to be a hand-written JSX list that had to
   // be kept in the exact same order as `PAYROLL_COLUMNS` by eye, the same class of drift that once
@@ -107,7 +119,7 @@ function PayrollEntryRowImpl({
           status={status}
           errorMessage={errorMessage}
           onRetry={editor.retryNow}
-          onReload={editor.reload}
+          onReload={handleReload}
         />
         <span className="tabular-nums text-text-muted">{rowIndex + 1}</span>
       </div>

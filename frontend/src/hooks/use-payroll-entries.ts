@@ -179,6 +179,15 @@ export function usePayrollEntries(cycleId: string | undefined) {
   });
 }
 
+/**
+ * Phase 7E durability checkpoint (A5) — a bounded request timeout scoped to just these four
+ * Payroll Entry mutations, not a global default on `apiRequest` (see that function's own doc
+ * comment on `timeoutMs` for why). 15s is generous for an ordinary single-row PATCH/POST/DELETE
+ * even under a slow connection or a busy backend, while still turning a genuinely hung request
+ * into a visible, auto-retryable `'error'` well before a user gives up waiting on their own.
+ */
+const PAYROLL_ENTRY_MUTATION_TIMEOUT_MS = 15_000;
+
 /** Server responses from PATCH /payroll-entries/:id and PATCH /work-lines/:id never include the
  * `employee`/`site` relations (only the list/get endpoints do) — merging preserves whatever is
  * already cached for those two, which never change via this grid (site is permanently
@@ -207,6 +216,7 @@ export function useUpdatePayrollEntry(cycleId: string) {
       apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/payroll-entries/${id}`, {
         method: 'PATCH',
         body: input,
+        timeoutMs: PAYROLL_ENTRY_MUTATION_TIMEOUT_MS,
       }),
     onSuccess: (data, variables) => {
       replaceEntry(queryClient, cycleId, variables.id, data.entry);
@@ -221,6 +231,7 @@ export function useUpdateWorkLine(cycleId: string) {
       apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/work-lines/${id}`, {
         method: 'PATCH',
         body: input,
+        timeoutMs: PAYROLL_ENTRY_MUTATION_TIMEOUT_MS,
       }),
     onSuccess: (data) => {
       replaceEntry(queryClient, cycleId, data.entry.id, data.entry);
@@ -240,6 +251,7 @@ export function useAddWorkLine(cycleId: string) {
       apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/payroll-entries/${entryId}/work-lines`, {
         method: 'POST',
         body: input,
+        timeoutMs: PAYROLL_ENTRY_MUTATION_TIMEOUT_MS,
       }),
     onSuccess: (data) => {
       replaceEntry(queryClient, cycleId, data.entry.id, data.entry);
@@ -258,6 +270,7 @@ export function useDeleteWorkLine(cycleId: string) {
     mutationFn: ({ id, version }: { id: string; version: number }) =>
       apiRequest<{ entry: MutationEntryResponse }>(`/api/v1/work-lines/${id}?version=${version}`, {
         method: 'DELETE',
+        timeoutMs: PAYROLL_ENTRY_MUTATION_TIMEOUT_MS,
       }),
     onSuccess: (data) => {
       replaceEntry(queryClient, cycleId, data.entry.id, data.entry);

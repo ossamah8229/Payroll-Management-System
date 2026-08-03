@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useBlocker } from 'react-router-dom';
 import { Download, FileEdit, Lock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
@@ -10,10 +11,12 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
+import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { PrintButton } from '@/components/ui/print-button';
 import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { canRequestCorrection } from '@/lib/permissions';
+import { payrollEntrySaveStatusStore } from '@/lib/payroll-entry-save-status-store';
 import { useBanks } from '@/hooks/use-banks';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
@@ -21,6 +24,7 @@ import { formatCycleLabel, useReconcileDraftCycleRoster } from '@/hooks/use-payr
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { downloadPayrollEntryExport, usePayrollEntries, type PayrollEntry } from '@/hooks/use-payroll-entries';
 import { PayrollEntryGrid } from '@/components/payroll-entry/payroll-entry-grid';
+import { PayrollEntrySaveStatusBanner } from '@/components/payroll-entry/save-status-banner';
 import { NewCycleModal } from '@/components/payroll-entry/new-cycle-modal';
 import { CopyToAllToolbar } from '@/components/payroll-entry/copy-to-all-toolbar';
 import { RequestCorrectionModal } from '@/components/corrections/request-correction-modal';
@@ -110,6 +114,20 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   const hasAnyCycle = cycles.length > 0;
   const isArchived = cycle?.status === 'ARCHIVED';
   const [requestCorrectionOpen, setRequestCorrectionOpen] = useState(false);
+
+  // Phase 7E durability checkpoint (A3) — the in-app navigation counterpart to the global
+  // `beforeunload` guard (A2): blocks a `Link`/`navigate()`/back-forward transition to a
+  // *different route* while this cycle still has anything not yet server-confirmed saved,
+  // re-using `payrollEntrySaveStatusStore` exactly like the banner above it (never a second,
+  // independent "is this dirty" check). Deliberately keyed on the path changing, not the search
+  // string/hash, so switching the on-page site filter or cycle selector (same route, same
+  // component instance) is never blocked — only actually *leaving* Payroll Entry is. Requires the
+  // data router (`createBrowserRouter`/`RouterProvider`, `App.tsx`) — `useBlocker` throws under the
+  // declarative `<Routes>` mode this app used before this checkpoint.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      currentLocation.pathname !== nextLocation.pathname && payrollEntrySaveStatusStore.hasPendingForCycle(cycleId),
+  );
   const {
     data: entries,
     isLoading: entriesLoading,
@@ -266,6 +284,7 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           {!cycleError && !isLoading && cycleId && !entriesError && entries && entries.length > 0 && (
             <div className="flex flex-col gap-3">
               {isArchived && <ArchivedReadOnlyBanner />}
+              {!isArchived && <PayrollEntrySaveStatusBanner cycleId={cycleId} />}
               <div className="flex flex-wrap items-end gap-3 print:hidden">
                 <MultiSelectFilter
                   id="payroll-entry-site-filter"
@@ -409,6 +428,26 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           onOpenChange={setRequestCorrectionOpen}
           entries={correctableEntries}
         />
+      )}
+
+      {blocker.state === 'blocked' && (
+        <Modal open onOpenChange={(open) => !open && blocker.reset()}>
+          <ModalContent title="Unsaved changes">
+            <p className="text-xs text-text-muted">
+              This cycle still has rows that are unsaved, saving, retrying, or in conflict. Leaving
+              now risks losing whatever hasn't reached the server yet — you can stay and wait for
+              them to finish (or resolve the conflict/failure shown in the grid), or leave anyway.
+            </p>
+            <ModalFooter>
+              <Button type="button" variant="secondary" onClick={() => blocker.reset()}>
+                Stay on this page
+              </Button>
+              <Button type="button" variant="amber" onClick={() => blocker.proceed()}>
+                Leave anyway
+              </Button>
+            </ModalFooter>
+          </ModalContent>
+        </Modal>
       )}
     </AppShell>
   );

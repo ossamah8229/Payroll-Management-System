@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
 import { PERMISSIONS } from '@payroll/shared';
@@ -23,8 +23,10 @@ import {
   type PayrollCycle,
 } from '@/hooks/use-payroll-cycles';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
+import { usePayrollEntries } from '@/hooks/use-payroll-entries';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { useReleaseProjectUnit, useUnitReleaseStatus, type ReleaseUnitResult, type UnitReleaseStatus } from '@/hooks/use-payroll-release';
+import { usePayrollEntryCycleSaveSummary } from '@/lib/payroll-entry-save-status-store';
 
 const selectClassName =
   'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
@@ -305,6 +307,30 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   const finalizeCycle = useFinalizePayrollCycle();
   const rolloverCycle = useRolloverPayrollCycle();
 
+  // Phase 7E durability checkpoint (A4) — the frontend half of the release interlock. Reuses the
+  // exact same per-row `SaveStatus` truth the Payroll Entry grid's own banner reads
+  // (`payrollEntrySaveStatusStore`), never a second, independently-tracked "is this dirty" check.
+  // This is a same-tab/same-session signal only — it cannot see another tab's or another user's
+  // in-flight edit (documented limitation, `payroll-entry-save-status-store.ts`'s own doc comment)
+  // — the backend's `expectedVersions` check below is what actually guarantees correctness across
+  // sessions; this is purely a "don't even let the operator try" convenience on top of that.
+  const saveSummary = usePayrollEntryCycleSaveSummary(cycle?.id);
+  const hasPendingEntryWork = saveSummary.pendingCount > 0;
+
+  // Fetched only to extract each currently-releasable entry's own `{id, version}` — the
+  // `expectedVersions` preflight below reuses this same already-existing query (Payroll Entry's
+  // own), rather than introducing a second read endpoint just for this Unit-scoped slice.
+  const entriesForVersionCheck = usePayrollEntries(cycle?.id);
+
+  function expectedVersionsForUnit(unitId: string): { entryId: string; version: number }[] {
+    return (entriesForVersionCheck.data ?? [])
+      .filter(
+        (entry) =>
+          !entry.released && entry.payoutOutcome === null && entry.workLines.some((line) => line.unitId === unitId),
+      )
+      .map((entry) => ({ entryId: entry.id, version: entry.version }));
+  }
+
   const canRelease = user.permissions.includes(PERMISSIONS.PAYROLL_RELEASE);
   const canFinalize = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const cycleLabel = cycle ? formatCycleLabel(cycle) : '';
@@ -313,7 +339,10 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   async function handleConfirmRelease() {
     if (!confirming || !cycle) return;
     try {
-      const result = await releaseUnit.mutateAsync(confirming.unit.id);
+      const result = await releaseUnit.mutateAsync({
+        unitId: confirming.unit.id,
+        expectedVersions: expectedVersionsForUnit(confirming.unit.id),
+      });
       const parts: string[] = [];
       if (result.releasedEntryCount > 0) {
         parts.push(`${result.releasedEntryCount} paid`);
@@ -468,6 +497,23 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
                   further release, Finalize, or rollover action can be taken against it.
                 </div>
               )}
+              {!isArchived && hasPendingEntryWork && (
+                <div className="mx-[18px] mt-[18px] flex items-center gap-2 rounded border border-warning bg-warning-light/40 px-3 py-2 text-xs text-text print:hidden">
+                  <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-warning" aria-hidden />
+                  Release is disabled — this cycle has {saveSummary.pendingCount} Payroll Entry row
+                  {saveSummary.pendingCount === 1 ? '' : 's'} that {saveSummary.pendingCount === 1 ? 'is' : 'are'} not
+                  yet server-confirmed saved (unsaved, saving, retrying, or in conflict). Releasing now could
+                  exclude an edit that hasn't reached the server yet.{' '}
+                  {cycleId && (
+                    <Link
+                      to={`/payroll-cycles/${cycleId}/payroll-entry`}
+                      className="font-medium text-accent-mid underline hover:no-underline"
+                    >
+                      Go to Payroll Entry to resolve or retry
+                    </Link>
+                  )}
+                </div>
+              )}
               {unitStatus.error && (
                 <div className="flex flex-col items-center gap-1 py-14 text-center">
                   <p className="text-xs font-medium text-danger">Could not load release status</p>
@@ -528,7 +574,16 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
                         </TableCell>
                         <TableCell className="text-right print:hidden">
                           {!status.released && canRelease && cycle.status === 'DRAFT' && (
-                            <Button size="sm" onClick={() => setConfirming(status)}>
+                            <Button
+                              size="sm"
+                              onClick={() => setConfirming(status)}
+                              disabled={hasPendingEntryWork}
+                              title={
+                                hasPendingEntryWork
+                                  ? 'Release is disabled while this cycle has unsaved, saving, retrying, or conflicted Payroll Entry rows'
+                                  : undefined
+                              }
+                            >
                               Release
                             </Button>
                           )}

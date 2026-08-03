@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { PERMISSIONS } from '@payroll/shared';
+import { PERMISSIONS, releaseProjectUnitSchema } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
@@ -49,9 +49,13 @@ payrollUnitReleasesRouter.post(
     try {
       const cycleId = requireIdParam(req.params.cycleId);
       const unitId = requireIdParam(req.params.unitId);
+      // Phase 7E durability checkpoint (A4) — optional, additive: an empty/omitted body still
+      // releases exactly as before. See `releaseProjectUnitSchema`'s own doc comment for why this
+      // isn't a second save API.
+      const input = releaseProjectUnitSchema.parse(req.body ?? {});
       // releaseProjectUnit owns its own audit logging inside the release transaction — the route
       // never logs a second, redundant entry after the fact (same convention as createPayrollCycle).
-      const result = await releaseProjectUnit(req.currentUser!, cycleId, unitId, {
+      const result = await releaseProjectUnit(req.currentUser!, cycleId, unitId, input.expectedVersions, {
         ipAddress: req.ip ?? null,
         userAgent: req.get('user-agent') ?? null,
       });

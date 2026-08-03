@@ -104,6 +104,20 @@ async function refreshCsrfToken(): Promise<void> {
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
+  /**
+   * Phase 7E durability checkpoint (A5) — optional and `undefined` by default, so every existing
+   * caller of `apiRequest` is completely unaffected (a hung request just hangs exactly as it did
+   * before this checkpoint). Only Payroll Entry's own entry/work-line mutations
+   * (`use-payroll-entries.ts`) pass this, deliberately scoped rather than a blanket default for
+   * every request in the app — a narrow, low-risk change per the checkpoint's own instruction,
+   * not a judgment that every other call site's current unbounded-wait behavior is fine long term.
+   * When the timeout elapses first, the in-flight `fetch` is aborted, which rejects with a plain
+   * `AbortError` — not an `ApiError` — so it flows through the exact same generic-retry path a
+   * dropped network connection already does (`use-payroll-entry-editor.ts`'s `commit()` catch
+   * block treats any non-`ApiError`/non-`ApiError`-409/400 failure identically); a hung save can
+   * therefore never be mistaken for `'saved'`, and always becomes a visible, retryable `'error'`.
+   */
+  timeoutMs?: number;
 }
 
 export async function apiRequest<TResponse>(
@@ -122,12 +136,24 @@ export async function apiRequest<TResponse>(
     headers['x-csrf-token'] = csrfToken;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers,
-    credentials: 'include',
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  const timeoutController = options.timeoutMs !== undefined ? new AbortController() : undefined;
+  const timeoutId =
+    timeoutController !== undefined
+      ? setTimeout(() => timeoutController.abort(), options.timeoutMs)
+      : undefined;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      credentials: 'include',
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: timeoutController?.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   captureCsrfToken(response);
 

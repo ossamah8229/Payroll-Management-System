@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider, type RouteObject } from 'react-router-dom';
 import { PERMISSIONS } from '@payroll/shared';
 import { useSession } from '@/hooks/use-session';
 import { RouteLoadingFallback } from '@/components/layout/route-loading-fallback';
@@ -7,6 +7,7 @@ import { RouteErrorBoundary } from '@/components/layout/route-error-boundary';
 import { RequirePermission } from '@/components/layout/require-permission';
 import { LoginPage } from '@/routes/login-page';
 import { NotFoundPage } from '@/routes/not-found-page';
+import { usePayrollEntryUnloadGuard } from '@/lib/payroll-entry-save-status-store';
 
 /**
  * AUD-012 (Post-Phase-5 Stabilization Checkpoint 4) — every authenticated page-level route is
@@ -72,317 +73,322 @@ function RequireSession({
   return <>{children(sessionUser)}</>;
 }
 
+/**
+ * Phase 7E durability checkpoint (A3) — converted from `<Routes>`/`<Route>` (declarative mode) to
+ * `createBrowserRouter`/`RouterProvider` (data mode), the only way React Router 6.27 exposes
+ * `useBlocker` — the framework-native in-app navigation guard the Payroll Entry route needs so a
+ * dirty/saving/failed/conflicted row can never be silently navigated away from (see
+ * `PayrollEntryPage`'s own use of it). Every route below is otherwise byte-for-byte the same
+ * element tree this file already rendered — `RequireSession`/`RequirePermission` wrapping,
+ * lazy-loading, and every path (including the flat/`:cycleId`-nested pair for each cycle-aware
+ * page) are unchanged; only the JSX-vs-object-array wiring around them changed. `useBlocker` is
+ * only ever called from inside `PayrollEntryPage` itself, so no other route's navigation behavior
+ * is affected by this migration.
+ */
+const routes: RouteObject[] = [
+  { path: '/login', element: <LoginPage /> },
+  {
+    path: '/',
+    element: <RequireSession>{(user) => <HomePage user={user} />}</RequireSession>,
+  },
+  {
+    path: '/sites',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.SITES_MANAGE}>
+            <ProjectSitesPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/employees',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.EMPLOYEES_VIEW}>
+            <EmployeesPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Historical Payroll Cycle Selector routing (Phase 5 Checkpoint 4) — every cycle-aware page is
+  // mounted at two paths, both rendering the exact same component: the original flat path (kept as
+  // a compatibility redirect — `useSelectedPayrollCycle` resolves the default cycle and navigates
+  // to the canonical URL below) and the canonical `/payroll-cycles/:cycleId/...` path a
+  // bookmark/refresh/back-forward can target directly. `useParams` returns `undefined` for
+  // `cycleId` on the flat route and the actual value on the nested one — the same page component
+  // handles both via one shared hook, not two separate implementations.
+  {
+    path: '/payroll-entry',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_ENTRY}>
+            <PayrollEntryPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/payroll-entry',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_ENTRY}>
+            <PayrollEntryPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/release',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_VIEW}>
+            <SalaryReleasePage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/release',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_VIEW}>
+            <SalaryReleasePage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/bank-sheet',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
+            <BankSheetPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/bank-sheet',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
+            <BankSheetPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/cash-receiving',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
+            <CashReceivingPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/cash-receiving',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
+            <CashReceivingPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/advances',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.ADVANCES_MANAGE}>
+            <AdvancesPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payslips',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.PAYSLIPS_VIEW}>
+            <PayslipsPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/payslips',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.PAYSLIPS_VIEW}>
+            <PayslipsPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/corrections',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}>
+            <CorrectionsPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/corrections/requests/:id',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}>
+            <CorrectionRequestDetailPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/corrections/ledger/:id',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}>
+            <BalanceAdjustmentDetailPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/statements',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.STATEMENTS_VIEW}>
+            <StatementsPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/settings',
+    // No permission requirement — GET /settings/company is intentionally unrestricted to any
+    // authenticated user (settings.routes.ts's own documented decision: company name/address
+    // appears throughout the app, not just this page). SettingsPage already gates its own edit
+    // controls per-section (canManage/canManageBanks) — Fix 3's action-level gating, not a
+    // route-level concern.
+    element: <RequireSession>{(user) => <SettingsPage user={user} />}</RequireSession>,
+  },
+  {
+    path: '/users',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
+            <UsersPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/roles',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
+            <RolesPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/reports',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Historical Payroll Cycle Selector routing (same shape as every other cycle-aware page, e.g.
+  // /bank-sheet above) — the flat route redirects to the canonical
+  // /payroll-cycles/:cycleId/reports/payroll-summary URL via useSelectedPayrollCycle.
+  {
+    path: '/reports/payroll-summary',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsPayrollSummaryPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/reports/payroll-summary',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsPayrollSummaryPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  { path: '*', element: <NotFoundPage /> },
+];
+
+const router = createBrowserRouter(routes);
+
 export function App() {
+  // Phase 7E durability checkpoint (A2) — installed once, globally, regardless of which route is
+  // currently mounted (see the hook's own doc comment for why this can't be scoped to just
+  // PayrollEntryPage).
+  usePayrollEntryUnloadGuard();
+
   return (
     <RouteErrorBoundary>
       <Suspense fallback={<RouteLoadingFallback />}>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/"
-            element={
-              <RequireSession>{(user) => <HomePage user={user} />}</RequireSession>
-            }
-          />
-          <Route
-            path="/sites"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.SITES_MANAGE}>
-                    <ProjectSitesPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/employees"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.EMPLOYEES_VIEW}>
-                    <EmployeesPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          {/*
-           * Historical Payroll Cycle Selector routing (Phase 5 Checkpoint 4) — every cycle-aware
-           * page is mounted at two paths, both rendering the exact same component: the original
-           * flat path (kept as a compatibility redirect — `useSelectedPayrollCycle` resolves the
-           * default cycle and navigates to the canonical URL below) and the canonical
-           * `/payroll-cycles/:cycleId/...` path a bookmark/refresh/back-forward can target
-           * directly. `useParams` returns `undefined` for `cycleId` on the flat route and the
-           * actual value on the nested one — the same page component handles both via one shared
-           * hook, not two separate implementations.
-           */}
-          <Route
-            path="/payroll-entry"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_ENTRY}>
-                    <PayrollEntryPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payroll-cycles/:cycleId/payroll-entry"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_ENTRY}>
-                    <PayrollEntryPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/release"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_VIEW}>
-                    <SalaryReleasePage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payroll-cycles/:cycleId/release"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.PAYROLL_VIEW}>
-                    <SalaryReleasePage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/bank-sheet"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
-                    <BankSheetPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payroll-cycles/:cycleId/bank-sheet"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
-                    <BankSheetPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/cash-receiving"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
-                    <CashReceivingPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payroll-cycles/:cycleId/cash-receiving"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.BANK_SHEETS_VIEW}>
-                    <CashReceivingPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/advances"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.ADVANCES_MANAGE}>
-                    <AdvancesPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payslips"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.PAYSLIPS_VIEW}>
-                    <PayslipsPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payroll-cycles/:cycleId/payslips"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.PAYSLIPS_VIEW}>
-                    <PayslipsPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/corrections"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission
-                    user={user}
-                    permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}
-                  >
-                    <CorrectionsPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/corrections/requests/:id"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission
-                    user={user}
-                    permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}
-                  >
-                    <CorrectionRequestDetailPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/corrections/ledger/:id"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission
-                    user={user}
-                    permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.CORRECTIONS_APPROVE]}
-                  >
-                    <BalanceAdjustmentDetailPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/statements"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.STATEMENTS_VIEW}>
-                    <StatementsPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              // No permission requirement — GET /settings/company is intentionally unrestricted to
-              // any authenticated user (settings.routes.ts's own documented decision: company
-              // name/address appears throughout the app, not just this page). SettingsPage already
-              // gates its own edit controls per-section (canManage/canManageBanks) — Fix 3's
-              // action-level gating, not a route-level concern.
-              <RequireSession>{(user) => <SettingsPage user={user} />}</RequireSession>
-            }
-          />
-          <Route
-            path="/users"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
-                    <UsersPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/roles"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.USERS_MANAGE}>
-                    <RolesPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/reports"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
-                    <ReportsPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          {/* Historical Payroll Cycle Selector routing (same shape as every other cycle-aware page,
-              e.g. /bank-sheet above) — the flat route redirects to the canonical
-              /payroll-cycles/:cycleId/reports/payroll-summary URL via useSelectedPayrollCycle. */}
-          <Route
-            path="/reports/payroll-summary"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
-                    <ReportsPayrollSummaryPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route
-            path="/payroll-cycles/:cycleId/reports/payroll-summary"
-            element={
-              <RequireSession>
-                {(user) => (
-                  <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
-                    <ReportsPayrollSummaryPage user={user} />
-                  </RequirePermission>
-                )}
-              </RequireSession>
-            }
-          />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
+        <RouterProvider router={router} />
       </Suspense>
     </RouteErrorBoundary>
   );
