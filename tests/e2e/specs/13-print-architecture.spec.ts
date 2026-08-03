@@ -1,5 +1,5 @@
 import { test, expect } from '../fixtures/auth';
-import { apiPost } from '../helpers/api';
+import { apiGet, apiPatch, apiPost } from '../helpers/api';
 import { createSiteWithEmployee, ensureAnyPayrollCycleExists } from '../helpers/fixtures';
 
 /**
@@ -212,7 +212,30 @@ test.describe('Professional Printing — shared architecture', () => {
       const context = page.context();
       await stubWindowPrintWithCapture(page, '.print-flow table');
       const { cycleId } = await ensureAnyPayrollCycleExists(context);
-      const { unitId } = await createSiteWithEmployee(context, `print-arch-${siteName}-${Date.now()}`);
+      const { siteId, unitId } = await createSiteWithEmployee(context, `print-arch-${siteName}-${Date.now()}`);
+
+      // `createSiteWithEmployee` never sets worked days, so this entry's net salary is negative
+      // (grossPay earned over 0 days, minus EOBI) — since the Negative Payroll Recovery checkpoint
+      // (2026-07-27, `payroll-release.service.ts`), releasing a negative/zero-net entry resolves it
+      // as RECOVERY_DUE instead of `released`, so it would never actually appear on either report
+      // (both "only ever show released payroll"). Give it a full cycle of worked days first, same
+      // as `02-payroll-lifecycle.spec.ts`/`07-corrections.spec.ts` do for their own fixture entries.
+      // Filtered server-side by `siteId` (this brand-new site has exactly one entry) rather than
+      // fetched unfiltered and searched client-side — by this point in the full suite, the current
+      // Draft cycle's entries (accumulated across every earlier spec's own fixture employees) can
+      // easily exceed the list endpoint's default `pageSize` (50), silently missing this one on an
+      // unfiltered page 1.
+      const entries = await apiGet<{
+        entries: { id: string; version: number; workLines: { id: string; cycleDays: number }[] }[];
+      }>(context, `/api/v1/payroll-cycles/${cycleId}/entries?siteId=${siteId}`);
+      const entry = entries.body.entries[0];
+      if (entry?.workLines[0]) {
+        await apiPatch(context, `/api/v1/work-lines/${entry.workLines[0].id}`, {
+          version: entry.version,
+          days: String(entry.workLines[0].cycleDays),
+        });
+      }
+
       // Both pages only ever show released payroll ("Bank Sheets are generated only from released
       // payroll" / the same for Cash Receiving) — release the fixture's own unit so there's a row
       // to actually render and inspect.

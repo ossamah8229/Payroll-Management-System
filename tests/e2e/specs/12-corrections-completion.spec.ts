@@ -10,7 +10,10 @@ import { apiGet } from '../helpers/api';
  *      even applied to).
  *   2. The reusable EmployeeLookup combobox (Advances' Record Advance modal).
  *   3. Standard print support (PrintButton/PrintContextHeader, AppShell's print: utilities).
- *   4. Downloadable import templates (Employee Registry, Payroll Entry).
+ *   4. Downloadable import templates (Employee Registry). Payroll Entry's own equivalent test was
+ *      removed here — `89af663` (2026-07-24) deliberately removed Payroll Entry CSV/Excel import
+ *      entirely ("payroll data must never be imported"), so no such action exists to test anymore;
+ *      Employee Registry's own, separate import feature is untouched.
  *
  * Reuses whatever RELEASED/ARCHIVED cycle + employees earlier specs already produced (this suite's
  * own established convention, `tests/e2e/README.md`) rather than re-bootstrapping a cycle, which
@@ -173,22 +176,5 @@ test.describe('Downloadable import templates', () => {
       page.getByRole('button', { name: 'Download Import Template' }).click(),
     ]);
     expect(download.suggestedFilename()).toBe('employee-import-template.xlsx');
-  });
-
-  test('Payroll Entry offers a Download Import Template action that produces a real file', async ({
-    authenticatedPage: page,
-  }) => {
-    const context = page.context();
-    const cycles = await apiGet<{ cycles: { id: string; status: string }[] }>(context, '/api/v1/payroll-cycles');
-    const draft = cycles.body.cycles?.find((c) => c.status === 'DRAFT');
-    test.skip(!draft, 'No Draft cycle exists yet — the Import action only renders for a non-Archived cycle.');
-    if (!draft) return;
-
-    await page.goto(`/payroll-cycles/${draft.id}/payroll-entry`);
-    const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByRole('button', { name: 'Download Import Template' }).click(),
-    ]);
-    expect(download.suggestedFilename()).toBe('payroll-entry-import-template.xlsx');
   });
 });
