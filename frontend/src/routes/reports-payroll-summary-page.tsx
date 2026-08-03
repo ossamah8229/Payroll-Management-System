@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Info } from 'lucide-react';
+import { flushSync } from 'react-dom';
+import { Download, Info, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatMoney, PERMISSIONS, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
@@ -7,7 +8,6 @@ import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { PrintButton } from '@/components/ui/print-button';
 import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -18,6 +18,16 @@ import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
 import { formatCycleLabel } from '@/hooks/use-payroll-cycles';
 import { ReportPagination } from '@/components/reports/report-pagination';
+import { useTriggerPrint } from '@/components/print/use-print';
+import { PayrollSummaryPrintOptionsDialog } from '@/components/reports/payroll-summary-print-options-dialog';
+import {
+  DEFAULT_PRINT_SELECTION,
+  SUMMARY_CARD_FIELDS,
+  TABLE_COLUMN_FIELDS,
+  isCountField,
+  type PayrollSummaryPrintSelection,
+  type TableColumnFieldId,
+} from '@/components/reports/payroll-summary-print-fields';
 import {
   downloadPayrollSummaryExport,
   usePayrollSummaryReport,
@@ -57,6 +67,26 @@ function CycleStateNotice({ status }: { status: 'DRAFT' | 'RELEASED' | 'ARCHIVED
 
 const EXPORT_BUTTON_LABEL: Record<PayrollSummaryExportFormat, string> = { csv: 'Export CSV', xlsx: 'Export Excel' };
 
+/** The one place a summary card's own displayed value is derived — `advancesIncludingEid` is the
+ * only card whose value isn't a direct `PayrollSummaryFigures` field (it combines
+ * `advanceDeductions` + `eidAdvanceDeductions`, mirroring the on-screen "Advances (incl. Eid)" card
+ * already above this print refinement). No figure is recomputed — both inputs come from the same
+ * already-loaded `totals`/`row` the on-screen report already renders. */
+function summaryCardValue(id: (typeof SUMMARY_CARD_FIELDS)[number]['id'], figures: PayrollSummaryFigures): string {
+  if (id === 'employeeCount') return String(figures.employeeCount);
+  if (id === 'advancesIncludingEid') {
+    return formatMoney((Number(figures.advanceDeductions) + Number(figures.eidAdvanceDeductions)).toFixed(2));
+  }
+  return formatMoney(figures[id]);
+}
+
+/** The one place a table column's own displayed value is derived for the print-only table — reused
+ * for both a site row and the `cycleTotals` row, since both share the `PayrollSummaryFigures` shape.
+ * `siteName` is handled by the caller directly (a string, not part of `PayrollSummaryFigures`). */
+function tableColumnValue(id: Exclude<TableColumnFieldId, 'siteName'>, figures: PayrollSummaryFigures): string {
+  return isCountField(id) ? String(figures[id]) : formatMoney(figures[id] as string);
+}
+
 /**
  * Phase 8B Checkpoint 1 — Payroll Summary Report, the first production report of the Reports module.
  * Grouped Payroll Cycle → Project Site → totals (Phase 8A investigation report §4A), always scoped to
@@ -85,6 +115,29 @@ export function ReportsPayrollSummaryPage({ user }: { user: SessionUser }) {
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [activeExport, setActiveExport] = useState<PayrollSummaryExportFormat | null>(null);
+  const [printOptionsOpen, setPrintOptionsOpen] = useState(false);
+  // The last-confirmed field selection — drives the print-only cards/table below. Starts at the
+  // same Full Report default the dialog itself opens with (Final Print UX Refinement — the
+  // application must never silently hide report data); only ever changes when the user actually
+  // confirms the dialog, never mid-editing.
+  const [printSelection, setPrintSelection] = useState<PayrollSummaryPrintSelection>(DEFAULT_PRINT_SELECTION);
+  const triggerPrint = useTriggerPrint('landscape');
+
+  function handlePrintConfirm(selection: PayrollSummaryPrintSelection) {
+    // Production Print Defect fix, same sequencing `PrintButton` already established: `window.print()`
+    // (inside `triggerPrint`) captures the DOM at the exact synchronous instant it's called, so both
+    // the dialog's own removal *and* the print-only table below picking up the new `printSelection`
+    // must already be committed — not just scheduled — before that call. A plain pair of `setState`
+    // calls here would only queue React 18's batched update; `flushSync` forces both to actually apply
+    // first. Fixed landscape/fit-to-page (Checkpoint brief: "use landscape orientation") — deliberately
+    // never `.print-fit`'s shared `table-layout: fixed`/8.5px shrink, see the print-only table below's
+    // own comment for why natural column widths are what this refinement actually needed.
+    flushSync(() => {
+      setPrintSelection(selection);
+      setPrintOptionsOpen(false);
+    });
+    triggerPrint({ orientation: 'landscape', fit: 'normal' });
+  }
 
   // A filter change invalidates whichever page was previously being viewed — never silently keep
   // showing "page 3" of a now-different filtered result.
@@ -156,9 +209,16 @@ export function ReportsPayrollSummaryPage({ user }: { user: SessionUser }) {
               }
               actions={
                 <>
-                  {/* 17 columns of mostly-financial figures — the same "wide report" shape Bank
-                      Sheet/Statements already recommend Landscape for. */}
-                  <PrintButton recommendedOrientation="landscape" disabled={activeExport !== null} />
+                  {/* Post-deployment Print Usability Refinement — 19 columns of mostly-financial
+                      figures is too wide to print legibly at once (production UAT finding); Print
+                      now opens a field-selection dialog first instead of going straight to the
+                      shared orientation/fit dialog (still reused once the user confirms, via
+                      `handlePrintConfirm` → `useTriggerPrint`, fixed to landscape). The on-screen
+                      table below is completely unaffected — it always shows every column. */}
+                  <Button variant="secondary" onClick={() => setPrintOptionsOpen(true)} disabled={activeExport !== null}>
+                    <Printer className="h-3.5 w-3.5" aria-hidden />
+                    Print
+                  </Button>
                   {(['csv', 'xlsx'] as const).map((format) => (
                     <Button
                       key={format}
@@ -235,8 +295,14 @@ export function ReportsPayrollSummaryPage({ user }: { user: SessionUser }) {
                   </div>
                 ) : (
                   <>
+                    {/* Post-deployment Print Usability Refinement — this on-screen card grid never
+                        prints (`print:hidden`); a separate, field-selectable card block below it
+                        (`hidden print:block`) is what actually prints, mirroring Payroll Entry's own
+                        established "dedicated print-only markup, on-screen version print:hidden"
+                        pattern rather than reusing one element for both. Every value below is
+                        unchanged and unaffected by print field selection. */}
                     {totals && (
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <div data-testid="on-screen-cards" className="grid grid-cols-2 gap-3 sm:grid-cols-4 print:hidden">
                         <StatFigure label="Employees" value={String(totals.employeeCount)} />
                         <StatFigure label="Gross Pay" value={formatMoney(totals.grossPay)} />
                         <StatFigure label="Net Salary" value={formatMoney(totals.netSalary)} />
@@ -253,7 +319,13 @@ export function ReportsPayrollSummaryPage({ user }: { user: SessionUser }) {
                       </div>
                     )}
 
-                    <div className="print-flow overflow-x-auto rounded border border-border">
+                    {/* On-screen only (`print:hidden`) — always every column, unaffected by print
+                        field selection. The print-only table below reuses these exact same
+                        `report.data.siteRows`/`totals`, just drawing a subset of their columns. */}
+                    <div
+                      data-testid="on-screen-table"
+                      className="print-flow overflow-x-auto rounded border border-border print:hidden"
+                    >
                       <Table density="compact" className="min-w-full">
                         <TableHeader>
                           <TableRow>
@@ -333,6 +405,75 @@ export function ReportsPayrollSummaryPage({ user }: { user: SessionUser }) {
                       </Table>
                     </div>
 
+                    {/* Post-deployment Print Usability Refinement — print-only (`hidden print:block`,
+                        same pattern Payroll Entry's own dedicated print table already established).
+                        Renders only the user's selected cards/columns from the exact same `totals`/
+                        `report.data.siteRows` the on-screen version above already loaded — no new
+                        fetch, no recalculated figure. Deliberately outside `.print-fit` (this page
+                        never applies that class — see `handlePrintConfirm`): a fixed `table-layout`
+                        and 8.5px font is what made the *full* 19-column table illegible in the first
+                        place; a user-narrowed column set is meant to size naturally instead. */}
+                    {totals && (
+                      <div
+                        data-testid="print-only-cards"
+                        className="hidden print:mb-3 print:grid print:grid-cols-4 print:gap-3"
+                      >
+                        {SUMMARY_CARD_FIELDS.filter((field) => printSelection.cards.includes(field.id)).map((field) => (
+                          <StatFigure key={field.id} label={field.label} value={summaryCardValue(field.id, totals)} />
+                        ))}
+                      </div>
+                    )}
+
+                    <div data-testid="print-only-table" className="hidden print:block">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            {TABLE_COLUMN_FIELDS.filter((field) => printSelection.columns.includes(field.id)).map(
+                              (field) => (
+                                <TableHead key={field.id} className={field.id === 'siteName' ? undefined : 'text-right'}>
+                                  {field.label}
+                                </TableHead>
+                              ),
+                            )}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {report.data.siteRows.map((row) => (
+                            <TableRow key={row.siteId}>
+                              {TABLE_COLUMN_FIELDS.filter((field) => printSelection.columns.includes(field.id)).map(
+                                (field) =>
+                                  field.id === 'siteName' ? (
+                                    <TableCell key={field.id} className="font-medium">
+                                      {row.siteName}
+                                    </TableCell>
+                                  ) : (
+                                    <TableCell key={field.id} className="text-right tabular-nums">
+                                      {tableColumnValue(field.id, row)}
+                                    </TableCell>
+                                  ),
+                              )}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                        {totals && (
+                          <tfoot>
+                            <TableRow className="border-t-2 border-border-strong font-semibold">
+                              {TABLE_COLUMN_FIELDS.filter((field) => printSelection.columns.includes(field.id)).map(
+                                (field, index) =>
+                                  field.id === 'siteName' ? (
+                                    <TableCell key={field.id}>{index === 0 ? 'Total (this selection)' : null}</TableCell>
+                                  ) : (
+                                    <TableCell key={field.id} className="text-right tabular-nums">
+                                      {tableColumnValue(field.id, totals)}
+                                    </TableCell>
+                                  ),
+                              )}
+                            </TableRow>
+                          </tfoot>
+                        )}
+                      </Table>
+                    </div>
+
                     <p className="text-[11px] text-text-muted">
                       &ldquo;Pending Amt&rdquo; is this cycle&apos;s computed net salary not yet released (Draft-editable
                       or awaiting release action) — it is not the same as a cross-cycle outstanding Balance Adjustment.
@@ -354,6 +495,11 @@ export function ReportsPayrollSummaryPage({ user }: { user: SessionUser }) {
           </CardContent>
         </Card>
       </div>
+      <PayrollSummaryPrintOptionsDialog
+        open={printOptionsOpen}
+        onOpenChange={setPrintOptionsOpen}
+        onConfirm={handlePrintConfirm}
+      />
     </AppShell>
   );
 }
