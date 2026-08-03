@@ -8316,6 +8316,102 @@ Cash Receiving, company logo, theme system) was modified.
 
 ---
 
+## Phase 8B Checkpoint 1 — Post-deployment Print Usability Refinement (2026-08-03)
+
+**IMPLEMENTED, awaiting review, NOT COMMITTED.** Production UAT on the deployed Payroll Summary
+report found a real usability defect: the on-screen report and Excel export were correct, but the
+printed report was illegible — the full site-level table's 19 columns (Project Site plus 18
+mostly-financial figures) meant headings and monetary values were truncated and squashed. Financial
+calculations, CSV/XLSX behavior, and every other report/Dashboard remained explicitly out of scope
+for this refinement.
+
+**Fix**: configurable print fields for Payroll Summary only. Clicking Print now opens a
+`PayrollSummaryPrintOptionsDialog` (`frontend/src/components/reports/`) before the browser's native
+print dialog — individual checkboxes for the 8 existing summary cards and all 19 table columns
+(stable `PayrollSummaryFigures`-keyed field ids, never display-label keys; Project Site locked,
+always selected), three named presets (Compact Summary, Deductions, Release Status) each selecting a
+paired card+column set, Select All / Clear Optional Fields / Reset to Default, a non-blocking
+wide-selection warning (>10 columns) and a hard block against printing with no meaningful column
+selected. Confirming calls the exact same shared `useTriggerPrint` engine every other print-enabled
+page already uses (fixed to landscape/fit-to-page for this report, mirroring the `flushSync`
+close-then-print sequencing the Production Print Defect fix already established) — no new print
+engine. A `hidden print:block` cards/table block (mirroring Payroll Entry's own dedicated
+print-only-markup pattern) renders only the selected fields, reading them directly from the same
+already-loaded `PayrollSummaryReport` the on-screen table and CSV/XLSX exports already use — no new
+fetch, no recalculated figure. The on-screen table (now separately `print:hidden`) still always
+shows all 19 columns, unchanged; CSV/XLSX still always export the complete filtered report via the
+same unaffected backend endpoints. Legibility comes from letting a smaller, user-chosen column set
+size itself naturally (`table-layout: auto`, no forced shrink) rather than the shared `.print-fit`
+class's existing `table-layout: fixed`/8.5px-font behavior, which is what made the full table
+illegible in the first place and was deliberately not reused here. The user's last-used
+preset/selection is remembered in browser `localStorage` only (`payroll-summary-print-fields:v1`) —
+not persisted to PostgreSQL this checkpoint, per its own explicit scope. Full architecture write-up:
+`docs/architecture/print-architecture.md`'s own "Payroll Summary — field-selectable print" section.
+
+**Verification**: full frontend suite 278/278 passing (256 + 22 new: 15 dialog-component tests,
+7 page-level tests covering the dialog-first Print flow, selected-field print rendering, on-screen/
+export non-interference, and local-preference restoration). New real-Chromium Playwright coverage
+(`tests/e2e/specs/17-reports.spec.ts`, 8/8 passing including the 2 pre-existing Reports tests):
+Compact Summary/Deductions/Release Status/a custom selection each print exactly their own headings
+(exact accessible-name match, so a truncated/ellipsized heading would fail even if some text node
+technically remained); measurable geometry proof that the print-only table never overflows its
+printable container, no individual header cell is internally clipped, and no two adjacent
+totals-row cells overlap; the on-screen table still shows every column under real screen media;
+Excel export still succeeds, unaffected, after using Print. Repo-wide typecheck and Reports-relevant
+lint clean; backend/frontend/e2e builds unaffected (no backend change — this refinement is entirely
+frontend presentation).
+
+**Documentation**: `docs/architecture/print-architecture.md` (new "Payroll Summary —
+field-selectable print" section plus a Testing addendum), `docs/architecture/workflows/reports.md`
+§11 (Print), this file, and `docs/SESSION_HANDOFF.md`.
+
+**No commit, push, or deployment occurred — do not mark this refinement complete** until reviewed.
+No other report, Dashboard work, or unrelated module was started or modified — the diff is Reports'
+own print presentation only (`reports-payroll-summary-page.tsx` and two new files under
+`components/reports/`), no backend change, no financial calculation touched.
+
+## Phase 8B Checkpoint 1 — Final Print UX Refinement (2026-08-03)
+
+**IMPLEMENTED, awaiting review, NOT COMMITTED.** Two UX changes to the Print Options dialog above,
+requested before landing — no redesign, no backend change, no calculation change, no CSV/XLSX
+change, no other report started.
+
+**1. Default selection is now the complete report.** The dialog's own initial state (and what
+"Reset to Default" restores) is every summary card and every table column selected
+(`FULL_REPORT_SELECTION`, `payroll-summary-print-fields.ts`) — the application must never silently
+hide report data, so a smaller printout is now something a user explicitly opts into. Compact
+Summary/Deductions/Release Status remain available exactly as before, as opt-in shortcuts, not the
+default. A saved browser-local preference (e.g. a user who already chose Compact Summary before this
+refinement) still wins over the new default on the dialog's next open — nothing in browser storage
+was migrated; the new default only applies when nothing is stored yet, or after an explicit Reset,
+which then overwrites the stored preference with Full Report only once the user confirms Print.
+
+**2. "N columns selected" replaced with a Print Readability indicator.** Four column-count-derived
+tiers (`getReadabilityLevel`), purely informational, never altering the selection: ≤8 columns
+Excellent ("This layout should print clearly."), 9–11 Good ("Suitable for most A4 landscape
+prints."), 12–15 Wide ("Some columns may become compressed."), 16+ Very Wide ("This layout is
+likely to reduce readability. Consider using a preset."). Only Very Wide additionally shows a
+prominent (but still non-blocking) warning banner. Because Full Report is now the default, a
+first-time user sees Very Wide and the warning immediately on open — an accepted tradeoff for never
+hiding data by default; the three presets exist precisely to offer an easy path to Excellent/Good.
+
+**Verification**: full frontend suite 288/288 passing (278 + 10 net new: dialog tests rewritten and
+expanded to 23, page tests expanded to 19, covering the new default, Reset behavior, all four
+readability tiers, the Very Wide-only warning, and confirming-without-a-preset prints the complete
+report). Reports Playwright (`17-reports.spec.ts`) 9/9 passing (8 existing + 1 new, confirming the
+real-browser default is Full Report/Very Wide/warning-visible and prints every column). Repo-wide
+typecheck and lint clean; builds unaffected (no backend change).
+
+**Documentation**: `docs/architecture/print-architecture.md` ("Final Print UX Refinement" addendum
+to the existing "Payroll Summary — field-selectable print" section, plus a readability-tier table
+and an updated Testing list), `docs/architecture/workflows/reports.md` §11, this file, and
+`docs/SESSION_HANDOFF.md`.
+
+**No commit, push, or deployment occurred — do not mark this refinement complete** until reviewed.
+No other report, Dashboard work, or unrelated module was started or modified.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SessionUser } from '@payroll/shared';
@@ -72,7 +72,22 @@ function mockSelectedCycle(cycle: (typeof CYCLES)[number] = CYCLES[0]!) {
   });
 }
 
-beforeEach(() => mockSelectedCycle());
+// Radix's Dialog primitive probes a few DOM APIs jsdom doesn't implement — the Print Options
+// dialog (post-deployment Print Usability Refinement) needs this the same way print-button.test.tsx
+// already established for the shared PrintSettingsDialog.
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+});
+
+beforeEach(() => {
+  mockSelectedCycle();
+  window.localStorage.clear();
+});
 
 function renderPage(user: SessionUser = baseUser) {
   const queryClient = new QueryClient();
@@ -181,7 +196,10 @@ describe('ReportsPayrollSummaryPage — rendering totals, cycle state, and table
     mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
     renderPage();
     expect(screen.getByText(/still in draft/i)).toBeTruthy();
-    expect(screen.getByText('Site One')).toBeTruthy();
+    // Two matches from this point on: the on-screen table plus the print-only table's own
+    // always-included Project Site column (Post-deployment Print Usability Refinement) — `Site One`
+    // is no longer unique on the page, by design.
+    expect(screen.getAllByText('Site One').length).toBeGreaterThan(0);
     // Employees stat tile
     expect(screen.getAllByText('2').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/PKR\s*59,200\.00|59,200\.00/).length).toBeGreaterThan(0);
@@ -248,5 +266,161 @@ describe('ReportsPayrollSummaryPage — pagination', () => {
     mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport({ page: 1 }), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
     renderPage();
     expect((screen.getByRole('button', { name: /previous/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// --- Post-deployment Print Usability Refinement -------------------------------------------------
+//
+// Production UAT found the full 19-column table illegible when printed. These tests cover the new
+// Print Options dialog flow this page now owns: Print no longer calls window.print() directly, and
+// the print-only cards/table (`data-testid="print-only-cards"`/`"print-only-table"`) render only the
+// user's selected fields from the exact same already-loaded `report.data` the on-screen version
+// above already asserts against — never a second fetch, never a recalculated figure.
+
+describe('ReportsPayrollSummaryPage — Print Options dialog', () => {
+  afterEach(() => cleanup());
+
+  it('clicking Print opens the options dialog instead of calling window.print() immediately', () => {
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+
+    expect(printSpy).not.toHaveBeenCalled();
+    expect(screen.getByText('Print Options')).toBeTruthy();
+  });
+
+  it('first open defaults to the Full Report — every card and every column already selected (Final Print UX Refinement)', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    expect(screen.getByText(/Full Report \(all fields\)/)).toBeTruthy();
+    expect(screen.getByText('19 columns selected', { exact: false })).toBeTruthy();
+  });
+
+  it('confirming the dialog calls window.print() with the field selection already applied', () => {
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    expect(printSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Print Options')).toBeNull();
+  });
+
+  it('confirming without picking a preset prints the complete Full Report (every column, every card)', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    const printTable = within(screen.getByTestId('print-only-table'));
+    const printCards = within(screen.getByTestId('print-only-cards'));
+    expect(printTable.getByText('Held')).toBeTruthy();
+    expect(printTable.getByText('Overtime')).toBeTruthy();
+    expect(printTable.getByText('Balance Payable Included')).toBeTruthy();
+    expect(printCards.getByText('EOBI')).toBeTruthy();
+    expect(printCards.getByText('Fines')).toBeTruthy();
+  });
+
+  it('the print-only table shows exactly the selected columns and hides the rest', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deductions' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    const printTable = within(screen.getByTestId('print-only-table'));
+    expect(printTable.getByText('Advance Deduction')).toBeTruthy();
+    expect(printTable.getByText('Eid Advance Deduction')).toBeTruthy();
+    expect(printTable.getByText('Recovery Deducted')).toBeTruthy();
+    // Held/Released/Pending counts are not part of the Deductions preset — must be absent.
+    expect(printTable.queryByText('Held')).toBeNull();
+    expect(printTable.queryByText('Overtime')).toBeNull();
+  });
+
+  it('the print-only summary cards show exactly the selected cards and hide the rest', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release Status' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    const printCards = within(screen.getByTestId('print-only-cards'));
+    expect(printCards.getByText('Employees')).toBeTruthy();
+    expect(printCards.getByText('Released Amount')).toBeTruthy();
+    expect(printCards.getByText('Pending Release Amount')).toBeTruthy();
+    // Release Status has no EOBI/Fines/Advances card.
+    expect(printCards.queryByText('EOBI')).toBeNull();
+    expect(printCards.queryByText('Fines')).toBeNull();
+  });
+
+  it('the on-screen report still shows every column and every card regardless of print selection', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compact Summary' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    const onScreenTable = within(screen.getByTestId('on-screen-table'));
+    expect(onScreenTable.getByText('Held')).toBeTruthy();
+    expect(onScreenTable.getByText('Overtime')).toBeTruthy();
+    expect(onScreenTable.getByText('Bal. Payable')).toBeTruthy();
+    const onScreenCards = within(screen.getByTestId('on-screen-cards'));
+    expect(onScreenCards.getByText('EOBI')).toBeTruthy();
+    expect(onScreenCards.getByText('Fines')).toBeTruthy();
+  });
+
+  it('CSV/XLSX export still exports the complete filtered report, unaffected by print field selection', async () => {
+    vi.spyOn(window, 'print').mockImplementation(() => undefined);
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compact Summary' }));
+    const confirmButtons = screen.getAllByRole('button', { name: 'Print' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+
+    fireEvent.click(screen.getByRole('button', { name: /export excel/i }));
+    await vi.waitFor(() => expect(mockDownloadPayrollSummaryExport).toHaveBeenCalled());
+    // The export call carries no field-selection argument at all — the backend export endpoint
+    // always returns every column (`reports.service.ts`'s own contract, unaffected by this
+    // checkpoint), matching the same call shape the CSV/XLSX tests above already assert. This
+    // mock's call history isn't reset between tests in this file (no `clearMocks` in
+    // `vitest.config.ts`), so the most recent call — not necessarily index 0 — is this test's own.
+    const lastCall = mockDownloadPayrollSummaryExport.mock.calls.at(-1);
+    expect(lastCall?.[2]).toBe('xlsx');
+  });
+
+  it('restores a previously saved field selection the next time the dialog opens', () => {
+    window.localStorage.setItem(
+      'payroll-summary-print-fields:v1',
+      JSON.stringify({ cards: ['fines'], columns: ['siteName', 'fines'] }),
+    );
+    mockUsePayrollSummaryReport.mockReturnValue({ data: fullReport(), isLoading: false, isFetching: false, error: null, refetch: vi.fn() });
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    // The stored selection is `['siteName', 'fines']` — 2 columns, Project Site plus Fines. Not the
+    // Full Report default, proving a saved preference wins over it (Final Print UX Refinement).
+    expect(screen.getByText('2 columns selected', { exact: false })).toBeTruthy();
   });
 });

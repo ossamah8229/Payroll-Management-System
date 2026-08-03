@@ -3158,3 +3158,54 @@ Release, Employee Registry, Advances, Corrections, Statements, Payslips, Bank Sh
 company logo, theme system) was modified. **No commit, push, or deploy occurred this session** —
 stopped deliberately for review, per explicit instruction.
 
+## 25. Addendum, 2026-08-03 — Post-deployment Print Usability Refinement (Payroll Summary) — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own "Post-deployment Print Usability Refinement" entry
+(inserted just before its §2 "Remaining work" table) — this is the handoff summary.
+
+Production UAT on the deployed Payroll Summary report found a real defect: the printed report was
+illegible (19 columns squashed onto one page), even though the on-screen report and Excel export
+were already correct. Fixed with a new, Payroll-Summary-scoped Print Options dialog
+(`components/reports/payroll-summary-print-options-dialog.tsx` + `payroll-summary-print-fields.ts`)
+— presets and individual summary-card/table-column checkboxes, Project Site always locked selected —
+that confirms into the exact same shared `useTriggerPrint` print engine every other page already
+uses, never a new one. A print-only cards/table block renders only the selected fields from the
+already-loaded report DTO (no new fetch, no recalculated figure); the on-screen table/cards and
+CSV/XLSX export are completely unaffected. Legibility comes from letting the (now smaller,
+user-chosen) column set size itself naturally rather than reusing the shared `.print-fit` class's
+existing table-layout:fixed/8.5px-font shrink, which is what made the full table illegible in the
+first place. Last-used selection is remembered in browser `localStorage` only, not PostgreSQL.
+
+**Verification**: full frontend suite 278/278 (256 + 22 new — 15 dialog-component tests, 7
+page-level tests). New real-Chromium Playwright coverage (`17-reports.spec.ts`, 8/8 including the 2
+pre-existing Reports tests): every preset/custom selection prints exactly its own headings (exact
+accessible-name match, not just "some text node exists"), plus measurable geometry proof of no
+horizontal overflow, no per-cell clipping, and no adjacent totals-cell overlap; on-screen table
+still complete under real screen media; Excel export still succeeds and unaffected. Repo-wide
+typecheck clean; no backend change (frontend presentation only), so no backend test/build impact.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for review, per
+explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
+
+## 26. Addendum, 2026-08-03 — Final Print UX Refinement (Payroll Summary) — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own "Final Print UX Refinement" entry — this is the
+handoff summary. Two UX changes to the Print Options dialog from Addendum 25, before landing:
+
+1. **Default selection is now the complete report** (every card, every column) — the application
+   must never silently hide report data, so a smaller printout is now something a user explicitly
+   opts into (a preset or a hand-picked selection), never the unexplained starting point. Reset to
+   Default now restores this same complete selection, not Compact Summary. A saved browser-local
+   preference still wins over the new default on the dialog's next open — no storage migration.
+2. **"N columns selected" replaced with a Print Readability indicator** — four column-count tiers
+   (Excellent ≤8 / Good 9–11 / Wide 12–15 / Very Wide 16+), purely informational, never altering the
+   selection; only Very Wide additionally shows a prominent, still non-blocking warning banner.
+
+No backend change, no calculation change, no CSV/XLSX change, no other report started.
+**Verification**: full frontend suite 288/288 (278 + 10 net new — dialog tests expanded to 23, page
+tests to 19). Reports Playwright (`17-reports.spec.ts`) 9/9 (8 existing + 1 new confirming the
+real-browser default). Typecheck/lint clean; no backend build impact.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for review, per
+explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
+
