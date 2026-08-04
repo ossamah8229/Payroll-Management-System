@@ -1,6 +1,7 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
+import { closeBrowser } from '../src/lib/pdf/browser';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 /**
@@ -35,6 +36,13 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
  * comment on its identical `jest.setTimeout(45000)` — real, measured host memory contention from
  * processes outside this suite's control, not a leak or a logic defect; reproduced there via 10
  * consecutive full-suite runs). Same proportionate response applied here, for the same reason.
+ *
+ * **Phase 7G remediation (2026-08-04)** — this file rendered real Puppeteer PDFs from the start
+ * but never called `closeBrowser()`, unlike every other real-PDF-rendering suite
+ * (`payslips.test.ts`, `statements.test.ts`). Confirmed directly (not just theorized) to matter:
+ * isolated runs of this file left a live, `ESTABLISHED` Chrome DevTools-Protocol WebSocket open
+ * after all 5 tests had already passed, which is exactly why Jest never exited on its own
+ * afterward. `afterAll` below now closes the shared browser, matching the established pattern.
  */
 jest.setTimeout(45000);
 
@@ -47,8 +55,15 @@ describe('Hold Workflow Verification (Phase 7F, 2026-08-04)', () => {
   });
 
   afterAll(async () => {
-    await cleanTestData();
-    await prisma.$disconnect();
+    // `closeBrowser()` runs in `finally` — it must close the shared Puppeteer instance even if
+    // `cleanTestData()`/`prisma.$disconnect()` above throws, matching `payslips.test.ts`'s and
+    // `statements.test.ts`'s own established lifecycle pattern.
+    try {
+      await cleanTestData();
+      await prisma.$disconnect();
+    } finally {
+      await closeBrowser();
+    }
   });
 
   async function masterAdminAgent(email: string) {
