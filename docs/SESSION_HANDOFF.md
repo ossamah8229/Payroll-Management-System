@@ -3209,3 +3209,138 @@ real-browser default). Typecheck/lint clean; no backend build impact.
 **No commit, push, or deployment occurred this session** — stopped deliberately for review, per
 explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
 
+## 27. Addendum, 2026-08-04 — Phase 7F: Payroll Workflow Integrity — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own "Phase 7F — Payroll Workflow Integrity" entry
+(inserted just before its §2 "Remaining work" table) and
+`docs/architecture/workflows/payroll-lifecycle.md §4`'s new subsections — this is the handoff
+summary. Four objectives from a production-UAT-driven checkpoint, all implemented and tested.
+
+**Objective 1 (Employee Registry authoritative Draft master data)**: production UAT found editing
+Gross Salary in Employee Registry didn't update an already-created, unreleased Payroll Entry.
+Extended Phase 7D's own "Master Data Boundary" live-overlay/release-freeze mechanism
+(`withLiveMasterData`/`liveMasterByEntryId`) to the three fields it had missed — `grossPay`,
+`employeeNameSnapshot`, `fatherNameSnapshot` — removed from `updatePayrollEntrySchema` the same way
+`designation`/banking fields already were. CNIC/Employee Code confirmed already correctly live
+(never independently stored on `PayrollEntry`); EOBI applicability confirmed already correct via
+its own distinct bidirectional-sync mechanism. Every genuinely Payroll-owned field confirmed still
+Draft-editable via a dedicated regression test. **Known limitation, not fixed**: CSV/Excel export
+and Backup Package generation still read the entry's stored column directly, bypassing the live
+overlay — a pre-existing gap mirroring Bank Sheet's own already-shipped "Account Title" gap
+(Phase 8A); Bank Sheets/Cash Receiving themselves are unaffected (`released: true`-scoped only).
+
+**Objective 2 (Release All)**: new bulk release action (`POST
+/api/v1/payroll-cycles/:cycleId/units/release-all`), scoped to one Site or "All Sites" (the
+caller's own RBAC-accessible scope). Loops the exact same, unmodified `releaseProjectUnit` once per
+not-yet-released Unit — introduces no second release mechanism. **Transaction strategy: one
+transaction per Project Unit, sequential** (reasoning fully documented in both the function's own
+doc comment and the workflow doc) — chosen over one giant transaction (timeout/lock-duration/
+blast-radius risk) and over one per employee (no natural single-employee transaction boundary this
+architecture already has). A genuine per-Unit failure is reported and skipped without affecting any
+other, already-succeeded Unit — verified with a test that forces one specific Unit to fail via a
+targeted `jest.spyOn` on the plain (pre-transaction) `prisma.projectUnit.findUnique` call, confirmed
+not to intercept anything inside `releaseProjectUnit`'s own transactional client proxy.
+
+**Objective 3 (Hold Workflow Verification)**: full audit of the documented Hold → Release →
+Hold-removed lifecycle. Mechanics were already correct through "release remaining" (held entries
+were always excluded from `releaseProjectUnit`'s own candidate query). Two real gaps found and
+fixed: (1) `getUnitReleaseStatus`'s `willReleaseCount` included Held entries, overstating the
+Release confirmation dialog's "will release now" figure — fixed, with a new `heldCount` field
+surfacing the excluded count explicitly rather than folding it into "remain pending." (2) The
+documented lifecycle's own final step — un-Hold *after* the Unit already released — had no path
+back to release at all; `releaseProjectUnit` unconditionally 409'd a second call against an
+already-released Unit. This is the "Late Entry" gap every prior checkpoint's own doc comments
+documented as explicitly deferred (distinct from the still-genuinely-open "no post-finalization
+release path" gap, which this does **not** close — see the workflow doc's own clarification).
+Closed as a **Late/Straggler Sweep**: a second call against an already-released Unit now sweeps
+only newly-eligible stragglers (no new `PayrollUnitRelease` row — still insert-once, still no
+"un-release"), still rejecting with the identical 409 when there's genuinely nothing new. Verified
+this doesn't regress the pre-existing "double-click" 409 test, and correctly waits for a
+straggler's *other* touched Unit before resolving it. Surfaced in the UI as a distinctly-labeled
+"Release Remaining" action. Also added a derived, purely client-side Site-level release-status badge
+(Draft/Partially Released/Held Remaining/Released) — investigation found none existed before this
+checkpoint; computed from already-fetched data, no new backend endpoint.
+
+**Objective 4 (edge-case audit)**: Hold→Released→Hold-removed→release-remaining is the Late/
+Straggler Sweep above, verified end to end. Recovery Due/No Payout/Balance Payable/Corrections/
+Balance Adjustments all confirmed unaffected by every change in this checkpoint — every
+Corrections/Balance-Adjustments test suite and the negative-salary/recovery-accounting suites pass
+unchanged in the full regression run. Bank Sheets/Cash Receiving/Payslips/Statements confirmed
+scoped to released entries only, unaffected by the Draft-time changes, and Payslips specifically
+more correct than before (name/father-name now freeze at release time, not entry-creation time).
+
+**Verification**: full backend suite — see this file's own final tally below (re-run clean against
+a freshly re-provisioned local database after an unrelated mid-session database-corruption incident
+this session's own investigation found and fixed — see "Environment note" below, not a code
+defect). Full frontend suite **312/312** passing throughout (no regression at any point). Repo-wide
+typecheck clean (shared/backend/frontend/e2e) after every change. New test files: `backend/tests/
+payroll-entry-master-data-boundary-grosspay.test.ts` (6), `payroll-release-all.test.ts` (13),
+`payroll-hold-workflow.test.ts` (4) — 23 new backend tests, all passing, none flaky across repeated
+runs. Five pre-existing backend tests and two pre-existing frontend tests updated for the
+intentional `grossPay`-no-longer-Draft-editable behavior change (not relaxed — each re-scoped to
+what it actually verifies, with a swapped still-editable field where `grossPay` was only ever
+incidental to that test's real point).
+
+**Environment note (not a code defect, recorded for the next session)**: this session's local
+Postgres (re-provisioned per the standing `@embedded-postgres/darwin-x64` recipe) accumulated
+cross-test-file pollution from several earlier, interrupted `npx jest` invocations run directly
+(bypassing `npm run test`) while diagnosing an unrelated login-401 issue during initial setup —
+traced to `roles.test.ts`'s own "second qualifying administrator" test, which deliberately
+deactivates the real `MASTER_ADMIN` system role mid-test and restores it in a follow-up statement
+that never ran because an earlier partial invocation aborted first. This is a pre-existing test-
+isolation hazard (a shared, global system-role row mutated without a guaranteed-to-run restore),
+not something this checkpoint's own code changes caused — confirmed by reproducing the exact same
+cascading 401 failures against a freshly re-provisioned, completely unmodified database using only
+`npx jest` directly. Fixed for this session by dropping and recreating the database cleanly and
+running the full suite exactly once via `npm run test`. **Worth a dedicated hardening pass in a
+future checkpoint** (e.g. `cleanTestData()` also resetting system-role `isActive`/`isSystemRole` to
+their seeded values, or that specific test using `try/finally`) — not attempted here, out of scope
+for a Payroll workflow checkpoint, and the underlying mechanism (this test intentionally toggles a
+real system role for one assertion) is itself sound; only the restore's own failure-safety needs
+hardening.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for review, per
+explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
+
+## 28. Addendum, 2026-08-04 (later same day) — Phase 7F Refinement: Export live overlay + Release Remaining idempotency — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own "Phase 7F Refinement" entry — this is the handoff
+summary. Two review follow-ups, both closed.
+
+**1. CSV/Excel export now matches the on-screen Payroll Entry grid.** Export
+(`payroll-entry-import-export.service.ts`) was reading stored `PayrollEntry` columns directly,
+bypassing Objective 1's own live-overlay — a Draft export could show a stale Gross Salary/
+Designation. Also found, independently: the export's Name column was the *opposite* problem —
+always live (`entry.employee.name`), never frozen even for a Released row. Fixed by exporting and
+reusing the existing `withLiveMasterData` (no new logic) and switching Name to
+`employeeNameSnapshot ?? entry.employee.name` (Payslip's own existing convention). Released/Archived
+export rows are unaffected — same `released || payoutOutcome !== null` gate already proven
+elsewhere. No calculation or Release-semantics change. Backup Package generation (reuses this same
+export) inherits the fix for free.
+
+**2. Release Remaining idempotency, tested explicitly.** New test:
+hold → release remaining → un-hold → Release Remaining → Release Remaining again. Second call 409s;
+verified byte-identical afterward: `PayrollUnitRelease` count, `payroll_unit.late_sweep`/
+`payroll_entry.released` audit counts, the entry's own row, Bank Sheet row, Cash Receiving row
+count, a real Payslip PDF (still generates cleanly), and the Statement ledger (still one line).
+
+**Testing-infrastructure note**: the new test's two real Payslip PDF generations exposed
+`payroll-hold-workflow.test.ts` to the same measured Puppeteer/Chrome resource-contention fragility
+`payslips.test.ts` already carries its own file-scoped `jest.setTimeout(45000)` for — reproduced
+once under full-suite load (a 500, not a hang), absent both in isolation and after applying the
+identical existing mitigation. Not a logic defect; same established pattern, not a new one.
+
+**Verification (final, after the refinement)**:
+- Backend: **1271/1272** — the one failure (`corrections-service.test.ts`'s "Concurrent approval...
+  two different requests... serialize" test) is a pre-existing, already-documented full-suite
+  concurrency-timing flake in a module this checkpoint never touched (Corrections) — confirmed
+  **53/53 in isolation**, the exact figure this project's own prior documentation already recorded
+  for this same known flake.
+- Frontend: **312/312**.
+- Playwright: full suite re-run — see this addendum's own final line below for the result.
+- Typecheck (shared/backend/frontend/e2e): clean. Lint (backend + frontend): clean, 0 errors (only
+  pre-existing warnings in files this checkpoint never touched). Build: clean.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for review, per
+explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
+
