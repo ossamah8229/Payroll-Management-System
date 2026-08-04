@@ -283,10 +283,11 @@ export function totalGridWidth(columns: ResolvedPayrollColumnDef[]): number {
  * to reach and focus them, not necessarily type into them the same way.
  *
  * `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` removed (Master Data Boundary, Phase
- * 7D, 2026-07-30) — now plain `ReadOnlyCell`s (Employee Registry's data, display-only here), with
- * no focusable input to navigate to. */
+ * 7D, 2026-07-30); `grossPay` removed the same way (Phase 7F, 2026-08-04) — now plain
+ * `ReadOnlyCell`s (Employee Registry's data, display-only here), with no focusable input to
+ * navigate to. */
 export const NAVIGABLE_COLUMN_IDS = PAYROLL_COLUMNS.filter((c) =>
-  ['grossPay', 'days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'eobiApplicable', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'hold', 'remarks'].includes(
+  ['days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'eobiApplicable', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'hold', 'remarks'].includes(
     c.id,
   ),
 ).map((c) => c.id);

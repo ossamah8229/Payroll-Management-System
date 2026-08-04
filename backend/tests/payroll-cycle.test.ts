@@ -142,7 +142,7 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
     expect(second.body.error.message).toMatch(/archive-and-create-next/i);
   });
 
-  it('carries forward grossPay/EOBI/leaveRate/cycleDays/otRate from a continuing employee\'s prior entry, not from Employee\'s own defaults, via rollover', async () => {
+  it('carries forward EOBI/cycleDays/otRate from a continuing employee\'s prior entry (own stored column also carries forward for grossPay, but Phase 7F, 2026-08-04, made grossPay live-overlaid from Employee Registry while Draft, so it no longer needs a Payroll-Entry-level edit to diverge from Employee\'s default)', async () => {
     const { agent, csrfToken } = await masterAdminAgent('cycle-carry-forward@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Carry Forward');
     const employee = await makeEmployee(site.id, unit.id, 'Continuing Employee', { grossPay: '30000' });
@@ -158,15 +158,19 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
       include: { workLines: true },
     });
 
-    // Adjust cycle 1's entry directly (a Payroll-Entry-level edit, as if made before release) to a
-    // figure that deliberately differs from Employee.grossPay — this is exactly the kind of
-    // adjustment §9 says Employee.grossPay ("template value only") would NOT reflect.
+    // Adjust cycle 1's entry directly (a Payroll-Entry-level edit, as if made before release) to
+    // figures that deliberately differ from Employee's own defaults — this is exactly the kind of
+    // adjustment §9 says Employee.grossPay ("template value only") would NOT reflect. `grossPay`
+    // deliberately absent from this PATCH (Phase 7F, 2026-08-04) — it is no longer Draft-editable
+    // on `PayrollEntry` at all (Employee Registry is its sole editable source now), so it is
+    // verified separately below via its own, still-genuine "own stored column carries forward"
+    // mechanism rather than a PATCH-introduced divergent value.
     const patchRes = await agent
       .patch(`/api/v1/payroll-entries/${entry1.id}`)
       .set('x-csrf-token', csrfToken)
       // hold: true — Finalize's precondition requires every entry be released or held; this test
       // doesn't exercise per-Unit release, so it holds the one entry instead.
-      .send({ version: entry1.version, grossPay: '35000.50', eobiAmount: '450', eobiApplicable: false, hold: true });
+      .send({ version: entry1.version, eobiAmount: '450', eobiApplicable: false, hold: true });
     expect(patchRes.status).toBe(200);
 
     await prisma.payrollEntryWorkLine.update({
@@ -194,7 +198,14 @@ describe('Phase 3 Checkpoint 1 — Payroll Cycle bootstrap/creation', () => {
       include: { workLines: true },
     });
 
-    expect(Number(entry2.grossPay)).toBe(35000.5);
+    // `grossPay` itself (Phase 7F, 2026-08-04): the *stored* column still mechanically carries
+    // forward from the prior entry's own stored column (this test's bootstrap logic is unchanged),
+    // so it equals entry1's — here, Employee's original '30000' template value, since no PATCH ever
+    // touched it. This is no longer the field under test (EOBI/cycleDays/otRate below are); a live
+    // read while cycle 2 is Draft would show Employee's *current* Gross Salary regardless of this
+    // stored value (`payroll-entry.service.ts`'s `withLiveMasterData`), which this direct-DB
+    // assertion deliberately bypasses to prove the underlying carry-forward mechanism is intact.
+    expect(Number(entry2.grossPay)).toBe(Number(entry1.grossPay));
     expect(Number(entry2.eobiAmount)).toBe(450);
     expect(entry2.eobiApplicable).toBe(false);
     expect(entry2.workLines).toHaveLength(1);

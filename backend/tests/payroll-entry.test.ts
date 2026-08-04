@@ -244,11 +244,12 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     expect(created.body.entry.bankId).toBe(bank.id);
     expect(created.body.entry.accountNumber).toBe('5551234567');
 
-    // A PATCH that also includes banking/designation fields (as an old client, or a hostile
-    // request, might still send) is silently ignored for those specific fields — the schema no
-    // longer recognizes them — while any legitimate financial field in the same request still
-    // applies normally. This is the checkpoint's "Payroll Entry APIs must not accept or persist
-    // changes to employee banking fields" requirement.
+    // A PATCH that also includes banking/designation/grossPay fields (as an old client, or a
+    // hostile request, might still send) is silently ignored for those specific fields — the
+    // schema no longer recognizes them — while any legitimate financial field in the same request
+    // still applies normally. This is the checkpoint's "Payroll Entry APIs must not accept or
+    // persist changes to employee banking fields" requirement, extended to `grossPay` by Phase 7F
+    // (2026-08-04).
     const attempted = await admin.agent
       .patch(`/api/v1/payroll-entries/${entryId}`)
       .set('x-csrf-token', admin.csrfToken)
@@ -260,6 +261,7 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
         branchCode: 'HACKED',
         accountNumber: '0000000000',
         designation: 'Hacked Designation',
+        grossPay: '999999',
       });
     expect(attempted.status).toBe(200);
     expect(Number(attempted.body.entry.allowance)).toBe(1500);
@@ -268,10 +270,12 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
     expect(attempted.body.entry.accountNumber).toBe('5551234567');
     expect(attempted.body.entry.iban).toBeNull();
     expect(attempted.body.entry.designation).toBe('Guard');
+    expect(Number(attempted.body.entry.grossPay)).toBe(30000);
 
     const persisted = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryId } });
     expect(persisted.bankId).toBe(bank.id);
     expect(persisted.accountNumber).toBe('5551234567');
+    expect(Number(persisted.grossPay)).toBe(30000);
     expect(persisted.iban).toBeNull();
     expect(persisted.designation).toBe('Guard');
   });

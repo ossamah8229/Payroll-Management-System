@@ -186,13 +186,14 @@ describe('Employee identity/banking cells are display-only', () => {
       expect(cell.querySelector('input')).toBeNull();
     }
   });
+
 });
 
 describe('Payroll-cycle financial fields and the EOBI toggle remain fully editable', () => {
   it('every legitimate payroll-entry financial field still renders an editable input', () => {
     const entry = makeEntry();
     const { container } = renderRow(entry);
-    for (const colId of ['grossPay', 'days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'remarks']) {
+    for (const colId of ['days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'remarks']) {
       const cell = container.querySelector(`[data-col-id="${colId}"]`) as HTMLElement;
       expect(cell.querySelector('input')).not.toBeNull();
     }

@@ -203,12 +203,16 @@ describe('Master Data Boundary — Employee Registry as the authoritative source
       .set('x-csrf-token', admin.csrfToken)
       .send({ employeeId: employee.id });
 
+    // Phase 7F (2026-08-04) — `grossPay` moved out of this "still Draft-editable" set and into the
+    // Master Data Boundary alongside designation/banking (see
+    // `payroll-entry-master-data-boundary-grosspay.test.ts` for its own dedicated read-only/
+    // live-sync/release-freeze coverage); every field below it remains exactly as Draft-editable as
+    // before — this checkpoint only widened the identity/banking boundary, nothing else.
     const updated = await admin.agent
       .patch(`/api/v1/payroll-entries/${created.body.entry.id}`)
       .set('x-csrf-token', admin.csrfToken)
       .send({
         version: created.body.entry.version,
-        grossPay: '35000',
         allowance: '2000',
         leaveDays: '1',
         leaveRate: '1000',
@@ -219,7 +223,6 @@ describe('Master Data Boundary — Employee Registry as the authoritative source
         remarks: 'Adjusted for overtime coverage',
       });
     expect(updated.status).toBe(200);
-    expect(Number(updated.body.entry.grossPay)).toBe(35000);
     expect(Number(updated.body.entry.allowance)).toBe(2000);
     expect(Number(updated.body.entry.leaveDays)).toBe(1);
     expect(Number(updated.body.entry.leaveRate)).toBe(1000);

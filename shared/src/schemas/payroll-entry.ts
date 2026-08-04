@@ -59,12 +59,19 @@ export type CreatePayrollEntryInput = z.infer<typeof createPayrollEntrySchema>;
  * `eobiApplicable` deliberately stay below, unaffected — EOBI applicability remains a
  * payroll-cycle-specific toggle owned by Payroll Entry, not Employee Registry.
  *
+ * **Phase 7F (2026-08-04) — `grossPay` removed, same reasoning extended**: production UAT found
+ * that editing Gross Salary in Employee Registry did not update an unreleased Payroll Entry —
+ * `grossPay` was a Draft-editable duplicated column exactly like the Phase 7D fields above, just
+ * missed by that checkpoint. Employee Registry is now the sole editable source for Gross Salary
+ * too; a Draft entry's own copy is refreshed from the live `Employee` record for display and
+ * calculation (`payroll-entry.service.ts`'s `withLiveMasterData`) and re-frozen from it at release
+ * time (`payroll-release.service.ts`), never accepted from this route again.
+ *
  * `version` is mandatory — the optimistic-locking token the caller must echo back from whatever
  * read produced the value being edited (docs/architecture/database/schema-invariants.md §22).
  */
 export const updatePayrollEntrySchema = z.object({
   version: z.number().int(),
-  grossPay: decimalString.optional(),
   allowance: decimalString.optional(),
   leaveDays: decimalString.optional(),
   leaveRate: z.preprocess(emptyToNull, decimalString.nullable().optional()),

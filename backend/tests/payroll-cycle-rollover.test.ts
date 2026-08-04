@@ -271,12 +271,14 @@ describe('Phase 5 Checkpoint 3 — Cycle Archiving, Automatic Backup Generation,
     expect(manual.body.backupPackage.version).toBe(1);
 
     // The held entry is still editable after Finalize (Checkpoint 1's own approved rule) — change
-    // its grossPay, which v1 does NOT reflect.
+    // its fine (an ordinary Payroll-Entry-owned field — `grossPay` is no longer Draft-editable on
+    // this route as of Phase 7F, 2026-08-04, and this test's own concern is Backup Package
+    // freshness, not which specific field changed), which v1 does NOT reflect.
     const heldAfterFinalize = await getEntry(admin, finalized.id, employee.id);
     await admin.agent
       .patch(`/api/v1/payroll-entries/${heldAfterFinalize.id}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ version: heldAfterFinalize.version, grossPay: '99999.99' });
+      .send({ version: heldAfterFinalize.version, fine: '99999.99' });
 
     const res = await rollover(admin, finalized.id);
     expect(res.status).toBe(201);

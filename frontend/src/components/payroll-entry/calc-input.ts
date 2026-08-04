@@ -5,9 +5,11 @@ import { toNumberOrNull, type RowLiveSnapshot } from './live-totals-store';
 
 /** The entry-level fields this checkpoint's grid can edit (a subset of `UpdatePayrollEntryInput` —
  * excludes the non-calculation fields like designation/bank/hold/remarks, which don't feed
- * `calcNet`). */
+ * `calcNet`). `grossPay` deliberately absent (Phase 7F, 2026-08-04) — it feeds `calcNet` but is no
+ * longer Draft-editable at all (Employee Registry is now its sole editable source), so there is
+ * never a local override to merge; `buildCalcInput` below always reads the entry's own (already
+ * live-overlaid by the backend) `grossPay` directly. */
 export interface EntryCalcOverrides {
-  grossPay?: string;
   allowance?: string;
   leaveDays?: string;
   leaveRate?: string | null;
@@ -67,7 +69,7 @@ export function buildCalcInput(
   });
 
   return {
-    grossPay: entryOverrides.grossPay ?? entry.grossPay,
+    grossPay: entry.grossPay,
     allowance: entryOverrides.allowance ?? entry.allowance,
     leaveDays: entryOverrides.leaveDays ?? entry.leaveDays,
     leaveRate: entryOverrides.leaveRate !== undefined ? entryOverrides.leaveRate : entry.leaveRate,

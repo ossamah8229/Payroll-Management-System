@@ -177,7 +177,7 @@ describe('usePayrollEntryEditor — debounce coalescing (item 1)', () => {
     const { result } = renderHook(() => usePayrollEntryEditor(entry, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      result.current.setEntryField('grossPay', '31000');
+      result.current.setEntryField('leaveDays', '2');
     });
     act(() => {
       result.current.setEntryField('allowance', '500');
@@ -193,7 +193,7 @@ describe('usePayrollEntryEditor — debounce coalescing (item 1)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
-    expect(body.grossPay).toBe('31000');
+    expect(body.leaveDays).toBe('2');
     expect(body.allowance).toBe('500');
   });
 });
@@ -207,7 +207,7 @@ describe('usePayrollEntryEditor — failure, retry, and exhaustion (items 5, 6, 
     const { result } = renderHook(() => usePayrollEntryEditor(entry, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      result.current.setEntryField('grossPay', '31000');
+      result.current.setEntryField('allowance', '500');
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600);
@@ -215,19 +215,19 @@ describe('usePayrollEntryEditor — failure, retry, and exhaustion (items 5, 6, 
 
     expect(result.current.status).toBe('error');
     expect(result.current.hasUnsavedChanges).toBe(true);
-    expect(result.current.effectiveEntry.grossPay).toBe('31000');
+    expect(result.current.effectiveEntry.allowance).toBe('500');
   });
 
   it('clears the unsaved state once a manual retry succeeds (item 6)', async () => {
     const entry = makeEntry({ id: uid('entry') });
     const cycleId = uid('cycle');
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { entry: mutationResponse(entry, { version: 2, grossPay: '31000' }) }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { entry: mutationResponse(entry, { version: 2, allowance: '500' }) }));
 
     const { result } = renderHook(() => usePayrollEntryEditor(entry, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      result.current.setEntryField('grossPay', '31000');
+      result.current.setEntryField('allowance', '500');
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600);
@@ -254,7 +254,7 @@ describe('usePayrollEntryEditor — failure, retry, and exhaustion (items 5, 6, 
     const { result } = renderHook(() => usePayrollEntryEditor(entry, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      result.current.setEntryField('grossPay', '31000');
+      result.current.setEntryField('allowance', '500');
     });
 
     // Initial send (t=600) + 3 auto-retries at 1s/2s/4s backoff — every one of these rejects.
@@ -287,7 +287,7 @@ describe('usePayrollEntryEditor — hung requests and timeout (item 8)', () => {
     const { result } = renderHook(() => usePayrollEntryEditor(entry, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      result.current.setEntryField('grossPay', '31000');
+      result.current.setEntryField('allowance', '500');
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600); // fires the request
@@ -315,7 +315,7 @@ describe('usePayrollEntryEditor — 409 conflict (item 9)', () => {
     const { result } = renderHook(() => usePayrollEntryEditor(entry, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      result.current.setEntryField('grossPay', '31000');
+      result.current.setEntryField('allowance', '500');
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600);
@@ -341,15 +341,15 @@ describe('usePayrollEntryEditor — multiple rows save independently (item 10)',
 
     fetchMock.mockImplementation((url: string) => {
       if (url.includes(entryA.id)) return Promise.resolve(jsonResponse(500, { error: { code: 'INTERNAL', message: 'boom' } }));
-      return Promise.resolve(jsonResponse(200, { entry: mutationResponse(entryB, { version: 2, grossPay: '31000' }) }));
+      return Promise.resolve(jsonResponse(200, { entry: mutationResponse(entryB, { version: 2, allowance: '500' }) }));
     });
 
     const { result: resultA } = renderHook(() => usePayrollEntryEditor(entryA, cycleId, 'DRAFT'), { wrapper });
     const { result: resultB } = renderHook(() => usePayrollEntryEditor(entryB, cycleId, 'DRAFT'), { wrapper });
 
     act(() => {
-      resultA.current.setEntryField('grossPay', '99999');
-      resultB.current.setEntryField('grossPay', '31000');
+      resultA.current.setEntryField('allowance', '750');
+      resultB.current.setEntryField('allowance', '500');
     });
 
     await act(async () => {

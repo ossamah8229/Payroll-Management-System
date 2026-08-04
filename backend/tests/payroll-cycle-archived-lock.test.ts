@@ -233,13 +233,16 @@ describe('Phase 5 Checkpoint 4 — Archived Cycle Ordinary-Editing Lock', () => 
     expect(finalized.status).toBe('RELEASED');
 
     const heldAfterFinalize = await getEntry(admin, finalized.id, employee.id);
+    // Phase 7F (2026-08-04) — `allowance` stands in for `grossPay` here (which this test used
+    // before `grossPay` became a read-only, Employee-Registry-sourced field); this test exercises
+    // whether an ordinary field edit is still accepted at all, not anything specific to which field.
     const res = await admin.agent
       .patch(`/api/v1/payroll-entries/${heldAfterFinalize.id}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ version: heldAfterFinalize.version, grossPay: '35000' });
+      .send({ version: heldAfterFinalize.version, allowance: '35000' });
 
     expect(res.status).toBe(200);
-    expect(Number(res.body.entry.grossPay)).toBe(35000);
+    expect(Number(res.body.entry.allowance)).toBe(35000);
   });
 
   // --- isCurrentDraft DTO ---------------------------------------------------------------------
