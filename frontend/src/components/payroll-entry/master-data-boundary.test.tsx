@@ -187,6 +187,15 @@ describe('Employee identity/banking cells are display-only', () => {
     }
   });
 
+  // Phase 7F (2026-08-04) — Gross Salary joins this same display-only tier; production UAT found
+  // it was the one master-data field Phase 7D's own pass missed.
+  it('grossPay renders as plain formatted text — no <input> in that cell', () => {
+    const entry = makeEntry({ grossPay: '45000' });
+    const { container } = renderRow(entry);
+    const cell = container.querySelector('[data-col-id="grossPay"]') as HTMLElement;
+    expect(cell.querySelector('input')).toBeNull();
+    expect(cell.textContent).toContain('45,000');
+  });
 });
 
 describe('Payroll-cycle financial fields and the EOBI toggle remain fully editable', () => {

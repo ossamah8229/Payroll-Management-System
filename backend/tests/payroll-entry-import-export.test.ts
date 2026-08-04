@@ -22,7 +22,12 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
       email,
       password: PASSWORD,
       roleCode: ROLE_CODES.MASTER_ADMIN,
-      permissionKeys: [PERMISSIONS.PAYROLL_CYCLE_MANAGE, PERMISSIONS.PAYROLL_ENTRY],
+      permissionKeys: [
+        PERMISSIONS.PAYROLL_CYCLE_MANAGE,
+        PERMISSIONS.PAYROLL_ENTRY,
+        PERMISSIONS.PAYROLL_RELEASE,
+        PERMISSIONS.EMPLOYEES_EDIT,
+      ],
     });
   }
 
@@ -57,6 +62,22 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
       .set('x-csrf-token', admin.csrfToken)
       .send({ year: 2900, month });
     return res.body.cycle as { id: string; status: string };
+  }
+
+  async function createEntry(
+    admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>,
+    cycleId: string,
+    employeeId: string,
+    days = '26',
+  ) {
+    const res = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycleId}/entries`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ employeeId, workLines: [{ days }] });
+    if (res.status !== 201) {
+      throw new Error(`createEntry failed with status ${res.status}: ${JSON.stringify(res.body)}`);
+    }
+    return res.body.entry as { id: string; version: number };
   }
 
   it('exports CSV with the exact template header row and the entry’s real values', async () => {
@@ -110,6 +131,75 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
       (entry) => (entry.metadata as { cycleId?: string })?.cycleId === cycle.id,
     );
     expect(exportAudit).toHaveLength(1);
+  });
+
+  // --- Phase 7F Refinement (2026-08-04) — export now overlays live Employee Registry data for a
+  // Draft entry, and continues freezing it for a Released one, matching the on-screen grid exactly.
+
+  it('a Draft entry export reflects a live Employee Registry edit (Gross Pay/Designation/Name) — no PATCH to the entry, no stale export', async () => {
+    const admin = await masterAdminAgent('export-live-draft-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Export Live Draft');
+    // Cycle created *before* the Employee, deliberately — creating a cycle bootstraps entries for
+    // every already-existing Employee (`bootstrapPayrollEntries`), which would otherwise silently
+    // pre-empt the explicit `createEntry` call below with a 409 (a real fixture-ordering gotcha
+    // this codebase's own other test files already established the same fix for).
+    const cycle = await makeDraftCycle(admin, 5);
+    const employee = await makeEmployee(site.id, unit.id, 'Original Export Name', { cnic: '1112223334445', grossPay: '30000' });
+    await createEntry(admin, cycle.id, employee.id);
+
+    // Corrected in Employee Registry after the entry already exists — the exact scenario the
+    // on-screen grid already reflects live (`payroll-entry.service.ts`'s `withLiveMasterData`).
+    const patchEmployee = await admin.agent
+      .patch(`/api/v1/employees/${employee.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ grossPay: '45000', designation: 'Shift Supervisor', name: 'Corrected Export Name' });
+    expect(patchEmployee.status).toBe(200);
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const dataLine = exportRes.text.trim().split('\n')[1]!;
+    expect(dataLine).toContain('Corrected Export Name');
+    expect(dataLine).toContain('Shift Supervisor');
+    expect(dataLine).toContain('45000');
+    expect(dataLine).not.toContain('Original Export Name');
+    expect(dataLine).not.toContain('30000');
+
+    // The entry's own stored column is untouched — same "copied, not linked" convention as every
+    // other read of this data; only the export (and the grid) overlay it for display.
+    const stored = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employee.id } });
+    expect(stored.designation).toBe('Guard');
+    expect(Number(stored.grossPay)).toBe(30000);
+  });
+
+  it('a Released entry export keeps the frozen historical snapshot — a later Employee Registry edit never reaches it', async () => {
+    const admin = await masterAdminAgent('export-frozen-released-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Export Frozen Released');
+    // Cycle before Employee — same fixture-ordering reason as the Draft test above.
+    const cycle = await makeDraftCycle(admin, 6);
+    const employee = await makeEmployee(site.id, unit.id, 'Pre-release Export Name', { cnic: '5556667778889', grossPay: '30000' });
+    await createEntry(admin, cycle.id, employee.id);
+
+    const release = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/units/${unit.id}/release`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(release.status).toBe(201);
+    expect(release.body.releasedEntryCount).toBe(1);
+
+    // Employee Registry changes after release — must never reach the now-frozen export row.
+    await admin.agent
+      .patch(`/api/v1/employees/${employee.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ grossPay: '99999', designation: 'Renamed After Release', name: 'Renamed After Release Name' });
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const dataLine = exportRes.text.trim().split('\n')[1]!;
+    expect(dataLine).toContain('Pre-release Export Name');
+    expect(dataLine).toContain('Guard');
+    expect(dataLine).toContain('30000');
+    expect(dataLine).not.toContain('Renamed After Release');
+    expect(dataLine).not.toContain('99999');
   });
 
   it('no longer serves a Payroll Entry import route or an import-template route', async () => {
