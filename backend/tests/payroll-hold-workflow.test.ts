@@ -1,7 +1,7 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { closeBrowser } from '../src/lib/pdf/browser';
+import { closePdfRenderer } from '../src/lib/pdf/render-pdf';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 /**
@@ -43,6 +43,16 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
  * isolated runs of this file left a live, `ESTABLISHED` Chrome DevTools-Protocol WebSocket open
  * after all 5 tests had already passed, which is exactly why Jest never exited on its own
  * afterward. `afterAll` below now closes the shared browser, matching the established pattern.
+ *
+ * **Phase 7H (2026-08-04)** — the PDF 500 this file's "Release Remaining idempotency" test hit
+ * intermittently under full-suite load was root-caused to Jest's own `--experimental-vm-modules`
+ * VM-realm teardown racing `browser.ts`'s dynamic `import('puppeteer')` under concurrent load
+ * (`"Test environment has been torn down"`, thrown by `jest-util`'s own module registry, not
+ * application code — reproduced deterministically, fixed by moving real rendering to a persistent
+ * worker process outside any Jest VM realm; see `docs/architecture/testing.md`). `closeBrowser()`
+ * became `closePdfRenderer()` (`render-pdf.ts`) as part of that fix — it recycles whichever
+ * browser is actually rendering (the shared worker's, in `NODE_ENV=test`), not this file's own
+ * in-process singleton, which the worker delegation means is no longer used at all in tests.
  */
 jest.setTimeout(45000);
 
@@ -55,14 +65,14 @@ describe('Hold Workflow Verification (Phase 7F, 2026-08-04)', () => {
   });
 
   afterAll(async () => {
-    // `closeBrowser()` runs in `finally` — it must close the shared Puppeteer instance even if
+    // `closePdfRenderer()` runs in `finally` — it must recycle the shared renderer even if
     // `cleanTestData()`/`prisma.$disconnect()` above throws, matching `payslips.test.ts`'s and
     // `statements.test.ts`'s own established lifecycle pattern.
     try {
       await cleanTestData();
       await prisma.$disconnect();
     } finally {
-      await closeBrowser();
+      await closePdfRenderer();
     }
   });
 

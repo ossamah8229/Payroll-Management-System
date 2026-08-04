@@ -31,10 +31,15 @@ import { logger } from '../logger';
 const importPuppeteer = new Function('return import("puppeteer")') as () => Promise<typeof import('puppeteer')>;
 
 let browserPromise: Promise<Browser> | null = null;
+// Mirrors `browserPromise` once it resolves — a synchronous read of "the currently live browser,
+// if any" that `peekBrowserProcessPid()` below needs, since awaiting `browserPromise` itself would
+// either trigger a launch (if none is in flight) or block on one already in progress, neither of
+// which a read-only introspection helper should ever do.
+let resolvedBrowser: Browser | null = null;
 
 async function launchBrowser(): Promise<Browser> {
   const { default: puppeteer } = await importPuppeteer();
-  return puppeteer.launch({
+  const browser = await puppeteer.launch({
     headless: true,
     // --no-sandbox is required in most containerized hosting environments (confirmed necessary
     // in this project's own sandboxed dev session by direct smoke test) where Chrome's own
@@ -43,6 +48,8 @@ async function launchBrowser(): Promise<Browser> {
     // Render target this project deploys to.
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
+  resolvedBrowser = browser;
+  return browser;
 }
 
 /** Returns the shared browser instance, launching it on first call and relaunching it if the
@@ -93,6 +100,7 @@ export async function closeBrowser(): Promise<void> {
   if (!browserPromise) return;
   const promise = browserPromise;
   browserPromise = null;
+  resolvedBrowser = null;
   try {
     const browser = await promise;
     await browser.close();
@@ -119,10 +127,26 @@ export async function closeBrowser(): Promise<void> {
 export function discardBrowser(): void {
   const stale = browserPromise;
   browserPromise = null;
+  resolvedBrowser = null;
   if (!stale) return;
   stale
     .then((browser) => browser.close())
     .catch(() => {
       // Already dead, or never successfully launched — nothing left to close.
     });
+}
+
+/**
+ * Phase 7H — best-effort, synchronous introspection only; never triggers or waits on a launch,
+ * and returns `undefined` if no browser has resolved yet. Exists for the PDF test worker's own
+ * shutdown backstop (`pdf-worker.entry.ts`): `browser.close()` above is the correct, graceful way
+ * to ask Chrome to exit, but confirmed directly not always sufficient to terminate every Chrome
+ * helper process — Puppeteer launches Chrome detached into its own OS process group, separate
+ * from this Node process's own, specifically so Puppeteer can manage its lifecycle independently.
+ * A worker that needs to *guarantee* Chrome is gone (not just ask nicely) needs Chrome's own pid
+ * to do that, which this exposes without this module taking on that responsibility itself —
+ * production's own `closeBrowser()` behavior is completely unchanged.
+ */
+export function peekBrowserProcessPid(): number | undefined {
+  return resolvedBrowser?.process()?.pid ?? undefined;
 }
