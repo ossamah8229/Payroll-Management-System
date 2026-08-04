@@ -21,16 +21,18 @@ to it rather than repeating it.
 | Backend unit/integration | `backend/tests/*.test.ts` | Jest (`npm run test --workspace backend`) | Real PostgreSQL (see below) |
 | Frontend unit | `frontend/src/**/*.test.tsx` | Vitest (`npm run test --workspace frontend`) | jsdom, no network/DB |
 | Browser end-to-end | `tests/e2e/specs/*.spec.ts` | Playwright (`npm run test:e2e`, repo root) | The real compiled backend + real production frontend build + real PostgreSQL, all three provisioned and torn down per run |
-| PDF rendering | `backend/tests/pdf-template.test.ts`, plus the PDF-generation assertions inside `payslips.test.ts` | Jest, same process as backend tests | Puppeteer (bundled Chrome-for-Testing), unrelated to Playwright |
+| PDF rendering | `backend/tests/pdf-template.test.ts`, plus the PDF-generation assertions inside `payslips.test.ts`, `statements.test.ts`, `payroll-hold-workflow.test.ts` | Jest, but real Puppeteer rendering happens in a separate persistent worker process (`backend/src/lib/pdf/worker/`) — see "Backend PDF test architecture" below | Puppeteer (bundled Chrome-for-Testing), unrelated to Playwright |
 
 **Backend and frontend suites are "deterministic" in the sense this project's own checkpoint
 instructions use the word** — no network flakiness, no browser timing, same result every run given
-the same code — **with one documented exception: `payslips.test.ts`**, which launches a real
-Puppeteer/Chrome-for-Testing browser (see "PDF rendering" row above) and is therefore genuinely
-subject to host-level timing/resource variability the same way the E2E suite is, just without a
-real network/frontend involved. See "Payslip PDF test reliability" below for the full investigation,
-fix, and its measured limits. The E2E suite is the other layer that is genuinely a real browser
-driving a real running stack, and is treated differently for that reason (see below).
+the same code — **with one documented exception: the real-Puppeteer suites** (`payslips.test.ts`,
+`statements.test.ts`, `payroll-hold-workflow.test.ts`), which render real PDFs via a real
+Chrome-for-Testing browser (see "PDF rendering" row above) and were therefore genuinely subject to
+host-level timing/resource variability the same way the E2E suite is, just without a real
+network/frontend involved. See "Payslip PDF test reliability" and "Backend PDF test architecture"
+below for the full investigation, fix, and its measured limits. The E2E suite is the other layer
+that is genuinely a real browser driving a real running stack, and is treated differently for that
+reason (see below).
 
 ## Payslip PDF test reliability (Pre-Deployment Reliability Checkpoint)
 
@@ -84,6 +86,88 @@ shapes instead of one, which reduced but did not eliminate the ~5-10% recurrence
 reproduction. Left as a known, separate, lower-priority issue (KI-10 covers it) rather than weakening
 its exact-equality assertion, which the checkpoint's own instructions for this investigation
 explicitly forbid.
+
+## Backend PDF test architecture (Phase 7H)
+
+**Confirmed root cause, superseding the "resource contention" explanation above for one specific
+failure shape.** PR #6's CI kept intermittently failing a real-Puppeteer assertion with the error
+`"Test environment has been torn down"`. Investigation (full record: `docs/PROJECT_PROGRESS.md`'s
+"Phase 7H" entry) proved this is a **Jest/`--experimental-vm-modules` VM-lifecycle race**, not host
+resource contention and not an application defect:
+
+- `backend/src/lib/pdf/browser.ts`'s dynamic `import('puppeteer')` (the documented ESM-interop
+  workaround `new Function('return import("puppeteer")')`, required because Puppeteer 22+ ships
+  ESM-only against this backend's CommonJS compile target) is a genuine, sometimes-slow native Node
+  operation.
+- Jest's `--experimental-vm-modules` mode gives every test *file* its own disposable VM realm and
+  tears each one down independently once that file's tests finish.
+- Under real concurrent load (many files each doing this same dynamic import around the same time),
+  the import can resolve *after* Jest has already torn down the realm that started it. Jest's own
+  module registry then throws `"Test environment has been torn down"` — the stack trace traces
+  directly into `jest-util`'s own `invariant()`, not into any application code.
+- Reproduced deterministically: 20 throwaway test files, each calling `renderHtmlToPdf()` directly
+  under `--runInBand`, failed 37/40 and 18/20 across two runs. The identical render, called the
+  same number of times from a plain Node script with no Jest involved at all, succeeded 20/20 every
+  time — proving the render pipeline itself was never the problem.
+- A child process spawned *from* a Jest test and given the same work is structurally immune — 10/10
+  passed under the exact same concurrent stress that made direct in-Jest calls fail 90% of the time,
+  since a child process is never itself inside any Jest VM realm.
+
+**Old architecture**: every real-Puppeteer test file launched and owned its own in-process
+Puppeteer browser via `browser.ts`'s singleton, subject to the race above.
+
+**New architecture**: a persistent PDF test worker, `backend/src/lib/pdf/worker/`
+(`pdf-worker.entry.ts` the child process itself, `pdf-worker-client.ts` the parent-side API,
+`protocol.ts` the newline-delimited-JSON wire format). `render-pdf.ts`'s `renderHtmlToPdf()`
+delegates to it whenever `NODE_ENV=test` — every Jest run, local and CI — and is unchanged for
+`development`/`production`; the worker itself imports and calls the exact same
+`renderOnce()`/`browser.ts` code, not a reimplementation, so production rendering output is
+identical either way.
+
+- **Spawned lazily**, once, by whichever test file first needs a real render; every other file in
+  the same `--runInBand` run reuses it via a fixed socket path and a `fs.mkdirSync`-based spawn
+  lock (atomic — safe if several files race to be first). Never inside any Jest VM realm, so the
+  race above cannot occur regardless of concurrent load.
+- **Ownership/cleanup**: `tests/globalTeardown.ts` sends one `shutdown` message at the very end of
+  the whole Jest run, regardless of which suites passed or failed. Test files that used to call
+  `browser.ts`'s `closeBrowser()` directly (to proactively recycle memory, e.g. after a
+  300-employee batch render) now call `render-pdf.ts`'s `closePdfRenderer()` instead — in
+  `NODE_ENV=test` that recycles the worker's browser, not a local one that's no longer ever used.
+- **Two real bugs found and fixed during stress-testing this architecture itself**, both about
+  Chrome specifically outliving the process meant to own it: (1) the client's own "is a worker
+  already running" check could false-negative under load, letting a second worker start and steal
+  the socket from a still-healthy first one — fixed by making the *worker's own* startup bind-first
+  and only fall back to a liveness check on `EADDRINUSE`, removing the check-then-act race entirely.
+  (2) Puppeteer launches Chrome **detached into its own OS process group**, separate from the
+  worker's — confirmed directly via `ps -eo pid,ppid,pgid` — so `browser.close()` not fully
+  terminating every Chrome helper process (a real, if uncommon, Puppeteer behavior) previously left
+  orphans with nothing left to notice or clean them up. The worker now tracks Chrome's own pid
+  (`peekBrowserProcessPid()`, `browser.ts`) and, on shutdown/recycle, kills Chrome's own process
+  group directly as a backstop; a hard-killed worker (simulating an external OOM kill) records
+  Chrome's pid to disk beforehand so the *next* spawn can sweep up that orphan too.
+- **Observability**: a retry-exhausted render (both the in-process and worker paths share this)
+  tags the failing error with which stage broke (`browser-launch`/`new-page`/`set-content`/
+  `pdf-generation`/`page-close`) and emits one structured diagnostic via `console.error` — the only
+  exception to `backend/src/lib/logger.ts`'s `NODE_ENV=test` silence, added because the original
+  investigation found CI logs had *no trace* of the underlying exception at all. `normalizeError()`
+  (`lib/pdf/normalize-error.ts`) extracts name/message/stack by duck-typing rather than
+  `instanceof Error`, so a cross-realm error (exactly the kind this was built to catch) is reported
+  accurately instead of collapsing to a generic `"object"` fallback. Never logs HTML, employee
+  names, or salary data — only the caught error's own identity plus fixed retry bookkeeping.
+
+**Verification**: each real-PDF suite run in isolation 5×, all real-PDF suites together 5×, the
+full backend suite 3× (3,843 total test executions across the three full runs) — zero
+`"Test environment has been torn down"` occurrences, zero lingering Chrome/CDP/worker processes
+after any run. The one failure seen across all of this repetition was `corrections-service.test.ts`'s
+already-documented, unrelated concurrency-timing flake (see that file's own history in
+`docs/PROJECT_PROGRESS.md`) — not misclassified as a PDF issue.
+
+**KI-10 status**: the Jest-VM-teardown failure mode this section documents is resolved by
+construction (the worker is structurally immune, not merely less likely to fail) and confirmed
+via the repetition above — **substantially improved for this specific failure shape**. The
+*separate* off-by-one query-count flake (next section) is unchanged and still open; KI-10 in
+`docs/release/KNOWN_ISSUES_v1.0.md` is updated to distinguish the two rather than treating them as
+one issue with one status.
 
 ## Why Puppeteer *and* Playwright both exist in this repository
 

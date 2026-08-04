@@ -8661,6 +8661,126 @@ instruction.**
 
 ---
 
+## Phase 7G — CI Stability Remediation (2026-08-04)
+
+Phase 7F's PR #6 was blocked by a CI failure in `payroll-hold-workflow.test.ts`'s "Release
+Remaining idempotency" test — a Payslip PDF route returning 500. Investigation found two concrete,
+in-scope defects, both fixed and committed:
+
+1. `payroll-hold-workflow.test.ts` rendered real Puppeteer PDFs but never called `closeBrowser()`
+   in its own `afterAll`, unlike every other real-Puppeteer suite — confirmed directly to leave a
+   live, `ESTABLISHED` Chrome DevTools-Protocol WebSocket open after all 5 tests had already passed,
+   which is why Jest never exited on its own afterward. Fixed: `afterAll` now closes the browser in
+   a `finally`, matching the established pattern. Commit `cd71b5d`.
+2. `backend/src/lib/logger.ts` silences all logs when `NODE_ENV=test`, so the real exception behind
+   a PDF-route 500 was invisible in CI — grepping a full CI log for an actual occurrence found no
+   trace of it. Fixed with one narrow, additive diagnostic in `render-pdf.ts`: when
+   `renderHtmlToPdf`'s one built-in retry is also exhausted, a single structured `console.error`
+   (already allowed by `no-console`) reports the error's own name/message/stack — never the
+   rendered HTML or PDF options, which can carry real payroll data — only in `NODE_ENV=test`, never
+   touching the shared logger's own config. Commit `15a3776`.
+
+This immediately paid off: the very next CI run reproduced the PDF failure again, and the new
+diagnostic captured the real exception for the first time — `"Error: Test environment has been torn
+down"` — a Jest/VM-lifecycle signature, not a payroll defect. That finding is what Phase 7H (below)
+investigates and fixes. PR #6 remained blocked, unmerged, per this checkpoint's own explicit
+instruction not to guess or re-run indefinitely.
+
+---
+
+## Phase 7H — Permanent PDF Test Infrastructure Stabilisation (2026-08-04)
+
+**Objective**: resolve the `"Test environment has been torn down"` failure Phase 7G's diagnostic
+surfaced, permanently, and unblock PR #6. Investigation-first, per explicit instruction — no
+architecture chosen before empirical reproduction.
+
+### Root cause (proven, not inferred)
+
+A minimal reproduction matrix was built for five call paths (direct `renderHtmlToPdf()`, the
+`renderPayslipPdfBuffer()` service call, the real HTTP route via supertest, a standalone
+`node`/`tsx` script outside Jest entirely, and a child process spawned from a Jest test):
+
+- **Outside Jest** (standalone `tsx` script, 20 real renders): **20/20 succeeded**, every time —
+  the production render pipeline itself was never the problem.
+- **Direct in-Jest calls, run alongside many sibling files under `--runInBand`** (40 throwaway test
+  files, each independently calling `renderHtmlToPdf()`): **37/40 and 18/20 failed** across two
+  stress runs, always with the identical stack trace — through `jest-util`'s own `invariant()`,
+  called from inside the `eval`'d dynamic `import('puppeteer')` at `browser.ts`'s documented
+  ESM-interop workaround, inside `launchBrowser()`. Never application code.
+- **A child process spawned from a Jest test, given the same work, under the identical concurrent
+  stress**: **10/10 succeeded**.
+
+Mechanism: `browser.ts`'s `new Function('return import("puppeteer")')` (required because Puppeteer
+22+ ships ESM-only against this backend's CommonJS compile target — see that file's own existing
+comment) is a genuine, sometimes-slow native Node operation. Jest's `--experimental-vm-modules`
+mode gives every test *file* its own disposable VM realm, torn down independently once that file's
+tests finish. Under real concurrent load (many files each racing through this same dynamic import
+around the same time), the import can resolve *after* Jest has already torn down the realm that
+started it — a scheduling race on Jest's own side, not a missing `await` in application code (the
+full `renderHtmlToPdf → renderOnce → getBrowser` chain was re-verified, correctly awaited
+top-to-bottom). `--experimental-vm-modules` cannot be removed without breaking Puppeteer loading
+entirely (it's what makes the ESM-interop workaround reach Node's real loader at all), so no
+config-level fix was viable — confirming an architectural fix was required.
+
+### Architecture chosen: persistent PDF test worker (Option B)
+
+A dedicated child process (`backend/src/lib/pdf/worker/`) that is never itself inside a Jest VM
+realm — structurally immune to the race, not merely less likely to hit it. `render-pdf.ts`'s
+`renderHtmlToPdf()` delegates to it whenever `NODE_ENV=test` (every Jest run, local and CI);
+`development`/`production` are completely unchanged. The worker imports and calls the exact same
+`renderOnce()`/`browser.ts` code Jest's own real-Puppeteer suites already used, not a
+reimplementation — production rendering output is identical either way. Full design, ownership/
+cleanup model, and observability strategy: `docs/architecture/testing.md`'s "Backend PDF test
+architecture" section.
+
+**Two real bugs found and fixed while stress-testing this architecture itself** (both about Chrome
+specifically outliving the process meant to own it, confirmed directly via `ps -eo pid,ppid,pgid`):
+a duplicate-spawn race (the client's own liveness check could false-negative under load, letting a
+second worker steal the socket from a healthy first one — fixed by making the worker's own startup
+bind-first and reserve the liveness check for a genuine `EADDRINUSE`), and an orphaned-Chrome leak
+(Puppeteer launches Chrome detached into its **own** OS process group, separate from the worker's —
+so `browser.close()` not fully terminating every Chrome helper process left true orphans with
+nothing left to clean them up; fixed with a tracked-pid backstop kill on shutdown/recycle, plus a
+sweep for any orphan left by a hard-killed previous worker generation on the next spawn).
+
+### Verification
+
+Each real-Puppeteer suite in isolation ×5, all real-PDF suites together ×5, full backend suite ×3
+(3,843 total test executions across the three full runs): **zero
+`"Test environment has been torn down"` occurrences, zero lingering Chrome/CDP/worker processes
+after any run.** The one failure across all of this repetition was `corrections-service.test.ts`'s
+already-documented, unrelated concurrency-timing flake (see that file's own history above) —
+confirmed unrelated to PDF rendering and not misclassified as one. The query-count flake (KI-10,
+`docs/release/KNOWN_ISSUES_v1.0.md`) did not recur in this checkpoint's runs; it is unchanged and
+still open — not touched, per explicit instruction not to weaken it.
+
+### Files
+
+New: `backend/src/lib/pdf/worker/{protocol,pdf-worker.entry,pdf-worker-client}.ts`,
+`backend/src/lib/pdf/normalize-error.ts`, `backend/tests/globalTeardown.ts`,
+`backend/tests/pdf-worker-infrastructure.test.ts`, `backend/tests/pdf-worker-timeout.test.ts`.
+Modified: `backend/src/lib/pdf/render-pdf.ts` (worker delegation, stage tracking, retry logic
+extracted into `renderWithOneRetry` for direct testability), `backend/src/lib/pdf/browser.ts`
+(added `peekBrowserProcessPid()` — read-only introspection only, no behavior change),
+`backend/jest.config.js` (`globalTeardown`), `backend/tests/{payslips,statements,
+payroll-hold-workflow}.test.ts` (`closeBrowser()` → `closePdfRenderer()`, since rendering now
+happens in the shared worker, not each file's own in-process singleton),
+`backend/tests/pdf-render-diagnostics.test.ts` (rewritten against the extracted
+`renderWithOneRetry`, since the public `renderHtmlToPdf` now delegates to the worker in
+`NODE_ENV=test` and can no longer be unit-tested by mocking `browser.ts` directly). No payroll
+business logic, Reports, or Dashboard code touched.
+
+### Regression / Testing
+
+Typecheck, lint, backend build, frontend build all clean. Full detail and exact counts in the
+"Backend PDF test architecture" section referenced above.
+
+**No commit yet as of this entry — see below for the commit SHAs once applied.** No merge,
+deployment, or new checkpoint began. PR #6 status and the GitHub Actions result are recorded in
+this checkpoint's own final report, not duplicated here.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

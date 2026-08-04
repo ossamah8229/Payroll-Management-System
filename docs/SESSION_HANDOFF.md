@@ -17,7 +17,24 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-07-30 (latest) — Phase 7D final refinement: EOBI Synchronisation Permissions &
+> **Update, 2026-08-04 (latest) — Phase 7H: Permanent PDF Test Infrastructure Stabilisation —
+> IMPLEMENTED, awaiting review, NOT YET COMMITTED.** PR #6 (Phase 7F) was blocked by a CI failure
+> that Phase 7G's own diagnostic fix (commits `cd71b5d`/`15a3776`) traced to
+> `"Test environment has been torn down"` — proven (reproduction matrix across 5 call paths, not
+> inferred) to be a Jest `--experimental-vm-modules` VM-lifecycle race in `browser.ts`'s dynamic
+> `import('puppeteer')`, not a payroll defect: direct in-Jest calls failed 37/40 and 18/20 under
+> concurrent stress; the identical render outside Jest entirely succeeded 20/20; the same work run
+> from a child process spawned by a Jest test succeeded 10/10 under the identical stress. **Fixed**
+> by moving real Puppeteer rendering to a persistent worker process
+> (`backend/src/lib/pdf/worker/`) that is never itself inside a Jest VM realm — structurally
+> immune, not merely less likely to fail. Two further bugs (a duplicate-spawn race and an
+> orphaned-Chrome leak, both found while stress-testing the new architecture itself) were also
+> fixed. Verified via 5× isolated + 5× combined + 3× full-backend-suite runs (3,843 total test
+> executions): zero recurrences, zero lingering processes. The query-count flake (KI-10) is
+> unrelated and untouched. Full detail: `docs/PROJECT_PROGRESS.md`'s "Phase 7H" entry and
+> `docs/architecture/testing.md`'s "Backend PDF test architecture" section.
+
+> **Update, 2026-07-30 — Phase 7D final refinement: EOBI Synchronisation Permissions &
 > Audit — IMPLEMENTED, awaiting review, NOT COMMITTED.** Same-day follow-up overriding the entry
 > directly below: the dual-permission requirement (`employees:edit` **and** `payroll:entry` before
 > the synchronised write would proceed) is removed — the client clarified the synchronised write is
