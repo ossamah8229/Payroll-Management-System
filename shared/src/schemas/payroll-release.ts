@@ -29,3 +29,15 @@ export const releaseProjectUnitSchema = z.object({
 });
 
 export type ReleaseProjectUnitInput = z.infer<typeof releaseProjectUnitSchema>;
+
+/**
+ * Release All (Phase 7F, 2026-08-04) — `siteId` omitted (or `null`) means "All Sites" (every Site
+ * the caller can access); a specific value releases only that one Site. See
+ * `payroll-release.service.ts`'s `releaseAllEligible` for the full behavior and transaction
+ * strategy.
+ */
+export const releaseAllSchema = z.object({
+  siteId: z.string().uuid().nullable().optional(),
+});
+
+export type ReleaseAllInput = z.infer<typeof releaseAllSchema>;

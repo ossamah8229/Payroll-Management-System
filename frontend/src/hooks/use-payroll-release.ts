@@ -12,6 +12,9 @@ export interface UnitReleaseStatus {
   releasedBy: { id: string; name: string } | null;
   entryCount: number;
   willReleaseCount: number;
+  /** Hold Workflow Verification (Phase 7F, 2026-08-04) — currently-Held, unresolved entries at this
+   * Unit; never included in `willReleaseCount`. */
+  heldCount: number;
 }
 
 export interface ReleaseUnitResult {
@@ -34,6 +37,10 @@ export interface ReleaseUnitResult {
   /** How many `RESERVED` Advances/Eid Advances this release settled to `PAID_OFF` (Presentation &
    * Workflow Stabilization Checkpoint, 2026-07-25, Issue 5). */
   advancesSettled: number;
+  /** Late/Straggler Sweep (Hold Workflow Verification, Phase 7F, 2026-08-04) — `true` when this
+   * Unit was already released and this call only swept newly-eligible stragglers (typically: a
+   * Hold removed after the Unit's original release). No new release event occurred. */
+  isLateSweep: boolean;
 }
 
 const unitReleaseStatusQueryKey = (cycleId: string, siteId: string) =>
@@ -79,6 +86,57 @@ export function useReleaseProjectUnit(cycleId: string, siteId: string) {
       queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
       // A release can settle a RESERVED Advance to PAID_OFF (Issue 5) — the Advances page's own
       // cache needs the same treatment as Payroll Entry's above, for the identical reason.
+      queryClient.invalidateQueries({ queryKey: ADVANCES_QUERY_KEY });
+    },
+  });
+}
+
+/** Release All (Phase 7F, 2026-08-04) — one entry per employee outcome the sweep produced, summed
+ * across every Project Unit this call actually released; see `payroll-release.service.ts`'s
+ * `ReleaseAllResult` (the exact same shape, field for field) for the full meaning of each count. */
+export interface ReleaseAllResult {
+  releasedEntryCount: number;
+  noPayDueCount: number;
+  recoveryDueCount: number;
+  blockedCount: number;
+  blockedEntries: Array<{
+    id: string;
+    employeeId: string;
+    employeeName: string;
+    siteId: string;
+    unitId: string;
+    unitName: string;
+    blockReasons: string[];
+  }>;
+  heldEntryCount: number;
+  unitsReleased: number;
+  unitsAlreadyReleased: number;
+  unitsFailed: number;
+  failedUnits: Array<{ unitId: string; unitName: string; siteId: string; error: string }>;
+  correctionSettlementsConsumed: number;
+  advancesSettled: number;
+}
+
+export interface ReleaseAllVariables {
+  /** `undefined` releases every Site the current user can access ("All Sites"); a specific value
+   * releases only that one Site. */
+  siteId?: string;
+}
+
+export function useReleaseAll(cycleId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ siteId }: ReleaseAllVariables) =>
+      apiRequest<ReleaseAllResult>(`/api/v1/payroll-cycles/${cycleId}/units/release-all`, {
+        method: 'POST',
+        body: { siteId: siteId ?? null },
+      }),
+    onSuccess: () => {
+      // Release All can touch every Site's own unit-release-status cache at once (not just the
+      // currently-filtered one), so this invalidates every cached siteId variant for this cycle —
+      // a broader match than useReleaseProjectUnit's own single-site invalidation needs to be.
+      queryClient.invalidateQueries({ queryKey: ['payroll-unit-release-status', cycleId] });
+      queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
       queryClient.invalidateQueries({ queryKey: ADVANCES_QUERY_KEY });
     },
   });
