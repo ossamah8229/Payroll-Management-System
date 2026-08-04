@@ -1,6 +1,7 @@
 import type { PDFOptions } from 'puppeteer';
 import { discardBrowser, getBrowser } from './browser';
 import { logger } from '../logger';
+import { env } from '../../config/env';
 
 export interface RenderPdfOptions {
   /** Defaults to `'A4'` — standard for Pakistani business documents; passed straight through to
@@ -42,13 +43,50 @@ export interface RenderPdfOptions {
 export async function renderHtmlToPdf(html: string, options: RenderPdfOptions = {}): Promise<Buffer> {
   try {
     return await renderOnce(html, options);
-  } catch (error) {
+  } catch (firstError) {
     logger.warn(
-      { error },
+      { error: firstError },
       'PDF render failed — discarding the shared browser and retrying once against a freshly launched instance',
     );
     discardBrowser();
-    return renderOnce(html, options);
+    try {
+      return await renderOnce(html, options);
+    } catch (secondError) {
+      reportExhaustedPdfRenderFailure(secondError);
+      throw secondError;
+    }
+  }
+}
+
+/**
+ * Phase 7G — `backend/src/lib/logger.ts` sets `level: 'silent'` whenever `NODE_ENV === 'test'`, so
+ * a render failure that survives the one retry above was previously invisible in CI (confirmed
+ * directly: grepping a full CI log for an actual occurrence of this failure found no trace of the
+ * underlying exception anywhere). This is the one, narrow exception to that silence — fires only
+ * once *both* attempts have failed, only in `NODE_ENV=test`, and only with fields safe to expose
+ * (the error's own identity/stack and fixed retry bookkeeping). Deliberately never passed `html`
+ * or `options` (`headerTemplate`/`footerTemplate` can carry real payroll data) — only the caught
+ * `error`. Uses `console.error` directly rather than the shared `logger` so no other call site's
+ * test-time silence is affected; `no-console` already allows `error` (`eslint.config.mjs`).
+ * Wrapped so a serialization failure here can never mask or replace the real error.
+ */
+function reportExhaustedPdfRenderFailure(error: unknown): void {
+  if (env.NODE_ENV !== 'test') return;
+  try {
+    console.error(
+      JSON.stringify({
+        msg: 'PDF render failed after exhausting its one retry',
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        attempt: 2,
+        totalAttempts: 2,
+        browserDiscardedAndRelaunched: true,
+      }),
+    );
+  } catch {
+    // Diagnostics must never mask or replace the real error — if serialization fails for any
+    // reason, the original error still propagates from renderHtmlToPdf exactly as before.
   }
 }
 
