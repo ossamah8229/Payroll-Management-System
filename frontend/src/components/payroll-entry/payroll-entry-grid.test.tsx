@@ -222,6 +222,103 @@ describe('PayrollEntryGrid — sortable columns (Payroll Entry usability checkpo
   });
 });
 
+describe('PayrollEntryGrid — sticky header containment (Post-Checkpoint-1A UAT Stabilization)', () => {
+  afterEach(() => cleanup());
+
+  /**
+   * Root cause of the reported "sticky header reveals a blank/underlying strip while scrolling":
+   * each virtualized row was fully transparent (`background-color: rgba(0,0,0,0)`), relying
+   * entirely on the ancestor Card's own incidental white background rather than painting its own
+   * opaque surface — a real robustness gap for a row sharing screen space with the grid's sticky
+   * header/totals rows during scroll compositing. Every row must now be its own explicit, opaque
+   * paint surface (`bg-surface-2`), regardless of what's behind it.
+   */
+  it('every body row has an explicit opaque background — never relying on an ancestor to happen to be white', () => {
+    const entry = makeEntry({ id: '1', employee: { ...makeEntry({ id: '1' }).employee, name: 'Employee One' } });
+    renderGrid([entry]);
+
+    const row = screen.getByRole('row', { name: /Employee One/ });
+    expect(row.className).toMatch(/\bbg-surface-2\b/);
+  });
+
+  it('the sticky group-header and column-header rows both carry an opaque background and elevated z-index above body rows', () => {
+    const entry = makeEntry({ id: '1' });
+    renderGrid([entry]);
+
+    // The group-label row ("BANK DETAILS" etc.) and the column-header row ("#", "STATUS", ...) —
+    // both directly sticky, both directly opaque (the totals row is sticky too, but its own
+    // opaque `bg-surface` lives on its child `PayrollEntryTotalsRow`, not this outer wrapper, so
+    // it's deliberately excluded from this direct-class assertion).
+    const columnHeaderRow = screen.getByRole('columnheader', { name: 'Employee' }).closest('[role="row"]')!;
+    expect(columnHeaderRow.className).toMatch(/\bsticky\b/);
+    expect(columnHeaderRow.className).toMatch(/\bbg-surface\b/);
+    expect(columnHeaderRow.className).toMatch(/\bz-20\b/);
+
+    const groupHeaderRow = columnHeaderRow.previousElementSibling!;
+    expect(groupHeaderRow.className).toMatch(/\bsticky\b/);
+    expect(groupHeaderRow.className).toMatch(/\bbg-surface\b/);
+    expect(groupHeaderRow.className).toMatch(/\bz-20\b/);
+  });
+});
+
+describe('PayrollEntryGrid — EOBI footer total (Post-Checkpoint-1A UAT Stabilization)', () => {
+  afterEach(() => cleanup());
+
+  function eobiFooterTotal(): string | null {
+    const cells = document.querySelectorAll('[data-col-id="eobiAmount"]');
+    return cells[cells.length - 1]?.textContent ?? null;
+  }
+
+  it('excludes a disabled row entirely — the footer must never sum raw eobiAmount regardless of eobiApplicable', () => {
+    const disabled = makeEntry({
+      id: '1',
+      eobiAmount: '400',
+      eobiApplicable: false,
+      employee: { ...makeEntry({ id: '1' }).employee, name: 'Employee Disabled' },
+    });
+    renderGrid([disabled]);
+
+    expect(eobiFooterTotal()).toBe('PKR 0.00');
+  });
+
+  it('includes every enabled row at its own configured amount', () => {
+    const enabled = makeEntry({
+      id: '1',
+      eobiAmount: '400',
+      eobiApplicable: true,
+      employee: { ...makeEntry({ id: '1' }).employee, name: 'Employee Enabled' },
+    });
+    renderGrid([enabled]);
+
+    expect(eobiFooterTotal()).toBe('PKR 400.00');
+  });
+
+  it('mixed applicable/non-applicable rows — only the enabled rows contribute to the total', () => {
+    const enabledA = makeEntry({
+      id: '1',
+      eobiAmount: '400',
+      eobiApplicable: true,
+      employee: { ...makeEntry({ id: '1' }).employee, name: 'Employee A' },
+    });
+    const disabled = makeEntry({
+      id: '2',
+      eobiAmount: '400',
+      eobiApplicable: false,
+      employee: { ...makeEntry({ id: '2' }).employee, name: 'Employee B' },
+    });
+    const enabledC = makeEntry({
+      id: '3',
+      eobiAmount: '550',
+      eobiApplicable: true,
+      employee: { ...makeEntry({ id: '3' }).employee, name: 'Employee C' },
+    });
+    renderGrid([enabledA, disabled, enabledC]);
+
+    // 400 + 550, the disabled row's own 400 excluded entirely — never 1,350.
+    expect(eobiFooterTotal()).toBe('PKR 950.00');
+  });
+});
+
 describe('PayrollEntryGrid — Status column header alignment (Presentation & Workflow Stabilization Checkpoint, 2026-07-25)', () => {
   afterEach(() => cleanup());
 

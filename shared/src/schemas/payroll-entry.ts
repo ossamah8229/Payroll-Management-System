@@ -126,13 +126,20 @@ export type UpdateWorkLineInput = z.infer<typeof updateWorkLineSchema>;
  * filter is applied, a bulk mutation's scope must always be an explicit, deliberate selection —
  * never implicitly "every employee in the cycle."
  *
- * A discriminated union on `field` because the three copyable fields have genuinely different wire
- * types (`leaveRate`/`otRate` are decimal strings; `cycleDays` is a plain 1–31 integer) — the same
- * types `updatePayrollEntrySchema`/`updateWorkLineSchema` already enforce for these exact fields,
- * reused here rather than redefined. `leaveRate` lives on `PayrollEntry` itself; `otRate`/
- * `cycleDays` live on `PayrollEntryWorkLine` and are applied to each entry's *primary* line only
- * (lowest `sortOrder`) — non-primary lines are intentionally reachable only through the Split by
+ * A discriminated union on `field` because the copyable fields have genuinely different wire
+ * types (`leaveRate`/`otRate`/`eobiAmount` are decimal strings; `cycleDays` is a plain 1–31 integer)
+ * — the same types `updatePayrollEntrySchema`/`updateWorkLineSchema` already enforce for these exact
+ * fields, reused here rather than redefined. `leaveRate`/`eobiAmount` live on `PayrollEntry` itself;
+ * `otRate`/`cycleDays` live on `PayrollEntryWorkLine` and are applied to each entry's *primary* line
+ * only (lowest `sortOrder`) — non-primary lines are intentionally reachable only through the Split by
  * {unitLabel} modal (Checkpoint 3), never through a bulk action.
+ *
+ * **`eobiAmount` (Post-Checkpoint-1A UAT Stabilization)** — bulk-changes only the cycle-specific
+ * configured EOBI amount, e.g. after a statutory minimum-wage/contribution-basis change, across
+ * every matched entry regardless of that entry's own `eobiApplicable` toggle (a disabled row still
+ * receives the new amount, ready for if/when applicability is later enabled — the toggle itself is
+ * never touched by this field). Never confused with `eobiApplicable`, which is not bulk-editable at
+ * all — applicability stays a deliberate, per-employee decision.
  */
 export const bulkUpdatePayrollEntriesSchema = z.discriminatedUnion('field', [
   z.object({
@@ -149,6 +156,11 @@ export const bulkUpdatePayrollEntriesSchema = z.discriminatedUnion('field', [
     siteIds: z.array(z.string().uuid()).min(1, 'Select at least one site'),
     field: z.literal('cycleDays'),
     value: z.number().int().min(1).max(31),
+  }),
+  z.object({
+    siteIds: z.array(z.string().uuid()).min(1, 'Select at least one site'),
+    field: z.literal('eobiAmount'),
+    value: decimalString,
   }),
 ]);
 

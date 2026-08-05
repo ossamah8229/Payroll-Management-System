@@ -1,6 +1,7 @@
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
+import * as auditLogService from '../src/modules/audit-log/audit-log.service';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
@@ -585,6 +586,254 @@ describe('Phase 3 Checkpoint 1 — Payroll Entry / Work Line CRUD', () => {
         .send({ siteIds: [site.id], field: 'leaveRate', value: '500.00' });
 
       expect(bulk.status).toBe(403);
+    });
+
+    describe('eobiAmount (Post-Checkpoint-1A UAT Stabilization)', () => {
+      it('applies the new amount to every matched entry regardless of its own eobiApplicable, without touching applicability anywhere, scoped to selected sites, with an audit record', async () => {
+        const admin = await masterAdminAgent('bulk-eobi-amount@test.local');
+        const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Bulk EOBI A');
+        const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Bulk EOBI B');
+        const cycle = await makeDraftCycle(admin, 8);
+        const employeeApplicable = await makeEmployee(siteA.id, unitA.id, 'Bulk EOBI Applicable');
+        const employeeDisabled = await makeEmployee(siteA.id, unitA.id, 'Bulk EOBI Disabled');
+        const employeeOtherSite = await makeEmployee(siteB.id, unitB.id, 'Bulk EOBI Other Site');
+
+        const entryApplicable = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeApplicable.id });
+        const entryDisabled = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeDisabled.id });
+        const entryOtherSite = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeOtherSite.id });
+
+        // Both start at the schema default (400.00, applicable=true) — disable one directly, the
+        // same pattern this file already uses for simulating pre-existing state (e.g. the
+        // released-entry test above).
+        await prisma.payrollEntry.update({
+          where: { id: entryDisabled.body.entry.id },
+          data: { eobiApplicable: false },
+        });
+
+        const bulk = await admin.agent
+          .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ siteIds: [siteA.id], field: 'eobiAmount', value: '550.00' });
+
+        expect(bulk.status).toBe(200);
+        expect(bulk.body).toEqual({ matchedCount: 2, appliedCount: 2 });
+
+        const refreshedApplicable = await prisma.payrollEntry.findUniqueOrThrow({
+          where: { id: entryApplicable.body.entry.id },
+        });
+        const refreshedDisabled = await prisma.payrollEntry.findUniqueOrThrow({
+          where: { id: entryDisabled.body.entry.id },
+        });
+        const refreshedOtherSite = await prisma.payrollEntry.findUniqueOrThrow({
+          where: { id: entryOtherSite.body.entry.id },
+        });
+
+        // Amount updated for both matched entries, applicable or not — a disabled row still
+        // receives the statutory amount, ready for if/when applicability is re-enabled.
+        expect(refreshedApplicable.eobiAmount.toString()).toBe('550');
+        expect(refreshedDisabled.eobiAmount.toString()).toBe('550');
+        // Applicability itself — on both entries — is completely untouched by this field.
+        expect(refreshedApplicable.eobiApplicable).toBe(true);
+        expect(refreshedDisabled.eobiApplicable).toBe(false);
+        // The other site was never in scope — completely untouched.
+        expect(refreshedOtherSite.eobiAmount.toString()).toBe('400');
+        expect(refreshedOtherSite.version).toBe(entryOtherSite.body.entry.version);
+
+        // Employee master-data applicability defaults are equally untouched — this is a
+        // cycle-specific amount change only, never a master-data write.
+        const employeeApplicableAfter = await prisma.employee.findUniqueOrThrow({ where: { id: employeeApplicable.id } });
+        const employeeDisabledAfter = await prisma.employee.findUniqueOrThrow({ where: { id: employeeDisabled.id } });
+        expect(employeeApplicableAfter.defaultEobiApplicable).toBe(true);
+        expect(employeeDisabledAfter.defaultEobiApplicable).toBe(true);
+
+        const auditEntry = await prisma.auditLog.findFirst({
+          where: { action: 'payroll_entry.bulk_updated' },
+          orderBy: { occurredAt: 'desc' },
+        });
+        expect(auditEntry?.metadata).toMatchObject({
+          field: 'eobiAmount',
+          value: '550.00',
+          matchedCount: 2,
+          appliedCount: 2,
+          siteIds: [siteA.id],
+          // Both matched entries shared the same schema-default previous amount (400) — a truthful
+          // single-value summary, not a fabricated one.
+          previousValues: { kind: 'single', value: '400' },
+        });
+      });
+
+      it('records a truthful "mixed" previous-value summary — never a single fabricated value — when matched entries had different amounts, and "single" when they already agreed', async () => {
+        const admin = await masterAdminAgent('bulk-eobi-prevvalues@test.local');
+        const { site, unit } = await makeSiteWithUnit('Test Site Bulk EOBI Prev Values');
+        // Cycle created BEFORE the employees below (this file's own established convention, see the
+        // top-of-file comment) — an employee created afterward is the one case not auto-enrolled by
+        // the cycle's own bootstrap, so the explicit POST /entries calls below are each creating the
+        // one-and-only entry for that employee, not colliding with an already-bootstrapped one.
+        const cycle = await makeDraftCycle(admin, 9);
+        const employeeA = await makeEmployee(site.id, unit.id, 'Bulk EOBI Prev A');
+        const employeeB = await makeEmployee(site.id, unit.id, 'Bulk EOBI Prev B');
+        const employeeC = await makeEmployee(site.id, unit.id, 'Bulk EOBI Prev C');
+
+        const entryA = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeA.id });
+        const entryB = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeB.id });
+        const entryC = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeC.id });
+
+        // Three genuinely different starting amounts (the realistic case: employees onboarded at
+        // different times against whatever the statutory amount was then).
+        await prisma.payrollEntry.update({ where: { id: entryA.body.entry.id }, data: { eobiAmount: '300.00' } });
+        await prisma.payrollEntry.update({ where: { id: entryB.body.entry.id }, data: { eobiAmount: '400.00' } });
+        await prisma.payrollEntry.update({ where: { id: entryC.body.entry.id }, data: { eobiAmount: '450.50' } });
+
+        const bulk = await admin.agent
+          .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ siteIds: [site.id], field: 'eobiAmount', value: '600.00' });
+        expect(bulk.status).toBe(200);
+        expect(bulk.body).toEqual({ matchedCount: 3, appliedCount: 3 });
+
+        const mixedAudit = await prisma.auditLog.findFirst({
+          where: { action: 'payroll_entry.bulk_updated' },
+          orderBy: { occurredAt: 'desc' },
+        });
+        // Truthful mixed summary — never a single fabricated "previous value" — bounded (no
+        // per-employee breakdown), regardless of how many rows were actually matched.
+        expect(mixedAudit?.metadata).toMatchObject({
+          previousValues: { kind: 'mixed', distinctCount: 3, minimum: 300, maximum: 450.5 },
+        });
+
+        // A second bulk apply now that every row agrees again (all just set to 600) must report
+        // "single", not "mixed" — the summary reflects the *current* matched population each time,
+        // never a stale record of the first bulk apply.
+        const secondBulk = await admin.agent
+          .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ siteIds: [site.id], field: 'eobiAmount', value: '650.00' });
+        expect(secondBulk.status).toBe(200);
+        const singleAgainAudit = await prisma.auditLog.findFirst({
+          where: { action: 'payroll_entry.bulk_updated' },
+          orderBy: { occurredAt: 'desc' },
+        });
+        expect(singleAgainAudit?.metadata).toMatchObject({
+          previousValues: { kind: 'single', value: '600' },
+        });
+      });
+
+      it('forces a failure inside the audit insert and proves the whole bulk update rolls back — no partial write, applicability and Employee defaults untouched', async () => {
+        const admin = await masterAdminAgent('bulk-eobi-audit-rollback@test.local');
+        const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Bulk EOBI Rollback A');
+        const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site Bulk EOBI Rollback B');
+        // Cycle created BEFORE the employees below — see the identical note in the previous test.
+        const cycle = await makeDraftCycle(admin, 10);
+        const employeeApplicable = await makeEmployee(siteA.id, unitA.id, 'Rollback Applicable');
+        const employeeDisabled = await makeEmployee(siteA.id, unitA.id, 'Rollback Disabled');
+        const employeeOtherSite = await makeEmployee(siteB.id, unitB.id, 'Rollback Other Site');
+
+        const entryApplicable = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeApplicable.id });
+        const entryDisabled = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeDisabled.id });
+        const entryOtherSite = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employeeOtherSite.id });
+        await prisma.payrollEntry.update({ where: { id: entryDisabled.body.entry.id }, data: { eobiApplicable: false } });
+
+        // Forces the bulk action's own summary audit write to fail, inside the same transaction as
+        // the `updateMany` — the established pattern (`eobi-bidirectional-sync.test.ts`). Captured
+        // BEFORE `jest.spyOn` replaces the export, or `actual` would resolve to the spy itself.
+        const actual = auditLogService.recordAuditLog;
+        const spy = jest.spyOn(auditLogService, 'recordAuditLog');
+        spy.mockImplementation(async (input, client) => {
+          if (input.action === 'payroll_entry.bulk_updated') {
+            throw new Error('Simulated failure during bulk EOBI amount audit insert');
+          }
+          return actual(input, client);
+        });
+
+        try {
+          const bulk = await admin.agent
+            .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+            .set('x-csrf-token', admin.csrfToken)
+            .send({ siteIds: [siteA.id], field: 'eobiAmount', value: '999.00' });
+          expect(bulk.status).toBe(500);
+        } finally {
+          spy.mockRestore();
+        }
+
+        // Every matched entry retains its original EOBI amount — no partial update survived the
+        // forced rollback.
+        const refreshedApplicable = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryApplicable.body.entry.id } });
+        const refreshedDisabled = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryDisabled.body.entry.id } });
+        expect(refreshedApplicable.eobiAmount.toString()).toBe('400');
+        expect(refreshedApplicable.version).toBe(entryApplicable.body.entry.version);
+        expect(refreshedDisabled.eobiAmount.toString()).toBe('400');
+        expect(refreshedDisabled.version).toBe(entryDisabled.body.entry.version);
+        // Applicability flags are unchanged (this field never touches them anyway, but the rollback
+        // must not have disturbed them either).
+        expect(refreshedApplicable.eobiApplicable).toBe(true);
+        expect(refreshedDisabled.eobiApplicable).toBe(false);
+
+        // The unmatched, out-of-scope site's entry is equally untouched.
+        const refreshedOtherSite = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryOtherSite.body.entry.id } });
+        expect(refreshedOtherSite.eobiAmount.toString()).toBe('400');
+        expect(refreshedOtherSite.version).toBe(entryOtherSite.body.entry.version);
+
+        // Employee Registry defaults are untouched — this field never writes to Employee at all.
+        const employeeApplicableAfter = await prisma.employee.findUniqueOrThrow({ where: { id: employeeApplicable.id } });
+        const employeeDisabledAfter = await prisma.employee.findUniqueOrThrow({ where: { id: employeeDisabled.id } });
+        expect(employeeApplicableAfter.defaultEobiApplicable).toBe(true);
+        expect(employeeDisabledAfter.defaultEobiApplicable).toBe(true);
+
+        // No audit entry survived either — the forced failure happened inside the same transaction
+        // as the `updateMany`, so both roll back together, not just the update.
+        const auditAfter = await prisma.auditLog.findFirst({
+          where: { action: 'payroll_entry.bulk_updated', metadata: { path: ['value'], equals: '999.00' } },
+        });
+        expect(auditAfter).toBeNull();
+      });
+
+      it('rejects a negative or malformed eobiAmount before any write', async () => {
+        const admin = await masterAdminAgent('bulk-eobi-invalid@test.local');
+        const { site, unit } = await makeSiteWithUnit('Test Site Bulk EOBI Invalid');
+        const cycle = await makeDraftCycle(admin, 7);
+        const employee = await makeEmployee(site.id, unit.id, 'Bulk EOBI Invalid Employee');
+        const entry = await admin.agent
+          .post(`/api/v1/payroll-cycles/${cycle.id}/entries`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ employeeId: employee.id });
+
+        const bulk = await admin.agent
+          .patch(`/api/v1/payroll-cycles/${cycle.id}/entries/bulk`)
+          .set('x-csrf-token', admin.csrfToken)
+          .send({ siteIds: [site.id], field: 'eobiAmount', value: '-50.00' });
+
+        expect(bulk.status).toBe(400);
+        const untouched = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.body.entry.id } });
+        expect(untouched.eobiAmount.toString()).toBe('400');
+        expect(untouched.version).toBe(entry.body.entry.version);
+      });
     });
   });
 });

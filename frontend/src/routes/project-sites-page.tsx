@@ -6,6 +6,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -43,7 +44,35 @@ import {
   type ProjectUnit,
 } from '@/hooks/use-project-units';
 
-function SiteFormModal({
+/** The one place a blank create form's defaults are decided — `unitLabel` defaults to `'Branch'`
+ * (matching `ProjectSite.unitLabel`'s own DB default, `database/sites-and-units.md §8`), not an
+ * arbitrary empty string, since that's a documented, intentional default rather than a retained
+ * previous value. */
+const BLANK_SITE_FORM = { name: '', unitLabel: 'Branch', address: '' };
+
+/**
+ * Post-Checkpoint-1A UAT Stabilization — root cause of the reported "Add Project Site modal
+ * retains prior site values" defect: this component (in its *create* usage,
+ * `<SiteFormModal open={createOpen} .../>` below, no `site` prop) used to be mounted exactly once,
+ * unconditionally, for the whole life of the page — only its `open` prop toggled. Since
+ * `useState(site?.name ?? '')` only ever evaluates its initializer on first mount, the form's own
+ * fields silently kept whatever they last held (typed text, or a just-submitted value) across every
+ * later close/reopen, with nothing to ever reset them. The *edit* usage never had this problem: it's
+ * already conditionally rendered (`{editingSite && <SiteFormModal site={editingSite} .../>}`,
+ * further down), so selecting a different site — or Create right after Edit — always mounts a fresh
+ * instance seeded from that specific site. The fix makes *create* follow the exact same
+ * mount-fresh-every-time discipline already proven for edit (and already used by every other modal
+ * in this file — `ManageUnitsModal`, `DeleteSiteModal`), rather than inventing a new mechanism:
+ * `ProjectSitesPage` now renders this component with `{createOpen && <SiteFormModal .../>}` too, so
+ * opening "New Site" always mounts a brand-new, blank instance. `resetForm` below additionally
+ * handles the one case a remount alone can't cover — "Add another", which must blank the *same*
+ * still-open instance without unmounting it.
+ */
+// Exported (in addition to being used internally below) purely for direct, focused testability
+// (`project-sites-page.test.tsx`) — the create/edit form-reset lifecycle this component owns is
+// self-contained and independent of the page's own list/dropdown wiring, so testing it directly
+// avoids coupling that coverage to an unrelated interaction (Radix's DropdownMenu open/close).
+export function SiteFormModal({
   open,
   onOpenChange,
   site,
@@ -56,11 +85,22 @@ function SiteFormModal({
   const updateSite = useUpdateProjectSite();
   const isEdit = Boolean(site);
 
-  const [name, setName] = useState(site?.name ?? '');
-  const [unitLabel, setUnitLabel] = useState(site?.unitLabel ?? 'Branch');
-  const [address, setAddress] = useState(site?.address ?? '');
+  const [name, setName] = useState(site?.name ?? BLANK_SITE_FORM.name);
+  const [unitLabel, setUnitLabel] = useState(site?.unitLabel ?? BLANK_SITE_FORM.unitLabel);
+  const [address, setAddress] = useState(site?.address ?? BLANK_SITE_FORM.address);
+  // "Add another" (Post-Checkpoint-1A UAT Stabilization) — create-only; edit never offers it, since
+  // editing is always about exactly one already-selected site. Persists checked across a run of
+  // several creates in a row, deliberately, so the operator isn't re-checking it every time.
+  const [addAnother, setAddAnother] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const isPending = createSite.isPending || updateSite.isPending;
+
+  function resetForm() {
+    setName(BLANK_SITE_FORM.name);
+    setUnitLabel(BLANK_SITE_FORM.unitLabel);
+    setAddress(BLANK_SITE_FORM.address);
+  }
 
   function resetAndClose() {
     onOpenChange(false);
@@ -79,11 +119,19 @@ function SiteFormModal({
       if (isEdit && site) {
         await updateSite.mutateAsync({ id: site.id, input });
         toast.success('Site updated');
+        resetAndClose();
       } else {
         await createSite.mutateAsync(input);
-        toast.success('Site created');
+        if (addAnother) {
+          // Stays open on the same instance — the one case a fresh mount can't reset by itself.
+          toast.success('Site created — form cleared for the next one');
+          resetForm();
+          nameInputRef.current?.focus();
+        } else {
+          toast.success('Site created');
+          resetAndClose();
+        }
       }
-      resetAndClose();
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Something went wrong');
     }
@@ -105,11 +153,13 @@ function SiteFormModal({
             <Label htmlFor="site-name">Site name</Label>
             <Input
               id="site-name"
+              ref={nameInputRef}
               value={name}
               onChange={(event) => setName(event.target.value)}
               required
               maxLength={160}
               placeholder="e.g. Downtown Regional Office"
+              autoFocus
             />
           </div>
 
@@ -139,12 +189,19 @@ function SiteFormModal({
             />
           </div>
 
+          {!isEdit && (
+            <label className="flex items-center gap-2 text-xs text-text-muted">
+              <Checkbox checked={addAnother} onCheckedChange={(checked) => setAddAnother(checked === true)} />
+              Add another after this one
+            </label>
+          )}
+
           <ModalFooter>
             <Button type="button" variant="secondary" onClick={resetAndClose} disabled={isPending}>
               Cancel
             </Button>
             <Button type="submit" disabled={isPending || name.trim().length === 0}>
-              {isEdit ? 'Save changes' : 'Create site'}
+              {isEdit ? 'Save changes' : addAnother ? 'Create & add another' : 'Create site'}
             </Button>
           </ModalFooter>
         </form>
@@ -646,7 +703,11 @@ export function ProjectSitesPage({ user }: { user: SessionUser }) {
         </CardContent>
       </Card>
 
-      <SiteFormModal open={createOpen} onOpenChange={setCreateOpen} />
+      {/* Conditionally rendered (never a single persistent instance whose `open` prop merely
+          toggles) — the fix for the reported stale-values defect: this guarantees a brand-new,
+          blank-initialized instance every time "New Site" is opened, exactly like `editingSite`'s
+          own instance below already does per-site. See `SiteFormModal`'s own doc comment. */}
+      {createOpen && <SiteFormModal open={createOpen} onOpenChange={setCreateOpen} />}
 
       {editingSite && (
         <SiteFormModal

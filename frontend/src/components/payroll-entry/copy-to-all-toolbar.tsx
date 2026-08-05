@@ -7,12 +7,18 @@ import { Label } from '@/components/ui/label';
 import { useBulkUpdatePayrollEntries } from '@/hooks/use-payroll-entries';
 import { isValidDecimalDraft, parseValidCycleDays } from './numeric-validation';
 
-type BulkField = 'cycleDays' | 'otRate' | 'leaveRate';
+type BulkField = 'cycleDays' | 'otRate' | 'leaveRate' | 'eobiAmount';
 
 const FIELDS: { field: BulkField; label: string; placeholder: string }[] = [
   { field: 'cycleDays', label: 'Cycle Days', placeholder: 'e.g. 30' },
   { field: 'otRate', label: 'OT Rate', placeholder: 'e.g. 150' },
   { field: 'leaveRate', label: 'Leave Rate', placeholder: 'e.g. 1000' },
+  // Post-Checkpoint-1A UAT Stabilization — lets an authorized payroll user roll a statutory
+  // EOBI-amount change (e.g. minimum-wage/contribution-basis change) across the filtered
+  // population without editing thousands of rows individually. Amount only — never touches the
+  // `eobiApplicable` toggle, so a currently-disabled row still receives the new amount, ready for
+  // if/when applicability is later enabled (`bulkUpdatePayrollEntriesSchema`'s own doc comment).
+  { field: 'eobiAmount', label: 'EOBI Amount', placeholder: 'e.g. 400' },
 ];
 
 function isValidDraft(field: BulkField, value: string): boolean {
@@ -39,6 +45,7 @@ export function CopyToAllToolbar({ cycleId, siteIds }: { cycleId: string; siteId
     cycleDays: '',
     otRate: '',
     leaveRate: '',
+    eobiAmount: '',
   });
 
   const noSiteSelected = siteIds.length === 0;

@@ -44,6 +44,105 @@ test.describe('UI regression smoke', () => {
     expect(scrollHeight).toBeLessThanOrEqual(clientHeight + 1);
   });
 
+  /**
+   * Post-Checkpoint-1A UAT Stabilization — "sticky header reveals a blank/underlying strip while
+   * scrolling" defect. Root cause (isolated via direct pixel sampling of a headless-Chromium
+   * screenshot during this checkpoint's own investigation): every virtualized Payroll Entry row
+   * was fully transparent (`background-color: rgba(0,0,0,0)`), relying entirely on the ancestor
+   * Card's own incidental white background rather than painting its own opaque surface — a real
+   * gap when a row shares screen space with the grid's sticky header/totals rows during scroll
+   * compositing. Fixed with an explicit `bg-surface-2` on every row
+   * (`payroll-entry-row.tsx`) — this spec asserts the *computed* style (never overridable by an
+   * ancestor happening to be a different color) on real, currently-scrolled-past rows, at both the
+   * top of the page and after scrolling, across a dataset large enough to genuinely overflow the
+   * grid's own `max-h-[70vh]` scroll region.
+   */
+  test('Payroll Entry: every rendered row paints its own opaque background, at top of page and after scrolling (sticky-header containment)', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const label = `ui-regression-sticky-${Date.now()}`;
+    const site = await apiPost<{ site: { id: string } }>(context, '/api/v1/sites', { name: `E2E Sticky Site ${label}` });
+    const unit = await apiPost<{ unit: { id: string } }>(context, `/api/v1/sites/${site.site.id}/units`, {
+      name: `E2E Sticky Unit ${label}`,
+    });
+    // Enough rows to genuinely overflow the grid's own max-h-[70vh] scroll region at any
+    // reasonable viewport height.
+    for (let i = 0; i < 40; i++) {
+      await apiPost(context, '/api/v1/employees', {
+        name: `E2E Sticky Employee ${label} ${i}`,
+        designation: 'Guard',
+        siteId: site.site.id,
+        unitId: unit.unit.id,
+        grossPay: '30000',
+      });
+    }
+    await apiPost(context, '/api/v1/payroll-cycles', { year: 2900, month: 6 }).catch(() => undefined);
+
+    await page.goto('/payroll-entry');
+    const grid = page.getByRole('table', { name: 'Payroll Entry grid' });
+    await expect(grid).toBeVisible();
+
+    async function assertNoTransparentRow() {
+      const transparentCount = await grid.evaluate((el) => {
+        const rows = Array.from(el.querySelectorAll('[role="row"]')).filter(
+          (r) => r.getAttribute('style')?.includes('position: absolute'),
+        );
+        return rows.filter((r) => getComputedStyle(r).backgroundColor === 'rgba(0, 0, 0, 0)').length;
+      });
+      expect(transparentCount).toBe(0);
+    }
+
+    await assertNoTransparentRow();
+
+    await grid.evaluate((el) => {
+      el.scrollTop = el.scrollHeight / 2;
+    });
+    await page.waitForTimeout(200);
+    await assertNoTransparentRow();
+
+    // The app shell's own topbar stays a fully opaque, solid band regardless of scroll position —
+    // never a see-through strip.
+    const topbarBg = await page.locator('header').first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(topbarBg).not.toBe('rgba(0, 0, 0, 0)');
+  });
+
+  /**
+   * Post-Checkpoint-1A UAT Stabilization — representative audit beyond Payroll Entry, per the
+   * checkpoint's own instruction to verify "one ordinary list page, one report/financial page, one
+   * settings/admin page." None of these pages have any sticky element of their own (confirmed by
+   * direct repository inspection during this checkpoint) — this asserts the one thing that could
+   * regress for any of them: the document itself never becomes the scrolling surface, and the
+   * topbar stays a fully opaque band, both at rest and (where the page has enough content) after
+   * scrolling `<main>`.
+   */
+  for (const [label, path] of [
+    ['Employee Registry (ordinary list page)', '/employees'],
+    ['Reports (report/financial page)', '/reports'],
+    ['Users (settings/admin page)', '/users'],
+  ] as const) {
+    test(`${label}: document never scrolls, topbar stays opaque`, async ({ authenticatedPage: page }) => {
+      await page.goto(path);
+      await page.waitForLoadState('networkidle');
+
+      const { scrollHeight, clientHeight } = await page.evaluate(() => ({
+        scrollHeight: document.documentElement.scrollHeight,
+        clientHeight: document.documentElement.clientHeight,
+      }));
+      expect(scrollHeight).toBeLessThanOrEqual(clientHeight + 1);
+
+      const topbarBg = await page.locator('header').first().evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(topbarBg).not.toBe('rgba(0, 0, 0, 0)');
+
+      await page.evaluate(() => {
+        document.querySelector('main')?.scrollTo(0, 999999);
+      });
+      await page.waitForTimeout(150);
+      const topbarBgAfterScroll = await page.locator('header').first().evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(topbarBgAfterScroll).not.toBe('rgba(0, 0, 0, 0)');
+    });
+  }
+
   test('one standard-density and one compact-density table both render, with a real padding difference between them', async ({
     authenticatedPage: page,
   }) => {

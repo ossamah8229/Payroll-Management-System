@@ -313,6 +313,29 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
     expect(sample?.leaveRate?.toString()).toBe('123.45');
   });
 
+  // Post-Checkpoint-1A UAT Stabilization — the new bulk EOBI Amount field shares the exact same
+  // single `updateMany` code path `leaveRate` above already measures (no per-row loop, no N+1
+  // query growth), so this confirms that guarantee holds for this specific field too rather than
+  // relying on "same code path" reasoning alone.
+  it('Bulk EOBI Amount completes within target at 10,000-row scope', async () => {
+    const start = Date.now();
+    const res = await admin.agent
+      .patch(`/api/v1/payroll-cycles/${cycleId}/entries/bulk`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ siteIds, field: 'eobiAmount', value: '550.00' });
+    const ms = Date.now() - start;
+
+    expect(res.status).toBe(200);
+    expect(res.body.matchedCount).toBe(EMPLOYEE_COUNT);
+    expect(res.body.appliedCount).toBe(EMPLOYEE_COUNT);
+    // eslint-disable-next-line no-console
+    console.log(`[perf] Bulk EOBI Amount across ${EMPLOYEE_COUNT} entries: ${ms}ms (target <=2000ms)`);
+    expect(ms).toBeLessThan(10_000);
+
+    const sample = await prisma.payrollEntry.findFirst({ where: { cycleId } });
+    expect(sample?.eobiAmount.toString()).toBe('550');
+  });
+
   it('export produces all 10,000 rows correctly, with its duration on record', async () => {
     const start = Date.now();
     const res = await admin.agent.get(`/api/v1/payroll-cycles/${cycleId}/entries/export?format=csv`);

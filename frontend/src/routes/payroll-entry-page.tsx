@@ -203,12 +203,14 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   const printTotals = useMemo(() => {
     return filteredEntries.reduce(
       (acc, entry) => {
-        const deductions =
-          Number(entry.eobiAmount) + Number(entry.advanceDeduction) + Number(entry.eidAdvanceDeduction) + Number(entry.fine);
+        // `calc.totalDeduction` (eobiDeduction + advanceDeduction + eidAdvanceDeduction + fine) is
+        // the canonical figure — never a raw `entry.eobiAmount` sum, which would ignore
+        // `eobiApplicable` and overstate a disabled row's deduction.
+        const calc = calcNet(buildCalcInput(entry));
         acc.grossPay += Number(entry.grossPay);
         acc.allowance += Number(entry.allowance);
-        acc.deductions += deductions;
-        acc.netSalary += Number(calcNet(buildCalcInput(entry)).netSalary);
+        acc.deductions += Number(calc.totalDeduction);
+        acc.netSalary += Number(calc.netSalary);
         return acc;
       },
       { grossPay: 0, allowance: 0, deductions: 0, netSalary: 0 },
@@ -355,12 +357,11 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                       </TableHeader>
                       <TableBody>
                         {filteredEntries.map((entry) => {
-                          const deductions =
-                            Number(entry.eobiAmount) +
-                            Number(entry.advanceDeduction) +
-                            Number(entry.eidAdvanceDeduction) +
-                            Number(entry.fine);
-                          const netSalary = calcNet(buildCalcInput(entry)).netSalary;
+                          // Canonical `calcNet` deduction total — never a raw `entry.eobiAmount`
+                          // sum, which would ignore `eobiApplicable`.
+                          const calc = calcNet(buildCalcInput(entry));
+                          const deductions = Number(calc.totalDeduction);
+                          const netSalary = calc.netSalary;
                           return (
                             <TableRow key={entry.id}>
                               <TableCell>{entry.employee.employeeCode ?? '—'}</TableCell>

@@ -60,7 +60,8 @@ function PayrollEntryRowImpl({
       leaveDays: toNumberOrNull(effectiveEntry.leaveDays),
       leaveRate: toNumberOrNull(effectiveEntry.leaveRate),
       allowance: toNumberOrNull(effectiveEntry.allowance),
-      eobiAmount: toNumberOrNull(effectiveEntry.eobiAmount),
+      // Effective deduction, not the raw amount — see `computeServerSnapshot`'s identical rule.
+      eobiAmount: effectiveEntry.eobiApplicable ? toNumberOrNull(effectiveEntry.eobiAmount) : 0,
       advanceDeduction: toNumberOrNull(effectiveEntry.advanceDeduction),
       eidAdvanceDeduction: toNumberOrNull(effectiveEntry.eidAdvanceDeduction),
       fine: toNumberOrNull(effectiveEntry.fine),
@@ -80,6 +81,7 @@ function PayrollEntryRowImpl({
     effectiveEntry.leaveRate,
     effectiveEntry.allowance,
     effectiveEntry.eobiAmount,
+    effectiveEntry.eobiApplicable,
     effectiveEntry.advanceDeduction,
     effectiveEntry.eidAdvanceDeduction,
     effectiveEntry.fine,
@@ -431,8 +433,22 @@ function PayrollEntryRowImpl({
       role="row"
       style={{ ...style, gridTemplateColumns }}
       className={cn(
-        'grid items-center border-b border-border text-xs',
-        status === 'conflict' && 'bg-danger-light/40',
+        // Explicit opaque background (not left to inherit from the ancestor Card's own bg-surface-2)
+        // — this row is absolutely positioned and transformed by the virtualizer, sharing screen
+        // space with the grid's sticky header/totals rows during scroll. Relying on an ancestor's
+        // incidental background was a confirmed robustness gap (Post-Checkpoint-1A UAT
+        // Stabilization) — a transparent row has no defense against underlying content becoming
+        // visible during sticky/virtualized composition, regardless of the exact browser mechanism
+        // — every row is now its own fully opaque paint surface, regardless of what's behind it.
+        'grid items-center border-b border-border bg-surface-2 text-xs',
+        // Independent-review remediation (M4) — `twMerge` resolves a `bg-*` conflict by keeping only
+        // the *last* class in this list, so a naive `bg-danger-light/40` here previously dropped
+        // `bg-surface-2` entirely for a conflict row, silently reintroducing the exact translucent-
+        // background gap the fix above exists to close. `bg-danger-light` (no opacity modifier) is
+        // the same solid, already-vetted semantic color badge.tsx's own `hold`/`red` variants and
+        // the Print Options dialog's warning banner already use at full opacity — fully opaque,
+        // still visually distinct from the row's ordinary white, never translucent.
+        status === 'conflict' && 'bg-danger-light',
       )}
     >
       {PAYROLL_COLUMNS.map((column) => (

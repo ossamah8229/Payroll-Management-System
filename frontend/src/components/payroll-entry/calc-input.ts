@@ -106,7 +106,12 @@ export function computeServerSnapshot(entry: PayrollEntry): RowLiveSnapshot {
     leaveDays: toNumberOrNull(entry.leaveDays),
     leaveRate: toNumberOrNull(entry.leaveRate),
     allowance: toNumberOrNull(entry.allowance),
-    eobiAmount: toNumberOrNull(entry.eobiAmount),
+    // The *effective* EOBI deduction (`eobiApplicable ? eobiAmount : 0`), never the raw configured
+    // amount — a disabled row's amount stays stored for later use but must not contribute to this
+    // total (docs/architecture/database/payroll-entry.md §12's `eobiDeduction` formula, mirrored
+    // from `calcNet`). This is the single totals-store field the footer's "EOBI Amount" column
+    // sums; per-row the grid still shows/edits the raw configured amount separately.
+    eobiAmount: entry.eobiApplicable ? toNumberOrNull(entry.eobiAmount) : 0,
     advanceDeduction: toNumberOrNull(entry.advanceDeduction),
     eidAdvanceDeduction: toNumberOrNull(entry.eidAdvanceDeduction),
     fine: toNumberOrNull(entry.fine),

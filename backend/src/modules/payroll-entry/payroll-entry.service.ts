@@ -1029,6 +1029,58 @@ export interface BulkUpdatePayrollEntriesResult {
 }
 
 /**
+ * Independent-review remediation (M2, Post-Checkpoint-1A UAT Stabilization) — the bulk-update audit
+ * entry's own `metadata.value` already records the *new* value, but previously recorded no prior
+ * state at all, for any field. A single flat "previous value" would be untruthful whenever the
+ * matched population didn't already share one value (the common case for `eobiAmount` specifically,
+ * since employees are onboarded at different times against whatever the statutory amount was then).
+ * This stays a bounded *summary*, never one entry per affected row, so it costs nothing extra even
+ * at a 10,000-row match — `kind: 'single'` when every editable row already agreed (the value itself,
+ * verbatim, including a genuine `null` for an unset `leaveRate`/`otRate`); `kind: 'mixed'` otherwise,
+ * with a distinct-value count plus the numeric min/max across whichever rows had a value at all (a
+ * row that was `null` still counts toward `distinctCount`, just not toward min/max — there is no
+ * numeric "minimum" a null value could contribute).
+ */
+type PreviousValuesSummary =
+  | { kind: 'single'; value: string | number | null }
+  | { kind: 'mixed'; distinctCount: number; minimum: number; maximum: number };
+
+interface EntryForPreviousValue {
+  leaveRate: Prisma.Decimal | null;
+  eobiAmount: Prisma.Decimal;
+  workLines: { cycleDays: number; otRate: Prisma.Decimal | null }[];
+}
+
+function extractPreviousFieldValue(
+  entry: EntryForPreviousValue,
+  field: BulkUpdatePayrollEntriesInput['field'],
+): string | number | null {
+  switch (field) {
+    case 'leaveRate':
+      return entry.leaveRate === null ? null : entry.leaveRate.toString();
+    case 'eobiAmount':
+      return entry.eobiAmount.toString();
+    case 'cycleDays':
+      return entry.workLines[0]!.cycleDays;
+    case 'otRate':
+      return entry.workLines[0]!.otRate === null ? null : entry.workLines[0]!.otRate.toString();
+  }
+}
+
+/** Compares by numeric value (never by raw string), so e.g. a `Decimal` that happens to serialize as
+ * `"400"` on one row and `"400.00"` on another is still correctly recognized as the same previous
+ * value — a raw-string `Set` would silently over-report `distinctCount` for exactly that case. */
+function summarizePreviousValues(rawValues: (string | number | null)[]): PreviousValuesSummary {
+  const normalized = rawValues.map((v) => (v === null ? null : Number(v)));
+  const distinct = new Set(normalized);
+  if (distinct.size <= 1) {
+    return { kind: 'single', value: rawValues[0] ?? null };
+  }
+  const numeric = normalized.filter((v): v is number => v !== null);
+  return { kind: 'mixed', distinctCount: distinct.size, minimum: Math.min(...numeric), maximum: Math.max(...numeric) };
+}
+
+/**
  * "Copy to All" (Phase 3 Checkpoint 4) — pushes one value to every currently-filtered entry in one
  * request, following `database/schema-invariants.md` §23's standing rule ("bulk writes over
  * row-by-row loops... even though [the affected set] is typically small") rather than looping the
@@ -1075,70 +1127,96 @@ export async function bulkUpdatePayrollEntries(
     assertSiteAccess(currentUser, siteId);
   }
 
-  const matched = await prisma.payrollEntry.findMany({
-    where: { cycleId, siteId: { in: input.siteIds } },
-    select: {
-      id: true,
-      released: true,
-      payoutOutcome: true,
-      workLines: { orderBy: { sortOrder: 'asc' }, take: 1, select: { id: true } },
-    },
-  });
-  // A released entry, or any entry at all once the cycle is Archived, is locked exactly like a
-  // single-entity edit would reject it (`assertEntryEditable`) — skipped here rather than failing
-  // the whole batch over it. Negative Payroll Recovery checkpoint (2026-07-26): an entry already
-  // resolved as NO_PAY_DUE/RECOVERY_DUE is equally locked, even though `released` itself stays
-  // `false` for it.
-  const editable =
-    cycle.status === 'ARCHIVED' ? [] : matched.filter((entry) => !entry.released && entry.payoutOutcome === null);
-
+  let matchedCount = 0;
   let appliedCount = 0;
 
-  if (editable.length > 0) {
+  // Independent-review remediation (Post-Checkpoint-1A UAT Stabilization) — the matching read now
+  // runs *inside* the same transaction as the write and the audit insert (previously a separate,
+  // pre-transaction `prisma.payrollEntry.findMany`), so the "previous value" the audit entry records
+  // is genuinely the value each row held at the instant it was overwritten, not a value that could
+  // have been changed by a concurrent request in the gap between an earlier, non-transactional read
+  // and this write.
+  await prisma.$transaction(async (tx) => {
+    const matched = await tx.payrollEntry.findMany({
+      where: { cycleId, siteId: { in: input.siteIds } },
+      select: {
+        id: true,
+        released: true,
+        payoutOutcome: true,
+        leaveRate: true,
+        eobiAmount: true,
+        workLines: { orderBy: { sortOrder: 'asc' }, take: 1, select: { id: true, cycleDays: true, otRate: true } },
+      },
+    });
+    matchedCount = matched.length;
+
+    // A released entry, or any entry at all once the cycle is Archived, is locked exactly like a
+    // single-entity edit would reject it (`assertEntryEditable`) — skipped here rather than failing
+    // the whole batch over it. Negative Payroll Recovery checkpoint (2026-07-26): an entry already
+    // resolved as NO_PAY_DUE/RECOVERY_DUE is equally locked, even though `released` itself stays
+    // `false` for it.
+    const editable =
+      cycle.status === 'ARCHIVED' ? [] : matched.filter((entry) => !entry.released && entry.payoutOutcome === null);
+
+    // Zero-match/zero-applied behavior is unchanged: no write, no audit entry, no fabricated
+    // previous-value summary.
+    if (editable.length === 0) return;
+
+    const previousValues = summarizePreviousValues(
+      editable.map((entry) => extractPreviousFieldValue(entry, input.field)),
+    );
     const entryIds = editable.map((entry) => entry.id);
 
-    await prisma.$transaction(async (tx) => {
-      if (input.field === 'leaveRate') {
-        const result = await tx.payrollEntry.updateMany({
-          where: { id: { in: entryIds } },
-          data: { leaveRate: input.value, version: { increment: 1 } },
-        });
-        appliedCount = result.count;
-      } else {
-        // Guaranteed by the architecture — every PayrollEntry always has at least one WorkLine
-        // (database/payroll-entry.md §12a) — so `workLines[0]` is always the primary line here.
-        const primaryLineIds = editable.map((entry) => entry.workLines[0]!.id);
-        await tx.payrollEntryWorkLine.updateMany({
-          where: { id: { in: primaryLineIds } },
-          data: input.field === 'cycleDays' ? { cycleDays: input.value } : { otRate: input.value },
-        });
-        const result = await tx.payrollEntry.updateMany({
-          where: { id: { in: entryIds } },
-          data: { version: { increment: 1 } },
-        });
-        appliedCount = result.count;
-      }
+    if (input.field === 'leaveRate') {
+      const result = await tx.payrollEntry.updateMany({
+        where: { id: { in: entryIds } },
+        data: { leaveRate: input.value, version: { increment: 1 } },
+      });
+      appliedCount = result.count;
+    } else if (input.field === 'eobiAmount') {
+      // Amount only — `eobiApplicable` is never touched by this field (see the schema's own doc
+      // comment). Applies to every matched entry regardless of its own applicable toggle, so a
+      // currently-disabled row still receives the updated statutory amount for later use.
+      const result = await tx.payrollEntry.updateMany({
+        where: { id: { in: entryIds } },
+        data: { eobiAmount: input.value, version: { increment: 1 } },
+      });
+      appliedCount = result.count;
+    } else {
+      // Guaranteed by the architecture — every PayrollEntry always has at least one WorkLine
+      // (database/payroll-entry.md §12a) — so `workLines[0]` is always the primary line here.
+      const primaryLineIds = editable.map((entry) => entry.workLines[0]!.id);
+      await tx.payrollEntryWorkLine.updateMany({
+        where: { id: { in: primaryLineIds } },
+        data: input.field === 'cycleDays' ? { cycleDays: input.value } : { otRate: input.value },
+      });
+      const result = await tx.payrollEntry.updateMany({
+        where: { id: { in: entryIds } },
+        data: { version: { increment: 1 } },
+      });
+      appliedCount = result.count;
+    }
 
-      await recordAuditLog(
-        {
-          actorUserId: currentUser.id,
-          action: 'payroll_entry.bulk_updated',
-          entityType: 'PayrollEntry',
-          metadata: {
-            cycleId,
-            siteIds: input.siteIds,
-            field: input.field,
-            value: input.value,
-            matchedCount: matched.length,
-            appliedCount,
-          },
-          ipAddress: requestMeta.ipAddress,
-          userAgent: requestMeta.userAgent,
+    await recordAuditLog(
+      {
+        actorUserId: currentUser.id,
+        action: 'payroll_entry.bulk_updated',
+        entityType: 'PayrollEntry',
+        metadata: {
+          cycleId,
+          siteIds: input.siteIds,
+          field: input.field,
+          value: input.value,
+          previousValues,
+          matchedCount,
+          appliedCount,
         },
-        tx,
-      );
-    });
-  }
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+      },
+      tx,
+    );
+  });
 
-  return { matchedCount: matched.length, appliedCount };
+  return { matchedCount, appliedCount };
 }

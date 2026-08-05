@@ -17,7 +17,53 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-05 (latest) — Phase 7 Reports, Employee Payroll History Checkpoint 1A
+> **Update, 2026-08-05 (latest, later same day) — Post-Checkpoint-1A UAT Stabilization: Sticky
+> Header Containment, EOBI Totals/Bulk Apply, Project Site Form Reset — IMPLEMENTED, awaiting
+> review, NOT COMMITTED.** Three independently-reported UAT defects, fixed as one scoped checkpoint
+> per explicit instruction — no Employee Payroll History Checkpoint 1B, Dashboard, or other report
+> work was started. Full record: `docs/PROJECT_PROGRESS.md`'s own "Post-Checkpoint-1A UAT
+> Stabilization" entry (root causes, exact fixes, every file changed) and this session's own
+> completion report (full test results, Playwright evidence, performance measurement).
+>
+> **Sticky header** — root-caused via direct pixel sampling of a real headless-Chromium screenshot
+> (not guessed): every virtualized Payroll Entry row had a fully transparent background, relying on
+> the ancestor Card's own incidental white surface rather than painting its own opaque one. Fixed
+> with an explicit `bg-surface-2` on the row (`payroll-entry-row.tsx`) — the one place in the app
+> with a genuine sticky-header + GPU-transformed-virtualized-content combination. A direct
+> repository-wide audit confirmed no other page has any sticky element at all, so there was no
+> second implementation to patch.
+>
+> **EOBI totals** — the footer summed every row's *raw* `eobiAmount` regardless of
+> `eobiApplicable`; `calcNet` itself was never wrong (already-tested), the bug was two frontend
+> aggregation paths bypassing it (`calc-input.ts`'s `computeServerSnapshot`, and
+> `payroll-entry-page.tsx`'s own hand-rolled print-totals calculation). Both now route through
+> `eobiApplicable ? eobiAmount : 0`/`calcNet`'s `totalDeduction`. A missing `eobiApplicable`
+> dependency in the row's live-edit effect (so toggling alone never re-reported to the totals
+> store) was fixed alongside it.
+>
+> **Bulk EOBI Amount** — a new `field: 'eobiAmount'` variant on the existing
+> `bulkUpdatePayrollEntriesSchema`/`bulkUpdatePayrollEntries` bulk-update code path (same
+> `updateMany` bulk statement, same audit/site-scope/editability guarantees as the three existing
+> bulk fields) plus a fourth `CopyToAllToolbar` field, reusing the exact same UI pattern. Applies
+> to every matched entry regardless of `eobiApplicable`; never touches `eobiApplicable` itself or
+> `Employee.defaultEobiApplicable` (verified directly in tests). 10,000-row timing case added
+> alongside the existing Copy-to-All perf test.
+>
+> **Project Site form reset** — root-caused to the create-mode modal being a single,
+> unconditionally-mounted instance for the page's whole life, so its `useState` initializers only
+> ever ran once; the edit-mode instance was already conditionally mounted and never had this
+> problem. Fixed by mounting create fresh every open, matching every other modal in that file,
+> plus a new "Add another" checkbox with an explicit `resetForm()` for the one case a remount can't
+> cover (staying open, same instance). Every reported scenario re-verified against the real running
+> application.
+>
+> **Verification**: backend full suite **1369/1369**; frontend full suite **325/325** (312
+> pre-existing + 13 new); typecheck/lint/build clean across `shared`/`backend`/`frontend`;
+> `git diff --check` clean; full Playwright suite result in this session's own completion report.
+> **Do not begin Employee Payroll History Checkpoint 1B, Dashboard, or any other report until this
+> checkpoint is reviewed and landed.**
+
+> **Update, 2026-08-05 (superseded by the entry above for status purposes) — Phase 7 Reports, Employee Payroll History Checkpoint 1A
 > (Backend Foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.** Backend service/routes/
 > shared Zod contracts/database index/tests only, per explicit checkpoint scope — no frontend
 > page, no drill-down UI, no browser Print, no backend PDF, no saved-filter presets, none of which
@@ -3508,4 +3554,154 @@ deferred to Checkpoint 1B or a later frontend refinement, never begun in this se
 
 **No commit, push, or deployment occurred this session** — stopped deliberately for review, per
 explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
+
+## 31. Addendum, 2026-08-05 (later same day) — Post-Checkpoint-1A UAT Stabilization: Sticky Header Containment, EOBI Totals/Bulk Apply, Project Site Form Reset — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s own "Post-Checkpoint-1A UAT Stabilization" entry — this
+is the handoff summary. Three independently-reported UAT defects, fixed as one scoped checkpoint;
+no Employee Payroll History Checkpoint 1B, Dashboard, or other report work was started.
+
+**Environment note for the next session**: this session's own local Postgres was provisioned fresh
+in the scratchpad on a non-default port (5433, `embedded-postgres`) specifically because a
+different, unrelated session's own stale Postgres was already occupying the project's usual 5432 —
+left untouched rather than killed, per this session's own non-destructive-by-default posture. A
+*second*, separate database (`payroll_test`, same port-5433 instance) was provisioned purely for
+the backend Jest suite, after discovering the first database (manually seeded with UI-verification
+fixtures, including a real payroll cycle) broke the bootstrap-only `POST /api/v1/payroll-cycles`
+tests — worth remembering: never point `DATABASE_URL` at a manually-exercised dev database when
+running the committed test suite, even locally.
+
+**Part A (sticky header) — investigation method, since the eventual root cause required real
+evidence, not inference.** A live Chromium browser (Playwright, no `claude-in-chrome` available
+this session — user declined) was driven against a freshly seeded 80-employee Payroll Entry grid.
+Two hypotheses were tested and **disproven** before the real one was found: (1) the app shell
+somehow lets the *document* scroll — disproven directly (`window.scrollY` stayed 0,
+`document.documentElement.scrollHeight === clientHeight` after every scroll attempt); (2) the
+grid's own sticky header fails to occlude a scrolled-past row — the initial screenshot evidence
+*looked* like this (a "Test Employee 8" fragment visible right at the header's lower edge), but
+pixel-level sampling (`PIL`, sampling raw RGB values down a vertical line through the suspect
+region) proved this was simply the header's *own* "Employee" column label text, not foreign
+content — a false positive from not accounting for the header having real text content in the
+same screen column being sampled. The real defect (every virtualized row fully transparent,
+`rgba(0,0,0,0)`, confirmed via `getComputedStyle`) was found only after this elimination, by
+directly inspecting the row's own computed background rather than continuing to reason about
+z-index/stacking (which was already correct). A `will-change: transform` speculative fix was tried
+and measured to have **zero effect** (confirming the mechanism was never a compositing-layer-order
+issue) before landing on the actual fix (an explicit opaque background) — recorded here so a future
+session doesn't re-try the same dead end. **This paragraph's own record is what an independent
+review (2026-08-05) used to correct overstated "confirmed root cause" wording in
+`docs/design-system.md` and `docs/PROJECT_PROGRESS.md`** — this account was already accurate and
+needed no change itself; only the two more headline-style summaries elsewhere had drifted stronger
+than what's recorded here.
+
+**Part D (Project Sites) — a genuinely new "Add another" UI was added, not merely a bug fix.** The
+UAT description referenced an "Add another" option that did not exist anywhere in the shipped code
+— the create modal only ever had Cancel/Create. This checkpoint added a `Checkbox` ("Add another
+after this one") to `SiteFormModal`'s create mode only, per the task's explicit requirement, rather
+than treating the reported defect as solely "close/reopen retains values" (which was also true and
+also fixed, via the same conditional-mount change).
+
+**Testing note**: `SiteFormModal` is now exported from `project-sites-page.tsx` (previously
+module-private) specifically so its reset lifecycle could be unit-tested directly, independent of
+the page's own `DropdownMenu`-driven Edit action — Radix's `DropdownMenu` does not open under
+`fireEvent.click` in jsdom (confirmed via a minimal isolated repro; `aria-expanded`/`data-state`
+never changed even with `hasPointerCapture`/pointer-event stubs applied) with no
+`@testing-library/user-event` available in this project to work around it. The full page-level
+flow (including the dropdown) is covered instead by a real-browser Playwright spec, which has no
+such limitation.
+
+**Verification**: backend full suite **1369/1369** (fresh `payroll_test` database). Frontend full
+suite **325/325** (312 pre-existing + 13 new — `calc-input.test.ts` new file, 3 tests;
+`payroll-entry-grid.test.tsx` two new describe blocks, 5 tests; `project-sites-page.test.tsx` new
+file, 5 tests). `typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend` (only
+pre-existing, unrelated lint warnings — KI-4 and two backend script files, both untouched this
+session). `git diff --check` clean.
+
+**Playwright**: the two directly-relevant specs (`06-ui-regression.spec.ts` extended, new
+`18-post-checkpoint-1a-uat-stabilization.spec.ts`) both passed cleanly in an isolated run before
+the full-suite run. The full suite (82 tests, single worker, `workers: 1`) took an unusually long
+3.4 hours and reported 5 failures — investigated, not waved away: this session's *own* lingering
+manual dev-server processes (backend/frontend, left running from earlier live-browser verification)
+were still competing for host resources for the whole run. After killing them, the 5 failing tests
+were re-run: **3 passed cleanly in isolation** (`03-navigation`'s full-route sweep,
+`08-role-administration`'s role-rename test, `12-corrections-completion`'s released-row-actions
+test) — confirmed environmental, not a regression. The remaining 2 (`07-corrections.spec.ts`
+Scenario 4 — a Balance Adjustment settlement status assertion; `15-statements.spec.ts`'s Export PDF
+download) failed consistently even after freeing resources and re-running with correct
+prerequisite state, but both are in modules this checkpoint's diff never touches at all (`git diff
+--stat` confirms zero files under `corrections/`, `balance-adjustments/`, or `statements/`,
+frontend or backend) — consistent with this project's own already-documented pattern of
+Corrections-domain timing flakiness (SESSION_HANDOFF's Phase 7F entry) and Puppeteer/PDF resource
+sensitivity (KI-10). Reported honestly rather than re-run silently until green: these 2 are
+pre-existing, unrelated to this checkpoint's changes, not confirmed fixed by this session.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for review, per
+explicit instruction. No Employee Payroll History Checkpoint 1B, Dashboard, or other report/
+unrelated module was started or modified.
+
+## 32. Addendum, 2026-08-05 (later same day) — Independent-Review Remediation (M1–M4) — IMPLEMENTED, NOT COMMITTED
+
+A separate session ran a rigorous, independent, read-only review of Addendum 31's checkpoint —
+re-deriving every claim from the real diff and live application behavior — and returned **APPROVE
+WITH NON-BLOCKING NOTES** (0 Blockers, 0 High, 5 Medium, 2 Low). This addendum records the
+follow-up remediation pass, explicitly scoped to **M1–M4 only** (M5 — Corrections Scenario 4's own
+pre-existing, unrelated reproducibility — deliberately left open and untouched). Full design record:
+`docs/PROJECT_PROGRESS.md`'s own "Post-Checkpoint-1A UAT Stabilization — Independent Review
+Remediation" entry.
+
+**M1 (docs)**: `docs/design-system.md` and `docs/PROJECT_PROGRESS.md` both corrected — neither now
+claims a *confirmed* causal link between the row-opacity fix and the user's own specific reported
+screenshot; both now state plainly that the robustness gap is confirmed, the reported symptom itself
+was never conclusively reproduced in the review environment, and opaque rows are correct by
+construction regardless. This file's own §31 investigation-method paragraph needed no correction
+(it was already this precise) — a cross-reference sentence was added there instead, pointing at it
+as the source record the other two files' headline wording was corrected against.
+
+**M2 (audit previous-value summary)**: implemented generically for all four bulk fields, not only
+`eobiAmount` — `payroll-entry.service.ts`'s `bulkUpdatePayrollEntries` now records
+`previousValues: { kind: 'single', value } | { kind: 'mixed', distinctCount, minimum, maximum }` in
+the same `payroll_entry.bulk_updated` audit metadata, bounded regardless of row count, numeric
+(never raw-string) distinctness comparison. **The matching read moved inside the same transaction**
+as the `updateMany`/audit insert (previously a separate pre-transaction read) — closes a real TOCTOU
+gap where a concurrent request could have made the recorded "previous value" untruthful.
+
+**M3 (rollback test)**: new forced-audit-failure test (`jest.spyOn(auditLogService,
+'recordAuditLog')`, the same pattern `eobi-bidirectional-sync.test.ts` already established) proves
+the whole bulk request 500s and every touched/untouched row, applicability flag, and Employee
+default is exactly as it was before the call. A second new test proves the `previousValues` summary
+itself is truthful across a genuinely mixed population (300/400/450.50 → `{mixed, distinctCount:3,
+minimum:300, maximum:450.5}`) and correctly collapses to `single` once the population re-agrees.
+`payroll-entry.test.ts` is now 18/18 (4 new).
+
+**M4 (conflict-row opacity)**: root-caused precisely — `cn()`/`tailwind-merge` keeps only the *last*
+conflicting `bg-*` class, so `status === 'conflict' && 'bg-danger-light/40'` silently dropped the
+row's own base `bg-surface-2` (Addendum 31's own opaque-row fix) for exactly this one reachable row
+state, reintroducing the same translucency gap for a concurrent-edit conflict. Fixed by dropping the
+`/40` suffix (`bg-danger-light`, already used at full opacity elsewhere in this app —
+`badge.tsx`'s `hold`/`red` variants, the Payroll Summary Print Options warning banner — no new
+color introduced). New file `payroll-entry-row.test.tsx` (2 tests) asserts the real, rendered,
+tailwind-merge-resolved `className` directly: a conflict row contains `bg-danger-light` and matches
+no `bg-*/NN` opacity-suffixed pattern at all; an ordinary row still resolves to plain `bg-surface-2`.
+
+**Verification**: `payroll-entry.test.ts` **18/18**; Bulk EOBI Amount 10,000-row timing re-measured
+at **780ms** (unchanged from the original 714ms baseline — the transactional restructuring and the
+previous-value computation added no measurable cost); frontend full suite **327/327** (325 + 2 new);
+typecheck/lint/build clean across all three workspaces (identical pre-existing warning baseline,
+zero new); `git diff --check` clean.
+
+**Full backend suite, run once in the environment as it stood at the time, per explicit instruction
+not to chase a clean result by repeating it**: **1349/1371** (22 failed) — **identical in every
+respect to the pre-remediation baseline** (same 3 files — `payslips.test.ts`, `statements.test.ts`,
+`payroll-hold-workflow.test.ts` — same homogeneous `"PDF test worker did not become ready within
+30000ms"`/`"Exceeded timeout of 45000 ms"` signature, same already-documented KI-10 pattern, zero
+overlap with this remediation's own changed files). Total grew from 1369 to 1371, exactly matching
+the 2 new tests added in `payroll-entry.test.ts`; `payroll-entry.test.ts` itself passed cleanly
+within this same full run (not only in isolation). **Zero new failures, zero regressions — the
+identical pre-existing environmental issue, reported honestly rather than re-run until green.**
+
+**Corrections Scenario 4 (M5) remains open, separate, and unresolved** — out of this remediation's
+authorized scope. **Employee Payroll History Checkpoint 1B remains not started.**
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for final
+authorization, per explicit instruction.
 
