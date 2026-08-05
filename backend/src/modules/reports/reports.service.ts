@@ -3,6 +3,7 @@ import type { SessionUser } from '@payroll/shared';
 import { calcNet, sumMoney, type CalcNetResult } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { stringifyCsvSafe } from '../../common/import-export';
+import { excelColumnWidth } from '../../common/excel-utils';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import { paginateInMemory, resolveReportPage } from './reports-pagination';
@@ -382,14 +383,6 @@ export async function exportPayrollSummaryToCsv(
     ...(rows.length > 0 ? [buildTotalExportRow(data.cycleTotals)] : []),
   ]);
   return { buffer: Buffer.from(csv, 'utf-8'), rowCount: data.siteRows.length, cycle: data.cycle };
-}
-
-/** Local duplicate of `bank-sheets.service.ts`'s own `excelColumnWidth` (the Dynamic Width Rule) —
- * duplicated per this module's own boundary rather than extracted into shared infrastructure, the
- * same choice `statements.service.ts` already made for the identical helper. */
-function excelColumnWidth(header: string, values: string[]): number {
-  const longest = values.reduce((max, value) => Math.max(max, value.length), header.length);
-  return longest + 3;
 }
 
 /**

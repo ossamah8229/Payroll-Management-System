@@ -17,7 +17,31 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-05 (latest) — PR #6 MERGED into `main`; Render deployment triggered — supersedes
+> **Update, 2026-08-05 (latest) — Phase 7 Reports, Employee Payroll History Checkpoint 1A
+> (Backend Foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.** Backend service/routes/
+> shared Zod contracts/database index/tests only, per explicit checkpoint scope — no frontend
+> page, no drill-down UI, no browser Print, no backend PDF, no saved-filter presets, none of which
+> were started. Preceded by a read-only Checkpoint 0 architecture review (same day) that derived
+> the report's exact contract from the real schema/service code rather than a generic template,
+> and flagged five genuine decisions the user then explicitly approved before this implementation
+> began: permission `statements:view` (not `reports:view`), a 20,000-row export ceiling, shared
+> Zod contracts (a first for this module), the entry-oriented detail route shape, and the bulk-
+> export sensitive-field exclusion list. Full design record: `docs/architecture/workflows/
+> reports.md §15`. Full implementation/test/verification record: `docs/PROJECT_PROGRESS.md`'s new
+> "Phase 7 Reports — Employee Payroll History, Checkpoint 1A" entry. **A real formatting bug was
+> found and fixed during this checkpoint's own test-writing** (several detail-endpoint monetary
+> fields used a bare `Decimal.toString()` instead of `.toFixed(2)`, silently dropping trailing
+> zeros — e.g. `"2000.00"` rendering as `"2000"` — confirmed via a direct Postgres round-trip, then
+> fixed at every affected call site before this reached review, not after). New tests: 85/85
+> passing across `employee-payroll-history.test.ts` (63), `employee-payroll-history-status.test.ts`
+> (18), and `excel-utils.test.ts` (4) — see this session's own completion report for the full
+> backend-suite/typecheck/lint/build verification result. Two extractions, both behavior-
+> preserving and covered by the pre-existing test suites passing unweakened: the historical-
+> payroll employee lookup (`statements.service.ts`'s own `searchStatementEmployees` is now a thin
+> wrapper) and the Excel column-width helper (now shared by Reports and Statements; Bank Sheets'
+> own copy deliberately left untouched, per the approved migration list).
+
+> **Update, 2026-08-05 (superseded by the entry above for status purposes) — PR #6 MERGED into `main`; Render deployment triggered — supersedes
 > the Phase 7H entry immediately below, which is otherwise unchanged as written.** The user confirmed
 > PR #6 was manually merged into `main` and that Render's already-configured automatic deployment was
 > triggered by that merge. This session verified directly (git + `gh`, not assumed): `gh pr view 6` →
@@ -3446,4 +3470,42 @@ No branch anywhere in the repository holds required, unmerged work.
 **No commit, push, branch deletion, or GitHub modification occurred this session** — stopped
 deliberately for review and explicit authorization, per this checkpoint's own instruction. No
 Employee Payroll History, other Report, Dashboard, or UI work was started.
+
+## 30. Addendum, 2026-08-05 (later same day) — Phase 7 Reports, Employee Payroll History: Checkpoint 0 (Architecture Review) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s new "Phase 7 Reports — Employee Payroll History"
+entries and `docs/architecture/workflows/reports.md §15` — this is the handoff summary.
+
+**Checkpoint 0 (read-only architecture review)**: derived the report's exact contract — grain,
+columns and their canonical sources, corrections/balance-adjustment representation, historical
+RBAC, filters, drill-down design, export/print design, pagination/performance design, API surface
+— directly from the real schema and service code, deliberately not accepting the generic report
+description in the original request at face value (it assumed a "Leave Deduction" column that
+doesn't exist in this schema's `calcNet` formula — leave is an earning, per `shared/src/lib/
+calc-net.ts` — among other corrections). Flagged five genuine decisions for approval rather than
+silently resolving them; the user approved all five before implementation began.
+
+**Checkpoint 1A (backend foundation)**, built against those five approved decisions plus two more
+(report grain, financial-meaning rule) already settled by the architecture itself: new shared Zod
+contracts (`shared/src/schemas/employee-payroll-history.ts`), a new backend service and status-
+derivation module (`backend/src/modules/reports/employee-payroll-history{.service,-status}.ts`),
+four new routes on the existing Reports router, one additive database migration
+(`[siteId, cycleId]` index on `PayrollEntry`), and two behavior-preserving extractions (historical
+employee lookup, shared Excel column-width helper) — full detail in `PROJECT_PROGRESS.md`.
+
+**Worth a future session's attention, not fixed here**: `docs/architecture/workflows/reports.md`
+§15.9 discloses that this report's totals block is recomputed on every list call (not only
+exports), which measured roughly 500–700ms at 9,000 matching rows in this session's own seeded
+30,000-row performance test — extrapolating to the full 20,000-row ceiling, upwards of a second on
+every page navigation of a large, loosely-filtered result set. Not a defect (the design is
+correct and disclosed), but a real latency characteristic a future checkpoint may want to address
+by making totals a separate, independently-fetched call rather than bundling them into every list
+response — an API-shape change, so deliberately not made silently in this one.
+
+**No frontend work of any kind was started** — the list/detail pages, drill-down UI, browser
+Print, and saved-filter presets all remain exactly as Checkpoint 0's own review scoped them:
+deferred to Checkpoint 1B or a later frontend refinement, never begun in this session.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for review, per
+explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
 

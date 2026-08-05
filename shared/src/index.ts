@@ -148,6 +148,51 @@ export type {
 export { batchPayslipsSchema } from './schemas/payslip';
 export type { BatchPayslipsInput } from './schemas/payslip';
 
+export {
+  EMPLOYEE_PAYROLL_HISTORY_DEFAULT_PAGE_SIZE,
+  EMPLOYEE_PAYROLL_HISTORY_EXPORT_FORMATS,
+  EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS,
+  EMPLOYEE_PAYROLL_HISTORY_MAX_PAGE_SIZE,
+  EMPLOYEE_PAYROLL_HISTORY_ROSTER_STATUS_VALUES,
+  EMPLOYEE_PAYROLL_HISTORY_ROW_STATUS_VALUES,
+  EMPLOYEE_PAYROLL_HISTORY_SORT_DIRECTIONS,
+  EMPLOYEE_PAYROLL_HISTORY_SORT_FIELDS,
+  employeePayrollHistoryEmployeeLookupQuerySchema,
+  employeePayrollHistoryExportQuerySchema,
+  employeePayrollHistoryListQuerySchema,
+  employeePayrollHistoryRowStatusSchema,
+} from './schemas/employee-payroll-history';
+export type {
+  EmployeePayrollHistoryActorRef,
+  EmployeePayrollHistoryAdvanceSummary,
+  EmployeePayrollHistoryAuditReference,
+  EmployeePayrollHistoryBalanceAdjustmentSummary,
+  EmployeePayrollHistoryCalculation,
+  EmployeePayrollHistoryCorrectionDetail,
+  EmployeePayrollHistoryCorrectionPaymentDetail,
+  EmployeePayrollHistoryCycleRef,
+  EmployeePayrollHistoryDetail,
+  EmployeePayrollHistoryEmployeeLookupQuery,
+  EmployeePayrollHistoryEmployeeOption,
+  EmployeePayrollHistoryEmployeeSearchResponse,
+  EmployeePayrollHistoryExportFormat,
+  EmployeePayrollHistoryExportLimitError,
+  EmployeePayrollHistoryExportQuery,
+  EmployeePayrollHistoryListQuery,
+  EmployeePayrollHistoryListResponse,
+  EmployeePayrollHistoryMaterializationDetail,
+  EmployeePayrollHistoryReleaseInfo,
+  EmployeePayrollHistoryRosterStatus,
+  EmployeePayrollHistoryRow,
+  EmployeePayrollHistoryRowStatus,
+  EmployeePayrollHistorySettlementDetail,
+  EmployeePayrollHistorySortDirection,
+  EmployeePayrollHistorySortField,
+  EmployeePayrollHistoryTotals,
+  EmployeePayrollHistoryUnitRef,
+  EmployeePayrollHistoryWorkLineDetail,
+} from './schemas/employee-payroll-history';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

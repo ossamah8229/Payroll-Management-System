@@ -1,0 +1,20 @@
+-- Phase 7 Reports, Employee Payroll History Checkpoint 1A (2026-08-05).
+--
+-- Purely additive: one new composite index, no column/table change, no data migration.
+--
+-- Supports the historically site-scoped, multi-cycle, row-level query shape this report's list/
+-- export/totals queries all share: `WHERE siteId IN (caller's accessible sites) [AND cycleId
+-- BETWEEN ...]`, ordered by `(cycle.year DESC, cycle.month DESC, ...)` by default. The two indexes
+-- that already existed on PayrollEntry don't cover this:
+--   - `PayrollEntry_cycleId_siteId_idx` ([cycleId, siteId]) is cycleId-led — efficient for "one
+--     cycle, filter by site" (Payroll Summary's own shape), not "these sites, any/every cycle."
+--   - `PayrollEntry_employeeId_idx` ([employeeId]) efficiently answers "one employee, many
+--     cycles" (Statements' own shape), but this report is also queried with no employee filter at
+--     all (e.g. "this Project Site's entire payroll history").
+--
+-- `[siteId, cycleId]`, siteId-led, lets Postgres satisfy the accessible-site filter directly from
+-- the index and then use cycleId (the index's own second key) for range/order — the shape a
+-- site-scoped user's "all my sites, all time" browse or export actually takes. See
+-- docs/architecture/workflows/reports.md's Employee Payroll History section for the full query
+-- design this index was added for.
+CREATE INDEX "PayrollEntry_siteId_cycleId_idx" ON "PayrollEntry"("siteId", "cycleId");

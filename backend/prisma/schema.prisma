@@ -667,6 +667,17 @@ model PayrollEntry {
   @@index([cycleId, hold, released])
   @@index([cycleId, hold, released, payoutOutcome])
   @@index([cycleId, siteId])
+  /// Added Phase 7 Reports, Employee Payroll History Checkpoint 1A (2026-08-05). The existing
+  /// `[cycleId, siteId]` index above is cycleId-led — it serves "one cycle, filter by site"
+  /// (Payroll Summary's own shape) but not this report's dominant unfiltered-by-employee shape:
+  /// a site-scoped caller's accessible-site filter applied across an *unbounded* cycle range
+  /// (e.g. "this Project Site's entire payroll history"), which `[employeeId]` alone (the other
+  /// existing index, "one employee, many cycles") also does not cover. `siteId`-led so Postgres
+  /// can satisfy "siteId IN (accessible sites)" without a cycle filter and then use `cycleId` as
+  /// the index's own second key for the default `(year DESC, month DESC)` ordering this report's
+  /// list/export queries apply — see docs/architecture/workflows/reports.md's Employee Payroll
+  /// History section for the full query-shape reasoning.
+  @@index([siteId, cycleId])
   @@index([bankId])
   @@index([advanceId])
   @@index([eidAdvanceId])

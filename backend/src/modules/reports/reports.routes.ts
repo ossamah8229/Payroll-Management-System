@@ -1,10 +1,26 @@
 import { Router } from 'express';
-import { PERMISSIONS } from '@payroll/shared';
+import { z } from 'zod';
+import {
+  EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS,
+  employeePayrollHistoryEmployeeLookupQuerySchema,
+  employeePayrollHistoryExportQuerySchema,
+  employeePayrollHistoryListQuerySchema,
+  PERMISSIONS,
+  type EmployeePayrollHistoryExportLimitError,
+} from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { exportPayrollSummaryToCsv, exportPayrollSummaryToXlsx, getPayrollSummaryReport } from './reports.service';
+import {
+  buildEmployeePayrollHistoryExportData,
+  exportEmployeePayrollHistoryToCsv,
+  exportEmployeePayrollHistoryToXlsx,
+  getEmployeePayrollHistoryDetail,
+  getEmployeePayrollHistoryList,
+  searchEmployeePayrollHistoryEmployees,
+} from './employee-payroll-history.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -110,6 +126,135 @@ reportsRouter.get('/payroll-summary/export', requirePermission(PERMISSIONS.REPOR
       format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
     );
     res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Employee Payroll History (Phase 7 Reports, Checkpoint 1A). Gated by `statements:view`, not
+ * `reports:view` (approved decision 1) — this report exposes one employee's cross-cycle payroll
+ * history, the same sensitivity class Statements/Payslips already established a dedicated
+ * permission for, not Payroll Summary's own company-wide-aggregate shape. Lives under this
+ * module's `/api/v1/reports` mount for now (frontend navigation is a later checkpoint's own
+ * decision, not this one's).
+ *
+ * **Route order matters**: `/employee-payroll-history/employees` and
+ * `/employee-payroll-history/export` are both registered *before*
+ * `/employee-payroll-history/:entryId` — Express matches routes in registration order, so if the
+ * param route were registered first, a request to either static path would incorrectly match it
+ * with `entryId` bound to the literal string `"employees"`/`"export"`.
+ */
+const EMPLOYEE_PAYROLL_HISTORY_PERMISSION = requirePermission(PERMISSIONS.STATEMENTS_VIEW);
+
+reportsRouter.get('/employee-payroll-history', EMPLOYEE_PAYROLL_HISTORY_PERMISSION, async (req, res, next) => {
+  try {
+    const query = employeePayrollHistoryListQuerySchema.parse(req.query);
+    const report = await getEmployeePayrollHistoryList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollEntry',
+      entityId: null,
+      metadata: { reportType: 'employee_payroll_history', page: report.page, pageSize: report.pageSize, total: report.total },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** No audit log on this discovery endpoint — matches `statements.routes.ts`'s own
+ * `statementEmployeesRouter` precedent for the identical historical-lookup query. */
+reportsRouter.get('/employee-payroll-history/employees', EMPLOYEE_PAYROLL_HISTORY_PERMISSION, async (req, res, next) => {
+  try {
+    const query = employeePayrollHistoryEmployeeLookupQuerySchema.parse(req.query);
+    const result = await searchEmployeePayrollHistoryEmployees(req.currentUser!, query);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Preflight-counts before generating any CSV/XLSX output (approved decision 2) —
+ * `buildEmployeePayrollHistoryExportData` itself never fetches/maps a single row once
+ * `totalMatching` exceeds `EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS`, so the structured
+ * `EmployeePayrollHistoryExportLimitError` below is always returned *before* any expensive work,
+ * never after a truncated attempt.
+ */
+reportsRouter.get('/employee-payroll-history/export', EMPLOYEE_PAYROLL_HISTORY_PERMISSION, async (req, res, next) => {
+  try {
+    const query = employeePayrollHistoryExportQuerySchema.parse(req.query);
+    const data = await buildEmployeePayrollHistoryExportData(req.currentUser!, query);
+
+    if (data.totalMatching > EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS) {
+      const errorBody: EmployeePayrollHistoryExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (employee, site, or cycle range) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx' ? await exportEmployeePayrollHistoryToXlsx(data.rows) : exportEmployeePayrollHistoryToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'PayrollEntry',
+      entityId: null,
+      metadata: { reportType: 'employee_payroll_history', format: query.format, rowCount },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = `employee-payroll-history.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Entry-oriented detail (approved decision 4) — authorizes strictly against the entry's own
+ * historical `siteId`, returning 404 (never 403) for both a nonexistent and an inaccessible
+ * entry, matching Statements'/Payslips' own "reveal nothing" posture for a single-record detail
+ * endpoint. `entryId` is validated as a UUID before reaching the service — a malformed value is a
+ * 400, never passed through to Prisma.
+ */
+reportsRouter.get('/employee-payroll-history/:entryId', EMPLOYEE_PAYROLL_HISTORY_PERMISSION, async (req, res, next) => {
+  try {
+    const entryId = z.string().uuid('entryId must be a valid UUID').parse(req.params.entryId);
+    const detail = await getEmployeePayrollHistoryDetail(req.currentUser!, entryId);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollEntry',
+      entityId: entryId,
+      metadata: { reportType: 'employee_payroll_history_detail' },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(detail);
   } catch (error) {
     next(error);
   }

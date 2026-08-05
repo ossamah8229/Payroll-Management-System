@@ -2,11 +2,12 @@ import { Prisma } from '@prisma/client';
 import { Decimal } from 'decimal.js';
 import ExcelJS from 'exceljs';
 import type { SessionUser } from '@payroll/shared';
-import { normalizeCnic } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../common/http-error';
 import { stringifyCsvSafe } from '../../common/import-export';
-import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
+import { excelColumnWidth } from '../../common/excel-utils';
+import { getAccessibleSiteIds } from '../../common/authz-policy';
+import { searchEmployeesByHistoricalPayroll } from '../../common/historical-payroll-employee-lookup';
 import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
 import { getCompanySettings } from '../settings/settings.service';
 import { getCompanyLogoDataUri } from '../settings/company-logo.service';
@@ -1018,15 +1019,6 @@ export async function exportStatementToCsv(
   };
 }
 
-/** Local duplicate of `bank-sheets.service.ts`'s own `excelColumnWidth` (the Dynamic Width Rule,
- * 2026-07-13: every column's width comes from its own longest exported value, never a manually
- * guessed number) — duplicated here rather than extracted into shared infrastructure per this
- * checkpoint's own explicit scope boundary (Phase 7B Checkpoint 2). */
-function excelColumnWidth(header: string, values: string[]): number {
-  const longest = values.reduce((max, value) => Math.max(max, value.length), header.length);
-  return longest + 3;
-}
-
 /**
  * Exports one Employee Statement as XLSX — calls `getEmployeeStatement()` **exactly once**, same
  * RBAC/scope/concealment relationship as `exportStatementToCsv` above. Uses this codebase's existing
@@ -1095,123 +1087,20 @@ export async function exportStatementToXlsx(
 
 // --- Employee discovery for the Statements picker (Phase 7A Checkpoint 2 correction) ----------
 
-const STATEMENT_EMPLOYEE_SEARCH_MAX_PAGE_SIZE = 200;
-const STATEMENT_EMPLOYEE_SEARCH_DEFAULT_PAGE_SIZE = 50;
-
 /**
- * **The architectural fix this checkpoint's own review found necessary**: `employees.service.ts`'s
- * `listEmployees` (the org-wide Employee Lookup's own backend) filters on `Employee.siteId` — the
- * employee's *current* assignment — which is exactly correct for that lookup's real callers
- * (Advances' Record Advance, Corrections' Request Correction: both create a *new*, forward-looking
- * obligation against an employee *today*, so "can I currently administer this employee" is the
- * right question). Statements is the opposite kind of question — a *retrospective* one — and reused
- * that same current-site-scoped lookup by mistake, making an employee who has since transferred
- * away from a site permanently undiscoverable to the very user who administered their history
- * there, even though `getEmployeeStatement` above would happily show that user their permitted
- * slice of it.
- *
- * This function answers the retrospective question directly, using the exact same historical-
- * attribution mechanism `payslips.service.ts`'s `listPayslips` and
- * `payroll-entry.service.ts`'s `listPayrollEntries` already established for their own pickers/
- * lists (`Prisma.PayrollEntryWhereInput`'s own `siteId`, the row's frozen historical site, never
- * the related `Employee.siteId`): an employee is discoverable here if and only if the caller can
- * see at least one of that employee's `PayrollEntry` rows at a site the caller is scoped to
- * (`getAccessibleSiteIds`) — draft or released, matching Payroll Entry's own site-scoped
- * visibility rule (unlike Payslips, which additionally requires `released = true`; discovery here
- * intentionally does not, since `getEmployeeStatement` itself renders `CYCLE_PENDING` informational
- * rows for a still-Draft entry too).
- *
- * **Deliberately does not also discover an Advance-only employee** (one with Advance history but
- * literally zero `PayrollEntry` rows — a narrow, real edge case: a brand-new hire who received an
- * Advance before ever appearing in a payroll cycle). `Advance` has no site attribution of its own
- * anywhere in this schema (`statements-ledger.md §7`'s own documented limitation) — there is no
- * principled *historical* mechanism to scope such an employee by site at all, only their *current*
- * site, which is exactly the org-wide Employee Lookup's own domain. This is a disclosed, accepted
- * gap (recorded in the checkpoint report), not an oversight: closing it would mean either reusing
- * current-site scoping here too (reintroducing the exact problem this function exists to fix) or
- * inventing a historical Advance/site attribution this schema was never given (out of this
- * checkpoint's authorization).
- *
- * **A fixed query cost, never N+1**: the site/unit historical scope is expressed as a nested Prisma
- * relation filter (`payrollEntries: { some: { siteId, workLines: { some: { unitId } } } }`), which
- * compiles into the count/`findMany` queries themselves as `EXISTS` subqueries — never a
- * per-candidate follow-up query. The full request issues exactly three queries regardless of how
- * many employees match (one `COUNT`, one `SELECT`, and Prisma's own single batched relation fetch
- * for the joined `site.name` — its default `relationLoadStrategy` issues one extra round trip for
- * an included relation, never one per row): proven directly by `statements.test.ts`'s own "No N+1"
- * test, which asserts the *identical* query count for a 1-match and an 8-match search. No new
- * index was added: `PayrollEntry.@@index([employeeId])` already exists and already bounds this
- * exactly the way `statements.service.ts`'s own per-employee full-history queries above rely on it
- * (a few dozen entries per employee even over a long tenure, never proportional to company-wide
- * headcount — the same Principle 10 reasoning §10 of the architecture doc already documents); no
- * measured query-plan evidence justified adding `PayrollEntry.@@index([siteId])` on top of the
- * existing `@@index([employeeId])`/`@@index([cycleId, siteId])` pair for this checkpoint's own
- * scale target.
+ * Thin wrapper around the shared `searchEmployeesByHistoricalPayroll`
+ * (`common/historical-payroll-employee-lookup.ts`) — extracted there in Phase 7 Reports, Employee
+ * Payroll History Checkpoint 1A once a second caller (that report's own employee lookup) needed
+ * this exact query, not a similar one. Behavior-preserving: same signature, same historical
+ * `PayrollEntry.siteId`-based discovery, same "no Advance-only employee" limitation, same fixed
+ * three-query cost — see the shared function's own doc comment for the full design (RBAC
+ * boundary, why this isn't the ordinary current-site-scoped Employee Lookup, the N+1 proof this
+ * extraction must not weaken). Kept as a named export here, unchanged, so every existing caller
+ * and test continues to import `searchStatementEmployees` from this module.
  */
 export async function searchStatementEmployees(
   currentUser: SessionUser,
   params: SearchStatementEmployeesParams,
 ): Promise<SearchStatementEmployeesResult> {
-  if (params.siteId) {
-    assertSiteAccess(currentUser, params.siteId);
-  }
-
-  // `undefined` means "no site restriction at all" (Master Admin, no explicit filter) — the same
-  // convention `getAccessibleSiteIds` itself already establishes, never conflated with `[]`
-  // ("scoped to zero sites, sees nothing").
-  const accessibleSiteIds = getAccessibleSiteIds(currentUser);
-  const historicalSiteIds = params.siteId ? [params.siteId] : accessibleSiteIds;
-
-  const page = Math.max(1, params.page ?? 1);
-  const pageSize = Math.min(
-    STATEMENT_EMPLOYEE_SEARCH_MAX_PAGE_SIZE,
-    Math.max(1, params.pageSize ?? STATEMENT_EMPLOYEE_SEARCH_DEFAULT_PAGE_SIZE),
-  );
-
-  const search = params.search?.trim();
-  const normalizedCnicSearch = search ? normalizeCnic(search) : null;
-
-  const where: Prisma.EmployeeWhereInput = {
-    payrollEntries: {
-      some: {
-        ...(historicalSiteIds && { siteId: { in: historicalSiteIds } }),
-        // Nested inside the *same* `some` as the site filter — this must be one PayrollEntry row
-        // that is both at an in-scope site AND carries a matching work line, never two
-        // independently-matching entries treated as if they were one.
-        ...(params.unitId && { workLines: { some: { unitId: params.unitId } } }),
-      },
-    },
-    ...(search && {
-      OR: [
-        { employeeCode: { contains: search, mode: 'insensitive' } },
-        ...(normalizedCnicSearch ? [{ cnic: { contains: normalizedCnicSearch } }] : []),
-        { name: { contains: search, mode: 'insensitive' } },
-      ],
-    }),
-  };
-
-  const [total, employees] = await Promise.all([
-    prisma.employee.count({ where }),
-    prisma.employee.findMany({
-      where,
-      select: { id: true, employeeCode: true, cnic: true, name: true, siteId: true, site: { select: { name: true } } },
-      orderBy: { name: 'asc' },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-  ]);
-
-  return {
-    total,
-    page,
-    pageSize,
-    employees: employees.map((employee) => ({
-      employeeId: employee.id,
-      employeeCode: employee.employeeCode,
-      cnic: employee.cnic,
-      name: employee.name,
-      currentSiteId: employee.siteId,
-      currentSiteName: employee.site.name,
-    })),
-  };
+  return searchEmployeesByHistoricalPayroll(currentUser, params);
 }

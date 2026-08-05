@@ -249,3 +249,184 @@ Report, Deduction Report, Overtime Report, Advance Recovery Report, Salary Relea
 Variance/Month-on-Month Report, and Dashboard are all Not Started. No existing module's behavior
 (Payroll Entry, Salary Release, Employee Registry, Advances, Corrections, Statements, Payslips, Bank
 Sheets, Cash Receiving, company logo, theme system) was modified to build this checkpoint.
+
+**Superseded, 2026-08-05, for Employee Payroll History specifically — see §15 below.** The backend
+half of Employee Payroll History (Checkpoint 1A) is now built; the remaining six reports and
+Dashboard are still exactly as this section originally described.
+
+## 15. Employee Payroll History — Checkpoint 1A (Backend Foundation, 2026-08-05)
+
+Backend, shared contracts, database index, and backend tests only — no frontend page, no
+drill-down UI, no browser Print, no backend PDF, no saved-filter presets. All per the approved
+architecture review (a prior read-only checkpoint) and the product/architecture decisions approved
+immediately before this checkpoint began implementation.
+
+### 15.1 Approved decisions this checkpoint is built against
+
+1. **Permission: `statements:view`, not `reports:view`.** This report exposes one employee's
+   cross-cycle payroll history — the same sensitivity class Statements/Payslips already
+   established a dedicated permission for (`shared/src/constants/permissions.ts`'s own doc
+   comment on `STATEMENTS_VIEW`), not Payroll Summary's company-wide-aggregate shape. All four
+   routes below are gated by it; no new permission was created.
+2. **Report grain: one row = one `PayrollEntry`.** Equivalent to one employee per payroll cycle,
+   because of `PayrollEntry`'s own `@@unique([cycleId, employeeId])` constraint. No second
+   reporting table.
+3. **Financial meaning: the main row is always the original, as-released figure.** Every row's
+   `netSalary`/`totalEarnings`/`totalDeductions` come from canonical `calcNet` applied to the
+   entry's own *stored* columns. A `Correction` never mutates those stored columns — it is a
+   separate, append-only record layered on top (§6, `docs/architecture/workflows/
+   corrections-and-balance-adjustments.md`) — so this is always exactly what was released, never a
+   correction-replayed figure. Verified directly: `Corrections › the original released Net Salary
+   on the main row is never replaced by a correction-replayed figure`
+   (`backend/tests/employee-payroll-history.test.ts`).
+4. **Historical scoping: `PayrollEntry.siteId`, never `Employee.siteId`.** Every row and the
+   detail endpoint are both authorized against the row's own historical site. A transferred
+   employee's Site-A-era rows stay visible only to a Site-A-scoped caller, and Site-B-era rows
+   only to a Site-B-scoped caller, regardless of the employee's *current* site assignment.
+5. **Database-level pagination**, with one narrow, disclosed exception — see §15.6.
+6. **20,000-row export ceiling** — see §15.5.
+7. **Shared Excel column-width helper extraction** — see §15.7.
+
+### 15.2 Shared contracts
+
+`shared/src/schemas/employee-payroll-history.ts` — the first Reports-module report to validate its
+query parameters through a shared Zod schema rather than hand-parsing `req.query`
+(`reports.routes.ts`'s pre-existing `requireCycleIdQuery`/`parseSiteIdsQuery`/`parsePageQuery`
+helpers, used by Payroll Summary, are deliberately left untouched — this checkpoint does not
+retrofit them). Defines: the 5-state `EmployeePayrollHistoryRowStatus` union
+(`RELEASED`/`HELD`/`NO_PAY_DUE`/`RECOVERY_DUE`/`PENDING`, derived server-side only, never by the
+client); the 6 allowed sort fields (`cycle`/`employeeCode`/`employeeName`/`site`/`netSalary`/
+`rowStatus`); list/export/employee-lookup query schemas (deliberately excluding a standalone
+year/month filter, a generic calendar date range, and a vague `releaseStatus` — see the approved
+architecture review); and the full response contract (`EmployeePayrollHistoryRow`/`Totals`/
+`ListResponse`/`EmployeeOption`/`EmployeeSearchResponse`/`Detail`/`ExportLimitError`).
+
+### 15.3 Row status derivation
+
+`backend/src/modules/reports/employee-payroll-history-status.ts` — one canonical function,
+`deriveEmployeePayrollHistoryRowStatus`, precedence-ordered `RELEASED > HELD > NO_PAY_DUE >
+RECOVERY_DUE > PENDING`. Inspecting the actual schema/service invariants
+(`payroll-release.service.ts`'s `releaseProjectUnit`/the release-sweep candidate query, the
+migration's own `payoutOutcome IS NULL OR released = false` CHECK) shows these four "resolved"
+states are already mutually exclusive in valid data — a held entry is never swept, so it can never
+also acquire `released`/`payoutOutcome`; `released` is only ever set for the `PAID` bucket. The
+precedence therefore only matters for a hypothetical row that violated that invariant (a bug or a
+manual DB edit), and is tested explicitly for exactly those "impossible" combinations
+(`backend/tests/employee-payroll-history-status.test.ts`, 18 tests) — including a consistency test
+proving the derivation function and the `rowStatus` list filter's `WHERE`-clause equivalent
+(`employeePayrollHistoryRowStatusWhereClause`) never disagree.
+
+### 15.4 Historical employee discovery — extracted, not duplicated
+
+`backend/src/common/historical-payroll-employee-lookup.ts`'s `searchEmployeesByHistoricalPayroll`
+was extracted from `statements.service.ts`'s own `searchStatementEmployees` (per this project's
+standing "grep for duplicates on new shared utility" rule) once this report needed the *identical*
+historical `PayrollEntry.siteId`/`PayrollEntryWorkLine.unitId`-based discovery query, not a similar
+one. `searchStatementEmployees` is now a thin, behavior-preserving wrapper around the shared
+function — same exported name/signature, same fixed three-query cost, same "no Advance-only
+employee" limitation. `statements.test.ts`'s own 67 tests (including its "No N+1" test) pass
+unweakened against the extracted implementation.
+
+### 15.5 Export — 20,000-row ceiling
+
+`EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS = 20_000` (`shared/src/schemas/
+employee-payroll-history.ts`), enforced by a `COUNT` preflight
+(`buildEmployeePayrollHistoryExportData`) *before* any row is fetched or any CSV/XLSX buffer is
+generated — an over-limit request never attempts partial work, and the route returns a structured
+`{ code: 'EXPORT_ROW_LIMIT_EXCEEDED', matchingCount, maxRows, message }` body (HTTP 413), never a
+silently truncated file. The boundary is `>`, not `>=` — exactly 20,000 matching rows exports
+successfully; 20,001 is rejected. Verified in
+`backend/tests/employee-payroll-history.test.ts`; the ceiling's own cost at real volume is measured
+in §15.9 below.
+
+The flat export column set (Payroll Month, Employee Code, Employee Name, Project Site, Primary
+Unit, Additional Unit Count, Designation, Total Earnings, Total Deductions, Net Salary, Row Status,
+Correction Count, Outstanding Origin Balance, Released Date) deliberately excludes CNIC, every
+banking field, release-actor identity, audit-actor identity, correction reasons, before/after
+correction detail, and nested settlement detail — all of that stays drill-down-only, via the
+detail endpoint. Export rows are read verbatim off the same `EmployeePayrollHistoryRow` objects the
+list endpoint returns, never resummed, so export values are guaranteed to match on-screen values
+exactly (Principle 6).
+
+### 15.6 Pagination, sorting, and the one disclosed netSalary exception
+
+Five of the six sort fields (`cycle`/`employeeCode`/`employeeName`/`site`/`rowStatus`) use true
+database-level `skip`/`take` pagination with a deterministic ordering that always ends in
+`PayrollEntry.id ASC` — offset pagination is stable because no filter/sort key here changes
+concurrently at meaningful volume (new rows only appear via a monthly cycle bootstrap).
+`rowStatus`'s own sort orders by the three real columns that determine it (`released`/`hold`/
+`payoutOutcome`) — every row of the same status sorts contiguously (tested), but the order
+*between* statuses follows Postgres's own boolean/enum ordering, not the derivation's precedence
+rank; expressing the exact precedence would need a raw SQL `CASE` outside Prisma's typed
+`orderBy`, not introduced for a sort-only, non-financial concern.
+
+**`netSalary` is not a stored column** — it only exists as a `calcNet()` result, which cannot be
+reproduced as a SQL `ORDER BY`/`SUM` expression without an independent, drift-prone second
+implementation of the same formula (explicitly out of scope: "do not create a second SQL
+approximation of calcNet"). Loading the complete matching set into memory before paginating is
+equally forbidden for a row-level report (`§9` above). **Resolution, reusing already-approved
+infrastructure rather than inventing new infrastructure**: `sortBy=netSalary` is served by
+fetching every matching row's calc inputs, computing `netSalary` via canonical `calcNet`, sorting
+in memory with an explicit `id`-ascending tie-break, and paginating the sorted array — but *only*
+when the matching count is within the same `EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS` ceiling
+already approved for exports. Beyond that bound, `sortBy=netSalary` is rejected with a clear 400
+(narrow your filters, or sort by a different column) — never silently truncated, never falling
+back to a different sort. This is the identical reasoning and the identical ceiling
+`computeEmployeePayrollHistoryTotals` (§15.8) already uses, applied to one more query shape rather
+than a second one. Recorded here as a resolved architecture conflict, not a silent shortcut.
+
+### 15.7 Shared Excel column-width utility
+
+`backend/src/common/excel-utils.ts`'s `excelColumnWidth` — extracted from three independent,
+byte-identical copies (`bank-sheets.service.ts`, `reports.service.ts`, `statements.service.ts`)
+once a fourth consumer (this report's own XLSX export) made "duplicate again" the wrong call.
+Behavior-preserving (identical `longest + 3` formula) — `reports.service.ts`'s and
+`statements.service.ts`'s own XLSX exports now import the shared helper instead of their own local
+copy; `bank-sheets.service.ts`'s copy is deliberately left untouched (not in this checkpoint's
+approved migration list). `backend/tests/excel-utils.test.ts` adds focused unit tests; every
+pre-existing export test (`bank-sheets.test.ts`, `reports.test.ts`, `statements.test.ts`) still
+passes unweakened, proving the extraction changed no output.
+
+### 15.8 Totals
+
+`computeEmployeePayrollHistoryTotals` returns the five status-breakdown counts (plain, always-exact
+DB aggregates, combined with the caller's own filter via `AND`, never a shallow spread-merge that
+could silently overwrite an existing `rowStatus` filter) unconditionally. The three monetary sums
+(`totalEarnings`/`totalDeductions`/`netSalaryTotal`) are computed the same bounded way as §15.6's
+`netSalary` sort — fetched and summed via canonical `calcNet`/`sumMoney` only when the matching
+count is within the 20,000-row ceiling; beyond it, they are `null` with `totalsComputed: false`,
+visible and honest rather than a silently wrong or partial number.
+
+### 15.9 Performance evidence (measured, not assumed)
+
+Seeded 10 sites × 1,000 employees × 3 cycles = 30,000 real `PayrollEntry` rows (plus work lines)
+against the local dev database, then ran `EXPLAIN (ANALYZE, BUFFERS)` against the report's actual
+query shapes:
+
+| Query | Plan | Execution time |
+|---|---|---|
+| List, one site (3,000 of 30,000 rows matching), `ORDER BY cycle DESC ... LIMIT 25` | Uses `PayrollEntry_siteId_cycleId_idx` (Index/Bitmap Scan) | ~3–10ms |
+| Count, three sites (9,000 rows matching) | Uses `PayrollEntry_siteId_cycleId_idx` or `PayrollEntry_cycleId_siteId_idx` (Index Only Scan) — Postgres chose between the two composite indexes across repeated runs, both equally valid | ~2–4ms |
+| One employee across all cycles | Uses the pre-existing `PayrollEntry_employeeId_idx` | <0.1ms |
+| Full list-endpoint shape (count + paginated `findMany` with work lines), one site, page of 25 | — | 22–37ms |
+| Totals-shaped fetch: calc inputs for 9,000 matching rows, then real `calcNet`+`sumMoney` over all of them | — | ~500ms fetch + ~180ms compute ≈ **680ms total** |
+
+**The new `[siteId, cycleId]` index is confirmed used by the query planner** for the site-scoped,
+no-employee-filter query shape it was added for — the architectural claim in the Checkpoint 0
+review is now measured, not assumed.
+
+**Known limitation, disclosed rather than silently accepted**: §15.8's totals block is computed on
+**every** list request, not only exports — a list call whose filters still match a large row count
+(tens of thousands, up to the ceiling) pays the same `calcNet`-over-every-matching-row cost
+(extrapolating §15.9's measurement, roughly 1–1.5 seconds at the full 20,000-row ceiling) on every
+single page navigation, not only the first. This is a genuine, measured cost characteristic of the
+current design, not a bug — narrowing filters (by employee, site, or cycle range, all of which
+this report already supports) keeps it fast; an unfiltered "all employees, all history" browse at
+real 10,000-employee scale will feel this. Recorded as a candidate for a future checkpoint (e.g.
+making totals a separate, independently-cacheable call the frontend requests once per filter
+change rather than once per page) rather than fixed silently now, since it is an API-shape change
+beyond this checkpoint's own scope.
+
+This sandbox's single-node local Postgres (via `embedded-postgres`) is not a production-scale cloud
+database — these numbers are evidence of correct query-plan behavior and rough order of magnitude,
+not a production SLA guarantee.
