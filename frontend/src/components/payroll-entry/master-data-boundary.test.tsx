@@ -186,13 +186,23 @@ describe('Employee identity/banking cells are display-only', () => {
       expect(cell.querySelector('input')).toBeNull();
     }
   });
+
+  // Phase 7F (2026-08-04) — Gross Salary joins this same display-only tier; production UAT found
+  // it was the one master-data field Phase 7D's own pass missed.
+  it('grossPay renders as plain formatted text — no <input> in that cell', () => {
+    const entry = makeEntry({ grossPay: '45000' });
+    const { container } = renderRow(entry);
+    const cell = container.querySelector('[data-col-id="grossPay"]') as HTMLElement;
+    expect(cell.querySelector('input')).toBeNull();
+    expect(cell.textContent).toContain('45,000');
+  });
 });
 
 describe('Payroll-cycle financial fields and the EOBI toggle remain fully editable', () => {
   it('every legitimate payroll-entry financial field still renders an editable input', () => {
     const entry = makeEntry();
     const { container } = renderRow(entry);
-    for (const colId of ['grossPay', 'days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'remarks']) {
+    for (const colId of ['days', 'otHours', 'otRate', 'cycleDays', 'leaveDays', 'leaveRate', 'allowance', 'eobiAmount', 'advanceDeduction', 'eidAdvanceDeduction', 'fine', 'remarks']) {
       const cell = container.querySelector(`[data-col-id="${colId}"]`) as HTMLElement;
       expect(cell.querySelector('input')).not.toBeNull();
     }

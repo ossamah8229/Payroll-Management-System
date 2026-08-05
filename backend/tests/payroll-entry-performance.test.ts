@@ -244,9 +244,13 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
       const batchResults = await Promise.all(
         batch.map((entry, j) =>
           admin.agent
+            // Phase 7F (2026-08-04) — `allowance` stands in for `grossPay` here (which this suite
+            // used before `grossPay` became a read-only, Employee-Registry-sourced field); this
+            // test exercises the generic concurrent-distinct-row-write path, not anything specific
+            // to which field is edited.
             .patch(`/api/v1/payroll-entries/${entry.id}`)
             .set('x-csrf-token', admin.csrfToken)
-            .send({ version: entry.version, grossPay: String(31000 + i + j) }),
+            .send({ version: entry.version, allowance: String(31000 + i + j) }),
         ),
       );
       results.push(...batchResults);
@@ -261,7 +265,7 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
 
     for (let i = 0; i < targets.length; i += 1) {
       const fresh = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: targets[i]!.id } });
-      expect(Number(fresh.grossPay)).toBe(31000 + i);
+      expect(Number(fresh.allowance)).toBe(31000 + i);
     }
   });
 
@@ -269,22 +273,23 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
     const list = await admin.agent.get(`/api/v1/payroll-cycles/${cycleId}/entries?page=3&pageSize=1`);
     const entry = list.body.entries[0] as { id: string; version: number };
 
+    // Phase 7F (2026-08-04) — `allowance` stands in for `grossPay` here, same reason as above.
     const [a, b] = await Promise.all([
       admin.agent
         .patch(`/api/v1/payroll-entries/${entry.id}`)
         .set('x-csrf-token', admin.csrfToken)
-        .send({ version: entry.version, grossPay: '40001' }),
+        .send({ version: entry.version, allowance: '40001' }),
       admin.agent
         .patch(`/api/v1/payroll-entries/${entry.id}`)
         .set('x-csrf-token', admin.csrfToken)
-        .send({ version: entry.version, grossPay: '40002' }),
+        .send({ version: entry.version, allowance: '40002' }),
     ]);
 
     const statuses = [a.status, b.status].sort();
     expect(statuses).toEqual([200, 409]);
 
     const fresh = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
-    expect([40001, 40002]).toContain(Number(fresh.grossPay));
+    expect([40001, 40002]).toContain(Number(fresh.allowance));
     expect(fresh.version).toBe(entry.version + 1);
   });
 

@@ -5,6 +5,7 @@ import { prisma } from '../../lib/prisma';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
+import { withLiveMasterData } from './payroll-entry.service';
 
 /**
  * The Payroll Entry export template/header row (Phase 3 Checkpoint 5, `reference/PROJECT_SPEC.md`
@@ -57,7 +58,16 @@ function buildExportRow(entry: ExportEntry): string[] {
   return [
     entry.employee.cnic ?? '',
     entry.employee.employeeCode ?? '',
-    entry.employee.name,
+    // Phase 7F Refinement (2026-08-04) — was `entry.employee.name` (always the *live* Employee
+    // Registry name, unconditionally, even for a released/archived row) — the one export column
+    // that was never frozen at all, the opposite problem from `designation`/`grossPay` below (which
+    // were always frozen, even while still Draft). `employeeNameSnapshot` is what
+    // `withLiveMasterData` (applied in `resolveExportEntries`) already overlays with the live name
+    // while unreleased and leaves untouched once frozen at release — the same one column every
+    // other Employee Name read in this codebase (Payslips) already uses. The `?? entry.employee.name`
+    // fallback only ever matters for a pre-migration legacy row with a null snapshot
+    // (`database/payroll-entry.md §12`'s own note on this column's nullability).
+    entry.employeeNameSnapshot ?? entry.employee.name,
     entry.site.name,
     entry.designation,
     entry.grossPay.toString(),
@@ -89,6 +99,20 @@ export interface PayrollEntryExportResult {
  * function is paginated and single-`siteId`-scoped (the grid's own fetch shape) while export needs
  * every row across a caller-supplied *set* of sites in one pass, the same shape
  * `employees-import-export.service.ts`'s own `buildExportRows` needs from `listEmployees`.
+ *
+ * **Phase 7F Refinement (2026-08-04)** — every row now passes through the same
+ * `withLiveMasterData` overlay the Payroll Entry grid itself reads through, so an exported Draft
+ * row shows exactly the same `designation`/`grossPay`/`employeeNameSnapshot` values the on-screen
+ * grid currently shows (a corrected bank/salary/name in Employee Registry is reflected in the next
+ * export immediately, no separate resync) — closing the gap where export previously read the
+ * entry's own stored column directly, unconditionally, and could show a stale value the grid no
+ * longer did. A Released/Archived row is untouched by this (the same `released ||
+ * payoutOutcome !== null` gate `withLiveMasterData` already enforces everywhere else it's used) —
+ * its export row keeps reading the frozen, historical snapshot exactly as stored, exactly as
+ * before. No calculation is affected — this export has no computed/net-salary column, and
+ * `withLiveMasterData` itself never touches `calcNet` inputs beyond the display values it already
+ * overlays elsewhere in this codebase. Release semantics (`payroll-release.service.ts`) are
+ * entirely untouched by this change — this file has no write path of its own.
  */
 async function resolveExportEntries(
   currentUser: SessionUser,
@@ -102,11 +126,12 @@ async function resolveExportEntries(
   }
   const siteIdFilter = siteIds ?? (!isMasterAdmin(currentUser) ? currentUser.siteIds : undefined);
 
-  return prisma.payrollEntry.findMany({
+  const entries = await prisma.payrollEntry.findMany({
     where: { cycleId, ...(siteIdFilter && { siteId: { in: siteIdFilter } }) },
     include: { employee: true, site: true, workLines: { orderBy: { sortOrder: 'asc' } } },
     orderBy: { sortOrder: 'asc' },
   });
+  return entries.map((entry) => withLiveMasterData(entry));
 }
 
 export async function exportPayrollEntriesToCsv(

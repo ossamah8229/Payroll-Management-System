@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { PERMISSIONS, releaseProjectUnitSchema } from '@payroll/shared';
+import { PERMISSIONS, releaseAllSchema, releaseProjectUnitSchema } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
 import { badRequest } from '../../common/http-error';
-import { getUnitReleaseStatus, releaseProjectUnit } from './payroll-release.service';
+import { getUnitReleaseStatus, releaseAllEligible, releaseProjectUnit } from './payroll-release.service';
 
 function requireIdParam(id: string | undefined): string {
   if (!id) throw badRequest('id parameter is required');
@@ -65,3 +65,21 @@ payrollUnitReleasesRouter.post(
     }
   },
 );
+
+// Release All (Phase 7F, 2026-08-04) — same permission gate as a single Unit release; mounted at
+// the cycle level (not nested under a specific Unit) since its whole point is acting across many
+// Units at once. `releaseAllEligible` owns its own audit logging, same convention as
+// `releaseProjectUnit` above.
+payrollUnitReleasesRouter.post('/release-all', requirePermission(PERMISSIONS.PAYROLL_RELEASE), async (req, res, next) => {
+  try {
+    const cycleId = requireIdParam(req.params.cycleId);
+    const input = releaseAllSchema.parse(req.body ?? {});
+    const result = await releaseAllEligible(req.currentUser!, cycleId, input.siteId ?? undefined, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});

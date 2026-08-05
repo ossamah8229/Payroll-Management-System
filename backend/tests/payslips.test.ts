@@ -2,7 +2,7 @@ import AdmZip from 'adm-zip';
 import { PERMISSIONS, ROLE_CODES, MAX_BATCH_PAYSLIPS_PER_REQUEST, calcNet } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { closeBrowser } from '../src/lib/pdf/browser';
+import { closePdfRenderer } from '../src/lib/pdf/render-pdf';
 import * as payslipsService from '../src/modules/payslips/payslips.service';
 import { getPayslip, getPayslipsBulk } from '../src/modules/payslips/payslips.service';
 import { buildArchiveEntryName, slugify } from '../src/modules/payslips/payslips.routes';
@@ -65,7 +65,7 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
   afterAll(async () => {
     await cleanTestData();
     await prisma.$disconnect();
-    await closeBrowser();
+    await closePdfRenderer();
   });
 
   async function masterAdminAgent(email: string) {
@@ -1131,12 +1131,15 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
       // through the one shared browser instance (measured directly: shared-browser RSS grows to
       // ~600-700MB by the end of this test, against a baseline of well under 100MB), by far the
       // heaviest single consumer of that shared instance's resources anywhere in this file.
-      // Relaunching it here — rather than leaving every later test in this file to reuse the now
-      // much heavier instance — keeps this test's own outsized footprint from compounding into
-      // tests that have no reason to expect it, on a resource-constrained host. `closeBrowser()`
-      // (not a bare discard) is correct here specifically because this render just succeeded —
-      // there's a real, healthy browser to close cleanly, not a degraded one to abandon.
-      await closeBrowser();
+      // Relaunching it here — rather than leaving every later test to reuse the now much heavier
+      // instance — keeps this test's own outsized footprint from compounding into tests that have
+      // no reason to expect it. Phase 7H: `closePdfRenderer()` recycles whichever browser is
+      // actually rendering — in `NODE_ENV=test` that's the shared PDF test worker's own browser,
+      // reused across every suite in the whole run (not just this file), which makes recycling
+      // here matter even more than it did before. A clean close (not a bare discard) is correct
+      // specifically because this render just succeeded — there's a real, healthy browser to close
+      // cleanly, not a degraded one to abandon.
+      await closePdfRenderer();
     },
     120_000, // 300 real Puppeteer renders — generous, test-specific timeout (default is 15s)
   );

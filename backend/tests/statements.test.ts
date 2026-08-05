@@ -6,8 +6,8 @@ import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
 import { searchStatementEmployees } from '../src/modules/statements/statements.service';
 import { loadSessionUser } from '../src/modules/auth/auth.service';
-import { closeBrowser } from '../src/lib/pdf/browser';
 import * as renderPdfModule from '../src/lib/pdf/render-pdf';
+import { closePdfRenderer } from '../src/lib/pdf/render-pdf';
 import { cleanTestData, createAuthenticatedAgent } from './helpers';
 
 const app = createApp();
@@ -38,11 +38,11 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
   afterAll(async () => {
     await cleanTestData();
     await prisma.$disconnect();
-    // Phase 7B Checkpoint 1 — this file now also launches the shared Puppeteer singleton (PDF
-    // export tests, below); closing it here matches `browser.ts`'s own documented contract ("called
-    // from PDF-related test suites' own afterAll, so neither a real process exit nor a Jest run
-    // leaves an orphaned Chrome process") and mirrors `payslips.test.ts`'s identical call exactly.
-    await closeBrowser();
+    // Phase 7B Checkpoint 1 — this file also drives real Puppeteer PDF export tests, below;
+    // closing the shared renderer here mirrors `payslips.test.ts`'s identical call. Phase 7H:
+    // `closePdfRenderer()` (not `browser.ts`'s `closeBrowser()` directly) recycles whichever
+    // browser is actually rendering — in `NODE_ENV=test` that's the shared PDF test worker.
+    await closePdfRenderer();
   });
 
   // --- Agents --------------------------------------------------------------------------------

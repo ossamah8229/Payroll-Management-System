@@ -207,18 +207,12 @@ function PayrollEntryRowImpl({
     accountNumber: <ReadOnlyCell colId="accountNumber">{entry.accountNumber ?? '—'}</ReadOnlyCell>,
     iban: <ReadOnlyCell colId="iban">{entry.iban ?? '—'}</ReadOnlyCell>,
 
-    grossPay: (
-      <div role="cell" data-col-id="grossPay">
-        <InlineNumberCell
-          value={effectiveEntry.grossPay}
-          onChange={(v) => editor.setEntryField('grossPay', v)}
-          disabled={disabled}
-          invalid={!isValidDecimalDraft(effectiveEntry.grossPay, false)}
-          nav={nav('grossPay')}
-          ariaLabel={`Gross pay for ${entry.employee.name}`}
-        />
-      </div>
-    ),
+    // Master Data Boundary (Phase 7D, 2026-07-30; extended Phase 7F, 2026-08-04) — Gross Pay is
+    // Employee Registry's own data (same tier as designation/banking above), never independently
+    // editable here. While unreleased, the value shown is already the *live* Employee Registry
+    // value (`withLiveMasterData`, backend) — editing it in Employee Registry and refreshing this
+    // page is the only way to change it.
+    grossPay: <ReadOnlyCell colId="grossPay" align="right">{formatMoney(entry.grossPay)}</ReadOnlyCell>,
     units: (
       <div role="cell" data-col-id="units" className="flex items-center justify-center">
         <button

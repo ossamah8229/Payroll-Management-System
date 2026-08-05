@@ -332,6 +332,23 @@ during RC1 preparation (2026-07-19/20), not assumed.
   made (Employee Lookup, print support, import templates, and the RBAC module migration touch
   entirely different code paths) — recorded here since it's the same documented root cause, a new
   observed symptom of it.
+- **Update, 2026-08-04 (Phase 7H) — a second, distinct root cause identified for the PDF-suite
+  failures above; the query-count flake is unchanged and now tracked separately.** PR #6's CI
+  intermittently failed with `"Test environment has been torn down"` — traced (not inferred; full
+  reproduction record in `docs/PROJECT_PROGRESS.md`'s "Phase 7H" entry) to a Jest/
+  `--experimental-vm-modules` VM-lifecycle race: Jest disposes each test file's own VM realm
+  independently, and `browser.ts`'s dynamic `import('puppeteer')` can resolve *after* the realm
+  that started it is already gone, which Jest's own module registry rejects with that exact error
+  (`jest-util`'s `invariant()`, not application code). This is a **different** mechanism from the
+  resource-contention timeouts described above — it reproduced 90%+ of the time under concurrent
+  Jest-file load in direct testing, regardless of host memory headroom. **Fixed** by moving real
+  Puppeteer rendering to a persistent worker process (`backend/src/lib/pdf/worker/`) that is never
+  itself inside a Jest VM realm — structurally immune, not merely less likely to fail; see
+  `docs/architecture/testing.md`'s "Backend PDF test architecture" section for the full design.
+  Verified via 5× isolated + 5× combined + 3× full-backend-suite runs (3,843 total test
+  executions): zero recurrences, zero lingering processes. **This resolves the PDF-suite portion of
+  KI-10.** The off-by-one query-count flake (the bullet above this one) is unrelated to Puppeteer
+  entirely and was not touched — still open, still tracked here, unchanged status.
 
 ---
 
@@ -437,7 +454,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-7 | Concurrent first-contact CSRF race — intermittent login failure | No — **RESOLVED** 2026-07-23 (corrected design) |
 | KI-8 | Custom role with `sites:manage` could not see the Project Sites list | No — **RESOLVED** 2026-07-23 |
 | KI-9 | Roles & Permissions dialog excessive scrolling / frame desync | No — **RESOLVED** 2026-07-23 |
-| KI-10 | `payslips.test.ts` intermittent full-suite-load failures | No — **substantially improved** 2026-07-23, not claimed fully eliminated (see entry) |
+| KI-10 | `payslips.test.ts` intermittent full-suite-load failures | Partially — PDF/Jest-VM-teardown portion **RESOLVED** 2026-08-04 (Phase 7H, see entry); query-count portion still open |
 | KI-11 | `sites:manage` global authority missing from Unit read/create (KI-8 follow-up) | No — **RESOLVED** 2026-07-23 |
 | KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
 | KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |

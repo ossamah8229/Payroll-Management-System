@@ -75,25 +75,46 @@ function withCalc<T extends EntryWithWorkLines>(entry: T): T & { calc: CalcNetRe
 }
 
 /**
- * Master Data Boundary (Phase 7D, 2026-07-30) — Employee Registry is now the sole authoritative,
- * editable source for `designation`/`bankId`/`branchCode`/`accountNumber`/`iban`
- * (docs/architecture/database/employee.md); `updatePayrollEntrySchema` no longer accepts writes to
- * any of them. `PayrollEntry` still *stores* its own copy of these columns — that copy is what
- * gets frozen permanently at release time (`payroll-release.service.ts`'s `releaseProjectUnit`) so
- * Payslips/Bank Sheets/every other historical document keeps reading a stable, never-rewritten
- * snapshot (Principle 9) — but while an entry is still unreleased, that stored copy is no longer
- * the *display* source of truth. This overwrites it with the live `Employee` record on every read,
- * so a Draft/Open cycle always reflects whatever Employee Registry currently says (a corrected bank
- * account, a title change) the moment the page is refreshed — no separate "resync" action, and no
- * possibility of Payroll Entry silently showing a stale duplicate. Once `released = true` — or
- * once a Unit release sweep has otherwise *resolved* the entry without setting `released` itself
- * (`payoutOutcome = NO_PAY_DUE`/`RECOVERY_DUE`, the same "locked" tier `assertEntryEditable`/
- * `withReleaseBlockReasons` already treat identically to `released`) — this is a no-op: the
- * entry's own frozen columns (synced to Employee Registry's live values at the moment of that
- * resolution, `payroll-release.service.ts`) are returned exactly as stored, untouched by whatever
- * Employee Registry says today.
+ * Master Data Boundary (Phase 7D, 2026-07-30; extended Phase 7F, 2026-08-04) — Employee Registry is
+ * now the sole authoritative, editable source for `designation`/`bankId`/`branchCode`/
+ * `accountNumber`/`iban`/`grossPay`/employee name/father name (docs/architecture/database/
+ * employee.md); `updatePayrollEntrySchema` no longer accepts writes to any of them. `PayrollEntry`
+ * still *stores* its own copy of these columns — that copy is what gets frozen permanently at
+ * release time (`payroll-release.service.ts`'s `releaseProjectUnit`) so Payslips/Bank Sheets/every
+ * other historical document keeps reading a stable, never-rewritten snapshot (Principle 9) — but
+ * while an entry is still unreleased, that stored copy is no longer the *display* (or calculation)
+ * source of truth. This overwrites it with the live `Employee` record on every read, so a
+ * Draft/Open cycle always reflects whatever Employee Registry currently says (a corrected bank
+ * account, a title change, a revised Gross Salary) the moment the page is refreshed — no separate
+ * "resync" action, and no possibility of Payroll Entry silently showing (or calculating net salary
+ * from) a stale duplicate. Once `released = true` — or once a Unit release sweep has otherwise
+ * *resolved* the entry without setting `released` itself (`payoutOutcome = NO_PAY_DUE`/
+ * `RECOVERY_DUE`, the same "locked" tier `assertEntryEditable`/`withReleaseBlockReasons` already
+ * treat identically to `released`) — this is a no-op: the entry's own frozen columns (synced to
+ * Employee Registry's live values at the moment of that resolution, `payroll-release.service.ts`)
+ * are returned exactly as stored, untouched by whatever Employee Registry says today.
+ *
+ * **Phase 7F (2026-08-04)**: `grossPay`/`employeeNameSnapshot`/`fatherNameSnapshot` join this
+ * overlay — production UAT found Gross Salary specifically was missed by the Phase 7D pass (still
+ * a Draft-editable duplicated column, the reported defect); Employee Name/Father Name were already
+ * effectively live everywhere they're displayed (the grid reads `entry.employee.name` directly, a
+ * live join, never the snapshot column) but the *stored* snapshot columns themselves — which
+ * Payslip generation reads for a *released* entry — were never refreshed at read time or re-frozen
+ * at release, so a name/father-name change between entry creation and release would silently not
+ * appear on the eventual Payslip. Folded into this one function rather than a second one, since
+ * the gating condition (`released || payoutOutcome !== null`) is identical.
+ *
+ * **Exported (Phase 7F Refinement, 2026-08-04)** — CSV/Excel export
+ * (`payroll-entry-import-export.service.ts`) was found reading these same columns straight off the
+ * stored row, bypassing this overlay entirely; a Draft export could show a stale Gross
+ * Pay/Designation the on-screen grid no longer showed. Exporting this function (rather than
+ * re-deriving the same logic a second time) is the minimum-safe fix — same function, same
+ * `released || payoutOutcome !== null` gate, so a Released/Archived entry's export row is
+ * unaffected (still reads the frozen, historical columns exactly as stored) and calculations are
+ * untouched (this function never touches `calcNet`/`computeEntryCalc` inputs beyond the values it
+ * already overlays for on-screen display).
  */
-function withLiveMasterData<
+export function withLiveMasterData<
   T extends {
     released: boolean;
     payoutOutcome: string | null;
@@ -102,12 +123,18 @@ function withLiveMasterData<
     branchCode: string | null;
     accountNumber: string | null;
     iban: string | null;
+    grossPay: Prisma.Decimal;
+    employeeNameSnapshot: string | null;
+    fatherNameSnapshot: string | null;
     employee: {
       designation: string;
       bankId: string | null;
       branchCode: string | null;
       accountNumber: string | null;
       iban: string | null;
+      grossPay: Prisma.Decimal;
+      name: string;
+      fatherName: string | null;
     };
   },
 >(entry: T): T {
@@ -119,6 +146,9 @@ function withLiveMasterData<
     branchCode: entry.employee.branchCode,
     accountNumber: entry.employee.accountNumber,
     iban: entry.employee.iban,
+    grossPay: entry.employee.grossPay,
+    employeeNameSnapshot: entry.employee.name,
+    fatherNameSnapshot: entry.employee.fatherName,
   };
 }
 
@@ -557,12 +587,12 @@ export async function createPayrollEntry(
  *
  * Phase 7D (2026-07-30) — `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` deliberately
  * absent: `updatePayrollEntrySchema` no longer accepts them at all (Employee Registry is now the
- * sole editable source for these fields), so there is nothing for this mapper to translate. */
+ * sole editable source for these fields), so there is nothing for this mapper to translate.
+ * Phase 7F (2026-08-04) — `grossPay` removed the same way, for the same reason. */
 export function mapUpdateInputToEntryData(
   input: Omit<UpdatePayrollEntryInput, 'version'>,
 ): Prisma.PayrollEntryUncheckedUpdateInput {
   return {
-    ...(input.grossPay !== undefined && { grossPay: input.grossPay }),
     ...(input.allowance !== undefined && { allowance: input.allowance }),
     ...(input.leaveDays !== undefined && { leaveDays: input.leaveDays }),
     ...(input.leaveRate !== undefined && { leaveRate: input.leaveRate }),
@@ -688,7 +718,18 @@ export async function updatePayrollEntry(
       include: {
         workLines: WORK_LINES_INCLUDE,
         employee: {
-          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+          select: {
+            cnic: true,
+            employeeCode: true,
+            designation: true,
+            bankId: true,
+            branchCode: true,
+            accountNumber: true,
+            iban: true,
+            grossPay: true,
+            name: true,
+            fatherName: true,
+          },
         },
       },
     });
@@ -799,7 +840,18 @@ export async function addWorkLine(
       include: {
         workLines: WORK_LINES_INCLUDE,
         employee: {
-          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+          select: {
+            cnic: true,
+            employeeCode: true,
+            designation: true,
+            bankId: true,
+            branchCode: true,
+            accountNumber: true,
+            iban: true,
+            grossPay: true,
+            name: true,
+            fatherName: true,
+          },
         },
       },
     });
@@ -880,7 +932,18 @@ export async function updateWorkLine(
       include: {
         workLines: WORK_LINES_INCLUDE,
         employee: {
-          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+          select: {
+            cnic: true,
+            employeeCode: true,
+            designation: true,
+            bankId: true,
+            branchCode: true,
+            accountNumber: true,
+            iban: true,
+            grossPay: true,
+            name: true,
+            fatherName: true,
+          },
         },
       },
     });
@@ -941,7 +1004,18 @@ export async function deleteWorkLine(
       include: {
         workLines: WORK_LINES_INCLUDE,
         employee: {
-          select: { cnic: true, employeeCode: true, designation: true, bankId: true, branchCode: true, accountNumber: true, iban: true },
+          select: {
+            cnic: true,
+            employeeCode: true,
+            designation: true,
+            bankId: true,
+            branchCode: true,
+            accountNumber: true,
+            iban: true,
+            grossPay: true,
+            name: true,
+            fatherName: true,
+          },
         },
       },
     });

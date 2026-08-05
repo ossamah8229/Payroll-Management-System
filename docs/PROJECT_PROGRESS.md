@@ -8412,6 +8412,375 @@ No other report, Dashboard work, or unrelated module was started or modified.
 
 ---
 
+## Phase 7F — Payroll Workflow Integrity (2026-08-04)
+
+**Naming note**: "Phase 7F" is this checkpoint's own out-of-band requester label, not this
+roadmap's numbering — same convention already on record for "Phase 7D"/"Phase 8A"/"Phase 8B" in
+earlier addenda. The actual work spans this roadmap's Phase 4 (Salary Release), Phase 3 (Payroll
+Entry), and Phase 2 (Employee Registry) areas. **Phase 7D ("Master Data Boundary," 2026-07-30) is
+referenced throughout below as this checkpoint's own direct predecessor — it was never written up
+in this file at the time; a documentation gap this entry does not attempt to retroactively fill
+beyond what's needed to explain what Phase 7F itself changed.**
+
+Four objectives, all implemented, tested, and documented; **NOT committed, NOT pushed, NOT
+deployed — stopped deliberately for review, per explicit instruction.**
+
+### Objective 1 — Employee Registry as the authoritative Draft master-data source
+
+Production UAT found a real defect: editing Gross Salary in Employee Registry did not update an
+already-created, unreleased Payroll Entry. Investigation of the full Draft Payroll lifecycle found
+Phase 7D's own "Master Data Boundary" live-overlay (`withLiveMasterData`,
+`payroll-entry.service.ts`) and release-time freeze (`liveMasterByEntryId`,
+`payroll-release.service.ts`) already covered `designation`/`bankId`/`branchCode`/`accountNumber`/
+`iban` — `grossPay`, `employeeNameSnapshot`, and `fatherNameSnapshot` were the three fields that
+pass missed. Fixed by extending both mechanisms to all three: a Draft entry now always reflects
+Employee Registry's *live* value for Gross Salary/Name/Father Name (display **and** Net Salary
+calculation, via `computeEntryCalc`), removed from `updatePayrollEntrySchema`/
+`mapUpdateInputToEntryData` (PATCH silently strips them, same convention as the Phase 7D fields),
+and frozen from Employee Registry's *current* record at the moment of release (or its own
+Late/Straggler Sweep, Objective 3) rather than whatever the entry happened to be bootstrapped or
+last edited with. CNIC/Employee Code were confirmed already correct — never independently stored
+on `PayrollEntry`, always a live join — nothing to fix, only to verify. EOBI default applicability
+confirmed already correct via its own, deliberately different bidirectional-sync mechanism
+(`eobi-sync.service.ts`, Phase 7D) — `eobiApplicable` stays a genuine Payroll Entry toggle kept in
+sync with `Employee.defaultEobiApplicable`, not a read-time overlay; `eobiAmount` (the deduction
+figure) remains entirely Payroll-owned, untouched. Every Payroll-owned field (Worked Days, Work
+Lines, Overtime, Leave, Allowances, Advance/Eid Advance Deduction, Fines, Hold, Remarks, Manual
+EOBI Amount, Sort Order, Payout Outcome, Corrections, Balance Adjustments) confirmed to remain
+exactly as Draft-editable as before — verified by a dedicated regression test asserting the PATCH
+payload still applies every one of them, with `grossPay` removed from that same payload/assertion.
+Historical immutability verified explicitly: a released/archived entry's frozen columns never
+change when Employee Registry changes afterward (the same `released || payoutOutcome !== null`
+guard `withLiveMasterData` already used for the Phase 7D fields).
+
+**Known, documented limitation, not fixed**: Payroll Entry CSV/Excel export
+(`payroll-entry-import-export.service.ts`) and Backup Package generation (which reuses it) both
+read the entry's own stored column directly, bypassing the live overlay — mirrors a pre-existing,
+already-shipped, deliberately out-of-scope gap in Bank Sheet's own "Account Title" (Phase 8A
+Reports investigation). Left as a known limitation; fixing it touches export/backup infrastructure
+beyond this checkpoint's Payroll Entry/Salary Release scope. Bank Sheets/Cash Receiving themselves
+are unaffected by this gap — both are scoped to `released: true` entries only, which are always the
+correctly-frozen, immutable snapshot regardless.
+
+**Files**: `backend/src/modules/payroll-entry/payroll-entry.service.ts`,
+`backend/src/modules/payroll-release/payroll-release.service.ts`,
+`shared/src/schemas/payroll-entry.ts`, `frontend/src/components/payroll-entry/payroll-entry-row.tsx`,
+`columns.ts`, `calc-input.ts`, `frontend/src/hooks/use-payroll-entry-editor.ts`.
+
+**Tests**: new `backend/tests/payroll-entry-master-data-boundary-grosspay.test.ts` (6 tests — live
+Gross Salary sync + Net Salary recalculation, live Name/Father Name sync, CNIC/Employee Code
+already-live confirmation, PATCH-is-silently-ignored, release-time freeze from the *current*
+Employee record, released-entry immunity); three pre-existing tests updated for the intentional
+behavior change (`grossPay` no longer Draft-editable) — `payroll-entry-master-data-boundary.test.ts`,
+`payroll-cycle.test.ts` (the grossPay carry-forward test re-scoped to what's still genuinely
+Payroll-owned: EOBI/cycleDays/otRate), `payroll-cycle-archived-lock.test.ts`,
+`payroll-cycle-rollover.test.ts` (both swapped to a still-editable field, `allowance`/`fine`, since
+their own actual concern — editability-after-Finalize, Backup Package freshness — was never about
+`grossPay` specifically); two frontend test files updated the same way
+(`master-data-boundary.test.tsx`, `use-payroll-entry-editor.test.tsx`).
+
+### Objective 2 — Release All
+
+New bulk release action, scoped to one Project Site or "All Sites" (every Site the caller can
+access — every Site for a Master Admin, exactly the caller's own assigned Sites otherwise, never
+wider than the existing Site filter's own RBAC scope). Backend: `releaseAllEligible`
+(`payroll-release.service.ts`), a new `POST /api/v1/payroll-cycles/:cycleId/units/release-all`
+route. **Introduces no second release mechanism** — loops the exact same, unmodified
+`releaseProjectUnit` once per not-yet-released Unit in scope, so every existing guarantee (lock
+ordering, per-outcome master-data freeze, duplicate-identity blocking, correction/advance
+settlement, audit trail) applies identically to a Release All-triggered release as to a manual one.
+
+**Transaction strategy — one transaction per Project Unit, sequential, never one giant transaction,
+never one per employee** (full reasoning in the function's own doc comment and
+`docs/architecture/workflows/payroll-lifecycle.md`): a single transaction spanning the whole scope
+risks exceeding the platform's transaction timeout at scale, holds the cycle-level lock for the
+entire sweep's duration (blocking every concurrent edit/release against the cycle), and would roll
+back every already-processed Unit if any single Unit anywhere in scope failed. Per-Unit reuses the
+already-proven transaction boundary, bounds blast radius to one Unit's own headcount, and means one
+Unit's genuine failure never touches another Unit's already-committed result — the loop catches
+each Unit's own outcome independently and continues. Concurrency is a non-factor for parallelizing
+Units instead: every `releaseProjectUnit` call already takes the cycle-level lock first, so
+concurrent Unit releases against the same cycle already fully serialize at the database level.
+
+Eligibility skips (Already Released, Hold, Recovery Due/No Payout already resolved) are enforced by
+reusing `releaseProjectUnit`'s own existing candidate query and eligibility function — no
+duplicated logic. Summary reports `releasedEntryCount` / `noPayDueCount` / `recoveryDueCount` /
+`blockedCount` (+ `blockedEntries`, each tagged with its own Unit/Site) / `heldEntryCount`
+(informational, computed once upfront — Held entries never move during the sweep) /
+`unitsReleased` / `unitsAlreadyReleased` / `unitsFailed` (+ `failedUnits`, each with its own error)
+— presented in the UI as "N Released / N Held / N Recovery Due / N No Payout / N Failed," matching
+the requested wording. A genuine per-Unit technical failure is reported and skipped without
+rolling back or blocking any other, already-succeeded Unit in the same call — verified by a test
+that forces one specific Unit's own lookup to throw, confirming the other Units still commit and
+the failed Unit can be retried cleanly afterward.
+
+**Files**: `backend/src/modules/payroll-release/payroll-release.service.ts`,
+`payroll-release.routes.ts`, `shared/src/schemas/payroll-release.ts`,
+`frontend/src/hooks/use-payroll-release.ts`, `frontend/src/routes/salary-release-page.tsx`.
+
+**Tests**: new `backend/tests/payroll-release-all.test.ts` (13 tests — Single Site, All Sites,
+non-Master-User "All Sites" RBAC scoping, skip Hold, skip already-Released (idempotent re-call),
+skip already-resolved No Payout/Recovery Due, partial success (one Unit already released
+concurrently), rollback isolation (one Unit's genuine technical failure, verified not to affect or
+roll back the others, then retried successfully), blocked-entry aggregation across Units/Sites,
+RBAC rejection, non-Draft-cycle rejection, empty-scope well-formed zero result).
+
+### Objective 3 — Hold Workflow Verification
+
+Full audit of the documented lifecycle (Draft → Hold OFF → releasable → Hold ON → excluded →
+release remaining → Site status → later Hold OFF → releasable again → only that employee releases
+→ Site status updates correctly). The mechanics were already correct through "release remaining" —
+`releaseProjectUnit`'s candidate query already excludes `hold: true`, and a held entry stays
+ordinarily editable right up until it locks (`assertEntryEditable`). Two real gaps found and fixed:
+
+1. **`getUnitReleaseStatus`'s `willReleaseCount` included Held entries** — never excluded them,
+   overstating "will release now" in the Release confirmation dialog. Fixed to match
+   `releaseProjectUnit`'s own candidate query exactly; a new `heldCount` field surfaces the
+   excluded count explicitly rather than folding it silently into "remain pending." The
+   confirmation dialog and per-Unit table both now show Held separately from "split across other
+   Units," with distinct, accurate copy for each reason.
+2. **The final documented step — un-Hold *after* the Unit already released — had no path back to
+   release at all.** `releaseProjectUnit` unconditionally rejected a second call against an
+   already-released Unit with a 409, regardless of whether anything had since become newly
+   eligible; this is the "Late Entry" gap every prior checkpoint's own doc comments documented as
+   explicitly deferred. Closed as a **Late/Straggler Sweep**: a second call against an
+   already-released Unit is now accepted specifically when there's a newly-eligible straggler (no
+   new `PayrollUnitRelease` row is written — still insert-once, still no "un-release," Principle
+   9), and still rejected with the identical 409 when there genuinely isn't anything new — verified
+   this doesn't regress the existing "double-click" 409 test, and doesn't prematurely resolve a
+   straggler still waiting on a *different*, still-unreleased Unit (the same multi-Unit wait rule
+   a fresh release already enforces). A dedicated `payroll_unit.late_sweep` audit entry,
+   tagged with the original release's own id, distinguishes it from the original event in history.
+   The Salary Release page surfaces this as a distinctly-labeled "Release Remaining" action
+   (`willReleaseCount > 0` now correctly reappears even on an already-Released Unit).
+   `getUnitReleaseStatus`'s own `willReleaseCount` computation needed the matching fix (it was
+   hard-zeroed for any already-released Unit) for the action to ever become visible again.
+   **Release All does not itself proactively hunt for late-sweep stragglers among already-released
+   Units** — a deliberate, documented scope boundary; the per-Unit "Release Remaining" action
+   covers the documented scenario.
+
+**Files**: `backend/src/modules/payroll-release/payroll-release.service.ts`,
+`frontend/src/hooks/use-payroll-release.ts`, `frontend/src/routes/salary-release-page.tsx`.
+
+**Tests**: new `backend/tests/payroll-hold-workflow.test.ts` (4 tests — the full documented
+lifecycle end to end including two full release cycles and an audit-trail assertion; the
+Late/Straggler Sweep's own "nothing new eligible" 409 non-regression; a split-across-two-Units
+straggler correctly waiting for its second Unit before a late sweep can resolve it; Site status
+derivation across the whole lifecycle: Draft → fully released with a residual Held entry →
+straggler resolved → fully released with nothing outstanding).
+
+### Objective 3 (continued) — Partial Release Status
+
+Investigation found no Site-level release status existed anywhere before this checkpoint — only
+the per-Unit Released/Pending table. Added a derived, purely client-side "Draft / Partially
+Released / Held Remaining / Released" summary badge, computed from the same already-fetched
+per-Unit list (`SiteReleaseStatusBadge`, `salary-release-page.tsx`) — no new backend endpoint,
+nothing stored (Principle 5). The per-Unit table remains the authoritative detail view; the badge
+is a summary, shown next to the existing Cycle status badge.
+
+### Objective 4 — Edge-case audit
+
+**Hold → Released → Hold removed → release remaining salary**: this is exactly the Late/Straggler
+Sweep above, verified end to end. **Recovery Due / No Payout**: verified unaffected by every
+change above — `payroll-release-negative-salary.test.ts` and
+`payroll-release-recovery-accounting.test.ts` (pre-existing, unmodified) pass unchanged; Release
+All's own eligibility classification reuses the identical canonical function, verified by dedicated
+NO_PAY_DUE/RECOVERY_DUE tests in `payroll-release-all.test.ts`. **Balance Payable / Corrections /
+Balance Adjustments**: unmodified by this checkpoint; every Corrections/Balance-Adjustments test
+suite (`corrections-*.test.ts`) confirmed passing unchanged in the full regression run below —
+Corrections only ever operate on released entries, whose frozen columns are unaffected by the
+Draft-time live-overlay changes (the same `released` guard excludes them). **Bank Sheets/Cash
+Receiving/Payslips/Statements**: confirmed scoped to `released: true` entries only, so unaffected
+by the Draft-time live-overlay change and, for Payslips specifically, *more* correct than before —
+Payslip's `employeeNameSnapshot`/`fatherNameSnapshot` now freeze at release time rather than
+staying stuck at whatever Employee Registry said at entry creation, potentially weeks or cycles
+earlier.
+
+### Phase 7F Refinement (2026-08-04, same day) — CSV/Excel export live overlay + Release Remaining idempotency tests
+
+Two follow-up items from review, before landing.
+
+**1. Payroll Entry CSV/Excel export master-data consistency.** Investigation found export
+(`payroll-entry-import-export.service.ts`'s `resolveExportEntries`/`buildExportRow`) read the
+entry's own *stored* `designation`/`grossPay` columns directly, bypassing the live-overlay
+Objective 1 already applies to the on-screen grid — a Draft export could show a stale Gross
+Salary/Designation the grid no longer showed. A second, independent, pre-existing defect was also
+found in the same function: the export's "Name" column read `entry.employee.name` (always the
+*live* Employee Registry name, unconditionally) rather than the frozen `employeeNameSnapshot` — the
+opposite problem, never frozen even for a Released/Archived row. **Minimum-safe fix**: exported the
+existing, already-proven `withLiveMasterData` (`payroll-entry.service.ts`) rather than re-deriving
+the same logic a second time; applied it to every entry `resolveExportEntries` returns, and changed
+the Name column to read `entry.employeeNameSnapshot ?? entry.employee.name` (matching Payslip's own
+existing convention for this exact column). Same function, same `released || payoutOutcome !==
+null` gate — a Released/Archived export row is completely unaffected (still reads the frozen,
+historical columns exactly as stored). No calculation touched (this export has no computed/net-
+salary column). No Release semantics touched (`payroll-release.service.ts` untouched by this item).
+Backup Package generation (which reuses this same export function) inherits the fix automatically
+— consistent with, not a change to, how a still-unresolved (Held) entry surviving into a Released/
+Archived cycle already behaves everywhere else in this codebase (the live overlay's own guard is
+entry-level — `released`/`payoutOutcome` — not cycle-level, by existing design). **Files**:
+`payroll-entry.service.ts` (exported `withLiveMasterData`), `payroll-entry-import-export.service.ts`.
+**Tests**: two new tests in `payroll-entry-import-export.test.ts` — a Draft export reflecting a live
+Employee Registry edit (Gross Pay/Designation/Name), and a Released export staying frozen after a
+later Employee Registry edit. Existing export/Backup Package tests (`payroll-entry-import-export.test.ts`'s
+other 4, `payroll-cycle-rollover.test.ts`'s Backup Package suite, `backup-packages.test.ts`)
+confirmed unaffected.
+
+**2. Release Remaining idempotency test.** New end-to-end test in `payroll-hold-workflow.test.ts`:
+hold → release remaining → un-hold → Release Remaining → Release Remaining again, asserting the
+second call 409s and every observable surface is byte-for-byte unchanged from immediately after the
+first successful sweep — `PayrollUnitRelease` row count, `payroll_unit.late_sweep`/
+`payroll_entry.released` audit-log counts, the entry's own row (`version`/`releasedAt`), Bank
+Sheet's row for the entry (count and `netSalary`), Cash Receiving's row count, a real Payslip PDF
+generation (still succeeds cleanly, not corrupted), and the Statement ledger (still exactly one
+line, byte-identical JSON). Confirms no duplicate release, no duplicate audit trail, and no
+downstream document duplication — Bank Sheet/Cash Receiving/Statement are all derived on demand
+from `PayrollEntry` state (never separately persisted), so proving that state is untouched by the
+second call is the direct, sufficient proof none of them can duplicate anything either; the test
+still calls each one directly rather than only asserting the underlying state, matching this
+codebase's own "real integration test, not just a state-proof" convention.
+
+**Testing-infrastructure finding, not a logic defect**: this new test's two real Payslip PDF
+generations (genuine Puppeteer/Chrome renders) exposed `payroll-hold-workflow.test.ts` to the exact
+same measured resource-contention fragility `payslips.test.ts` already has its own documented,
+file-scoped `jest.setTimeout(45000)` for (see that file's own comment for the original measured
+evidence) — reproduced once under a full 66-suite run (a 500 from the Payslip PDF route, not merely
+a slow response), confirmed absent both in isolation and in a second full-suite run after applying
+the identical, already-established mitigation to this file too. Same proportionate response, not a
+new pattern.
+
+### Regression / Testing
+
+Full backend suite, full frontend suite, repo-wide typecheck, lint, and build all re-run after
+every change in this checkpoint and again after the refinement above. See
+`docs/SESSION_HANDOFF.md`'s own Phase 7F addendum for the exact final counts from the last clean
+run, including the refinement's own re-verification. No Report or Dashboard work was started.
+
+**No commit, push, or deployment occurred — stopped deliberately for review, per explicit
+instruction.**
+
+---
+
+## Phase 7G — CI Stability Remediation (2026-08-04)
+
+Phase 7F's PR #6 was blocked by a CI failure in `payroll-hold-workflow.test.ts`'s "Release
+Remaining idempotency" test — a Payslip PDF route returning 500. Investigation found two concrete,
+in-scope defects, both fixed and committed:
+
+1. `payroll-hold-workflow.test.ts` rendered real Puppeteer PDFs but never called `closeBrowser()`
+   in its own `afterAll`, unlike every other real-Puppeteer suite — confirmed directly to leave a
+   live, `ESTABLISHED` Chrome DevTools-Protocol WebSocket open after all 5 tests had already passed,
+   which is why Jest never exited on its own afterward. Fixed: `afterAll` now closes the browser in
+   a `finally`, matching the established pattern. Commit `cd71b5d`.
+2. `backend/src/lib/logger.ts` silences all logs when `NODE_ENV=test`, so the real exception behind
+   a PDF-route 500 was invisible in CI — grepping a full CI log for an actual occurrence found no
+   trace of it. Fixed with one narrow, additive diagnostic in `render-pdf.ts`: when
+   `renderHtmlToPdf`'s one built-in retry is also exhausted, a single structured `console.error`
+   (already allowed by `no-console`) reports the error's own name/message/stack — never the
+   rendered HTML or PDF options, which can carry real payroll data — only in `NODE_ENV=test`, never
+   touching the shared logger's own config. Commit `15a3776`.
+
+This immediately paid off: the very next CI run reproduced the PDF failure again, and the new
+diagnostic captured the real exception for the first time — `"Error: Test environment has been torn
+down"` — a Jest/VM-lifecycle signature, not a payroll defect. That finding is what Phase 7H (below)
+investigates and fixes. PR #6 remained blocked, unmerged, per this checkpoint's own explicit
+instruction not to guess or re-run indefinitely.
+
+---
+
+## Phase 7H — Permanent PDF Test Infrastructure Stabilisation (2026-08-04)
+
+**Objective**: resolve the `"Test environment has been torn down"` failure Phase 7G's diagnostic
+surfaced, permanently, and unblock PR #6. Investigation-first, per explicit instruction — no
+architecture chosen before empirical reproduction.
+
+### Root cause (proven, not inferred)
+
+A minimal reproduction matrix was built for five call paths (direct `renderHtmlToPdf()`, the
+`renderPayslipPdfBuffer()` service call, the real HTTP route via supertest, a standalone
+`node`/`tsx` script outside Jest entirely, and a child process spawned from a Jest test):
+
+- **Outside Jest** (standalone `tsx` script, 20 real renders): **20/20 succeeded**, every time —
+  the production render pipeline itself was never the problem.
+- **Direct in-Jest calls, run alongside many sibling files under `--runInBand`** (40 throwaway test
+  files, each independently calling `renderHtmlToPdf()`): **37/40 and 18/20 failed** across two
+  stress runs, always with the identical stack trace — through `jest-util`'s own `invariant()`,
+  called from inside the `eval`'d dynamic `import('puppeteer')` at `browser.ts`'s documented
+  ESM-interop workaround, inside `launchBrowser()`. Never application code.
+- **A child process spawned from a Jest test, given the same work, under the identical concurrent
+  stress**: **10/10 succeeded**.
+
+Mechanism: `browser.ts`'s `new Function('return import("puppeteer")')` (required because Puppeteer
+22+ ships ESM-only against this backend's CommonJS compile target — see that file's own existing
+comment) is a genuine, sometimes-slow native Node operation. Jest's `--experimental-vm-modules`
+mode gives every test *file* its own disposable VM realm, torn down independently once that file's
+tests finish. Under real concurrent load (many files each racing through this same dynamic import
+around the same time), the import can resolve *after* Jest has already torn down the realm that
+started it — a scheduling race on Jest's own side, not a missing `await` in application code (the
+full `renderHtmlToPdf → renderOnce → getBrowser` chain was re-verified, correctly awaited
+top-to-bottom). `--experimental-vm-modules` cannot be removed without breaking Puppeteer loading
+entirely (it's what makes the ESM-interop workaround reach Node's real loader at all), so no
+config-level fix was viable — confirming an architectural fix was required.
+
+### Architecture chosen: persistent PDF test worker (Option B)
+
+A dedicated child process (`backend/src/lib/pdf/worker/`) that is never itself inside a Jest VM
+realm — structurally immune to the race, not merely less likely to hit it. `render-pdf.ts`'s
+`renderHtmlToPdf()` delegates to it whenever `NODE_ENV=test` (every Jest run, local and CI);
+`development`/`production` are completely unchanged. The worker imports and calls the exact same
+`renderOnce()`/`browser.ts` code Jest's own real-Puppeteer suites already used, not a
+reimplementation — production rendering output is identical either way. Full design, ownership/
+cleanup model, and observability strategy: `docs/architecture/testing.md`'s "Backend PDF test
+architecture" section.
+
+**Two real bugs found and fixed while stress-testing this architecture itself** (both about Chrome
+specifically outliving the process meant to own it, confirmed directly via `ps -eo pid,ppid,pgid`):
+a duplicate-spawn race (the client's own liveness check could false-negative under load, letting a
+second worker steal the socket from a healthy first one — fixed by making the worker's own startup
+bind-first and reserve the liveness check for a genuine `EADDRINUSE`), and an orphaned-Chrome leak
+(Puppeteer launches Chrome detached into its **own** OS process group, separate from the worker's —
+so `browser.close()` not fully terminating every Chrome helper process left true orphans with
+nothing left to clean them up; fixed with a tracked-pid backstop kill on shutdown/recycle, plus a
+sweep for any orphan left by a hard-killed previous worker generation on the next spawn).
+
+### Verification
+
+Each real-Puppeteer suite in isolation ×5, all real-PDF suites together ×5, full backend suite ×3
+(3,843 total test executions across the three full runs): **zero
+`"Test environment has been torn down"` occurrences, zero lingering Chrome/CDP/worker processes
+after any run.** The one failure across all of this repetition was `corrections-service.test.ts`'s
+already-documented, unrelated concurrency-timing flake (see that file's own history above) —
+confirmed unrelated to PDF rendering and not misclassified as one. The query-count flake (KI-10,
+`docs/release/KNOWN_ISSUES_v1.0.md`) did not recur in this checkpoint's runs; it is unchanged and
+still open — not touched, per explicit instruction not to weaken it.
+
+### Files
+
+New: `backend/src/lib/pdf/worker/{protocol,pdf-worker.entry,pdf-worker-client}.ts`,
+`backend/src/lib/pdf/normalize-error.ts`, `backend/tests/globalTeardown.ts`,
+`backend/tests/pdf-worker-infrastructure.test.ts`, `backend/tests/pdf-worker-timeout.test.ts`.
+Modified: `backend/src/lib/pdf/render-pdf.ts` (worker delegation, stage tracking, retry logic
+extracted into `renderWithOneRetry` for direct testability), `backend/src/lib/pdf/browser.ts`
+(added `peekBrowserProcessPid()` — read-only introspection only, no behavior change),
+`backend/jest.config.js` (`globalTeardown`), `backend/tests/{payslips,statements,
+payroll-hold-workflow}.test.ts` (`closeBrowser()` → `closePdfRenderer()`, since rendering now
+happens in the shared worker, not each file's own in-process singleton),
+`backend/tests/pdf-render-diagnostics.test.ts` (rewritten against the extracted
+`renderWithOneRetry`, since the public `renderHtmlToPdf` now delegates to the worker in
+`NODE_ENV=test` and can no longer be unit-tested by mocking `browser.ts` directly). No payroll
+business logic, Reports, or Dashboard code touched.
+
+### Regression / Testing
+
+Typecheck, lint, backend build, frontend build all clean. Full detail and exact counts in the
+"Backend PDF test architecture" section referenced above.
+
+**No commit yet as of this entry — see below for the commit SHAs once applied.** No merge,
+deployment, or new checkpoint began. PR #6 status and the GitHub Actions result are recorded in
+this checkpoint's own final report, not duplicated here.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

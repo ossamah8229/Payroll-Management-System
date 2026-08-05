@@ -33,9 +33,9 @@ type LineDraft = Partial<Pick<UpdateWorkLineInput, 'unitId' | 'days' | 'otHours'
  * (every other numeric field). Non-decimal keys (hold, remarks, …) pass through
  * `sanitizeEntryDraft` unchanged — there is nothing to validate. (Phase 7D, 2026-07-30:
  * `designation`/`bankId`/`branchCode`/`accountNumber`/`iban` are no longer part of `EntryDraft` at
- * all — Employee Registry is now the sole editable source for them.) */
+ * all — Employee Registry is now the sole editable source for them. Phase 7F, 2026-08-04: `grossPay`
+ * removed the same way, for the same reason.) */
 const ENTRY_DECIMAL_FIELDS: { key: keyof EntryDraft; nullable: boolean }[] = [
-  { key: 'grossPay', nullable: false },
   { key: 'allowance', nullable: false },
   { key: 'leaveDays', nullable: false },
   { key: 'leaveRate', nullable: true },

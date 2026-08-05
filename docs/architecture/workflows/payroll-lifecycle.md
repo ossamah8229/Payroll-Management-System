@@ -57,6 +57,46 @@ Archived (Locked)
   - Payroll editing is allowed (all Payroll Entry fields, per employee) for any entry not yet
     released. Payroll managers (Payroll Staff, Master User) may freely edit any not-yet-released
     entry — this is unchanged and was never locked to only "before some deadline."
+  - **Employee Registry is the sole editable source for employee master data while an entry is
+    Draft (Master Data Boundary, Phase 7D 2026-07-30, extended Phase 7F 2026-08-04).** Employee
+    Name, Father Name, Employee Code, CNIC, Designation, Gross Salary, Bank, Branch Code, Account
+    Number, and IBAN are never independently Draft-editable on `PayrollEntry` itself — `PATCH
+    /payroll-entries/:id` no longer accepts any of them (silently stripped, not an error, so an old
+    client or a stale cached form degrades gracefully). `PayrollEntry` still stores its own copy of
+    each (`database/payroll-entry.md §12`'s "copied, not linked" columns), but that copy is
+    overwritten with Employee Registry's *live* value on every read while the entry is unreleased
+    (`payroll-entry.service.ts`'s `withLiveMasterData`) — a correction made in Employee Registry
+    (a bank account fix, a Gross Salary revision, a name correction) is reflected in every
+    still-Draft cycle's own Payroll Entry the moment the page is next loaded, with no separate
+    "resync" action and no possibility of a stale duplicate silently surviving. This also feeds
+    live into the entry's own Net Salary calculation (`computeEntryCalc`) up until the moment of
+    release — the production defect this closed: editing Gross Salary in Employee Registry
+    previously had no effect on an already-created, unreleased Payroll Entry. CNIC and Employee
+    Code were never independently stored on `PayrollEntry` at all — every read already joins
+    `Employee` live, so there was nothing to fix for those two specifically, only to verify.
+    EOBI applicability is the one deliberate, permanent exception: it stays a genuine Payroll
+    Entry-owned toggle (`eobiApplicable`), kept in sync with `Employee.defaultEobiApplicable` by a
+    bidirectional write on whichever side changes it (`eobi-sync.service.ts`), not a read-time
+    overlay — `eobiAmount` (the deduction figure) is entirely Payroll-Entry-owned and never
+    synchronized either direction. Worked Days, Work Lines, Overtime, Leave, Allowances, Advance/
+    Eid Advance Deduction, Fines, Hold, Remarks, Manual EOBI Amount, Sort Order, and every
+    Corrections/Balance Adjustment figure remain exactly as Draft-editable as before — this
+    boundary is scoped strictly to employee *identity/payment-destination/compensation* data, never
+    a payroll-cycle-specific figure. **Historical freeze**: at the moment a Unit release (or its own
+    Late/Straggler Sweep, below) resolves an entry, every one of these fields is written onto the
+    entry's own stored column one final time from Employee Registry's *then-current* value —
+    permanently, never re-synchronized again regardless of any later Employee Registry edit
+    (`payroll-release.service.ts`'s `liveMasterByEntryId`). A Payslip/Bank Sheet/Cash Receiving
+    Sheet generated for a released entry therefore reflects Employee Registry's value *as of
+    release*, not at Draft-entry creation weeks or months earlier, and never drifts again after
+    that. **Known gap, not fixed by this checkpoint**: the Payroll Entry CSV/Excel export
+    (`payroll-entry-import-export.service.ts`) and Backup Package generation (which reuses it) both
+    read the entry's own *stored* column directly, bypassing the live overlay — an unreleased
+    entry's export can still show a stale value the on-screen grid no longer shows. This mirrors a
+    pre-existing, already-shipped, deliberately out-of-scope gap in Bank Sheet's own "Account
+    Title" (documented in the Phase 8A Reports investigation) — left as a known limitation rather
+    than expanded into here, since fixing it touches export/backup infrastructure beyond this
+    checkpoint's Payroll Entry/Salary Release scope.
   - **Release now happens per Project Unit, not per Site (revised 2026-07-05).** Finance (a new role,
     see `docs/architecture/authentication.md`) executes "Release Unit X," inserting a
     `PayrollUnitRelease` row (`database/release.md §12b`) for `(cycleId, unitId)`. This immediately
@@ -65,6 +105,63 @@ Archived (Locked)
     salary / one Bank Sheet row even for a genuinely split employee (Principle 1, Principle 6). Finance
     may release a Unit immediately or wait for client funding to arrive — there is no forced timing,
     and different Units within the same Site or Cycle may release on entirely different days.
+  - **Release All (Phase 7F, 2026-08-04).** A bulk counterpart to releasing one Unit at a time,
+    scoped to a chosen Project Site or to every Site the caller can access ("All Sites" — every
+    Site in the system for a Master Admin, exactly the caller's own assigned Sites otherwise, never
+    wider than the RBAC scope the ordinary Site filter already enforces). Introduces no second
+    release mechanism: it loops the exact same, unmodified `releaseProjectUnit` once per
+    not-yet-released Unit in scope — every guarantee below (lock ordering, eligibility, historical
+    freeze, correction/advance settlement, audit trail) applies identically to a Release
+    All-triggered release as to a manual one. **Transaction strategy: one transaction per Project
+    Unit, sequential, never one giant transaction and never one per employee** — a single
+    transaction spanning the whole scope would risk exceeding the platform's own transaction
+    timeout at scale, hold the cycle-level lock for the entire sweep's duration blocking every
+    concurrent edit/release against the cycle, and roll back every already-processed Unit if any
+    single Unit anywhere in scope failed; per-Unit is the smallest boundary that's both correct
+    (preserves the "every touched Unit must release before an entry does" rule) and already
+    proven, and keeps one Unit's genuine failure from touching any other Unit's already-committed
+    result. Concurrency is a non-factor for parallelizing Units instead — every `releaseProjectUnit`
+    call already takes the cycle-level lock first, so concurrent Unit releases against the same
+    cycle already fully serialize at the database level regardless. Reports "N Released / N Held /
+    N Recovery Due / N No Payout / N Needs Attention / N Failed," continuing past any single Unit's
+    failure or "already released, nothing new" skip rather than aborting the whole call
+    (`payroll-release.service.ts`'s `releaseAllEligible`).
+  - **Late/Straggler Sweep (Hold Workflow Verification, Phase 7F, 2026-08-04)** — closes a real,
+    previously-open gap this checkpoint's own Hold-workflow audit found, distinct from both the
+    "Late Entry exception" and the "no post-finalization release path" gap documented further
+    below: an entry **Held at the moment its Unit originally released**, later un-Held while the
+    Cycle is still `Draft`, had no path back to being released for the rest of that Cycle's life —
+    `releaseProjectUnit` unconditionally rejected any second call against an already-released Unit
+    with a 409, regardless of whether something had since become newly eligible. Calling it again
+    is no longer an unconditional rejection: if the Unit already has its own `PayrollUnitRelease`
+    row, the call is treated as a **sweep for newly-eligible stragglers only** — no second
+    `PayrollUnitRelease` row is written (still insert-once, still no "un-release," Principle 9), and
+    every entry already resolved by the original release is completely untouched — but any entry
+    that has since become eligible (Held removed, and every Unit it touches now released) is swept
+    exactly as it would have been had it never been Held. If nothing is newly eligible (the ordinary
+    "clicked Release twice by mistake" case), this still rejects with the exact same 409 as before —
+    the error contract for that case is unchanged. A dedicated `payroll_unit.late_sweep` audit
+    entry, tagged with the same original `PayrollUnitRelease` id, records exactly which entries a
+    late sweep resolved, distinguishing it from the original release event in history. The Salary
+    Release page surfaces this as a **"Release Remaining"** action (distinct label from "Release")
+    on a Unit that already shows Released but still has a newly-eligible straggler
+    (`getUnitReleaseStatus`'s own `willReleaseCount`, which — also fixed by this checkpoint — no
+    longer hard-zeroes itself just because the Unit already released, and no longer counts a
+    currently-Held entry as "will release now" either; a Held entry's own count is now reported
+    separately via `heldCount`, never silently folded into "remain pending"). **Release All does
+    not itself proactively hunt for late-sweep stragglers among already-released Units** — it
+    processes not-yet-released Units only; a straggler is retrieved via the per-Unit "Release
+    Remaining" action (or a future Release All enhancement). This is a deliberate, documented scope
+    boundary, not an oversight.
+  - **Partial Release Status (Phase 7F, 2026-08-04)** — the Salary Release page's per-Unit table
+    (Released/Pending per Unit) is still the authoritative detail view; a derived, purely
+    client-side "Draft / Partially Released / Held Remaining / Released" summary badge was added
+    for the Site currently selected, computed from that same already-fetched per-Unit list (no new
+    backend endpoint, nothing stored) — investigation found no Site-level status existed anywhere
+    before this checkpoint, only the per-Unit rows. `Released` when every Unit at the Site has
+    released; `Held Remaining` (or `Partially Released — Held Remaining`) when nothing further can
+    release right now purely because everything left is Held; `Partially Released` when some Units
+    have released and others genuinely still await ordinary work (not just Hold); `Draft` otherwise.
   - **"Ready for Release" (`PayrollUnitReadiness`, `database/release.md §12b`) is a separate,
     non-gating, informational status** — Payroll Staff mark a Unit "Ready" once its data entry is
     believed complete. This has **no effect whatsoever** on whether Finance can release that Unit;
@@ -174,7 +271,10 @@ Archived (Locked)
     entries yet.** Once a cycle finalizes, a held-but-unreleased entry has no in-app mechanism to ever
     become `released = true` for that cycle — Checkpoint 1 deliberately does not build a "Late Entry /
     post-finalization release" workflow (an override-free, explicitly separate future action, not to
-    be confused with the no-override finalization precondition above). Until that workflow is built,
+    be confused with the no-override finalization precondition above). **Still true after the Phase
+    7F Late/Straggler Sweep (above) — that sweep only ever runs through `releaseProjectUnit`, which
+    itself requires the Cycle to still be `Draft`; it closes the gap for a Held entry un-Held
+    *before* finalization, not after.** Until this post-finalization workflow is built,
     the only way to affect payment for an employee left held past finalization is a hold/release
     decision in a *future* Draft cycle's own entry, per `database/payroll-entry.md §12`.
     `PayrollUnitReadiness` ("Ready for Release") likewise remains deferred, unrelated to this gap (see

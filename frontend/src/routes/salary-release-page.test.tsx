@@ -40,6 +40,7 @@ const unitStatus: UnitReleaseStatus = {
   releasedBy: null,
   entryCount: 3,
   willReleaseCount: 3,
+  heldCount: 0,
 };
 
 vi.mock('@/hooks/use-selected-payroll-cycle', () => ({
