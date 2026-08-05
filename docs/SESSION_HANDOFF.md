@@ -17,7 +17,32 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-04 (latest) — Phase 7H: Permanent PDF Test Infrastructure Stabilisation —
+> **Update, 2026-08-05 (latest) — PR #6 MERGED into `main`; Render deployment triggered — supersedes
+> the Phase 7H entry immediately below, which is otherwise unchanged as written.** The user confirmed
+> PR #6 was manually merged into `main` and that Render's already-configured automatic deployment was
+> triggered by that merge. This session verified directly (git + `gh`, not assumed): `gh pr view 6` →
+> `state: MERGED`, `mergedAt: 2026-08-05T02:22:07Z`, squash-merge commit
+> `e066f49f4c7496ac1e189bed61ab63ef2daac704` now on `origin/main`. `git diff e066f49 a09e4aa` (the PR's
+> own feature-branch tip) is empty — the squash carried the branch's tree over byte-for-byte, so
+> Phase 7H's PDF worker (`backend/src/lib/pdf/worker/*`) is confirmed present on `origin/main`, not
+> merely on the now-deleted feature branch. Local `main` was one fast-forward commit behind
+> `origin/main` (no divergence, nothing uncommitted anywhere in the repository).
+> **CI on the merge itself** (GitHub Actions run `30969152578`, triggered by the push to `main`)
+> reported `build-and-check: failure` — read directly from the log, this is `backup-packages.test.ts`'s
+> pre-existing, already-documented KI-5 one-second-timestamp flake (`docs/release/KNOWN_ISSUES_v1.0.md`),
+> not the Phase 7H PDF/Jest-VM-teardown issue: zero `"Test environment has been torn down"`
+> occurrences anywhere in the run, 1280/1281 other tests passed. Phase 7H's fix held on this real,
+> independent post-merge run. **Render deployment**: user-confirmed as triggered; this session could
+> not independently confirm deployment *completion* — no Render dashboard/API access was available,
+> and a health-check probe of the documented backend URL
+> (`https://payroll-backend.onrender.com/health`) returned `404` with Render's own
+> `x-render-routing: no-server` header (no live service currently answers that exact hostname). This
+> is inconclusive rather than a contradiction of the user's confirmation, and is recorded honestly as
+> such — see this file's Addendum 29 for the full evidence and the related stale-branch investigation
+> (PR #5 / `payroll-entry/durability-and-release-safety`, also fully resolved, safe to delete pending
+> approval) and `docs/PROJECT_PROGRESS.md`'s Phase 7H closure note.
+
+> **Update, 2026-08-04 (superseded by the entry above) — Phase 7H: Permanent PDF Test Infrastructure Stabilisation —
 > IMPLEMENTED, awaiting review, NOT YET COMMITTED.** PR #6 (Phase 7F) was blocked by a CI failure
 > that Phase 7G's own diagnostic fix (commits `cd71b5d`/`15a3776`) traced to
 > `"Test environment has been torn down"` — proven (reproduction matrix across 5 call paths, not
@@ -3360,4 +3385,65 @@ identical existing mitigation. Not a logic defect; same established pattern, not
 
 **No commit, push, or deployment occurred this session** — stopped deliberately for review, per
 explicit instruction. No other report, Dashboard work, or unrelated module was started or modified.
+
+## 29. Addendum, 2026-08-05 — Repository Reconciliation: PR #6 Merge Confirmation, Deployment Evidence, and Stale-Branch Investigation
+
+Documentation/investigation-only checkpoint, per explicit scope — no application code changed, no
+Employee Payroll History/Report/Dashboard/UI work performed.
+
+**PR #6 is MERGED.** `gh pr view 6`: `state: MERGED`, `mergedAt: 2026-08-05T02:22:07Z`, squash-merge
+commit `e066f49f4c7496ac1e189bed61ab63ef2daac704` on `origin/main` (parent: `f7d08dc`, i.e. directly
+on top of PR #5's own squash commit — one parent, confirming this was a squash, not a true merge
+commit). `git diff e066f49 a09e4aa` (the feature branch's own final local tip) is empty — proves the
+squash is byte-identical to the branch, so nothing was lost or altered. `git ls-tree -r origin/main`
+confirms `backend/src/lib/pdf/worker/{pdf-worker.entry,pdf-worker-client,protocol}.ts` are present on
+`origin/main`. Local `main` (`f7d08dc`) was exactly one fast-forward behind `origin/main`
+(`e066f49`) — `git log main..origin/main` shows only that one commit, `git log origin/main..main` is
+empty, and `git status` was clean throughout this session on every branch touched.
+
+**CI on the merge commit**: GitHub Actions run `30969152578` (push trigger, `main`) →
+`build-and-check: failure`. `gh run view --log-failed` shows the single failing test directly:
+`backup-packages.test.ts › ... byte-identical to the live Cash Receiving export (generated-at
+excluded)`, failing on a one-second timestamp mismatch (`2:25:19 AM` vs. `2:25:20 AM`) — exactly
+KI-5's documented profile (`docs/release/KNOWN_ISSUES_v1.0.md`), already on record as
+non-deterministic and non-blocking. `Test Suites: 1 failed, 68 passed, 69 total`;
+`Tests: 1 failed, 1280 passed, 1281 total`. Zero `"Test environment has been torn down"`
+occurrences anywhere in the log — Phase 7H's fix is confirmed to hold on a real, independent,
+post-merge CI run, not only in the pre-merge branch testing already recorded under Phase 7H.
+
+**Render deployment**: user-confirmed as triggered by this merge (Render's automatic-deploy is
+already configured per `render.yaml`, consistent with the confirmation). This session had no Render
+dashboard or API access, so deployment *completion* could not be independently re-derived. A direct
+probe was attempted anyway: `curl -i https://payroll-backend.onrender.com/health` (the backend URL
+`docs/release/CONFIGURATION_REFERENCE.md` documents) returned `HTTP/2 404` with
+`x-render-routing: no-server` — a Render-specific header meaning no active service is currently bound
+to that exact hostname. This is **inconclusive, not disconfirming**: it may reflect a different real
+service hostname, a paused/sleeping instance, or simply a probe this sandbox cannot complete
+correctly — none of which this session could distinguish without dashboard access. Recorded per the
+required distinction: **merge — confirmed directly**; **automatic deployment trigger — user-confirmed,
+plausible, not independently re-derived**; **deployment completion / production smoke verification —
+NOT confirmed this session**.
+
+**Stale-branch investigation — `payroll-entry/durability-and-release-safety` (PR #5)**: `gh pr view 5`
+confirms `state: MERGED`, `mergedAt: 2026-08-03T17:17:12Z`, squash commit `f7d08dc` on `main`. GitHub's
+"2 ahead / 2 behind" reading of this branch reflects the branch's own two raw commits (`4d57993`,
+`19e4e78`) being unreachable from `main` *by hash* — the expected, and here confirmed misleading,
+signature of any squash merge, exactly as this checkpoint's own instructions warned against relying
+on the ahead/behind count alone. `git cherry -v origin/main origin/payroll-entry/durability-and-release-safety`
+shows both commits marked `+` (no patch-id match in `main`) for that same reason. The check that
+actually settles it: `git diff f7d08dc 19e4e78` is empty — the tree at `main`'s own PR #5 squash
+commit is byte-identical to the branch's tip. **Classification: A — fully incorporated.** No unique,
+unmerged, or abandoned work exists on this branch; it is safe to delete (remote and local) once
+explicitly approved.
+
+**Repository state at the close of this checkpoint**: `main` (needs only a routine fast-forward to
+`origin/main`, zero conflict risk, not yet performed pending approval), `feat/phase-7f-payroll-workflow-integrity`
+(fully merged via squash; GitHub already auto-deleted its own remote copy on merge — a local copy and
+its now-stale tracking branch remain, safe to delete once approved), and
+`payroll-entry/durability-and-release-safety` (Classification A above, safe to delete once approved).
+No branch anywhere in the repository holds required, unmerged work.
+
+**No commit, push, branch deletion, or GitHub modification occurred this session** — stopped
+deliberately for review and explicit authorization, per this checkpoint's own instruction. No
+Employee Payroll History, other Report, Dashboard, or UI work was started.
 

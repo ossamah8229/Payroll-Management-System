@@ -349,6 +349,14 @@ during RC1 preparation (2026-07-19/20), not assumed.
   executions): zero recurrences, zero lingering processes. **This resolves the PDF-suite portion of
   KI-10.** The off-by-one query-count flake (the bullet above this one) is unrelated to Puppeteer
   entirely and was not touched — still open, still tracked here, unchanged status.
+- **Confirmed on the real merge, 2026-08-05.** The commits above were opened as PR #6 and manually
+  merged (squash) into `main` (`e066f49f4c7496ac1e189bed61ab63ef2daac704`). That merge's own
+  post-merge GitHub Actions run showed **zero** `"Test environment has been torn down"`
+  occurrences — the one failure in that run was the unrelated, already-documented KI-5 flake
+  (one-second timestamp boundary in `backup-packages.test.ts`), not this issue. The PDF-suite
+  portion of KI-10 is now confirmed resolved on a real, independent, post-merge CI run against
+  `main`, not only on pre-merge feature-branch testing. The query-count flake remains open and
+  untouched, unchanged status.
 
 ---
 
@@ -454,7 +462,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-7 | Concurrent first-contact CSRF race — intermittent login failure | No — **RESOLVED** 2026-07-23 (corrected design) |
 | KI-8 | Custom role with `sites:manage` could not see the Project Sites list | No — **RESOLVED** 2026-07-23 |
 | KI-9 | Roles & Permissions dialog excessive scrolling / frame desync | No — **RESOLVED** 2026-07-23 |
-| KI-10 | `payslips.test.ts` intermittent full-suite-load failures | Partially — PDF/Jest-VM-teardown portion **RESOLVED** 2026-08-04 (Phase 7H, see entry); query-count portion still open |
+| KI-10 | `payslips.test.ts` intermittent full-suite-load failures | Partially — PDF/Jest-VM-teardown portion **RESOLVED** 2026-08-04 (Phase 7H), confirmed on real merge to `main` 2026-08-05 (see entry); query-count portion still open |
 | KI-11 | `sites:manage` global authority missing from Unit read/create (KI-8 follow-up) | No — **RESOLVED** 2026-07-23 |
 | KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
 | KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |

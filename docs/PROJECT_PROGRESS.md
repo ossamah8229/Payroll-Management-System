@@ -8779,6 +8779,26 @@ Typecheck, lint, backend build, frontend build all clean. Full detail and exact 
 deployment, or new checkpoint began. PR #6 status and the GitHub Actions result are recorded in
 this checkpoint's own final report, not duplicated here.
 
+**Update, 2026-08-05 — CLOSED. PR #6 merged; Phase 7F/7G/7H all landed on `main`.** Committed as
+`140b7aa`/`3583eed`/`986bcd8`/`f04b937`/`cd71b5d`/`15a3776`/`d17316a`/`4dacae1`/`a09e4aa` on
+`feat/phase-7f-payroll-workflow-integrity`, opened as PR #6, and manually merged (squash) into `main`
+as `e066f49f4c7496ac1e189bed61ab63ef2daac704` at `2026-08-05T02:22:07Z` — confirmed via `gh pr view 6`
+(`state: MERGED`) and a byte-identical tree diff against the branch's own final tip (`a09e4aa`), so
+Phase 7H's PDF worker architecture is confirmed present on `origin/main`, not only on the deleted
+feature branch. Render's automatic deployment (`render.yaml`, already configured) was triggered by
+this merge per the user's direct confirmation; this session could not independently verify deployment
+*completion* (no Render dashboard/API access in this sandbox) — see `docs/SESSION_HANDOFF.md`'s
+Addendum 29 for the full evidence, including an inconclusive health-check probe. The merge's own
+post-merge CI run (GitHub Actions `30969152578`) reported one failure — `backup-packages.test.ts`'s
+pre-existing, already-documented KI-5 timestamp flake, unrelated to this checkpoint — with **zero**
+`"Test environment has been torn down"` occurrences, confirming Phase 7H's fix holds under a real,
+independent CI run, not only pre-merge branch testing. **This confirms the PDF-suite portion of KI-10
+as resolved on the real, deployed `main`, not merely as implemented on a feature branch.** The
+query-count flake portion of KI-10, and KI-5 itself, are unchanged and remain open, exactly as before
+— neither is affected by this closure. See `docs/SESSION_HANDOFF.md` §0's latest update and
+Addendum 29 for the accompanying stale-branch investigation (PR #5 / `payroll-entry/durability-and-release-safety`,
+confirmed fully incorporated via squash, safe to delete pending approval).
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
