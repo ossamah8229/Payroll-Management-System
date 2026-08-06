@@ -17,7 +17,76 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-05 (latest, later same day) — Phase 7 Reports, Employee Payroll History
+> **Update, 2026-08-06 (latest) — Phase 7 Reports, Project Site Payroll Report Checkpoint 0
+> (Architecture, read-only, approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED,
+> awaiting review, NOT COMMITTED.** Backend/shared-contracts/tests only — no frontend page exists
+> yet for this report. Full record: `docs/architecture/workflows/reports.md` §16 and
+> `docs/PROJECT_PROGRESS.md`'s own "Phase 7 Reports — Project Site Payroll Report" §1 entries
+> (Checkpoint 0 findings and all seven frozen decisions; Checkpoint 1A's shared schema, backend
+> service/routes, table columns, totals, exact test counts, performance evidence, known
+> limitations) — not duplicated here.
+>
+> **Business definition (Checkpoint 0)**: "Which employees were paid at the selected Project
+> Site(s) during one payroll cycle?" — the row-level drill-down beneath Payroll Summary's own
+> site-aggregate rows, one row = one `PayrollEntry`, always exactly one Payroll Cycle (never a
+> range or a historical browser — that stays Employee Payroll History's own role).
+>
+> **Built**: `GET /api/v1/reports/project-site-payroll` and `.../export`, gated by
+> `PERMISSIONS.REPORTS_VIEW` (the same permission Payroll Summary already uses — deliberately not
+> `statements:view`, since this report's disclosure surface matches Payroll Summary's own
+> site-scoped operational audience, not Employee Payroll History's narrower cross-cycle-history
+> one); `shared/src/schemas/project-site-payroll-report.ts`; a backend service structurally
+> mirroring Employee Payroll History's own (row select/`calcNet` adapter/ordering/bounded
+> `netSalary` sort) but narrowed to the approved filter set (Payroll Cycle required, Site
+> multi-select, Unit, Row Status, Has Correction — no employee search, designation, date range,
+> roster status, or outstanding-balance filter); totals reusing Payroll Summary's own field/bucket
+> model with Employee Payroll History's own guarded-computation ceiling; CSV/XLSX export of the
+> complete filtered dataset. No detail endpoint, no per-Unit financial total of any kind (frozen
+> decisions 4 and 5 — there is no mathematically correct way to allocate an entry's aggregate
+> deductions across multiple work lines with the existing schema, so none was invented). No schema
+> or migration change.
+>
+> **Verified**: 37 new backend tests (`project-site-payroll-report.test.ts`) plus 5 new committed
+> performance tests (`project-site-payroll-report-performance.test.ts`, seeding 30,000 real
+> `PayrollEntry` rows and running real `EXPLAIN (ANALYZE, BUFFERS)` against the report's actual
+> query shapes — no `Seq Scan` on `PayrollEntry` in any measured shape), all 42 passing;
+> `typecheck`/`lint` clean across `shared`/`backend`. One honest, disclosed performance finding:
+> Postgres's planner chose the single-column `PayrollEntry_cycleId_idx` over either
+> `[cycleId,siteId]` composite index for the one-cycle-plus-one-site query shape at this data
+> volume — still fast (~12ms), still not a sequential scan, recorded as measured evidence rather
+> than the composite-index assumption going in.
+>
+> **Environment note, this session**: a long-lived local `embedded-postgres` instance degraded
+> partway through this session's own verification work (every login in every backend test file,
+> including entirely unmodified pre-existing ones, began failing with `INVALID_CREDENTIALS` even
+> though direct `argon2`/Prisma reproduction outside Jest/Express worked correctly) — re-provisioning
+> a fresh instance from a clean data directory resolved it completely, with no code change of any
+> kind. Confirmed unrelated to this checkpoint's own changes by reproducing the same failure
+> pattern with this checkpoint's two new test files entirely excluded from the run.
+>
+> **Later clarification (independent Checkpoint 1A review, same day) — supersedes the uncertainty
+> above with stronger evidence.** The review did not accept "re-provisioning fixed it" as
+> sufficient and instead isolated the variable properly via `git worktree`: (1) the pure
+> pre-checkpoint baseline (commit `d1116aa`, zero changes from this checkpoint) ran the full
+> 1,371-test suite cleanly (1,345 passing; the 26 failures were the same pre-existing
+> Puppeteer/Chrome-unavailable-in-that-isolated-worktree gaps, unrelated to anything); (2) this
+> checkpoint's *production* changes alone (`reports.routes.ts`/`shared/index.ts`/the two new
+> source files), applied to that same clean worktree with **no test files present at all**,
+> produced the statistically indistinguishable result (1,344/1,371, the same known gaps plus one
+> unrelated pre-existing flake) — proving the production code itself is not the cause; (3) a
+> subsequent full-suite run in the original working directory, with everything present, passed
+> **1,412/1,412, zero failures**. The earlier widespread login failures were transient
+> session-level resource contention (most likely from running several concurrent
+> `embedded-postgres` instances/worktrees/Jest processes across a long, active session), not a
+> deterministic property of this code, this database, or this directory — and not a regression
+> from this checkpoint. See the Checkpoint 1A independent review's own §14 for the full evidence
+> table.
+>
+> **Not started this checkpoint**: any frontend work for this report (deferred to a future
+> Checkpoint 1B), a detail page/endpoint, per-Unit financial totals, any other Phase
+> 8A-catalogued report, and Dashboard.
+
+> **Update, 2026-08-05 (superseded by the entry above for status purposes) — Phase 7 Reports, Employee Payroll History
 > Checkpoint 1B (Frontend, Print, E2E, and Phase Close-Out) — IMPLEMENTED, awaiting review, NOT
 > COMMITTED.** Frontend-only, over the frozen Checkpoint 1A backend — no backend/shared-contract/
 > database change. Gated on `statements:view` throughout (routes, catalogue card), matching the

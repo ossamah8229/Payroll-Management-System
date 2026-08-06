@@ -6,7 +6,11 @@ import {
   employeePayrollHistoryExportQuerySchema,
   employeePayrollHistoryListQuerySchema,
   PERMISSIONS,
+  PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS,
+  projectSitePayrollReportExportQuerySchema,
+  projectSitePayrollReportListQuerySchema,
   type EmployeePayrollHistoryExportLimitError,
+  type ProjectSitePayrollReportExportLimitError,
 } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
@@ -21,6 +25,12 @@ import {
   getEmployeePayrollHistoryList,
   searchEmployeePayrollHistoryEmployees,
 } from './employee-payroll-history.service';
+import {
+  buildProjectSitePayrollReportExportData,
+  exportProjectSitePayrollReportToCsv,
+  exportProjectSitePayrollReportToXlsx,
+  getProjectSitePayrollReportList,
+} from './project-site-payroll.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -255,6 +265,89 @@ reportsRouter.get('/employee-payroll-history/:entryId', EMPLOYEE_PAYROLL_HISTORY
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json(detail);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Project Site Payroll Report (Phase 7 Reports, Checkpoint 1A, approved Checkpoint 0 architecture
+ * review 2026-08-06). Gated by `reports:view` — the same permission Payroll Summary already uses,
+ * never `statements:view` (frozen decision 2: this report is the row-level drill-down beneath
+ * Payroll Summary's own site-aggregate rows, always scoped to exactly one cycle, not a
+ * cross-cycle, employee-searchable history — Employee Payroll History's own, more sensitive,
+ * disclosure class). No detail route exists in V1 (frozen decision 4) — every field the frontend
+ * will ever need for this report lives on the list row itself.
+ */
+reportsRouter.get('/project-site-payroll', requirePermission(PERMISSIONS.REPORTS_VIEW), async (req, res, next) => {
+  try {
+    const query = projectSitePayrollReportListQuerySchema.parse(req.query);
+    const report = await getProjectSitePayrollReportList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'project_site_payroll', page: report.page, pageSize: report.pageSize, total: report.total },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Preflight-counts before generating any CSV/XLSX output, mirroring Employee Payroll History's
+ * own `/employee-payroll-history/export` — `buildProjectSitePayrollReportExportData` itself never
+ * fetches/maps a single row once `totalMatching` exceeds
+ * `PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS`, so the structured
+ * `ProjectSitePayrollReportExportLimitError` below is always returned *before* any expensive work.
+ * Always the complete filtered dataset — no `page`/`pageSize` accepted at all.
+ */
+reportsRouter.get('/project-site-payroll/export', requirePermission(PERMISSIONS.REPORTS_VIEW), async (req, res, next) => {
+  try {
+    const query = projectSitePayrollReportExportQuerySchema.parse(req.query);
+    const data = await buildProjectSitePayrollReportExportData(req.currentUser!, query);
+
+    if (data.totalMatching > PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS) {
+      const errorBody: ProjectSitePayrollReportExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (site, unit, or row status) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx'
+        ? await exportProjectSitePayrollReportToXlsx(data.rows)
+        : exportProjectSitePayrollReportToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'project_site_payroll', format: query.format, rowCount },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = `project-site-payroll.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
   } catch (error) {
     next(error);
   }

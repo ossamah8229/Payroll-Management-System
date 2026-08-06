@@ -13,13 +13,16 @@ export, and print treatment.
 `database/balance-adjustments.md §14–§14b`.
 
 **Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report) and Phase 7 Employee Payroll History
-(Checkpoints 0, 1A backend, and 1B frontend) are all complete.** The remaining Phase
-8A-investigated report catalogue (Project Site Payroll Report, Deduction Report, Overtime Report,
-Advance Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard are
-all **Not Started**, each requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s
-"Phase 8A — Reports Module Investigation", "Phase 8B Checkpoint 1", and "Phase 7 Reports — Employee
-Payroll History" entries for the full build record. §15 below covers Employee Payroll History in
-full (backend §15.1–§15.9, frontend §15.10).
+(Checkpoints 0, 1A backend, and 1B frontend) are all complete.** Project Site Payroll Report's
+Checkpoint 0 (architecture review) is approved and Checkpoint 1A (backend foundation only) is
+**IMPLEMENTED, awaiting review, NOT COMMITTED** — no frontend page exists yet for this report. The
+remaining Phase 8A-investigated report catalogue (Deduction Report, Overtime Report, Advance
+Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard are all
+**Not Started**, each requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s
+"Phase 8A — Reports Module Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee
+Payroll History", and "Phase 7 Reports — Project Site Payroll Report" entries for the full build
+record. §15 below covers Employee Payroll History in full (backend §15.1–§15.9, frontend §15.10);
+§16 covers Project Site Payroll Report Checkpoint 1A.
 
 ---
 
@@ -586,3 +589,216 @@ report (unchanged from the architecture review, §10 above).
 (Project Site Payroll Report, Deduction Report, Overtime Report, Advance Recovery Report, Salary
 Release Report, Variance/Month-on-Month Report) and Dashboard each remain **Not Started** and require
 their own separate, explicit authorization — this checkpoint did not begin any of them.
+
+## 16. Project Site Payroll Report — Checkpoint 1A (Backend Foundation, 2026-08-06)
+
+Backend, shared contracts, and backend tests only — no frontend page, no detail endpoint, no
+schema/migration change. Built against the approved Checkpoint 0 architecture review's own frozen
+decisions (`docs/PROJECT_PROGRESS.md`'s "Project Site Payroll Report — Checkpoint 0" entry).
+
+### 16.1 Frozen decisions this checkpoint is built against
+
+1. **Report scope**: "Which employees were paid at the selected Project Site(s) during one
+   payroll cycle?" One row = one `PayrollEntry`. Not a cross-cycle report — `cycleId` is required
+   and singular, no `fromCycleId`/`toCycleId` range, no historical browser.
+2. **Permission: `reports:view`, not `statements:view`.** This report is the row-level drill-down
+   beneath Payroll Summary's own site-aggregate rows (both share the identical permission), never
+   a cross-cycle, employee-searchable history — that stays Employee Payroll History's own, more
+   sensitive, disclosure class. Site authorization reuses `assertSiteAccess`/
+   `getAccessibleSiteIds` exactly as both existing reports already do; historical authorization is
+   always `PayrollEntry.siteId`, never `Employee.siteId`.
+3. **Cycle**: exactly one, required. No range.
+4. **No detail page/endpoint in V1.** Every field the frontend will ever need lives on the list
+   row itself.
+5. **Unit**: filtering and "Primary Unit (+N more)" display only. No per-Unit financial total or
+   allocation of any kind — an entry's aggregate deductions (EOBI, advances, fines, corrections)
+   live on `PayrollEntry`, not `PayrollEntryWorkLine`, so there is no mathematically correct way
+   to split them across a multi-unit employee's work lines with the existing schema. Not invented.
+6. **Financial rules**: canonical `calcNet` only, never a second Net Salary formula. Totals reuse
+   Payroll Summary's own field/bucket model (§4 above). Corrections are never replayed —
+   `correctionBalancePayable`/`correctionBalanceRecovery` are shown as separate, already-
+   materialized-settlement fields, exactly as Payroll Summary already does.
+7. **No schema change.** Proven with `EXPLAIN ANALYZE` against realistic seeded data (§16.6).
+
+### 16.2 Shared contracts
+
+`shared/src/schemas/project-site-payroll-report.ts` — the second Reports-module report (after
+Employee Payroll History) to validate its query parameters through a shared Zod schema. Defines:
+the 5-state `ProjectSitePayrollReportRowStatus` union (same values as
+`EmployeePayrollHistoryRowStatus` — `RELEASED`/`HELD`/`NO_PAY_DUE`/`RECOVERY_DUE`/`PENDING` — but
+independently declared under this report's own name rather than imported, so neither report's
+public DTO carries a confusing cross-report type reference); the 5 allowed sort fields
+(`employeeCode`/`employeeName`/`site`/`netSalary`/`rowStatus` — deliberately no `cycle`, since
+this report is always exactly one); list/export query schemas (deliberately excluding Employee
+search, Designation, any date/month range, Current Roster Status, and an outstanding-balance
+filter — the approved Checkpoint 0 filter set only); and the full response contract
+(`ProjectSitePayrollReportRow`/`Totals`/`ListResponse`/`ExportLimitError`).
+
+### 16.3 Backend service
+
+`backend/src/modules/reports/project-site-payroll.service.ts` — structurally mirrors Employee
+Payroll History's own `employee-payroll-history.service.ts` (`resolveSiteIdFilter`/
+`resolveUnitFilter`, `ROW_SELECT`/`calcEntryRow`, `mapEntriesToRows`, `buildOrderBy`, the bounded
+`netSalary`-sort/totals-computation resolution) but narrowed to this report's own approved filter
+set and simplified where the frozen decisions removed complexity Employee Payroll History needed
+(no cycle-range resolution, no per-row `cycle` in `ROW_SELECT` since the whole response shares one
+`cycle` at the top level, no outstanding-origin-balance batched query since that filter/field is
+out of scope here). Reuses Employee Payroll History's own
+`deriveEmployeePayrollHistoryRowStatus`/`employeePayrollHistoryRowStatusWhereClause` directly by
+import — this is the *second* consumer of that derivation logic, not yet extracted to a
+`common/`-scoped module per this project's own "extract at the third consumer" convention.
+
+**Totals** (`computeProjectSitePayrollReportTotals`) reuse Payroll Summary's own field/bucket
+*model* (frozen decision 6) but inherit Employee Payroll History's own guarded-computation *safety
+mechanism* (`PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS = 20,000`, the same value and reasoning
+as `EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS`, independently named per the same "extract at the
+third consumer" convention) rather than Payroll Summary's own unconditional computation — Payroll
+Summary's aggregation grain (Project Sites) is always small/bounded (dozens), but this report's
+grain (employees within one cycle) is the same order of magnitude as Employee Payroll History's,
+so the same "not a stored column, cannot be summed in SQL, only safe to sum via `calcNet` in
+application code up to a bound" conflict applies identically. In practice, since this report is
+always scoped to one cycle, the ceiling is not expected to bind at this system's current scale —
+see §16.6.
+
+`sortBy=netSalary` is resolved by the identical bounded in-memory sort Employee Payroll History
+already established (fetch, `calcNet`, sort with an `id`-ascending tie-break, paginate) — rejected
+with a 400 above the same ceiling, never silently truncated or falling back to a different sort.
+
+### 16.4 Routes
+
+`GET /api/v1/reports/project-site-payroll` and `GET /api/v1/reports/project-site-payroll/export`,
+mounted on the existing `reportsRouter`, both gated by `requirePermission(PERMISSIONS.REPORTS_VIEW)`
+— the same permission Payroll Summary already uses. No `/:id` route exists (frozen decision 4).
+Both routes are audited (`report.viewed`/`report.exported`, `metadata.reportType:
+'project_site_payroll'`), following the same "audit the view, not just the export" convention
+every other report already establishes. The export route preflight-`COUNT`s before generating any
+CSV/XLSX buffer, returning a structured `{ code: 'EXPORT_ROW_LIMIT_EXCEEDED', matchingCount,
+maxRows, message }` (HTTP 413) over the ceiling — never a silently truncated file, never
+`page`/`pageSize` accepted at all.
+
+### 16.5 Table columns and totals
+
+Row: Employee Code, Employee Name, Project Site, Primary Unit (+N more), Designation, Gross Pay,
+Allowance, EOBI (the `calcNet`-applied deduction, zero whenever `eobiApplicable` is false — never
+the raw stored `eobiAmount` regardless of applicability), Advance Deduction, EID Advance
+Deduction, Fine, Correction Balance Payable, Correction Balance Recovery, Total Earnings, Total
+Deductions, Net Salary, Row Status, Correction Count, Released Date. No CNIC, no banking field, no
+release-actor identity, no audit data (frozen decisions — Table Data section) — verified by a
+full-response regex sweep in the backend test suite, not just spot-checked fields.
+
+Totals: `matchingCount`, the five status-breakdown counts (`releasedCount`/`heldCount`/
+`noPayDueCount`/`recoveryDueCount`/`pendingCount`, always summing to `matchingCount`),
+`correctedEntryCount`, and Payroll Summary's own money-field set (`grossPay`/`allowance`/
+`eobiDeduction`/`advanceDeduction`/`eidAdvanceDeduction`/`fine`/`correctionBalancePayable`/
+`correctionBalanceRecovery`/`totalEarnings`/`totalDeductions`/`netSalaryTotal`), computed over the
+**complete filtered dataset**, never the current page. No per-Unit total anywhere in the response
+(frozen decision 5) — verified by an explicit regex sweep in the backend test suite.
+
+### 16.6 Performance evidence (measured, not assumed)
+
+Seeded 10 sites × 1,000 employees × 3 cycles = 30,000 real `PayrollEntry` rows (plus work lines)
+against a local Postgres instance, then ran `EXPLAIN (ANALYZE, BUFFERS)` against the report's
+actual query shapes (a committed, repeatable Jest suite —
+`backend/tests/project-site-payroll-report-performance.test.ts` — not an ad hoc script, mirroring
+`payroll-entry-performance.test.ts`'s own established methodology):
+
+| Query | Plan | Execution time |
+|---|---|---|
+| List, one cycle + one site (1,000 of 30,000 rows matching), real `ORDER BY employee.name` + `LIMIT 25` | `Index Scan` on `PayrollEntry_cycleId_idx`, `siteId` applied as a post-scan `Filter` (see note below) | ~12ms |
+| List, one cycle only, all sites (10,000 of 30,000 rows matching), same `ORDER BY`/`LIMIT` | `Index Scan` on `PayrollEntry_cycleId_idx` | ~47ms |
+| Full HTTP request: list page + totals over 10,000 matching rows (one cycle, unfiltered by site) | — | ~1.2–1.4s |
+| Export: 1,000 matching rows (one cycle + one site) to CSV | — | ~230–250ms |
+
+**No `Seq Scan` on `PayrollEntry` occurs in any measured query shape** — confirming frozen
+decision 7 ("no schema change... prove this with `EXPLAIN ANALYZE`") directly, not by assumption.
+
+**Honest finding, not the assumption going in**: for the one-cycle-plus-one-site shape, Postgres's
+planner chose the single-column `PayrollEntry_cycleId_idx` over either `[cycleId,siteId]`
+composite index, applying `siteId` as a post-scan `Filter` rather than as part of the index
+condition (`Rows Removed by Filter: 9000` out of ~10,000 cycleId-matching rows scanned). This is a
+valid, cost-based planner decision at this data volume/selectivity — not a bug, and not evidence
+the composite indexes (added for Payroll Summary and Employee Payroll History respectively) are
+unused in general — but it means this specific query shape does not exercise them the way it was
+initially expected to. Execution time remains fast (~12ms) regardless. Recorded here as measured
+evidence rather than silently asserting the composite index was used, which the actual query plan
+does not show.
+
+The Unit-filtered query shape (join through `PayrollEntryWorkLine`, which has only single-column
+indexes on `payrollEntryId`/`unitId` — no composite index involving `unitId`) stays fast (~170–
+200ms) because it only ever runs against an already-tightly-bounded candidate set (one cycle × the
+selected site(s)' own entries, already narrowed by the entry-level index first) — never against an
+unbounded multi-cycle set. This assumption is contingent on the report staying single-cycle-scoped
+per frozen decision 1; it is not re-validated for any hypothetical future cross-cycle expansion.
+
+This sandbox's single-node local Postgres (via `embedded-postgres`) is not a production-scale
+cloud database — these numbers are evidence of correct query-plan behavior and rough order of
+magnitude, not a production SLA guarantee (the same caveat §15.9 already states for Employee
+Payroll History).
+
+### 16.7 Tests
+
+`backend/tests/project-site-payroll-report.test.ts` (37 tests, post-independent-review
+remediation) — authorization (401/403, Master Admin global access, site-scoped restriction, an
+explicit inaccessible-`siteIds` filter rejected with 403 never silently narrowed, a genuine
+historical-transfer scenario proving authorization uses `PayrollEntry.siteId` and not the
+employee's *current* `Employee.siteId`), the cycle requirement (missing/malformed/nonexistent
+`cycleId`, confirming no range parameters are accepted), row grain and financial reconciliation
+(every required column present and correct, multi-unit "+N more" display with no per-unit
+financial field anywhere in the response, no CNIC/banking/audit field anywhere in the response via
+both a full-body sweep and a recursive `assertNoSensitiveKeys` check, EOBI deduction respecting
+`eobiApplicable`), row-status derivation (Held/Pending/No Pay Due/Recovery Due/a real Released
+transition via an actual Unit release), filtering (Site multi-select, Unit scoped to the site
+filter, an unrelated `unitId`/`siteIds` mismatch rejected with 400, the Has Correction tri-state,
+and a test proving the excluded filters — employee search, designation, date range, roster status,
+outstanding balance — have no narrowing effect at all, using values chosen so each one *would*
+have excluded the fixture row had it actually been wired, compared byte-for-byte against a
+baseline request omitting them), sorting (every approved field including the bounded `netSalary`
+path, and an explicit rejection of `sortBy=cycle`), pagination (database-level, page 2 never
+re-showing page 1 rows, an out-of-range `pageSize` correctly *rejected* with 400 — never clamped,
+matching Employee Payroll History's own identical precedent), totals (complete-filtered-dataset
+scope independent of the current page, status counts summing to `matchingCount`, an independent
+row-level `netSalary` sum cross-check against `totals.netSalaryTotal`, and an explicit assertion
+that no per-unit total exists anywhere in the response), and export (CSV field-by-field parity
+against the list endpoint via a real `csv-parse` parse — not just row/header counts — for a
+fixture entry exercising every declared export column at once; XLSX parsed with `ExcelJS`: exact
+safe header order, sensitive-header absence, complete filtered row count that is never a
+pagination-only subset, and representative-row values matching the list endpoint; permission
+enforcement before any export work happens). All 37 passing.
+
+`backend/tests/project-site-payroll-report-performance.test.ts` (5 tests, §16.6's own evidence) —
+committed and repeatable, not an uncommitted smoke test.
+
+Backend full suite: unaffected outside this checkpoint's own two new files plus the additive
+shared-schema/route/service changes — `typecheck`/`lint` clean. **Full-suite investigation
+(independent Checkpoint 1A review)**: an initial verification pass saw the full 1,412-test suite
+fail widely (~900 tests, all login-related) partway through a run, even with this checkpoint's own
+test files excluded. Rather than accept that as "pre-existing and unrelated" on a single
+re-provisioned-Postgres data point, the review isolated the variable properly via `git worktree`:
+the pure pre-checkpoint baseline (commit `d1116aa`, zero changes) ran clean (1,345/1,371, only
+pre-existing Puppeteer-unavailable-in-that-worktree gaps); this checkpoint's *production* changes
+alone, with no test files present, produced the statistically indistinguishable clean result
+(1,344/1,371); and a subsequent full run in the original working directory, with everything
+present, passed **1,412/1,412**. The earlier failures were transient session-level resource
+contention (most likely several concurrent `embedded-postgres`/worktree/Jest processes across a
+long session), not a deterministic property of this code — confirmed, not merely reasserted.
+
+### 16.8 What Checkpoint 1A did NOT build
+
+Per its own explicit scope boundary: no frontend route, page, filter UI, print, or CSV/XLSX
+download button — the backend/export endpoints exist and are fully functional over HTTP, but
+nothing in the frontend calls them yet. No detail endpoint (frozen decision 4). No per-Unit
+financial total of any kind (frozen decision 5). No schema or migration change (frozen decision
+7, proven in §16.6). Dashboard and every other Phase 8A-catalogued report remain untouched and
+**Not Started**.
+
+**Known limitations, disclosed**: (1) the totals-latency characteristic already disclosed for
+Employee Payroll History (§15.9) applies identically here — an unfiltered, all-sites, one-cycle
+request pays the full `calcNet`-over-every-matching-row cost on every request, not only exports;
+narrowing by site or unit keeps it fast; (2) the composite `[cycleId,siteId]`/`[siteId,cycleId]`
+indexes are not always the plan Postgres chooses for this report's own query shape (§16.6) — this
+is disclosed as measured fact, not silently assumed; (3) sorting/totals by `netSalary` share
+Employee Payroll History's own disclosed architecture conflict (not a stored column, bounded
+in-memory resolution, 400 above the ceiling) rather than a novel one.
+
+**Checkpoint 1A is backend-only and awaiting independent review before Checkpoint 1B (frontend)
+begins.** No other report or Dashboard work was started.
