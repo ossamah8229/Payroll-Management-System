@@ -49,3 +49,21 @@ describe('ReportsPage — Employee Payroll History catalogue card', () => {
     expect(screen.getByText('Payroll Summary')).toBeTruthy();
   });
 });
+
+describe('ReportsPage — Project Site Payroll Report catalogue card', () => {
+  afterEach(() => cleanup());
+
+  it('shows the Project Site Payroll Report card as a real link for a user holding only reports:view', () => {
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    const link = screen.getByText('Project Site Payroll Report').closest('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('/reports/project-site-payroll');
+  });
+
+  it('requires no extra permission beyond the page-level reports:view gate (no requiredPermission override)', () => {
+    // Contrast with Employee Payroll History, which is hidden without statements:view — Project
+    // Site Payroll Report reuses reports:view alone (frozen decision 2).
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    expect(screen.getByText('Project Site Payroll Report').closest('a')).not.toBeNull();
+  });
+});

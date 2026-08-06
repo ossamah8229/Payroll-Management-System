@@ -41,7 +41,12 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     available: true,
     requiredPermission: PERMISSIONS.STATEMENTS_VIEW,
   },
-  { title: 'Project Site Payroll Report', description: 'Not yet available.', to: '', available: false },
+  {
+    title: 'Project Site Payroll Report',
+    description: 'Employee payroll detail for selected Project Site(s) within one payroll cycle — row-level figures, corrections shown as counts only.',
+    to: '/reports/project-site-payroll',
+    available: true,
+  },
   { title: 'Deduction Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Overtime Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Advance Recovery Report', description: 'Not yet available.', to: '', available: false },

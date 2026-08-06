@@ -12,17 +12,18 @@ export, and print treatment.
 `database/payroll-entry.md §12`, `database/release.md §12b/§12c`, and
 `database/balance-adjustments.md §14–§14b`.
 
-**Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report) and Phase 7 Employee Payroll History
-(Checkpoints 0, 1A backend, and 1B frontend) are all complete.** Project Site Payroll Report's
-Checkpoint 0 (architecture review) is approved and Checkpoint 1A (backend foundation only) is
-**IMPLEMENTED, awaiting review, NOT COMMITTED** — no frontend page exists yet for this report. The
-remaining Phase 8A-investigated report catalogue (Deduction Report, Overtime Report, Advance
-Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard are all
-**Not Started**, each requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s
-"Phase 8A — Reports Module Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee
-Payroll History", and "Phase 7 Reports — Project Site Payroll Report" entries for the full build
-record. §15 below covers Employee Payroll History in full (backend §15.1–§15.9, frontend §15.10);
-§16 covers Project Site Payroll Report Checkpoint 1A.
+**Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report), Phase 7 Employee Payroll History
+(Checkpoints 0, 1A backend, and 1B frontend), and Phase 7 Project Site Payroll Report (Checkpoints
+0, 1A backend, and 1B frontend) are all complete.** Project Site Payroll Report's Checkpoint 1B
+(frontend, browser print, E2E, documentation) is **IMPLEMENTED, awaiting review, NOT COMMITTED** —
+built over the frozen Checkpoint 1A backend, no backend/shared/database change. The remaining
+Phase 8A-investigated report catalogue (Deduction Report, Overtime Report, Advance Recovery Report,
+Salary Release Report, Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each
+requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports
+Module Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History", and
+"Phase 7 Reports — Project Site Payroll Report" entries for the full build record. §15 below covers
+Employee Payroll History in full (backend §15.1–§15.9, frontend §15.10); §16 covers Project Site
+Payroll Report in full (backend §16.1–§16.8, frontend §16.9).
 
 ---
 
@@ -800,5 +801,184 @@ is disclosed as measured fact, not silently assumed; (3) sorting/totals by `netS
 Employee Payroll History's own disclosed architecture conflict (not a stored column, bounded
 in-memory resolution, 400 above the ceiling) rather than a novel one.
 
-**Checkpoint 1A is backend-only and awaiting independent review before Checkpoint 1B (frontend)
-begins.** No other report or Dashboard work was started.
+**Checkpoint 1A was backend-only; Checkpoint 1B (frontend, below) is now built over it.** No other
+report or Dashboard work was started by either checkpoint.
+
+### 16.9 Checkpoint 1B — Frontend, Browser Print, and E2E (2026-08-06)
+
+Frontend-only, over the frozen Checkpoint 1A backend above — no backend, shared-contract, or
+database change in this checkpoint. Gated on `reports:view` throughout (route, catalogue card),
+never `statements:view` — the same approved frozen decision 2 above.
+
+**Route** (`/reports/project-site-payroll`, plus the canonical `/payroll-cycles/:cycleId/reports/
+project-site-payroll`), lazy-loaded and `RequirePermission`-gated on `PERMISSIONS.REPORTS_VIEW`,
+following the exact `RequireSession` → `RequirePermission` → page pattern every other gated route
+already uses (`App.tsx`). Mirrors Payroll Summary's own dual flat/canonical route pair and
+`useSelectedPayrollCycle` hook — the natural precedent for "exactly one required Cycle, no From/To
+range" (frozen decisions 1/3), rather than Employee Payroll History's own local-state Cycle
+range-selection shape, which doesn't apply here. No detail route exists (frozen decision 4). The
+Reports catalogue card (`reports-page.tsx`) needs no `requiredPermission` override — it reuses the
+catalogue page's own `reports:view` gate directly, unlike Employee Payroll History's `statements:view`
+card.
+
+**Data layer** (`hooks/use-project-site-payroll-report.ts`) — imports the DTOs directly from
+`@payroll/shared` (`shared/src/schemas/project-site-payroll-report.ts`), mirroring
+`use-employee-payroll-history.ts`'s own convention. One query hook for the list (`enabled:
+Boolean(cycleId)` — no request is ever made without a valid Cycle; proven directly by a hook-level
+test exercising the real `useQuery` configuration, not just a code comment — see the Tests
+paragraph's own "no request without a Cycle" entry below, added during independent review), and a
+blob-download export function covering both CSV and XLSX. Site ids are sorted before being joined into both the query key
+and the URL, so an equivalent Site selection in a different pick order never produces a different
+request or a redundant React Query cache entry. The export function handles the structured 413
+`EXPORT_ROW_LIMIT_EXCEEDED` response the same way Employee Payroll History's own
+`ExportRowLimitExceededError` does — a dedicated `ProjectSitePayrollReportExportRowLimitExceededError`
+(independently declared, not imported, matching this project's "extract at the third consumer"
+convention already applied to the backend's own ceiling constant) carries the backend's
+`matchingCount`/`maxRows`/`message` verbatim via `toast.error`.
+
+**Filters** (frozen decisions/Step 4's approved set only): Payroll Cycle (`PayrollCycleSelectField`,
+required, single, navigates the URL — a navigation control, not a filter, per §2.6 of
+`docs/design-system.md`), Site (multi-select), Unit (disabled unless exactly one Site is selected —
+the same established convention Employee Payroll History's own Unit field uses, and cleared whenever
+the Site selection becomes incompatible), Row Status, Has Correction (the tri-state All/Yes/No
+select, §2.4 of `docs/design-system.md`). No Employee search, Designation, date/month range, Current
+Roster Status, or outstanding-balance filter — matching the backend's own deliberate exclusions
+(frozen decision from Checkpoint 0). A filter or sort change resets pagination to page 1; Clear
+Filters restores every filter to its default while never touching the currently selected Cycle (the
+Cycle selector is a navigation control, not one of the filters Clear Filters governs).
+
+**Totals** — every one of the 18 backend-provided `ProjectSitePayrollReportTotals` fields renders
+verbatim, grouped into three labeled clusters for readability at this field count (Payroll Totals,
+Deductions and Adjustments, Status Counts — Step 5's own suggested grouping). When `totalsComputed`
+is `false` (the matching set exceeds the 20,000-row ceiling), the eleven monetary cards collapse into
+one explanatory notice ("Totals are unavailable for this result size. Narrow the filters to calculate
+totals.") — the five status counts and `correctedEntryCount` remain visible regardless, since the
+backend always computes those as plain DB aggregates independent of the ceiling. No client-side
+summation, and no `calcNet` import, anywhere in this page.
+
+**Table** — server-paginated (`ReportPagination`), server-sorted only on the five backend-approved
+fields (`employeeCode`/`employeeName`/`site`/`netSalary`/`rowStatus` — deliberately no `cycle`, since
+this report is always exactly one); clicking a sortable header toggles `sortBy`/`sortDir`, always
+resets to page 1, and reflects `aria-sort` on the active column. Every row status
+(`RELEASED`/`HELD`/`NO_PAY_DUE`/`RECOVERY_DUE`/`PENDING`) gets its own badge tone (green/hold/gray/
+red/amber respectively) via a new, colocated `project-site-payroll-labels.ts` — never derived
+client-side, mirroring Employee Payroll History's identical tone mapping so the same status reads the
+same color across both reports. Corrections render as a plain count badge (never a reason, never a
+replay of the correction itself); the primary unit as `"{name} (+N more)"`. No edit action, no "View
+Details" action, no row click, and no per-Unit financial column of any kind (frozen decision 5) — the
+row shows the entry's own aggregate deductions only. **Page-clamp safeguard (added during
+independent review)**: a `useEffect` keyed on the resolved `report.data` (never on
+`isLoading`/`isFetching` — this hook has no `placeholderData`/`keepPreviousData`, so `report.data` is
+only ever defined once a response for the exact currently-requested page has actually resolved)
+clamps `page` down to the new last valid page (`Math.max(1, Math.ceil(total / pageSize))`) whenever
+the currently-viewed page is no longer valid for the backend's current total under an otherwise
+unchanged filter set — e.g. another user releases/holds rows while this page sits on page 3. Never
+fires below page 1, never fires before a real response exists, and self-terminates after one
+corrective `setPage` (recomputing against the same total no longer finds the new page out of range),
+so it cannot loop with, or fight, the separate filter/sort/Cycle page-reset effect above.
+
+**Export UI** — Export CSV/Export Excel buttons, page-level `activeExport` state (mutually exclusive
+across both formats — clicking one disables both until it resolves, preventing a duplicate request),
+current Cycle/filters/sort always applied, never just the current page; the export endpoint accepts
+no `page`/`pageSize` at all. A 413 is shown via the backend's own structured message through
+`toast.error`, and the current filter selection is left completely untouched by an export failure.
+
+**Browser Print (current-page-only scope, Step 10)** — a dedicated
+`ProjectSitePayrollPrintOptionsDialog`/`project-site-payroll-print-fields.ts`, a fresh field
+vocabulary (never a reuse of Payroll Summary's or Employee Payroll History's own field-id types —
+this report's own totals/table are a different shape from both). Explicitly states "Print scope:
+current page only" inside the dialog itself. Prints the current paginated page only — never an
+unbounded fetch of the full filtered result, and never routed through backend Puppeteer (no backend
+PDF for this report, matching both sibling reports). Defaults to every safe card/column selected (18
+cards, 19 columns; Employee Name locked as the one always-included column); reuses Payroll Summary's
+own 19-column-scaled Print Readability threshold tiers (Excellent ≤8 / Good 9–11 / Wide 12–15 / Very
+Wide 16+, since this report's table tops out at the identical 19-column maximum) rather than Employee
+Payroll History's smaller 13-column-scaled thresholds — informational only, never blocking; the one
+hard block remains "select at least one column besides Employee Name." The selection persists in
+browser `localStorage` only, under its own versioned key
+(`project-site-payroll-print-fields:v1`), never PostgreSQL; Reset to Default restores the same
+complete safe-field selection Select All produces (this dialog defines no narrower preset of its
+own). No CNIC, no banking, no release actor, no audit data is ever offered as a print field — this
+vocabulary only ever covers the list's own safe row/summary fields. When totals are unavailable, the
+print-only cards render the same explanatory notice the on-screen cards show, never zeros.
+
+**Tests**: 4 new colocated Vitest files —
+`use-project-site-payroll-report.test.ts` (URL builders including deterministic Site-id ordering, the
+413/`ProjectSitePayrollReportExportRowLimitExceededError` path, object-URL revocation, filename
+fallback, and — added during independent review — a direct hook-level "no request without a Cycle"
+suite that renders the real `useProjectSitePayrollReportList` hook through `renderHook`/
+`QueryClientProvider` with `global.fetch` stubbed, proving the query stays `fetchStatus: 'idle'` and
+issues zero fetches while `cycleId` is empty, across re-renders, and flips to exactly one request the
+moment a real `cycleId` is supplied — not merely the pure URL-builder functions),
+`project-site-payroll-labels.test.ts`, `project-site-payroll-print-fields.test.ts`
+(readability levels scaled to 19 columns, `localStorage` round-trip under this report's own key,
+defensive-parse behavior), `reports-project-site-payroll-page.test.tsx` (RBAC including "no View
+Details action ever renders," the missing-Cycle state, loading/empty/error states distinguishing "no
+entries for this cycle" from "no match for filters," totals including the grouped layout and the
+`totalsComputed: false` notice, every approved table column with a full-body sensitive-field sweep,
+`+N more`, a corrections test proving both halves of its own claim — a count badge (a `<span>`) when
+`correctionCount > 0` *and* a plain, un-badged "0" when it is 0, with the rest of that row still
+correct — every row-status badge, sorting resetting page to 1 with `aria-sort` reflected, pagination
+using server metadata only, every filter including the tri-state boolean and the Site-count-gated
+Unit disable/clear behavior, Clear Filters preserving the selected Cycle, export request shape and
+duplicate-click prevention, the 413 path, Print defaults/persistence/readability/no-CNIC-or-banking-
+ever, and — added during independent review — a dedicated "page clamp when the backend total
+shrinks" suite covering an already-valid page staying unchanged, a shrunk total clamping down to the
+new last valid page with an exact, non-looping request-count delta, a total of 0 clamping to page 1,
+and a loading/no-data render never clamping or throwing) — plus 2 new tests in the existing
+`reports-page.test.tsx` for the catalogue card's own permission-free (reuses `reports:view` alone)
+gating. **78 new frontend tests, all passing (76 in the 4 new files — 14 hook, 5 labels, 14
+print-fields, 43 page — 2 added to the existing catalogue test); full frontend suite 468/468.**
+`typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`, `typecheck:e2e` clean.
+
+**Independent review remediation (2026-08-06, same day, before commit)**: an independent read-only
+review (Checkpoint 1B review) found zero Blocker/High-severity issues and approved with three
+non-blocking notes, all addressed in this same uncommitted checkpoint before any commit: (1) the
+correction-count test above now proves both the badge and the plain-"0" case, not only the former;
+(2) the "no request without a Cycle" guarantee is now proven by a direct hook-level test, not only by
+code inspection; (3) the page-clamp safeguard described in the Table paragraph above was added and
+tested. No production behavior changed except the addition of the page-clamp safeguard itself, which
+the review characterized as a narrow, previously-undefended edge case, not a defect in what already
+shipped.
+
+**Playwright**: `tests/e2e/specs/20-project-site-payroll-report.spec.ts` — real backend, real
+Chromium, no `page.route` interception for any RBAC or financial assertion. Covers: Master User
+navigation (Reports catalogue → Project Site Payroll Report → Cycle/Site filter → totals → sorting →
+pagination), Site scoping (a Site-A-scoped user sees only their accessible historical row, a live
+employee transfer to Site B leaves the already-created entry visible under its frozen historical Site
+A, Site B is never offered as a filter option, a direct API call naming the inaccessible Site 403s,
+and no cross-site leak from an unrelated Site-B-only employee), Unit filtering (a genuine two-Unit
+work-line split within one Site remains exactly one row with a "+1 more" badge, the Unit filter
+matches on work-line membership for either Unit, no per-Unit financial total anywhere in the page
+text), Row statuses (Held via the Hold toggle, No Pay Due via a zero-gross/EOBI-inapplicable/
+zero-day entry that resolves to exactly `netSalary = 0` on release, Recovery Due via the
+zero-worked-days/positive-gross entry that resolves negative on release, Released via a full month of
+worked days, and Pending via a genuine "Late Entry" — an employee added after its Unit already
+released, which the ordinary sweep can never reach), Corrections (a real approved correction leaves
+the row's own Net Salary provably unchanged from its pre-correction value, shows a correction-count
+badge of 1, and never surfaces the correction's own reason text anywhere on the page), Export (CSV/
+XLSX download with safe headers present and CNIC/IBAN/account-number/bank absent from the downloaded
+file content itself), Print (current-page-only wording, Print Options defaults, Very Wide readability
+warning at the full 19-column default, browser print invoked), and Permission enforcement
+(`statements:view` alone: catalogue card and nav link absent, direct navigation shows "You do not
+have permission to access this page."; `reports:view`: full access). **8/8 passing**, both in
+isolation and combined with `17-reports.spec.ts` (9/9 passing, unweakened).
+
+**Request-count/performance observations** (measured during this checkpoint's own manual and
+Playwright verification, not a production SLA): the list fetch always requested exactly one page
+(`pageSize=25`), a filter/sort/pagination change each produced exactly one new list request with no
+duplicate/storm, multi-select Site state produced no request per checkbox toggle (only on menu
+close/selection settle, matching `MultiSelectFilter`'s own established debounce-free-but-controlled
+pattern), export produced exactly one request with no page/pageSize parameter, and print used the
+already-loaded page data with zero additional fetches. No detail request of any kind — no detail
+endpoint exists for this report to call.
+
+**Known limitations, disclosed**: (1) every Checkpoint 1A backend limitation (§16.8 above) is
+inherited unchanged — this checkpoint touches no backend code; (2) saved filter presets remain
+deferred (unchanged from the architecture review); (3) backend PDF remains intentionally excluded
+from this report (unchanged from the architecture review).
+
+**Project Site Payroll Report is now fully complete** (Checkpoints 0, 1A, 1B). The next remaining
+report (Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report,
+Variance/Month-on-Month Report) and Dashboard each remain **Not Started** and require their own
+separate, explicit authorization — this checkpoint did not begin any of them.

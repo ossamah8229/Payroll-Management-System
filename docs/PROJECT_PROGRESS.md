@@ -9388,6 +9388,107 @@ regression from this checkpoint — see `docs/architecture/workflows/reports.md 
 filters, print, export buttons), a detail endpoint, per-Unit financial totals, any schema/migration
 change, Dashboard, or any other report. No existing module's behavior was modified.
 
+## Phase 7 Reports — Project Site Payroll Report, Checkpoint 1B (Frontend, Browser Print, E2E, and
+## Phase Close-Out) — IMPLEMENTED, 2026-08-06, awaiting review, NOT COMMITTED
+
+Frontend-only, built over the frozen Checkpoint 1A backend above — no backend, shared-contract, or
+database change in this checkpoint. Full design record: `docs/architecture/workflows/reports.md
+§16.9` (new).
+
+**Route/catalogue**: `/reports/project-site-payroll` plus the canonical `/payroll-cycles/:cycleId/
+reports/project-site-payroll`, gated on `PERMISSIONS.REPORTS_VIEW` (frozen decision 2 — the same
+permission Payroll Summary already uses, never `statements:view`), reusing
+`useSelectedPayrollCycle`/`PayrollCycleSelectField` exactly as Payroll Summary does — the natural
+precedent for "exactly one required Cycle, no From/To range" (frozen decisions 1/3). No detail
+route (frozen decision 4). The catalogue card needs no `requiredPermission` override, since it
+reuses the Reports page's own `reports:view` gate directly.
+
+**Data layer** (`frontend/src/hooks/use-project-site-payroll-report.ts`): imports every DTO from
+`@payroll/shared` directly (no hand-copy). List query disabled until a Cycle is selected — proven by
+a direct hook-level test (independent review remediation, below), not only by code inspection. Site
+ids sorted before joining into both the query key and the URL — deterministic, no duplicate cache
+entries or requests from an equivalent Site selection picked in a different order. Export function
+handles the structured 413 the same way Employee Payroll History's own `ExportRowLimitExceededError`
+does, via an independently-declared `ProjectSitePayrollReportExportRowLimitExceededError`.
+
+**Filters**: Payroll Cycle (required, single, navigation control), Site (multi-select), Unit
+(disabled unless exactly one Site selected, cleared on an incompatible Site change), Row Status,
+Has Correction (tri-state). No Employee search/Designation/date range/roster status/outstanding
+balance — matching the backend's own deliberate exclusions. Filter/sort changes reset page to 1;
+Clear Filters never touches the selected Cycle.
+
+**Totals**: all 18 backend fields rendered verbatim, grouped into Payroll Totals / Deductions and
+Adjustments / Status Counts for readability. `totalsComputed: false` collapses the 11 monetary
+cards into one explanatory notice; the 6 count fields (always DB-computed regardless of the
+ceiling) stay visible. No client-side summation, no `calcNet` import.
+
+**Table**: server-paginated/sorted (5 approved sort fields, no `cycle`), `aria-sort` reflected,
+row-status badges via a new `project-site-payroll-labels.ts` (never derived client-side), primary
+unit as `"{name} (+N more)"`, corrections as a plain count badge (never a reason/replay). No edit
+action, no "View Details," no per-Unit financial column (frozen decision 5). **Page-clamp safeguard
+(independent review remediation)**: if the backend's total for the currently-requested page shrinks
+below the page being viewed under an unchanged filter set (e.g. another user releases/holds rows
+while this page sits on page 3), a `useEffect` keyed on the resolved response clamps `page` down to
+the new last valid page — never below 1, never before a response has actually resolved, and
+self-terminating (no loop, no request storm).
+
+**Export**: CSV/Excel buttons, mutually-exclusive `activeExport` state (prevents a duplicate
+in-flight request), current Cycle/filters/sort always applied, never `page`/`pageSize`. 413 shown
+via `toast.error`; filters left untouched by a failed export.
+
+**Browser Print**: a fresh `ProjectSitePayrollPrintOptionsDialog`/`project-site-payroll-print-fields.ts`
+vocabulary and `localStorage` key (`project-site-payroll-print-fields:v1`), never reusing either
+sibling report's own field-id types. States "Print scope: current page only" inside the dialog.
+Defaults to all 18 cards/19 columns selected (Employee Name locked); reuses Payroll Summary's own
+19-column-scaled readability thresholds (this report's table shares the same 19-column maximum)
+rather than Employee Payroll History's smaller 13-column scale. No CNIC/banking/release-actor/audit
+field ever offered. No backend PDF.
+
+**Tests**: 4 new colocated Vitest files (`use-project-site-payroll-report.test.ts`,
+`project-site-payroll-labels.test.ts`, `project-site-payroll-print-fields.test.ts`,
+`reports-project-site-payroll-page.test.tsx`) plus 2 new tests in the existing `reports-page.test.tsx`.
+**78 new frontend tests, all passing (76 in the 4 new files — 14 hook, 5 labels, 14 print-fields, 43
+page — 2 in the existing catalogue test); full frontend suite 468/468.** `typecheck`/`lint`/`build`
+clean across `shared`/`backend`/`frontend`, `typecheck:e2e` clean.
+
+**Independent review remediation (2026-08-06, same day, before commit)**: an independent read-only
+review of this checkpoint found zero Blocker/High findings and approved with three non-blocking
+notes, all addressed in this same uncommitted checkpoint: (1) the correction-count test now proves
+both the badge (`correctionCount > 0`) and the plain-un-badged-"0" (`correctionCount === 0`) cases,
+where it previously proved only the former despite its own title claiming both; (2) a new hook-level
+test (`use-project-site-payroll-report.test.ts`) proves — by rendering the real
+`useProjectSitePayrollReportList` hook via `renderHook`/`QueryClientProvider` with `global.fetch`
+stubbed — that the query is disabled and issues zero requests while `cycleId` is empty, not only by
+code-comment assertion; (3) the page-clamp safeguard described in the Table entry above was added and
+tested (4 new tests: unchanged-when-valid, clamps-on-shrink with an exact non-looping request-count
+delta, clamps-to-1-on-zero-total, no-op-before-a-response-exists). +8 net new tests versus the
+originally-reported 70 (4 hook + 4 page; the corrections test was strengthened in place, not split).
+
+**Playwright**: `tests/e2e/specs/20-project-site-payroll-report.spec.ts` — real backend, real
+Chromium, no `page.route` interception for RBAC or financial assertions. Covers Master User
+navigation/filtering/sorting/pagination, Site scoping (historical-transfer visibility, inaccessible
+Site rejected with 403, no cross-site leak), Unit filtering (genuine two-Unit work-line split stays
+one row, Unit filter matches work-line membership, no per-Unit total anywhere), every one of the
+five row statuses (including a real "Late Entry" Pending case and a real zero-net No Pay Due case,
+not simulated), Corrections (real approved correction, Net Salary provably unchanged, no reason
+replayed), Export (safe headers present, sensitive headers absent from the real downloaded file),
+Print (current-page wording, safe defaults, readability warning, browser print invoked), and
+Permission enforcement (`reports:view` vs. `statements:view`-only). **8/8 passing**, both in
+isolation and combined with `17-reports.spec.ts` (9/9 passing, unweakened). Directly affected
+backend suites re-run unweakened: `project-site-payroll-report.test.ts` (37/37) and
+`project-site-payroll-report-performance.test.ts` (5/5), confirming the frozen Checkpoint 1A
+backend was not touched.
+
+**Known limitations, disclosed**: every Checkpoint 1A backend limitation is inherited unchanged
+(this checkpoint touches no backend code); saved filter presets and backend PDF remain
+intentionally excluded, per the architecture review.
+
+**No commit, push, or deployment occurred — do not mark this checkpoint complete** until reviewed.
+**Project Site Payroll Report is now fully complete** (Checkpoints 0, 1A, 1B). **Explicitly NOT
+started this checkpoint**: Deduction Report, Overtime Report, Advance Recovery Report, Salary
+Release Report, Variance/Month-on-Month Report, Dashboard, or any other module. No existing
+module's behavior was modified.
+
 ---
 
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
@@ -9405,7 +9506,7 @@ change, Dashboard, or any other report. No existing module's behavior was modifi
 | 7 | Statements, Reports, Dashboard | **STARTED, IN PROGRESS — Phase 7A CLOSED, 2026-07-28; Reports Checkpoint 1 IMPLEMENTED (2026-07-31), NOT COMMITTED; Phase 7 overall not complete.** Architecture review CLOSED, 2026-07-27 (read-only, nine approved decisions — §1). **Phase 7A — canonical Employee Statement of Account ledger (Checkpoint 1) + Statements frontend with historical `PayrollEntry.siteId`-based employee discovery and Employee-first selection (Checkpoint 2 + same-day correction) — reviewed, approved, committed, pushed, and deployed** — see §1's "Phase 7A, Checkpoint 1", "Phase 7A Checkpoint 2 — architectural investigation and correction", and "Phase 7A — closure and landing" entries. **Phase 7B, Checkpoints 1 (Backend Statement PDF export) and 2 (Backend Statement Excel & CSV export) are both IMPLEMENTED, awaiting review, NOT COMMITTED** — see §1's own entries for each. **Reports (informally labeled "Phase 8A" investigation and "Phase 8B Checkpoint 1" implementation by their own out-of-band requester — see the naming note below) is this roadmap's Phase 7 Reports sub-scope**: the investigation report (data-source audit, report catalogue, financial-correctness rules) and the first production report — Payroll Summary (backend `reports.service.ts`/`reports.routes.ts`, frontend `/reports` + `/reports/payroll-summary`, CSV/XLSX export, browser print, an in-memory site-row pagination utility scoped to Payroll Summary's
 own bounded case, not a generic Reports pagination foundation — see
 `docs/architecture/workflows/reports.md §9` for the required database-level pagination rule any future
-row-level report must follow instead) — are both done, reusing the existing `reports:view` permission (no new permission created). See §1's "Phase 8A — Reports Module Investigation" and "Phase 8B Checkpoint 1 — Reporting Foundation + Payroll Summary Report" entries. **Employee Payroll History — Checkpoint 0 (architecture review) and Checkpoint 1A (backend foundation) both CLOSED, 2026-08-05, IMPLEMENTED, awaiting review/commit** — see the new "Phase 7 Reports — Employee Payroll History" §1 entries and `docs/architecture/workflows/reports.md §15` for the full record: backend service/routes/shared-Zod-contracts/database index/85 new backend tests, gated by `statements:view`; the frontend list/detail pages, drill-down UI, browser Print, and saved-filter presets are explicitly deferred to Checkpoint 1B or later. The remaining Phase 8A-catalogued reports (Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard both remain Not Started, each requiring its own separate, explicit authorization. **Update, 2026-08-06: Project Site Payroll Report — Checkpoint 0 (architecture review) CLOSED and Checkpoint 1A (backend foundation) IMPLEMENTED, awaiting review, NOT COMMITTED** — see the new "Phase 7 Reports — Project Site Payroll Report" §1 entries and `docs/architecture/workflows/reports.md §16` for the full record: `reports:view`-gated (not `statements:view`), no detail endpoint, no per-Unit financial totals, no schema change (proven with `EXPLAIN ANALYZE`); the frontend is explicitly deferred to a future Checkpoint 1B. **Naming note (2026-07-30, extended 2026-07-31): a separate, out-of-band production-UAT checkpoint was also labeled "Phase 7D" by its own requester** — that checkpoint (Payroll Master-Data Integrity & Payroll Entry UI Refinements, §1) is unrelated to this roadmap's Phase 7D (Dashboard) and does not advance or substitute for it. Likewise, the requester's own "Phase 8A"/"Phase 8B" labels for the Reports investigation/Checkpoint 1 above are unrelated to this table's row 8 (Team Collaboration panel, Audit Log viewer UI) — Reports work belongs to this roadmap's Phase 7; row 8 is untouched and still Not Started.** |
+row-level report must follow instead) — are both done, reusing the existing `reports:view` permission (no new permission created). See §1's "Phase 8A — Reports Module Investigation" and "Phase 8B Checkpoint 1 — Reporting Foundation + Payroll Summary Report" entries. **Employee Payroll History — Checkpoint 0 (architecture review) and Checkpoint 1A (backend foundation) both CLOSED, 2026-08-05, IMPLEMENTED, awaiting review/commit** — see the new "Phase 7 Reports — Employee Payroll History" §1 entries and `docs/architecture/workflows/reports.md §15` for the full record: backend service/routes/shared-Zod-contracts/database index/85 new backend tests, gated by `statements:view`; the frontend list/detail pages, drill-down UI, browser Print, and saved-filter presets are explicitly deferred to Checkpoint 1B or later. The remaining Phase 8A-catalogued reports (Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard both remain Not Started, each requiring its own separate, explicit authorization. **Update, 2026-08-06: Project Site Payroll Report — Checkpoint 0 (architecture review) CLOSED and Checkpoint 1A (backend foundation) IMPLEMENTED, awaiting review, NOT COMMITTED** — see the new "Phase 7 Reports — Project Site Payroll Report" §1 entries and `docs/architecture/workflows/reports.md §16` for the full record: `reports:view`-gated (not `statements:view`), no detail endpoint, no per-Unit financial totals, no schema change (proven with `EXPLAIN ANALYZE`); the frontend was, at that point, explicitly deferred to a future Checkpoint 1B. **Update, 2026-08-06 (later same day): Project Site Payroll Report — Checkpoint 1B (frontend, browser print, E2E) IMPLEMENTED, awaiting review, NOT COMMITTED** — see the new "Phase 7 Reports — Project Site Payroll Report, Checkpoint 1B" §1 entry and `docs/architecture/workflows/reports.md §16.9` for the full record: route/catalogue reusing `reports:view`, filters/totals/table/sorting/pagination/export/print all built over the unchanged Checkpoint 1A backend, 70 new frontend tests (460/460 full suite), 8/8 new Playwright tests. Project Site Payroll Report is now fully complete (Checkpoints 0, 1A, 1B). **Naming note (2026-07-30, extended 2026-07-31): a separate, out-of-band production-UAT checkpoint was also labeled "Phase 7D" by its own requester** — that checkpoint (Payroll Master-Data Integrity & Payroll Entry UI Refinements, §1) is unrelated to this roadmap's Phase 7D (Dashboard) and does not advance or substitute for it. Likewise, the requester's own "Phase 8A"/"Phase 8B" labels for the Reports investigation/Checkpoint 1 above are unrelated to this table's row 8 (Team Collaboration panel, Audit Log viewer UI) — Reports work belongs to this roadmap's Phase 7; row 8 is untouched and still Not Started.** |
 | 8 | Team Collaboration panel, Audit Log viewer UI | Not started |
 | 9 | Hardening, Security Review, Deployment | Not started |
 

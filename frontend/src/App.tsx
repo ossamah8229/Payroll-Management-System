@@ -63,6 +63,9 @@ const EmployeePayrollHistoryDetailPage = lazy(() =>
     default: m.EmployeePayrollHistoryDetailPage,
   })),
 );
+const ReportsProjectSitePayrollPage = lazy(() =>
+  import('@/routes/reports-project-site-payroll-page').then((m) => ({ default: m.ReportsProjectSitePayrollPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -406,6 +409,37 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.STATEMENTS_VIEW}>
             <EmployeePayrollHistoryDetailPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Project Site Payroll Report (Phase 7 Reports, Checkpoint 1B) — gated on `reports:view`, the
+  // same permission Payroll Summary already uses (frozen decision 2,
+  // `docs/architecture/workflows/reports.md` §16.1) — no requiredPermission override needed on the
+  // catalogue card. Historical Payroll Cycle Selector routing (same shape as Payroll Summary above,
+  // both requiring exactly one Payroll Cycle, no From/To range): the flat route redirects to the
+  // canonical /payroll-cycles/:cycleId/reports/project-site-payroll URL via
+  // useSelectedPayrollCycle. No detail route exists (frozen decision 4 — no detail endpoint/page).
+  {
+    path: '/reports/project-site-payroll',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsProjectSitePayrollPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/reports/project-site-payroll',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsProjectSitePayrollPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>

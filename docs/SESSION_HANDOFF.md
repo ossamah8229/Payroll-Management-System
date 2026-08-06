@@ -3815,3 +3815,131 @@ authorized scope. **Employee Payroll History Checkpoint 1B remains not started.*
 **No commit, push, or deployment occurred this session** — stopped deliberately for final
 authorization, per explicit instruction.
 
+## 33. Addendum, 2026-08-06 — Phase 7 Reports, Project Site Payroll Report: Checkpoint 1B (Frontend, Browser Print, E2E, and Phase Close-Out) — IMPLEMENTED, NOT COMMITTED
+
+Full detail in `docs/PROJECT_PROGRESS.md`'s new "Phase 7 Reports — Project Site Payroll Report,
+Checkpoint 1B" entry and `docs/architecture/workflows/reports.md §16.9` — this is the handoff
+summary. Starting state was verified clean before any edit: branch `main`, local `HEAD` equal to
+`origin/main` at `4085e7e91c5eac377f86e8b2cfd2c1edb9bc532e` (Checkpoint 1A backend, already
+committed and pushed per the prior session), working tree clean.
+
+**This checkpoint is frontend-only, built entirely over the frozen Checkpoint 1A backend** — no
+backend, shared-contract, or database file was modified. Route (`/reports/project-site-payroll` +
+the canonical `/payroll-cycles/:cycleId/reports/project-site-payroll`), gated on `PERMISSIONS.REPORTS_VIEW`
+(frozen decision 2), reusing `useSelectedPayrollCycle`/`PayrollCycleSelectField` exactly as Payroll
+Summary already does — the established precedent for "exactly one required Cycle, no range," rather
+than Employee Payroll History's own local-state Cycle-range shape, which doesn't apply here. Data
+layer (`use-project-site-payroll-report.ts`), filters (Cycle/Site/Unit/Row Status/Has Correction —
+the approved set only), totals (all 18 backend fields, grouped into three labeled clusters, the
+`totalsComputed: false` notice), table (19 approved columns, server sort/pagination, row-status
+badges via a new `project-site-payroll-labels.ts`), export (CSV/XLSX, mutually-exclusive
+`activeExport` guard, structured 413 handling), and browser print (a fresh
+`project-site-payroll-print-fields.ts` vocabulary/localStorage key, current-page-only scope stated
+in the dialog, 19-column-scaled readability thresholds reused from Payroll Summary since both
+tables share the same 19-column maximum) were all built following the exact patterns
+`reports-payroll-summary-page.tsx` and `reports-employee-payroll-history-page.tsx` already
+established — no new architectural pattern was introduced.
+
+**Environment note for the next session**: this worktree had no `node_modules` of its own (Node's
+module resolution was silently falling back to the parent checkout's hoisted packages, which is
+usually harmless but was missing `@types/archiver` at the root, breaking the E2E harness's own
+`tsc -p tsconfig.build.json` backend build step). Fixed by running a plain `npm install` inside the
+worktree — a normal, worktree-local, reversible action, not a workaround. A local Postgres was also
+independently provisioned in the session's own job scratchpad (`@embedded-postgres/darwin-x64`,
+port 5433, roles/databases `payroll_dev`/`payroll_test`) to run the backend Jest suite directly;
+this is separate from, and unrelated to, the E2E harness's own self-contained Postgres (port 55432,
+provisioned automatically by `tests/e2e/global-setup.ts` inside `tests/e2e/.tmp/`) — the two never
+share state. Both are session-scoped and expected to be re-provisioned fresh next time.
+
+**Verification**: frontend `typecheck`/`lint`/`build` clean; full frontend suite **460/460** (70 net
+new — 68 across 4 new colocated test files, 2 added to the existing `reports-page.test.tsx`).
+`typecheck:e2e` clean. New Playwright spec (`tests/e2e/specs/20-project-site-payroll-report.spec.ts`,
+8 tests covering Master User navigation, Site scoping/historical-transfer/no-cross-site-leak, Unit
+filtering, all five row statuses via real fixture data (not simulated — a genuine zero-net entry for
+No Pay Due, a genuine zero-worked-days entry for Recovery Due, a genuine post-release "Late Entry"
+for Pending), Corrections, Export, Print, and Permission) **8/8 passing**, both standalone and
+combined with the existing `17-reports.spec.ts` (**9/9 passing, unweakened** by this checkpoint).
+Directly affected backend suites re-run to confirm the frozen backend is untouched:
+`project-site-payroll-report.test.ts` **37/37** and `project-site-payroll-report-performance.test.ts`
+**5/5**, both unweakened. Full backend suite was not re-run, per this checkpoint's own instruction
+("do not rerun the entire backend suite unless backend/shared production files are changed
+unexpectedly") — no backend/shared production file was touched.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for independent
+review, per explicit instruction. **Project Site Payroll Report is now fully complete** (Checkpoints
+0, 1A, 1B). Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report,
+Variance/Month-on-Month Report, Dashboard, and every other module remain untouched and **Not
+Started** — none was begun this session.
+
+## 34. Addendum, 2026-08-06 (same day) — Project Site Payroll Report Checkpoint 1B: independent review remediation — IMPLEMENTED, STILL NOT COMMITTED
+
+An independent, read-only review of Addendum 33's Checkpoint 1B (same worktree/branch,
+`worktree-reports+project-site-payroll-1b`, base commit unchanged at
+`4085e7e91c5eac377f86e8b2cfd2c1edb9bc532e`) found **zero Blocker/High-severity findings** and
+returned a verdict of **APPROVE WITH NON-BLOCKING NOTES**. Three of the review's non-blocking notes
+were authorized for a targeted remediation pass, applied in this same uncommitted checkpoint —
+**Addendum 33 above is left as the unmodified historical record of what was true before this
+remediation**; this entry documents what changed since.
+
+**1. Correction-count zero case** (`frontend/src/routes/reports-project-site-payroll-page.test.tsx`)
+— the existing test's title claimed both a badge for `correctionCount > 0` and a plain "0" (never a
+badge) for `correctionCount === 0`, but only asserted the former. Strengthened in place (not split):
+now renders two rows in one fixture and asserts both — the badge case resolves to a `<span>` with the
+Badge's `rounded-full` class, the zero case resolves to the bare `<td>` itself with no such class —
+plus that the zero-correction row's other fields (employee code/name, row status) remain visible and
+correct alongside it. No production behavior changed; the review found no defect, only a coverage
+gap the test's own title had overclaimed.
+
+**2. No request without a Cycle** (`frontend/src/hooks/use-project-site-payroll-report.test.ts`) — a
+new, direct hook-level suite renders the real `useProjectSitePayrollReportList` hook through
+`renderHook`/`QueryClientProvider` (matching `use-payroll-entry-editor.test.tsx`'s own established
+real-hook-testing convention) with `global.fetch` stubbed. Proves: the query's `fetchStatus` stays
+`'idle'` and `fetch` is never called while `cycleId` is empty, including across re-renders; a
+positive control proves the same hook does issue exactly one request once a real `cycleId` is
+supplied; and a transition test proves flipping from an empty to a real `cycleId` moves the query
+from disabled to enabled with exactly one request — not merely the pure URL-builder functions the
+prior test file only exercised. No production code changed — `enabled: Boolean(params.cycleId)`
+(`use-project-site-payroll-report.ts`) was already correct; it now has direct proof.
+
+**3. Page clamp when total shrinks** (`frontend/src/routes/reports-project-site-payroll-page.tsx`) —
+a genuine, narrow gap the review identified: if the backend's total for the currently-viewed page
+shrinks under an *unchanged* filter set (e.g. another user releases/holds rows while a reviewer sits
+on page 3), nothing previously corrected the now-out-of-range page, risking a stale, empty page shown
+as if it were current data. Added a `useEffect` keyed on the resolved `report.data` (and `page`) that
+clamps `page` down to `Math.max(1, Math.ceil(total / pageSize))` whenever `page > 1` and the current
+page exceeds that value. Deliberately keyed on `report.data` alone (never on
+`isLoading`/`isFetching`) — this hook has no `placeholderData`/`keepPreviousData`, so `report.data` is
+`undefined` for the entire duration of any in-flight request; checking it directly is what guarantees
+the effect never clamps before a real response exists and never acts on stale/previous-page data.
+Never fires below page 1; self-terminates after one corrective `setPage` (recomputing against the
+same total no longer finds the new page out of range), so it cannot loop with, or fight, the
+pre-existing filter/sort/Cycle page-reset effect. Four new tests prove: an already-valid page stays
+unchanged; a shrunk total clamps to the new last valid page with an exact, asserted request-count
+delta (proving no storm/loop); a total of 0 clamps to page 1; and a loading/no-data render neither
+clamps nor throws.
+
+**4. Documentation**: `docs/architecture/workflows/reports.md §16.9` and this
+`docs/PROJECT_PROGRESS.md` entry were both updated in place — the "no request without a Cycle" claim
+now cites direct test proof rather than only a code comment, the page-clamp behavior is recorded, and
+every test count was corrected. **Both remain marked "awaiting review, NOT COMMITTED"** — this
+remediation does not change that status; it is still the same not-yet-authorized-to-commit
+checkpoint, now with the review's non-blocking notes closed.
+
+**Verification (re-run after remediation)**: frontend `typecheck`/`lint`/`build` clean; full frontend
+suite **468/468** (78 net new versus the pre-checkpoint baseline — 76 across the 4 new colocated test
+files [14 hook, 5 labels, 14 print-fields, 43 page], 2 in the existing `reports-page.test.tsx`; +8
+versus Addendum 33's 70, from the 4 new hook tests and 4 new page tests above — the corrections test
+was strengthened in place, not split, so it does not add to the count). `typecheck:e2e` clean.
+`tests/e2e/specs/20-project-site-payroll-report.spec.ts` re-run standalone: **8/8 passing**; combined
+with `17-reports.spec.ts`: **17/17 passing**, unweakened. No backend/shared/schema/migration file was
+touched by this remediation (confirmed via `git diff --name-status`, unchanged from Addendum 33's own
+scope) — the directly-affected backend suites were not re-run since no backend/shared production file
+changed. `git diff --check` clean; no test/build artifacts left in the working tree.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for final
+authorization, per explicit instruction. Project Site Payroll Report's frontend, print, and E2E
+remain fully implemented and now fully address the independent review's non-blocking notes, still
+**awaiting explicit authorization to commit**. Deduction Report, Overtime Report, Advance Recovery
+Report, Salary Release Report, Variance/Month-on-Month Report, Dashboard, and every other module
+remain untouched and **Not Started**.
+
