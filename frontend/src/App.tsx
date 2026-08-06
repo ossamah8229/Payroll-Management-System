@@ -55,6 +55,14 @@ const ReportsPage = lazy(() => import('@/routes/reports-page').then((m) => ({ de
 const ReportsPayrollSummaryPage = lazy(() =>
   import('@/routes/reports-payroll-summary-page').then((m) => ({ default: m.ReportsPayrollSummaryPage })),
 );
+const ReportsEmployeePayrollHistoryPage = lazy(() =>
+  import('@/routes/reports-employee-payroll-history-page').then((m) => ({ default: m.ReportsEmployeePayrollHistoryPage })),
+);
+const EmployeePayrollHistoryDetailPage = lazy(() =>
+  import('@/routes/reports-employee-payroll-history-detail-page').then((m) => ({
+    default: m.EmployeePayrollHistoryDetailPage,
+  })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -369,6 +377,35 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
             <ReportsPayrollSummaryPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Employee Payroll History (Phase 7 Reports, Checkpoint 1B) — gated on `statements:view`, not
+  // `reports:view` (approved decision 1, `docs/architecture/workflows/reports.md` §15.1.1): this
+  // report discloses one employee's cross-cycle payroll history, the same sensitivity class
+  // Statements itself already established a dedicated permission for, even though it's reached via
+  // the Reports catalogue.
+  {
+    path: '/reports/employee-payroll-history',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.STATEMENTS_VIEW}>
+            <ReportsEmployeePayrollHistoryPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/reports/employee-payroll-history/:entryId',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.STATEMENTS_VIEW}>
+            <EmployeePayrollHistoryDetailPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>

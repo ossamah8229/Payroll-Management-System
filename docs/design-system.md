@@ -179,6 +179,15 @@ filter, disabled until a single Site is chosen) communicates why via a native `t
 the control, which changes the field's own height and breaks the row's shared baseline (the
 Checkpoint 1 root cause of the reported Payslips misalignment).
 
+**Tri-state boolean filter (Employee Payroll History Checkpoint 1B)** — a filter over an optional
+boolean field (e.g. "Has Correction", "Has Outstanding Origin Balance") is a plain native `<select>`
+with exactly three options, in this order: **All** (the default — the filter is unset, `undefined`
+is sent, never a false-equivalent value), **Yes** (`true`), **No** (`false`). Same `selectClassName`
+styling as every other single-value filter select in the row (§1.5's shared control height) — no new
+component, no checkbox-plus-indeterminate widget; a checkbox cannot represent "unset" without a third,
+non-standard visual state, while a 3-option select reads unambiguously at a glance. Reuse this exact
+pattern for any future optional-boolean filter rather than inventing a second shape.
+
 ### 2.5 Read-Only Page Banner
 
 Bank Sheets and Cash Receiving Sheet each open with a colored info banner (a `Lock` icon, read-only) explaining

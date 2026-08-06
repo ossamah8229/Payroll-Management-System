@@ -17,9 +17,50 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-05 (latest, later same day) — Post-Checkpoint-1A UAT Stabilization: Sticky
-> Header Containment, EOBI Totals/Bulk Apply, Project Site Form Reset — IMPLEMENTED, awaiting
-> review, NOT COMMITTED.** Three independently-reported UAT defects, fixed as one scoped checkpoint
+> **Update, 2026-08-05 (latest, later same day) — Phase 7 Reports, Employee Payroll History
+> Checkpoint 1B (Frontend, Print, E2E, and Phase Close-Out) — IMPLEMENTED, awaiting review, NOT
+> COMMITTED.** Frontend-only, over the frozen Checkpoint 1A backend — no backend/shared-contract/
+> database change. Gated on `statements:view` throughout (routes, catalogue card), matching the
+> already-approved decision. Full record: `docs/architecture/workflows/reports.md` §15.10 and
+> `docs/PROJECT_PROGRESS.md`'s own "Phase 7 Reports — Employee Payroll History, Checkpoint 1B" entry
+> (routes/permission, data hooks, filters, table/sorting/pagination, totals-unavailable handling,
+> detail-page section-by-section breakdown, export/print behavior, exact test counts, Playwright
+> results, performance observations, known limitations) — not duplicated here.
+>
+> **Built**: `/reports/employee-payroll-history` and `/reports/employee-payroll-history/:entryId`
+> routes; `use-employee-payroll-history.ts` (imports DTOs directly from `@payroll/shared` rather
+> than hand-copying — they're already the single shared source of truth); a dedicated historical
+> employee lookup (a second fork of `StatementEmployeeLookup`'s own shape, pointed at
+> `GET /employee-payroll-history/employees`); the approved filter set only (Employee, Site
+> multi-select, Unit disabled unless exactly one Site is selected, Cycle From/To, Row Status, the
+> two tri-state All/Yes/No boolean filters — a new, documented `docs/design-system.md` §2.4
+> convention — Current Roster Status); server-paginated/server-sorted table with per-status badge
+> tones, a totals-unavailable notice when the backend's own `totalsComputed` is `false`; a
+> non-modal detail page (9 top-level sections, with Settlements and Correction Payments presented
+> inline within the relevant correction/balance-adjustment sections, modeled on
+> `balance-adjustment-detail-page.tsx`) that clearly separates the original, immutable payroll
+> result from later Corrections/Balance Adjustments/Materializations/Settlements, with CNIC shown
+> and no banking field ever present; CSV/XLSX export
+> (the first frontend code in this app to handle the structured `413 EXPORT_ROW_LIMIT_EXCEEDED`
+> response, via a new `ExportRowLimitExceededError`); a report-specific browser Print (current page
+> only, a fresh field vocabulary, never Payroll Summary's own, `localStorage`-only preference, no
+> backend PDF).
+>
+> **Verified**: 62 new frontend tests (5 new colocated files plus a new `reports-page.test.tsx`,
+> 3 tests), full frontend suite 389/389; `typecheck`/`lint`/`build` clean across
+> `shared`/`backend`/`frontend`, `typecheck:e2e` clean; new Playwright spec
+> `19-employee-payroll-history-frontend.spec.ts` **5/5 passing** (Master User multi-cycle/
+> correction/materialization/sort/paginate flow, CSV/XLSX export content, Print Options, a genuine
+> Site-A→Site-B transfer/concealment scenario, permission enforcement), run both in isolation and
+> alongside `17-reports.spec.ts` (**9/9 passing, unweakened**).
+>
+> **Not started this checkpoint** (unchanged from the architecture review): saved filter presets,
+> backend PDF, every other Phase 8A-catalogued report, and Dashboard. **Employee Payroll History
+> (Checkpoints 0, 1A, 1B) is now fully complete.**
+
+> **Update, 2026-08-05 (superseded by the entry above for status purposes) — Post-Checkpoint-1A UAT
+> Stabilization: Sticky Header Containment, EOBI Totals/Bulk Apply, Project Site Form Reset —
+> IMPLEMENTED, awaiting review, NOT COMMITTED.** Three independently-reported UAT defects, fixed as one scoped checkpoint
 > per explicit instruction — no Employee Payroll History Checkpoint 1B, Dashboard, or other report
 > work was started. Full record: `docs/PROJECT_PROGRESS.md`'s own "Post-Checkpoint-1A UAT
 > Stabilization" entry (root causes, exact fixes, every file changed) and this session's own

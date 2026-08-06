@@ -12,13 +12,14 @@ export, and print treatment.
 `database/payroll-entry.md §12`, `database/release.md §12b/§12c`, and
 `database/balance-adjustments.md §14–§14b`.
 
-**Status:** **Phase 8B Checkpoint 1 is complete** — the Reports foundation (permission reuse, a
-minimal server-side pagination utility) and the Payroll Summary Report (backend + frontend, CSV/XLSX
-export, browser print) are built and verified. The remaining Phase 8A-investigated report catalogue
-(Employee Payroll History, Project Site Payroll Report, Deduction Report, Overtime Report, Advance
-Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard are all **Not
-Started**, each requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A
-— Reports Module Investigation" and "Phase 8B Checkpoint 1" entries for the full build record.
+**Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report) and Phase 7 Employee Payroll History
+(Checkpoints 0, 1A backend, and 1B frontend) are all complete.** The remaining Phase
+8A-investigated report catalogue (Project Site Payroll Report, Deduction Report, Overtime Report,
+Advance Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard are
+all **Not Started**, each requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s
+"Phase 8A — Reports Module Investigation", "Phase 8B Checkpoint 1", and "Phase 7 Reports — Employee
+Payroll History" entries for the full build record. §15 below covers Employee Payroll History in
+full (backend §15.1–§15.9, frontend §15.10).
 
 ---
 
@@ -430,3 +431,158 @@ beyond this checkpoint's own scope.
 This sandbox's single-node local Postgres (via `embedded-postgres`) is not a production-scale cloud
 database — these numbers are evidence of correct query-plan behavior and rough order of magnitude,
 not a production SLA guarantee.
+
+### 15.10 Checkpoint 1B — Frontend, Print, and E2E (2026-08-05)
+
+Frontend-only, over the frozen Checkpoint 1A backend above — no backend, shared-contract, or
+database change in this checkpoint. Gated on `statements:view` throughout (routes, catalogue card),
+never `reports:view` — the same approved decision §15.1 already established.
+
+**Routes** (`/reports/employee-payroll-history`, `/reports/employee-payroll-history/:entryId`),
+lazy-loaded and `RequirePermission`-gated on `PERMISSIONS.STATEMENTS_VIEW`, following the exact
+`RequireSession` → `RequirePermission` → page pattern every other gated route already uses
+(`App.tsx`). The Reports catalogue card (`reports-page.tsx`) gained a `requiredPermission` field —
+additive, optional, absent from every other entry — so Employee Payroll History is hidden entirely
+for a user who lacks `statements:view` even though the surrounding catalogue page itself only
+requires `reports:view`, never rendered as a broken/unauthorized link.
+
+**Data layer** (`hooks/use-employee-payroll-history.ts`) — imports the DTOs directly from
+`@payroll/shared` rather than hand-copying them (they are already the single shared source of truth,
+unlike Payroll Summary's/Statements' own backend-internal types) — one query hook for the list, one
+for the historical employee lookup, one for the detail endpoint, and a blob-download export function
+covering both CSV and XLSX. The export function is the first in this codebase to handle the
+structured `413 EXPORT_ROW_LIMIT_EXCEEDED` response shape: a dedicated `ExportRowLimitExceededError`
+(extends `ApiError`) carries the backend's own `matchingCount`/`maxRows`/`message`, surfaced verbatim
+via `toast.error` — never a generic "export failed," and never a silent fallback to the current page.
+
+**Historical employee lookup** (`components/reports/employee-payroll-history-employee-lookup.tsx`) —
+a dedicated fork of `StatementEmployeeLookup`'s own interaction shape (debounced search, listbox
+combobox, keyboard navigation, a collapsed "selected" chip), pointed at
+`GET /employee-payroll-history/employees` instead — never the current-site-scoped `EmployeeLookup`
+(Advances/Corrections' own component). Selecting a candidate is never a claim their complete history
+is visible; the list endpoint's own row-level site authorization is the sole authority for that.
+
+**Filters** (Step 5's approved set only): Employee (the lookup above), Site (multi-select), Unit
+(disabled unless exactly one Site is selected — Unit only ever means something relative to one site,
+and Site is multi-select here), Cycle From/Cycle To (payroll-cycle selects, invalid ordering shown
+inline and the query held back rather than sent), Row Status, Has Correction, Has Outstanding Origin
+Balance (both the new tri-state All/Yes/No select, §2.4 of `docs/design-system.md`), Current Roster
+Status. No standalone Date Range/Year/Month, no vague Release Status, no duplicate Held checkbox —
+matching the backend's own deliberate exclusions. A filter or sort change resets pagination to page 1;
+Clear Filters restores every filter to its default while leaving the current sort untouched (Step 5:
+"preserve the default latest-first sort").
+
+**Totals** — every summary card (Matching Entries, Total Earnings, Total Deductions, Net Salary,
+Released, Held, No Pay Due, Recovery Due, Pending, Corrected Entries) renders the backend's own
+`EmployeePayrollHistoryTotals` verbatim; when `totalsComputed` is `false` (the matching set exceeds
+the 20,000-row ceiling, §15.8), the three monetary cards are replaced by one explanatory notice
+("Totals are unavailable for this result size. Narrow the filters to calculate totals.") rather than
+a misleading zero — the table itself remains available. No client-side summation anywhere.
+
+**Table** — server-paginated (`ReportPagination`), server-sorted only (the six approved fields;
+clicking a header toggles `sortBy`/`sortDir` and always resets to page 1; `aria-sort` reflects the
+active column). Every row status (`RELEASED`/`HELD`/`NO_PAY_DUE`/`RECOVERY_DUE`/`PENDING`) gets its
+own badge tone (green/hold/gray/red/amber respectively) via a new, colocated
+`employee-payroll-history-labels.ts` — never derived client-side. Corrections render as a count
+badge, Outstanding Origin Balance as a plain "Outstanding" badge (never a financial amount), the
+primary unit as `"{name} (+N more)"`. "View Details" navigates to the detail route, carrying the
+current filter/sort/page selection via React Router's own `location.state` (not a new global store,
+not URL query serialization — no other page in this codebase does either, so `location.state` is the
+lightest-weight existing mechanism) so returning via "Back to Report" restores exactly what was being
+viewed.
+
+**Detail page** (`reports-employee-payroll-history-detail-page.tsx`) — a dedicated route, never a
+modal, modeled on `balance-adjustment-detail-page.tsx`'s own multi-card/multi-query shape. 9
+top-level sections, with Settlements and Correction Payments presented inline within the relevant
+correction/balance-adjustment sections rather than as independent top-level cards, in order:
+Identity & Historical Assignment (employee, CNIC, historical site, current roster status
+explicitly labeled "(current)"), Original Payroll Result (the canonical `calcNet` breakdown verbatim,
+labeled with the required "Corrections and later settlements do not overwrite this original payroll
+result" text), Work Line / Unit Breakdown, Release Information (release actor's safe `{id, name}`
+only — never email/password), Linked Advances, Corrections Originating From This Entry (each with
+its own before→after value/net-salary change and, inline, its own Resulting Balance Adjustment
+summary and settlement history — the correction-domain's own `balanceAdjustmentTypeTone`/
+`balanceAdjustmentTypeLabel`/`balanceAdjustmentStatusTone`/`cyclePeriodLabel` are reused directly from
+`corrections/correction-labels.ts` rather than re-implemented), Automatic Recovery Balance Adjustment
+(this entry's own direct release outcome, kept visually and textually distinct from a
+correction-originated one), Materializations Consumed By This Entry (explicit "Origin cycle: {X}"
+wording, never implying the consuming entry's own cycle is the origin), and Audit References
+(read-only identifiers, no link — no Audit Log viewer route exists yet in this codebase). CNIC
+renders; no banking field is ever present on this page, matching the approved Sensitive Detail
+Policy the backend already enforces. A 404 (nonexistent or inaccessible entry) renders one plain
+"could not be found" message, deliberately never distinguishing the two cases — mirroring the
+backend's own concealment posture.
+
+**Export UI** — Export CSV/Export Excel buttons, one page-level `activeExport` state (mutually
+exclusive with Print, matching Payroll Summary's own convention), current filters and sort always
+applied, never just the current page. A 413 is shown via the backend's own structured message
+through `toast.error`.
+
+**Browser Print (Version 1 scope, Step 11)** — a dedicated
+`EmployeePayrollHistoryPrintOptionsDialog`/`employee-payroll-history-print-fields.ts`, a fresh field
+vocabulary (never a reuse of Payroll Summary's own `SummaryCardFieldId`/`TableColumnFieldId` — this
+report's own summary totals and table columns are a different shape). Prints the current paginated
+page only — never an unbounded fetch of the full 20,000-row ceiling, and never routed through backend
+Puppeteer. Defaults to every safe card/column selected (10 cards, 13 columns; Employee Name locked as
+the one always-included column); a Print Readability indicator (Excellent/Good/Wide/Very Wide, scaled
+down from Payroll Summary's own thresholds to this report's smaller 13-column maximum) warns, never
+blocks, once a selection gets wide; the one hard block remains "select at least one column besides
+Employee Name." The selection persists in browser `localStorage` only, under its own versioned key
+(`employee-payroll-history-print-fields:v1`), never PostgreSQL. No CNIC, no banking, no release actor,
+no drill-down section is ever offered as a print field — this vocabulary only ever covers the list's
+own safe row/summary fields. No backend PDF button.
+
+**Tests**: 5 new colocated Vitest files — `use-employee-payroll-history.test.ts` (URL builders, the
+413/`ExportRowLimitExceededError` path, filename-from-`Content-Disposition` fallback),
+`employee-payroll-history-labels.test.ts`, `employee-payroll-history-print-fields.test.ts`
+(readability levels, `localStorage` round-trip and defensive-parse behavior),
+`reports-employee-payroll-history-page.test.tsx` (RBAC, loading/empty/error states, totals including
+the `totalsComputed: false` notice, table rendering/badges/`+N more`, sorting resetting page to 1,
+pagination using server metadata only, every filter including the tri-state booleans and the
+Site-count-gated Unit disable, export request shape, Print Options defaults/persistence/no
+CNIC-or-banking-ever), `reports-employee-payroll-history-detail-page.test.tsx` (every section, CNIC
+present, no banking field anywhere on the page via a full-body regex sweep, safe release-actor name,
+a Correction with its resulting Balance Adjustment, empty-subsection wording, materialization
+origin-cycle labeling, 404 concealment, back navigation) — plus a new `reports-page.test.tsx` (3
+tests) for the catalogue card's own permission gating. **62 new frontend tests, all
+passing; full frontend suite 389/389.** `typecheck`/`lint`/`build` clean across `shared`/`backend`/
+`frontend`, `typecheck:e2e` clean.
+
+**Playwright**: `tests/e2e/specs/19-employee-payroll-history-frontend.spec.ts` — real backend, real
+Chromium, no `page.route` interception for any RBAC or financial assertion. Covers: Master User
+navigation (Reports catalogue → Employee Payroll History), employee-filtered discovery across two
+real payroll cycles (a real month-end rollover — Finalize + Archive-and-create-next — fixture, not a
+mock), a real approved Correction with its resulting Balance Adjustment and later materialization
+visible on the detail page with origin/consuming cycles correctly labeled, sorting (`aria-sort`
+toggling a real backend request), pagination, CSV/XLSX export (safe headers present, CNIC/IBAN/
+"account number" absent from the downloaded file content itself, not just the on-screen table), Print
+Options (default safe-column count, no CNIC/bank fields offered, browser print invoked), a genuine
+Site-A→Site-B employee-transfer scenario (a Site-A-only user discovers and sees only the Site-A
+historical row, and a direct URL to the Site-B entry renders the same plain not-found state a
+nonexistent entry would), and permission enforcement (`reports:view` alone: card hidden, direct
+navigation shows "You do not have permission to access this page."; `statements:view`: full access).
+**5/5 passing**, both run in isolation (bootstrapping its own first payroll cycle when none exists
+yet) and as part of the full suite alongside `17-reports.spec.ts` (9/9 passing, unweakened).
+
+**Performance observations** (measured, not a production SLA): during manual verification, the list
+fetch always requested exactly one page (`pageSize=25`), the employee lookup fired one debounced
+request per distinct search term (never per keystroke), opening the detail route issued exactly one
+detail request (never a prefetch per row), sorting/pagination/filter changes each produced exactly
+one new list request with no duplicate/storm, and export/print each used the already-loaded page data
+with zero additional fetches.
+
+**Known limitations, disclosed**: (1) `hasOutstandingOriginBalance`'s exact settlement timing after a
+`DEFERRED PAYABLE` correction's obligation is consumed by a later cycle's release is a
+Corrections-domain behavior this report only ever displays, never controls — the Playwright suite
+verifies the resulting Balance Adjustment is shown correctly in either `PENDING` or `SETTLED` state
+rather than asserting one specific timing, to avoid this report's own test suite becoming an implicit
+second spec for Corrections' settlement mechanics; (2) the totals-latency characteristic already
+disclosed in §15.9 is unchanged and now also drives this page's own totals card, so the same
+narrow-your-filters guidance applies on first paint too; (3) saved filter presets remain deferred
+(unchanged from the architecture review); (4) backend PDF remains intentionally excluded from this
+report (unchanged from the architecture review, §10 above).
+
+**Employee Payroll History is now fully complete** (Checkpoints 0, 1A, 1B). The next roadmap report
+(Project Site Payroll Report, Deduction Report, Overtime Report, Advance Recovery Report, Salary
+Release Report, Variance/Month-on-Month Report) and Dashboard each remain **Not Started** and require
+their own separate, explicit authorization — this checkpoint did not begin any of them.

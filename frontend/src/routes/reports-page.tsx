@@ -1,6 +1,6 @@
 import { FileBarChart } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { PERMISSIONS, type SessionUser } from '@payroll/shared';
+import { PERMISSIONS, type PermissionKey, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -9,6 +9,13 @@ interface ReportCatalogueEntry {
   description: string;
   to: string;
   available: boolean;
+  /** Additive, optional (Employee Payroll History Checkpoint 1B) — most catalogue entries need no
+   * permission beyond this page's own `reports:view` gate, since they reuse that same permission
+   * for their own route. Employee Payroll History is gated on `statements:view` instead (approved
+   * decision 1, `docs/architecture/workflows/reports.md` §15.1.1), a materially more sensitive
+   * disclosure than a company-wide aggregate — so its own card must independently check for it
+   * rather than assume `reports:view` alone is enough. Absent for every other entry. */
+  requiredPermission?: PermissionKey;
 }
 
 /**
@@ -27,7 +34,13 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     to: '/reports/payroll-summary',
     available: true,
   },
-  { title: 'Employee Payroll History', description: 'Not yet available.', to: '', available: false },
+  {
+    title: 'Employee Payroll History',
+    description: "One employee's cross-cycle original payroll results, with corrections and settlements available as drill-down detail.",
+    to: '/reports/employee-payroll-history',
+    available: true,
+    requiredPermission: PERMISSIONS.STATEMENTS_VIEW,
+  },
   { title: 'Project Site Payroll Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Deduction Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Overtime Report', description: 'Not yet available.', to: '', available: false },
@@ -58,7 +71,9 @@ export function ReportsPage({ user }: { user: SessionUser }) {
           <CardTitle>Report Catalogue</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {REPORT_CATALOGUE.map((entry) =>
+          {REPORT_CATALOGUE.filter(
+            (entry) => !entry.requiredPermission || user.permissions.includes(entry.requiredPermission),
+          ).map((entry) =>
             entry.available ? (
               <Link
                 key={entry.title}
