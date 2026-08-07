@@ -66,6 +66,9 @@ const EmployeePayrollHistoryDetailPage = lazy(() =>
 const ReportsProjectSitePayrollPage = lazy(() =>
   import('@/routes/reports-project-site-payroll-page').then((m) => ({ default: m.ReportsProjectSitePayrollPage })),
 );
+const ReportsDeductionReportPage = lazy(() =>
+  import('@/routes/reports-deduction-report-page').then((m) => ({ default: m.ReportsDeductionReportPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -440,6 +443,37 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
             <ReportsProjectSitePayrollPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Deduction Report (Phase 7 Reports, Checkpoint 1B) — gated on `reports:view`, the same permission
+  // Payroll Summary/Project Site Payroll Report already use (frozen decision 3,
+  // `docs/architecture/workflows/reports.md` §17.1) — no requiredPermission override needed on the
+  // catalogue card. Historical Payroll Cycle Selector routing (same shape as Project Site Payroll
+  // Report above, both requiring exactly one Payroll Cycle, no From/To range): the flat route
+  // redirects to the canonical /payroll-cycles/:cycleId/reports/deduction-report URL via
+  // useSelectedPayrollCycle. No detail route exists (frozen decision 12 — no detail endpoint/page).
+  {
+    path: '/reports/deduction-report',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsDeductionReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/reports/deduction-report',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsDeductionReportPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>

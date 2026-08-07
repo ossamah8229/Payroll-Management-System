@@ -47,7 +47,12 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     to: '/reports/project-site-payroll',
     available: true,
   },
-  { title: 'Deduction Report', description: 'Not yet available.', to: '', available: false },
+  {
+    title: 'Deduction Report',
+    description: 'Which employees had which deduction(s) applied this cycle, how much, and what each type totals to company-wide — filterable and sortable by deduction type.',
+    to: '/reports/deduction-report',
+    available: true,
+  },
   { title: 'Overtime Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Advance Recovery Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Salary Release Report', description: 'Not yet available.', to: '', available: false },

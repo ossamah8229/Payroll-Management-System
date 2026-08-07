@@ -17,6 +17,62 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-08-07 (latest, later same day) — Phase 7 Reports, Deduction Report Checkpoint 1B
+> (Frontend, Browser Print, and E2E) — IMPLEMENTED, awaiting review, NOT COMMITTED.** Built over the
+> frozen Checkpoint 1A backend below — no backend, shared-contract, or database change. Full record:
+> `docs/architecture/workflows/reports.md` §17.12 and `docs/PROJECT_PROGRESS.md`'s own "Phase 7
+> Reports — Deduction Report, Checkpoint 1B" §1 entry — not duplicated here in full.
+>
+> **Gated on `reports:view`** (frozen decision 3), same as Payroll Summary/Project Site Payroll
+> Report — never `statements:view`. Route pair (`/reports/deduction-report` +
+> `/payroll-cycles/:cycleId/reports/deduction-report`), catalogue card now `available: true` with no
+> `requiredPermission` override, no detail route (frozen decision 12).
+>
+> **Built**: `hooks/use-deduction-report.ts` (list query disabled until a Cycle exists, CSV/XLSX
+> export with structured-413 handling); filters — the base set (Site, Unit, Row Status, Has
+> Correction) plus the five approved deduction tri-states (Has EOBI, Has Advance Deduction, Has EID
+> Advance Deduction, Has Fine, Has Correction Recovery); totals grouped into Payroll Deductions
+> (collapses to a notice when `totalsComputed` is `false`) and Status (five status counts +
+> Matching Entries always visible; Employees With Any Deduction individually dashed when
+> unavailable); a 14-column table sorted server-side on the eight approved fields only (EOBI/Total
+> Deductions/Correction Count render with no sort button); CSV/XLSX export; a dedicated
+> `DeductionReportPrintOptionsDialog`/`deduction-report-print-fields.ts` (current-page-only,
+> `deduction-report-print-fields:v1` localStorage key, 14 cards/14 columns, readability thresholds
+> scaled from Employee Payroll History's own 13-column scale).
+>
+> **Verified**: 81 new frontend tests, all passing (79 across 4 new colocated Vitest files + 2 added
+> to the existing catalogue test); full frontend suite **549/549**. `typecheck`/`lint`/`build` clean
+> across `shared`/`backend`/`frontend`, `typecheck:e2e` clean, `git diff --check` clean.
+> `tests/e2e/specs/21-deduction-report.spec.ts` — **9/9 passing** standalone, **18/18 passing**
+> combined with `17-reports.spec.ts` (real backend, real Chromium, no route mocking) — covering
+> navigation/totals/sorting/pagination, Site scoping with a genuine historical transfer, a dedicated
+> test proving all five deduction tri-states narrow correctly individually and in AND-composition,
+> all five row statuses, a real approved Correction leaving Total Deductions unchanged, CSV/XLSX
+> export with a sensitive-field sweep, Print Options defaults/readability, a responsive-layout check
+> at 1024px, and permission enforcement.
+>
+> **Deduction Report is now functionally complete pending review** (Checkpoints 0, 1A, 1B). No
+> commit/push/deploy occurred.
+>
+> **This entry supersedes the Checkpoint 0/1A-only entry immediately below** (backend foundation
+> only, no frontend) **for current-status purposes — that entry's own text is left exactly as
+> originally written**, per this project's "don't rewrite history" documentation convention: a
+> superseding update is always a new, later entry, never an edit to an earlier one's own words.
+>
+> **Addendum, same day — M1–M5 final targeted review/remediation pass, still NOT COMMITTED.** Full
+> record: `docs/architecture/workflows/reports.md` §17.13. One genuine defect found and fixed: the
+> print context header was missing the Has Correction and all five deduction tri-state filter
+> summaries (now included). Filter/navigation-state architecture verified against Project Site
+> Payroll Report's own precedent (no persistence beyond the URL-encoded Cycle — confirmed intended,
+> no new global store). Export request parity, print content, and accessibility all covered with new
+> regression tests; no other production code changed. Also corrected this same pass's own earlier
+> mistake of rewriting the entry below's historical wording (see the note above). Updated, verified
+> totals: **108 Deduction-Report-specific frontend tests** (106 across the 4 dedicated files + 2
+> catalogue tests, up from 81), full suite **576/576**; `tests/e2e/specs/21-deduction-report.spec.ts`
+> **10/10** standalone, **19/19** combined with `17-reports.spec.ts`. `typecheck`/`lint`/`build`/
+> `typecheck:e2e`/`git diff --check` all clean. Deduction Report remains functionally complete
+> pending review — still not committed, pushed, or deployed.
+
 > **Update, 2026-08-07 (latest) — Phase 7 Reports, Deduction Report Checkpoint 0 (Architecture,
 > approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.**
 > Backend/shared-contracts/tests only — no frontend page exists yet for this report. Full record:

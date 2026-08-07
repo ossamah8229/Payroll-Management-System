@@ -15,16 +15,17 @@ export, and print treatment.
 **Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report), Phase 7 Employee Payroll History
 (Checkpoints 0, 1A backend, and 1B frontend), and Phase 7 Project Site Payroll Report (Checkpoints
 0, 1A backend, and 1B frontend) are all complete and merged to `main`.** Phase 7 Deduction Report's
-Checkpoint 0 (architecture review) is approved and Checkpoint 1A (backend foundation only) is
-**IMPLEMENTED, awaiting review, NOT COMMITTED** — no frontend page exists yet for this report. The
-remaining Phase 8A-investigated report catalogue (Overtime Report, Advance Recovery Report, Salary
-Release Report, Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each
-requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports
-Module Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History",
-"Phase 7 Reports — Project Site Payroll Report", and "Phase 7 Reports — Deduction Report" entries
-for the full build record. §15 below covers Employee Payroll History in full (backend §15.1–§15.9,
-frontend §15.10); §16 covers Project Site Payroll Report in full (backend §16.1–§16.8, frontend
-§16.9); §17 covers Deduction Report Checkpoint 1A (backend only).
+Checkpoint 0 (architecture review) is approved, and Checkpoint 1A (backend foundation) and
+Checkpoint 1B (frontend, browser print, E2E) are both **IMPLEMENTED, awaiting review, NOT
+COMMITTED** — Deduction Report is functionally complete pending review. The remaining
+Phase 8A-investigated report catalogue (Overtime Report, Advance Recovery Report, Salary Release
+Report, Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each requiring its
+own separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports Module
+Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History", "Phase 7
+Reports — Project Site Payroll Report", and "Phase 7 Reports — Deduction Report" entries for the
+full build record. §15 below covers Employee Payroll History in full (backend §15.1–§15.9, frontend
+§15.10); §16 covers Project Site Payroll Report in full (backend §16.1–§16.8, frontend §16.9); §17
+covers Deduction Report in full (backend §17.1–§17.11, frontend §17.12).
 
 ---
 
@@ -1316,3 +1317,300 @@ Also re-run individually and passing: `employee-payroll-history.test.ts` (63/63)
 `payroll-entry-row-status.test.ts` + `deduction-report.test.ts` (106/106). `typecheck`/`lint`/`build`
 clean across `shared`/`backend`; `git diff --check` clean. **No production code changed** — every
 change in this pass is a new or rewritten test, or a documentation correction.
+
+## 17.12 Checkpoint 1B — Frontend, Browser Print, and E2E (2026-08-07)
+
+Frontend-only, over the frozen Checkpoint 1A backend above — no backend, shared-contract, or
+database change in this checkpoint. Gated on `reports:view` throughout (route, catalogue card),
+never `statements:view` — the same approved frozen decision 3 above.
+
+**Route** (`/reports/deduction-report`, plus the canonical `/payroll-cycles/:cycleId/reports/
+deduction-report`), lazy-loaded and `RequirePermission`-gated on `PERMISSIONS.REPORTS_VIEW`,
+following the exact `RequireSession` → `RequirePermission` → page pattern every other gated route
+already uses (`App.tsx`). Mirrors Project Site Payroll Report's own dual flat/canonical route pair
+and `useSelectedPayrollCycle` hook — the established precedent for "exactly one required Cycle, no
+From/To range" (frozen decisions 1/4). No detail route exists (frozen decision 12). The Reports
+catalogue card (`reports-page.tsx`) needs no `requiredPermission` override — it reuses the catalogue
+page's own `reports:view` gate directly, matching Project Site Payroll Report's own identical
+treatment rather than Employee Payroll History's `statements:view` override.
+
+**Data layer** (`hooks/use-deduction-report.ts`) — imports the DTOs directly from `@payroll/shared`
+(`shared/src/schemas/deduction-report.ts`), mirroring `use-project-site-payroll-report.ts`'s own
+convention. One query hook for the list (`enabled: Boolean(cycleId)`, proven by a direct hook-level
+"no request without a Cycle" test suite exercising the real `useQuery` configuration through
+`renderHook`/`QueryClientProvider` with `global.fetch` stubbed, not merely a code comment), and a
+blob-download export function covering both CSV and XLSX. Site ids are sorted before being joined
+into both the query key and the URL. The export function handles the structured 413
+`EXPORT_ROW_LIMIT_EXCEEDED` response the same way every sibling report does — a dedicated
+`DeductionReportExportRowLimitExceededError` (independently declared, matching this project's
+"extract at the third consumer" convention already applied to the backend's own ceiling constant)
+carries the backend's `matchingCount`/`maxRows`/`message` verbatim via `toast.error`.
+
+**Filters** (frozen decisions/Step 5's approved set only): Payroll Cycle (`PayrollCycleSelectField`,
+required, single, navigates the URL — a navigation control, not a filter, per §2.6 of
+`docs/design-system.md`), Site (multi-select), Unit (disabled unless exactly one Site is selected —
+the same established convention every sibling report's own Unit field uses, cleared whenever the
+Site selection becomes incompatible), Row Status, Has Correction (the tri-state All/Yes/No select,
+§2.4 of `docs/design-system.md`), and the five approved deduction-presence tri-states — Has EOBI,
+Has Advance Deduction, Has EID Advance Deduction, Has Fine, Has Correction Recovery — each an
+independent All/Yes/No select composing with every other filter via `AND` (frozen decision 8, §17.4's
+own `buildDeductionPredicates`). No Employee search, Designation, date/cycle range, amount range,
+roster status, or outstanding-balance filter — matching the backend's own deliberate exclusions. A
+filter or sort change resets pagination to page 1; Clear Filters restores every filter to its default
+while never touching the currently selected Cycle.
+
+**Totals** — the backend's `DeductionReportTotals` fields render verbatim, grouped into two labeled
+clusters: **Payroll Deductions** (EOBI, Advance Deduction, EID Advance Deduction, Fine, Correction
+Recovery, Total Deductions — all six collapse into one explanatory notice, "Totals are unavailable
+for this result size. Narrow the filters to calculate totals.", when `totalsComputed` is `false`) and
+**Status** (Matching Entries, Employees With Any Deduction, Released, Held, Pending, No Pay Due,
+Recovery Due, Corrected Entries). The five status counts, `correctedEntryCount`, and Matching Entries
+are plain DB aggregates the backend always computes regardless of `totalsComputed` (§17.5), so they
+remain visible even when the monetary group collapses; **Employees With Any Deduction is individually
+gated to a dash** (`—`) in that same case, since the backend computes it via the identical bounded
+`calcNet`-adjacent pass as the monetary totals (§17.5's own doc comment) — never a misleading zero.
+No client-side summation, and no `calcNet` import, anywhere in this page.
+
+**Table** — server-paginated (`ReportPagination`), server-sorted only on the eight backend-approved
+fields (`employeeCode`/`employeeName`/`site`/`advanceDeduction`/`eidAdvanceDeduction`/`fine`/
+`correctionBalanceRecovery`/`rowStatus` — frozen decision 11; EOBI, Total Deductions, and Correction
+Count render as plain, non-interactive header cells with no sort button at all, proven by a dedicated
+test); clicking a sortable header toggles `sortBy`/`sortDir`, always resets to page 1, and reflects
+`aria-sort` on the active column. Every row status (`RELEASED`/`HELD`/`NO_PAY_DUE`/`RECOVERY_DUE`/
+`PENDING`) gets its own badge tone (green/hold/gray/red/amber respectively) via a new, colocated
+`deduction-report-labels.ts` — never derived client-side, mirroring every sibling report's identical
+tone mapping. Columns, in the exact order the authorizing instruction specified: Employee Code,
+Employee Name, Project Site, Primary Unit (+N more), Designation, EOBI, Advance Deduction, EID
+Advance Deduction, Fine, Correction Balance Recovery, Total Deductions, Correction Count, Row Status,
+Released Date — deliberately not the same column ordering Project Site Payroll Report uses (Row
+Status before Corrections there; Correction Count before Row Status here), since this checkpoint's
+own authorizing instruction specified this exact order. Correction Count renders as an amber count
+badge when `correctionCount > 0`, and a plain, un-badged "0" otherwise — never a badge for zero,
+matching every sibling report's identical distinction. No edit action, no "View Details" action, no
+row click, and no per-Unit deduction total of any kind (frozen decision 6) — the row shows the
+entry's own aggregate deduction figures only. The same page-clamp safeguard Project Site Payroll
+Report's own Checkpoint 1B review added (§16.9) is included here from the start: a `useEffect` keyed
+on the resolved `report.data` clamps `page` down to the new last valid page whenever the currently-
+viewed page is no longer valid for the backend's current total under an otherwise unchanged filter
+set, never fires below page 1, never fires before a real response exists, and self-terminates after
+one corrective `setPage`.
+
+**Export UI** — Export CSV/Export Excel buttons, page-level `activeExport` state (mutually exclusive
+across both formats), current Cycle/filters/sort always applied, never just the current page; the
+export endpoint accepts no `page`/`pageSize` at all. A 413 is shown via the backend's own structured
+message through `toast.error`, and the current filter selection is left completely untouched by an
+export failure.
+
+**Browser Print (current-page-only scope, frozen decision 14)** — a dedicated
+`DeductionReportPrintOptionsDialog`/`deduction-report-print-fields.ts`, a fresh field vocabulary
+(never a reuse of any sibling report's own field-id types — this report's own totals/table are a
+different shape from all of them). States "Print scope: current page only" inside the dialog itself.
+Prints the current paginated page only — never an unbounded fetch of the full filtered result, and
+never routed through backend Puppeteer (no backend PDF for this report, matching every sibling).
+Defaults to every safe card/column selected (14 cards, 14 columns; Employee Name locked as the one
+always-included column); readability thresholds (Excellent 0–4 / Good 5–7 / Wide 8–11 / Very Wide
+12+) are scaled proportionally from Employee Payroll History's own 13-column-scaled thresholds for
+this report's own 14-column maximum, nudging the Very Wide floor up by one column to account for the
+one extra column — informational only, never blocking; the one hard block remains "select at least
+one column besides Employee Name." The selection persists in browser `localStorage` only, under its
+own versioned key (`deduction-report-print-fields:v1`), never PostgreSQL; Reset to Default restores
+the same complete safe-field selection Select All produces. No CNIC, no banking, no release actor, no
+audit data is ever offered as a print field. When totals are unavailable, the print-only cards render
+the same explanatory notice the on-screen cards show, never zeros.
+
+**Tests**: 4 new colocated Vitest files — `use-deduction-report.test.ts` (19 tests: URL builders
+including deterministic Site-id ordering and all five deduction tri-state query params, the 413/
+`DeductionReportExportRowLimitExceededError` path, object-URL revocation, filename fallback, and a
+direct hook-level "no request without a Cycle" suite), `deduction-report-labels.test.ts` (6 tests),
+`deduction-report-print-fields.test.ts` (13 tests: readability levels scaled to 14 columns,
+`localStorage` round-trip under this report's own key, defensive-parse behavior),
+`reports-deduction-report-page.test.tsx` (41 tests: RBAC including "no View Details action ever
+renders," the missing-Cycle state, loading/empty/error states distinguishing "no entries for this
+cycle" from "no match for filters," totals including the two-group layout, the `totalsComputed: false`
+notice, and the individually-dashed Employees With Any Deduction card, every approved table column
+with a full-body sensitive-field sweep and an explicit assertion that Gross Pay/Net Salary/Correction
+Balance Payable never appear, `+N more`, the correction-count badge-vs-plain-zero distinction, every
+row-status badge, sorting resetting page to 1 with `aria-sort` reflected and an explicit proof that
+EOBI/Total Deductions/Correction Count expose no sort button, pagination using server metadata only
+including the page-clamp-on-shrunk-total safeguard, every filter including all six tri-states
+(`hasCorrection` plus the five deduction ones, each independently exercised) and the Site-count-gated
+Unit disable/clear behavior, Clear Filters preserving the selected Cycle, export request shape and
+duplicate-click prevention, the 413 path, and Print defaults/persistence/readability/no-CNIC-or-
+banking-ever) — plus 2 new tests in the existing `reports-page.test.tsx` for the catalogue card's own
+permission-free (reuses `reports:view` alone) gating. ~~81 new frontend tests, all passing (79 in the
+4 new files — 19 hook, 6 labels, 13 print-fields, 41 page — 2 added to the existing catalogue test);
+full frontend suite 549/549.~~ — **superseded, §17.13**: the same-day M1–M5 targeted review pass grew
+these counts further (106 across the 4 files, 108 including the catalogue additions; full suite
+576/576) and also corrected the labels-file count itself (5, not 6 — a pre-existing miscount in this
+paragraph, not a regression). `typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`,
+`typecheck:e2e` clean, `git diff --check` clean.
+
+**Playwright**: `tests/e2e/specs/21-deduction-report.spec.ts` — real backend, real Chromium, no
+`page.route` interception for any RBAC or financial assertion. Covers: Master User navigation
+(Reports catalogue → Deduction Report → Cycle/Site filter → totals → sorting → pagination), Site
+scoping (a Site-A-scoped user sees only their accessible historical row, a live employee transfer to
+Site B leaves the already-created entry visible under its frozen historical Site A, Site B is never
+offered as a filter option, a direct API call naming the inaccessible Site 403s, and no cross-site
+leak from an unrelated Site-B-only employee), a dedicated Deduction filters test proving each of the
+five tri-states narrows correctly both individually (one employee fixture per deduction type, direct
+`PATCH /api/v1/payroll-entries/:id` for `fine`/`advanceDeduction`/`eidAdvanceDeduction`,
+`defaultEobiApplicable` at employee creation for EOBI) and in AND-composition
+(`hasFine=Yes AND hasEobi=No` isolates exactly the fine-only fixture), Row statuses (Held via the Hold
+toggle, No Pay Due via a zero-gross/EOBI-inapplicable/zero-day entry, Recovery Due via the
+zero-worked-days/positive-gross entry, Released via a full month of worked days, Pending via a
+genuine "Late Entry," plus the Row Status filter itself narrowing to the same value), Corrections (a
+real approved correction leaves the row's own Total Deductions provably unchanged from its
+pre-correction value, shows a correction-count column of 1, and never surfaces the correction's own
+reason text anywhere on the page), Export (CSV/XLSX download with safe headers present and CNIC/IBAN/
+account-number/bank/Gross Pay/Net Salary absent from the downloaded file content itself), Print
+(current-page-only wording, Print Options defaults, Very Wide readability warning at the full
+14-column default, browser print invoked), a Responsive layout check (1024×800 viewport: no
+document-level horizontal scroll per the same invariant `06-ui-regression.spec.ts` already
+establishes for the app shell, every filter field remains individually visible), and Permission
+enforcement (`statements:view` alone: catalogue card and nav link absent, direct navigation shows
+"You do not have permission to access this page."; `reports:view`: full access). ~~9/9 passing, both
+in isolation and combined with `17-reports.spec.ts` (18/18 passing, unweakened)~~ — **superseded,
+§17.13**: the same-day M1–M5 pass added one more scenario (a full filter/navigation-state round trip)
+and strengthened the existing Print test with a real print-media-emulated content check, growing this
+to 10/10 standalone, 19/19 combined.
+
+**Request-count/performance observations** (measured during this checkpoint's own manual and
+Playwright verification, not a production SLA): the list fetch always requested exactly one page
+(`pageSize=25`), a filter/sort/pagination change each produced exactly one new list request with no
+duplicate/storm, multi-select Site state produced no request per checkbox toggle, export produced
+exactly one request with no page/pageSize parameter, and print used the already-loaded page data with
+zero additional fetches. No detail request of any kind — no detail endpoint exists for this report to
+call.
+
+**Known limitations, disclosed**: (1) every Checkpoint 1A backend limitation (§17.10 above) is
+inherited unchanged — this checkpoint touches no backend code; (2) saved filter presets remain
+deferred (unchanged from the architecture review); (3) backend PDF remains intentionally excluded
+from this report (unchanged from the architecture review).
+
+**Deduction Report is now fully complete pending review** (Checkpoints 0, 1A, 1B). The remaining
+reports (Overtime Report, Advance Recovery Report, Salary Release Report, Variance/Month-on-Month
+Report) and Dashboard each remain **Not Started** and require their own separate, explicit
+authorization — this checkpoint did not begin any of them.
+
+## 17.13 Checkpoint 1B — Final Targeted Review / Remediation pass (2026-08-07, same day)
+
+A targeted review/hardening pass over the still-uncommitted Checkpoint 1B frontend above, mirroring
+§17.11's own precedent for Checkpoint 1A — mostly tests and documentation; **one genuine production
+defect found and fixed** (M2, below); everything else is added regression coverage or a chronology
+correction. No backend/shared/schema/migration file touched. No other report or Dashboard work
+begun.
+
+**M1 — filter/navigation-state architecture, verified against precedent, not invented.** Investigated
+whether this report's filter/sort/page state survives navigation. Confirmed by direct inspection
+(both this page and `reports-project-site-payroll-page.tsx` grepped for `location.state`/
+`sessionStorage`: neither exists in either file) that Project Site Payroll Report — the correct
+precedent, sharing `reports:view` and the identical single-required-Cycle shape — has no restoration
+mechanism at all: only the Payroll Cycle survives, because it alone is encoded in the URL
+(`useSelectedPayrollCycle`'s `/payroll-cycles/:cycleId/...` param); every other filter, the sort, and
+the page live in plain `useState` and reset on remount. Deduction Report already matched this
+precedent exactly — **no new global filter store was introduced**, per the authorizing instruction's
+own explicit constraint. Added regression coverage rather than production changes: four new
+`reports-deduction-report-page.test.tsx` tests proving (a) a fresh mount always starts from filter/
+sort/page defaults, (b) switching Cycle via the dropdown — a same-`RouteObject`, param-only
+navigation that React Router never remounts for — preserves the already-selected Site/Unit, (c)
+switching directly between two different single Sites clears an incompatible Unit (not merely "a
+second Site added," the only case previously covered), and (d) an unrelated re-render (a background
+refetch resolving) never spuriously clears an already-selected Unit. One new Playwright scenario
+(`21-deduction-report.spec.ts`, "Filter and navigation state") proves the real browser Back/Forward
+round trip end to end: Site/Unit/Row Status/deduction filters/sort all reset after navigating to the
+Reports catalogue and back, while the Cycle (URL-encoded) is restored automatically. A second,
+originally-planned Playwright test for the Cycle-switch-preserves-Site/Unit scenario was dropped
+after discovering `POST /api/v1/payroll-cycles` only ever bootstraps the application's first cycle
+ever (every cycle after that requires a real rollover) — by the time this suite runs, a cycle already
+exists, so that endpoint would 400/403 on every real run; the identical mechanic is already proven
+deterministically at the Vitest level (item (b) above) instead of shipping a self-skipping,
+unreliable E2E test.
+
+**M2 — print content verification; one genuine defect found and fixed.** Reviewing the print context
+header (`PrintContextHeader`, `hidden print:block`, invisible on screen) against the authorizing
+instruction's own required-content list found that the on-page `context` string
+(`reports-deduction-report-page.tsx`) omitted **Has Correction and all five deduction tri-state
+filter summaries** — Project Site Payroll Report's own identical header includes its one tri-state
+(Has Correction); this report simply never carried that pattern forward to its five additional
+tri-states. **Fixed**: the context string now lists Cycle, Site, Unit, Row Status, Has Correction,
+and all five deduction filters (via a new `triStateSummaryLabel` helper reusing the filter select's
+own "All"/"Yes"/"No" words), before "Current page only." Generated timestamp, title, and Cycle were
+already correct (`PrintContextHeader`'s own unconditional `Generated {timestamp}` line). Added, at
+the config/data-model level per the authorizing instruction's own preference over button-click-only
+tests: two new `deduction-report-print-fields.test.ts` describe blocks proving no summary-card or
+table-column id/label can ever name a sensitive field (Gross Pay, Net Salary, Correction Balance
+Payable, CNIC, banking, release/audit actor, reason) and that the Very Wide readability status never
+affects `hasNoMeaningfulColumns` (the warning and the hard block are fully independent checks); six
+new `reports-deduction-report-page.test.tsx` tests proving the context header's full content
+(including all six tri-state summaries and the generated timestamp), that the print-only totals cards
+render real backend values by default (not only after confirming Print, since `printSelection`
+initializes to the full selection), that the print-only table renders exactly the confirmed column
+set, that opening/confirming Print never calls the export/download function (no backend request), and
+a full-body sensitive-field sweep of the actual printed output. One Playwright scenario extended with
+a real `page.emulateMedia({ media: 'print' })` assertion — the printed DOM (not just the Print Options
+dialog) is checked directly for the Row Status/Has EOBI filter summary, the generated timestamp, the
+print-only table's columns, and the absence of every sensitive term.
+
+**M3 — export request parity.** Four new `use-deduction-report.test.ts` tests prove, at the URL-
+construction level: CSV and XLSX built from the identical current filters/sort produce byte-identical
+query strings except `format`; both formats carry every filter field (cycleId, sorted siteIds,
+unitId, rowStatus, all six tri-states, sortBy, sortDir); neither ever includes `page`/`pageSize` or
+an unsupported filter; a tri-state left at "All" is omitted identically from both, never sent as a
+false-equivalent value. Four new `reports-deduction-report-page.test.tsx` tests prove: the 413
+structured message is shown via `toast.error` exactly once (a real `vi.spyOn(toast, 'error')`, this
+codebase's own established pattern from `statements-page.test.tsx`); two *separate, sequential* real
+export clicks (CSV then XLSX, waiting for the shared `activeExport` guard to release between them,
+exactly as a real user would) produce calls whose cycle/filters/sort arguments are deep-equal, proven
+by comparing the actual captured call arguments rather than inferring parity from the UI; filters/
+sort remain visibly unchanged on screen after both; export never touches `window.location`. The
+already-existing "disables both export buttons while one export is already in flight" test already
+covered the mutual-exclusion guard and object-URL revocation; not duplicated here.
+
+**M4 — accessibility review; no genuine regression found, coverage added.** Reviewed every control
+against the authorizing instruction's checklist. Every tri-state/Row Status/Unit/Cycle control already
+used the shared `FilterField`/native-`<select>` pattern (label `id`/`htmlFor` association by
+construction — the same mechanism this file's own tests already exercised via `getByLabelText`
+throughout); Site's `MultiSelectFilter` trigger already carries its own associated label. The Print
+dialog is the shared `Modal`/`ModalContent` (Radix `Dialog`) primitive verbatim — accessible name via
+`DialogPrimitive.Title`, focus trap, and Escape-to-close are Radix's own built-in guarantees, not
+reimplemented per report. Nine new tests added (`reports-deduction-report-page.test.tsx`): every
+filter control reachable by its own label; every tri-state's three `<option>`s are the literal words
+"All"/"Yes"/"No" (never color-coded); every sortable header defaults to `aria-sort="none"` and every
+non-sortable header (EOBI, Total Deductions, Correction Count, Released Date, Primary Unit,
+Designation) carries no `aria-sort` attribute at all; the Print dialog exposes the accessible name
+"Print Options"; Escape closes it; closing it never leaves focus stranded inside the removed dialog
+subtree (the exact target element Radix's `onCloseAutoFocus` restores focus to was not asserted — no
+other dialog in this codebase's test suite independently re-verifies that specific behavior either,
+and jsdom's `requestAnimationFrame`/focus-timing support for it is not reliable enough here to assert
+without risking a flaky, environment-dependent test); Export CSV/Export Excel's disabled state is
+exposed via the native `disabled` attribute, not color alone. **No production code changed for M4.**
+
+**M5 — documentation chronology correction.** The initial Checkpoint 1B pass's own `SESSION_HANDOFF.md`
+edit had rewritten the immediately-preceding Checkpoint 1A-only entry's own header text (from
+"(latest)" to "(superseded by the entry above for status purposes)") — technically consistent with a
+pattern this file already uses pervasively across its own history (Project Site Payroll Report,
+Employee Payroll History, and others all show the identical phrasing), but the authorizing instruction
+for this pass explicitly named this exact pattern as unwanted for this checkpoint's own record and
+asked for it to be reverted: **that entry's own text has been restored verbatim** ("(latest)"), and an
+explicit superseding note was added to the *newer* entry instead (which supersedes it for
+current-status purposes without touching its own words) — matching the instruction's own stated
+convention ("old historical entry remains untouched, then new dated/addendum entry explicitly
+supersedes it"). The other, already-committed instances of the same pattern elsewhere in
+`SESSION_HANDOFF.md` (from prior sessions' own checkpoints) were deliberately left untouched — out of
+this pass's scope, and not part of this still-uncommitted checkpoint's own diff. Test/Playwright
+counts throughout `docs/architecture/workflows/reports.md` §17.12, `docs/PROJECT_PROGRESS.md`, and
+`docs/SESSION_HANDOFF.md` were verified against a fresh, real run (not assumed) and corrected where
+stale, using the same strikethrough-plus-"superseded, §X"-pointer convention §17.11 already
+established, rather than silently overwriting a previously-stated number.
+
+**Verification** (this pass only — backend suites were not re-run, per the authorizing instruction's
+own "do not run backend suites"): focused runs of every touched/added test file, the full frontend
+suite (**576/576 passing**, up from 549 — every net-new test from this pass plus every pre-existing
+test, none weakened or skipped), `typecheck`/`lint`/`build` clean across `shared`/`backend`/
+`frontend`, `typecheck:e2e` clean, `21-deduction-report.spec.ts` run standalone twice (**10/10
+passing** both times) and once combined with `17-reports.spec.ts` (**19/19 passing**, unweakened),
+`git diff --check` clean. No backend/shared/schema/migration file appears in this pass's diff. No
+other report or Dashboard file appears in this pass's diff.
+
+**Still not committed, pushed, or deployed** — stopping again for final authorization, per the
+authorizing instruction.

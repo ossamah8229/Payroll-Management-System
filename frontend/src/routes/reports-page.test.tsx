@@ -67,3 +67,21 @@ describe('ReportsPage — Project Site Payroll Report catalogue card', () => {
     expect(screen.getByText('Project Site Payroll Report').closest('a')).not.toBeNull();
   });
 });
+
+describe('ReportsPage — Deduction Report catalogue card', () => {
+  afterEach(() => cleanup());
+
+  it('shows the Deduction Report card as a real link for a user holding only reports:view', () => {
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    const link = screen.getByText('Deduction Report').closest('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('/reports/deduction-report');
+  });
+
+  it('requires no extra permission beyond the page-level reports:view gate (no requiredPermission override)', () => {
+    // Contrast with Employee Payroll History, which is hidden without statements:view — Deduction
+    // Report reuses reports:view alone (frozen decision 3, reports.md §17.1).
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    expect(screen.getByText('Deduction Report').closest('a')).not.toBeNull();
+  });
+});
