@@ -9767,6 +9767,111 @@ pass's own scope ("do not run backend suites").
 
 ---
 
+## Phase 7 Reports — Overtime Report, Checkpoint 0 (Architecture Review, approved) and
+## Checkpoint 1A (Backend Foundation) — IMPLEMENTED, 2026-08-07, awaiting review, NOT COMMITTED
+
+**Checkpoint 0 — frozen decisions**: business purpose (single-cycle operational overtime report —
+which employees worked overtime, at which Unit, how many hours, at what rate, how much it cost);
+**report grain — one row = one `PayrollEntryWorkLine`, an intentional, frozen architectural
+exception** from every sibling report's own `PayrollEntry` grain (OT hours/rate are genuinely
+work-line-scoped, not entry-scoped — a multi-unit employee's OT rate has no single correct value at
+entry-grain); permission `reports:view`; cycle mandatory, single, no range; site authorization
+always `PayrollEntry.siteId`; Unit filterable and displayed as its own row-level field; canonical OT
+fields (OT Hours = stored column, Effective OT Rate/OT Earnings both from canonical `calcNet`, never
+a second formula); six filters (Cycle, Site, Unit, Row Status, Has Correction, one `hasOvertime`
+tri-state); an 11-column table excluding Net Salary/Total Earnings; totals split into always-exact
+entry-level counts (3 of 5 canonical status buckets — Released/Held/Pending, a deliberate narrowing)
+and a bounded 20,000-row group (including the stored-column `totalOtHours`, deliberately not split
+into an always-available SQL path); **no "Average OT Rate"** (a naive average would not be
+hours-weighted); six DB-native sortable fields, `effectiveOtRate`/`otEarned` explicitly excluded; no
+detail page; CSV/XLSX export at the same 20,000-row ceiling, one export row per matching work line;
+browser print deferred to a future Checkpoint 1B. Full record:
+`docs/architecture/workflows/reports.md §18.1`.
+
+**Checkpoint 1A — Backend** (`backend/src/modules/reports/overtime-report.service.ts`): `GET
+/api/v1/reports/overtime-report` and `GET .../export`, both gated by
+`requirePermission(PERMISSIONS.REPORTS_VIEW)` (mounted on the existing `reportsRouter`). The query
+root is `prisma.payrollEntryWorkLine`, not `prisma.payrollEntry` — the one structural difference
+from every sibling report's own service. `calcWorkLineRow` calls canonical `calcNet` with a
+`workLines` array containing only the row's own single work line — provably identical to that same
+line's own breakdown inside a full-entry `calcNet` call, since each line's `dailyRate`/
+`effectiveOtRate`/`otEarned` inside `calcNet` depends only on that line's own fields and the entry's
+`grossPay`, never on any sibling line (`docs/architecture/workflows/reports.md §18.2`). Totals split
+into always-exact `PayrollEntry`-level distinct counts (never double-counting a multi-unit entry as
+2 released entries) and one bounded fetch-and-`calcNet` pass for everything else, mirroring Deduction
+Report's own "one unified strategy" precedent.
+
+**Shared**: `shared/src/schemas/overtime-report.ts` — the fourth Reports-module report to validate
+its query parameters through a shared Zod schema. Defines the 5-state `OvertimeReportRowStatus`
+union, the 6-field sort union, list/export query schemas, the full response contract, and
+`OVERTIME_REPORT_EXPORT_MAX_ROWS = 20,000`.
+
+**Table columns**: Employee Code, Employee Name, Project Site, Unit, Designation, OT Hours,
+Effective OT Rate, OT Earnings, Gross Pay, Row Status, Has Correction. No Net Salary, no Total
+Earnings, no CNIC, no banking field, no release-actor identity, no audit data — verified by a
+recursive sensitive-key sweep in the test suite.
+
+**Tests**: `backend/tests/overtime-report.test.ts` (54 tests) — authorization, contracts, **grain
+correctness** (a single-line entry produces exactly 1 row; a 2-line entry produces exactly 2, never
+collapsed; each row carries its own Unit-specific OT hours/rate, never averaged; entry-level fields
+repeat identically across a multi-line entry's own rows), overtime correctness (explicit vs. derived
+effective rate, a correction proven never to replay into the original row's own OT figures, a
+sensitive-field sweep), filters (`hasOvertime` tri-state, Unit narrowing within a multi-unit entry,
+AND-composition), row status (all five states including on multi-line entries, one genuine HTTP
+release transitioning every one of an entry's rows), sorting/pagination (database-level, stable
+tie-break across a mix of single-/multi-line entries), totals (a multi-unit entry proven never to
+double-count, the "with overtime" counts proven to only count the `otHours > 0` subset, no "Average
+OT Rate" anywhere), and export (one row per matching work line, sensitive-field sweep). All 54
+passing. `backend/tests/overtime-report-performance.test.ts` (9 tests) — a committed, repeatable
+performance suite seeding 10 sites × 1,000 employees × 3 cycles = 30,000 real `PayrollEntry` rows
+(OT hours varied ~1-in-4), running real `EXPLAIN (ANALYZE, BUFFERS)` against every filter/sort query
+shape. **No `Seq Scan` on `PayrollEntry` in any measured shape** — confirming no migration is
+needed, directly. One honest, disclosed finding: `PayrollEntryWorkLine` has no `cycleId` column of
+its own, so two query shapes show a `Seq Scan` on that (small, ~30,000-row) table hash-joined to an
+already cycle-filtered `PayrollEntry` set — fast (~3ms of a ~10–16ms total) and non-pathological, not
+a missing-index finding. `backend/tests/overtime-report-boundary.test.ts` (6 tests) — the exact
+19,999/20,000/20,001 export/totals ceiling boundary proven at real seeded volume, mirroring
+`deduction-report-boundary.test.ts`'s own established pattern, added from day one rather than a later
+hardening pass. Full evidence table: `docs/architecture/workflows/reports.md §18.8`.
+
+**Verification**: `typecheck`/`lint`/`build` clean across `shared`/`backend`. A combined
+`--runInBand` run of this report's own 3 files plus every sibling report and the shared row-status
+module (250 tests total) passed **249/250** on a freshly re-provisioned local Postgres. The one
+failure, `employee-payroll-history.test.ts` › "automatic RECOVERY_DUE at release creates a distinct
+origin path — not a Correction" (expects `201`, receives `500`), sits entirely outside every file
+this checkpoint touches — **confirmed pre-existing and unrelated to this checkpoint** by stashing
+every file this checkpoint added/changed and reproducing the identical failure against clean,
+unmodified `main` on the same freshly-migrated database. Diagnosing this also independently
+reproduced `docs/SESSION_HANDOFF.md`'s own already-documented `roles.test.ts` "second qualifying
+administrator" hazard (that test deactivates the real `MASTER_ADMIN` system role mid-test and
+restores it in a later statement skipped when an earlier invocation is interrupted, corrupting the
+shared role row for every later login in that same long-lived database) — a pre-existing,
+previously-diagnosed test-isolation gap, not a new finding, resolved the same documented way
+(drop/recreate the database, run via one uninterrupted invocation). Neither finding touches any file
+this checkpoint added or changed.
+
+**Independent hostile review (2026-08-07, same day, before commit)**: re-verified this checkpoint
+end to end — export/list parity, the 19,999/20,000/20,001 boundary, work-line grain correctness,
+canonical `calcNet` parity, authorization, and this section's own performance evidence — and found
+two genuine, test-only defects in `overtime-report-performance.test.ts`'s own seeding/assertions: a
+deterministic (5/5 reproductions) stale-Postgres-statistics bad-plan bug that turned the
+unit-filtered query's ~5ms real cost into a measured 3.2s–11.1s (fixed by an explicit `ANALYZE` call
+immediately after seeding, matching real production statistics), and an over-precise "no Seq Scan"
+plan-shape assertion on the single-cycle, no-filter query that the same `ANALYZE` fix then correctly
+exposed as a legitimate, always-fast cost-based coin-flip at this fixture's own 33% selectivity, not
+a defect (relaxed to test the wall-clock bound that actually matters). No application code changed;
+`overtime-report.test.ts`/`overtime-report-boundary.test.ts` were unaffected. Full detail:
+`docs/architecture/workflows/reports.md` §18.8's own independent-review addendum.
+
+**No commit, push, or deployment occurred — do not mark this checkpoint complete** until reviewed.
+Explicitly NOT started this checkpoint (per its own scope boundary): any frontend work for this
+report (route, page, filters, print, export buttons — the Reports catalogue's existing placeholder
+entry, `available: false`, is untouched), a detail endpoint, any schema/migration change, Dashboard,
+or any other report. No existing module's behavior was modified beyond this report's own new files
+and the two additive route/export registrations in `reports.routes.ts`/`shared/src/index.ts`.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

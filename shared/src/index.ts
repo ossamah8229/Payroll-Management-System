@@ -247,6 +247,33 @@ export type {
   DeductionReportUnitRef,
 } from './schemas/deduction-report';
 
+export {
+  OVERTIME_REPORT_DEFAULT_PAGE_SIZE,
+  OVERTIME_REPORT_EXPORT_FORMATS,
+  OVERTIME_REPORT_EXPORT_MAX_ROWS,
+  OVERTIME_REPORT_MAX_PAGE_SIZE,
+  OVERTIME_REPORT_ROW_STATUS_VALUES,
+  OVERTIME_REPORT_SORT_DIRECTIONS,
+  OVERTIME_REPORT_SORT_FIELDS,
+  overtimeReportExportQuerySchema,
+  overtimeReportListQuerySchema,
+  overtimeReportRowStatusSchema,
+} from './schemas/overtime-report';
+export type {
+  OvertimeReportCycleRef,
+  OvertimeReportExportFormat,
+  OvertimeReportExportLimitError,
+  OvertimeReportExportQuery,
+  OvertimeReportListQuery,
+  OvertimeReportListResponse,
+  OvertimeReportRow,
+  OvertimeReportRowStatus,
+  OvertimeReportSortDirection,
+  OvertimeReportSortField,
+  OvertimeReportTotals,
+  OvertimeReportUnitRef,
+} from './schemas/overtime-report';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

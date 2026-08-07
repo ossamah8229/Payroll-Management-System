@@ -17,15 +17,18 @@ export, and print treatment.
 0, 1A backend, and 1B frontend) are all complete and merged to `main`.** Phase 7 Deduction Report's
 Checkpoint 0 (architecture review) is approved, and Checkpoint 1A (backend foundation) and
 Checkpoint 1B (frontend, browser print, E2E) are both **IMPLEMENTED, awaiting review, NOT
-COMMITTED** — Deduction Report is functionally complete pending review. The remaining
-Phase 8A-investigated report catalogue (Overtime Report, Advance Recovery Report, Salary Release
-Report, Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each requiring its
-own separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports Module
-Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History", "Phase 7
-Reports — Project Site Payroll Report", and "Phase 7 Reports — Deduction Report" entries for the
-full build record. §15 below covers Employee Payroll History in full (backend §15.1–§15.9, frontend
-§15.10); §16 covers Project Site Payroll Report in full (backend §16.1–§16.8, frontend §16.9); §17
-covers Deduction Report in full (backend §17.1–§17.11, frontend §17.12).
+COMMITTED** — Deduction Report is functionally complete pending review. Phase 7 Overtime Report's
+Checkpoint 0 (architecture review) is approved, and Checkpoint 1A (backend foundation) is
+**IMPLEMENTED, awaiting review, NOT COMMITTED** — no frontend yet (Checkpoint 1B). The remaining
+Phase 8A-investigated report catalogue (Advance Recovery Report, Salary Release Report,
+Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each requiring its own
+separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports Module Investigation",
+"Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History", "Phase 7 Reports — Project
+Site Payroll Report", "Phase 7 Reports — Deduction Report", and "Phase 7 Reports — Overtime Report"
+entries for the full build record. §15 below covers Employee Payroll History in full (backend
+§15.1–§15.9, frontend §15.10); §16 covers Project Site Payroll Report in full (backend §16.1–§16.8,
+frontend §16.9); §17 covers Deduction Report in full (backend §17.1–§17.11, frontend §17.12); §18
+covers Overtime Report's backend foundation (§18.1–§18.10) — frontend not yet started.
 
 ---
 
@@ -1614,3 +1617,340 @@ other report or Dashboard file appears in this pass's diff.
 
 **Still not committed, pushed, or deployed** — stopping again for final authorization, per the
 authorizing instruction.
+
+## 18. Overtime Report — Checkpoint 1A (Backend Foundation, 2026-08-07)
+
+Backend, shared contracts, and backend tests only — no frontend page, no detail endpoint, no
+schema/migration change. Built against the approved Checkpoint 0 architecture review's own frozen
+decisions.
+
+### 18.1 Frozen decisions this checkpoint is built against
+
+1. **Business purpose**: a single-cycle operational overtime report — "which employees worked
+   overtime this cycle, at which Unit, how many hours, at what rate, and how much did it cost."
+   Deliberately not a cross-cycle trend (that overlaps the not-yet-built Variance/Month-on-Month
+   Report) and not a second Project Site Payroll Report.
+2. **Report grain — an intentional, frozen architectural exception**: one row = one
+   `PayrollEntryWorkLine`, not one `PayrollEntry` — the first row-level report in this module built
+   at this grain. OT hours/rate are genuinely work-line-scoped (`docs/architecture/database/
+   payroll-entry.md` §12a): a multi-unit employee's OT rate has no single correct value at
+   entry-grain, since each Unit can carry its own `otRate` or derive its own effective rate
+   independently. Work-line grain is the only grain where OT Hours, Effective OT Rate, and OT
+   Earnings are all unambiguous and correctly attributed per Unit. An employee with 2 work lines
+   this cycle appears as 2 rows — Employee Code + Unit together identify a row, not Employee Code
+   alone.
+3. **Permission**: `reports:view`, not `statements:view` — the same one-cycle, site-scoped
+   operational disclosure class as Project Site Payroll Report/Deduction Report.
+4. **Cycle**: exactly one, required. No range, no cross-cycle browsing.
+5. **Site authorization**: always `PayrollEntry.siteId` (denormalized onto each work line's own
+   `siteId` column, DB-guaranteed equal to its parent's) — never `Employee.siteId` — reusing
+   `assertSiteAccess`/`getAccessibleSiteIds` exactly as every other report in this module.
+6. **Unit**: filterable and displayed as its own row-level field (not a "primary + N more" summary
+   like Deduction Report's own Unit column) — a direct consequence of the work-line grain, since
+   each row already *is* one specific Unit's attendance record.
+7. **Canonical overtime fields — never a second formula**: OT Hours is the stored
+   `PayrollEntryWorkLine.otHours` column, read verbatim. Effective OT Rate and OT Earnings both come
+   from canonical `calcNet` (`shared/src/lib/calc-net.ts`), never independently recomputed (§18.3).
+8. **Filters**: Cycle (required), Site (multi-select), Unit, Row Status, Has Correction, and one
+   `hasOvertime` tri-state (`otHours > 0` on the row's own work line) — no separate OT-hours/
+   OT-earnings filters, no amount/rate range, no employee search, no designation filter in V1.
+9. **Columns**: Employee Code, Employee Name, Project Site, Unit, Designation, OT Hours, Effective
+   OT Rate, OT Earnings, Gross Pay, Row Status, Has Correction. No Net Salary, no Total Earnings —
+   kept deliberately focused rather than becoming a second Project Site Payroll Report.
+10. **Totals**: `matchingCount`, `employeesWithOvertimeCount`, `totalOtHours`, `totalOtEarnings`,
+    `sitesWithOvertimeCount`, `unitsWithOvertimeCount` (all six gated by the same 20,000-row bounded
+    strategy, including the stored-column `totalOtHours` — deliberately *not* split into an
+    always-available SQL-aggregate path, per Deduction Report's own §17.5 "one unified bounded
+    strategy, not a second SQL financial formula" precedent), plus three always-exact DB-aggregate
+    entry-level counts — `releasedCount`/`heldCount`/`pendingCount` — and `correctedEntryCount`. **No
+    "Average OT Rate"** — a naive average of the row-level rate would not be hours-weighted and could
+    misrepresent true blended OT cost; deferred, not implemented.
+11. **Status-total scope, a deliberate narrowing**: totals expose exactly 3 of the 5 canonical
+    `rowStatus` states (Released/Held/Pending), not the full 5-state breakdown Deduction Report/
+    Employee Payroll History/Project Site Payroll Report use for their own totals. `NO_PAY_DUE`/
+    `RECOVERY_DUE` entries remain in `matchingCount` and fully reachable via the row-level
+    `rowStatus` filter (all 5 values) — they are simply not broken out as their own totals bucket in
+    V1, so the three counts do not necessarily sum to `matchingCount`. This is the approved scope,
+    not an oversight (§18.7).
+12. **Entry-level totals must count distinct entries, never raw matching work-line rows** — an
+    entry with 2 OT-matching work lines must not double-count as 2 released entries or 2 employees.
+    `PayrollEntry`'s own `@@unique([cycleId, employeeId])` makes "distinct employees" and "distinct
+    entries" the same count within this report's always-single-cycle scope, so
+    `employeesWithOvertimeCount` needs no separate `employeeId` grouping.
+13. **Sorting**: `employeeCode`/`employeeName`/`site`/`unit`/`otHours`/`rowStatus` — all true
+    database-level `ORDER BY`, no bounded in-memory sort exception. `effectiveOtRate`/`otEarned` are
+    explicitly **not** sortable in V1 (neither is a stored column — `otRate` is nullable/derived and
+    `otEarned` is never stored at all — and this checkpoint does not introduce a bounded-sort
+    exception for either, mirroring Deduction Report's own restraint absent real usage proving the
+    need).
+14. **No detail page/endpoint in V1.** Every field the frontend needs lives on the list row itself.
+    No cross-link to Employee Payroll History's own detail page (a different, more sensitive
+    `statements:view` permission a `reports:view`-only user may not hold).
+15. **Export**: CSV/XLSX, complete filtered dataset, the same 20,000-row preflight-`COUNT`/
+    structured-413 pattern every sibling report already uses. One export row per matching work
+    line — a multi-unit entry contributes multiple export rows, exactly matching the list endpoint's
+    own grain. No backend PDF.
+16. **Print**: deferred entirely to a future Checkpoint 1B (browser print only, current-page-only, a
+    fresh field vocabulary/`localStorage` key `overtime-report-print-fields:v1`) — no backend work
+    for print in this checkpoint.
+17. **No schema/migration change expected** — proven with `EXPLAIN ANALYZE` in this checkpoint
+    rather than assumed (§18.6).
+
+### 18.2 Why a single-line `calcNet` call is the canonical per-line figure, not an approximation
+
+Every sibling report's own `calcEntryRow` calls `calcNet` with an entry's *complete* `workLines`
+array. This report's own `calcWorkLineRow` (`overtime-report.service.ts`) instead calls `calcNet`
+with a `workLines` array containing only the row's own single work line. This is not a second,
+approximate formula: inside `calcNet` (`shared/src/lib/calc-net.ts`), each work line's
+`dailyRate`/`effectiveOtRate`/`otEarned` is computed purely from that line's own
+`otHours`/`otRate`/`cycleDays` and the parent entry's own `grossPay` — the per-line loop body never
+reads any sibling line. Calling `calcNet` with `[thisLine]` therefore yields the identical
+`workLines[0].effectiveOtRate`/`.otEarned` a full-entry call would have produced for that same line —
+proven by construction, not by a special-cased equivalence test — while letting this report avoid
+ever selecting/fetching an entry's other work lines, which it never displays. Every other `calcNet`
+input this report doesn't display (`allowance`, `leaveDays`, `eobiAmount`, etc.) is still passed as
+the entry's own real, selected value, never a placeholder, so the call remains a genuine, complete
+invocation of the canonical formula.
+
+### 18.3 Shared contract
+
+`shared/src/schemas/overtime-report.ts` — the fourth Reports-module report to validate its query
+parameters through a shared Zod schema. Defines: the 5-state `OvertimeReportRowStatus` union
+(independently declared, same "no confusing cross-report type reference in a public DTO" convention
+every sibling report already follows); the 6 allowed sort fields (frozen decision 13); list/export
+query schemas covering `cycleId` (required), `siteIds`, `unitId`, `rowStatus`, `hasCorrection`, and
+the new `hasOvertime` tri-state, reusing the established tri-state boolean/UUID-list query-parsing
+convention every sibling report's own shared schema already duplicates (this project's own
+established choice not to extract these small Zod helpers into a shared module, even at a 4th
+consumer); and the full response contract (`OvertimeReportRow`/`Totals`/`ListResponse`/
+`ExportLimitError`). `OVERTIME_REPORT_EXPORT_MAX_ROWS = 20,000`, independently named per the
+"extract at the third consumer" convention already applied to the ceiling constant three times
+before.
+
+### 18.4 Backend service
+
+`backend/src/modules/reports/overtime-report.service.ts` — the query root is
+`prisma.payrollEntryWorkLine`, not `prisma.payrollEntry` (the one structural difference from every
+sibling report's own service). `resolveOvertimeReportFilters` builds both a `PayrollEntryWorkLine`-
+level `where` (used by the list query, `matchingCount`, and the bounded totals/export fetch) and the
+same filter set expressed as a `PayrollEntry`-level `where` plus a `workLines: { some: ... }`
+fragment, for the entry-level distinct-count totals (§18.1 frozen decision 12) — kept in lockstep by
+being built from the same resolved filter values in one function, not two independently-maintained
+copies. `resolveSiteIdFilter`/`resolveUnitFilter` mirror Deduction Report's own functions exactly.
+`buildOrderBy` sorts through the `payrollEntry` relation for identity/status fields and directly on
+the work line's own columns for `unit`/`otHours` — every branch ends with `{ id: 'asc' }` (the work
+line's own `id`, the correct tie-break at this grain).
+
+### 18.5 Totals
+
+`computeOvertimeReportTotals` splits into two groups (frozen decisions 10–12): `matchingCount` and
+the four entry-level distinct counts are plain, always-exact `PayrollEntry`/`PayrollEntryWorkLine`
+`count()` calls; every other total (`employeesWithOvertimeCount`, `totalOtHours`, `totalOtEarnings`,
+`sitesWithOvertimeCount`, `unitsWithOvertimeCount`) is computed in one bounded fetch of every
+matching work line's calc inputs, only when `matchingCount` is within
+`OVERTIME_REPORT_EXPORT_MAX_ROWS` — beyond it, `null` with `totalsComputed: false`. The "with
+overtime" counts are computed from the `otHours > 0` subset of that same bounded fetch (via `Set`
+deduplication on `employeeId`/`siteId`/`unitId`), not a second query.
+
+### 18.6 Routes
+
+`GET /api/v1/reports/overtime-report` and `GET /api/v1/reports/overtime-report/export`, mounted on
+the existing `reportsRouter`, both gated by `requirePermission(PERMISSIONS.REPORTS_VIEW)`. No `/:id`
+route (frozen decision 14). Both routes are audited (`report.viewed`/`report.exported`,
+`metadata.reportType: 'overtime_report'`). The export route preflight-`COUNT`s before generating any
+CSV/XLSX buffer, returning a structured `{ code: 'EXPORT_ROW_LIMIT_EXCEEDED', matchingCount,
+maxRows, message }` (HTTP 413) over the ceiling.
+
+### 18.7 Table columns and totals
+
+Row: Employee Code, Employee Name, Project Site, Unit, Designation, OT Hours, Effective OT Rate, OT
+Earnings, Gross Pay, Row Status, Has Correction. No Net Salary, no Total Earnings, no CNIC, no
+banking field, no release-actor identity, no audit data — verified by a full-response recursive
+sensitive-key sweep in the backend test suite.
+
+Totals: `matchingCount`, `employeesWithOvertimeCount`, `totalOtHours`, `totalOtEarnings`,
+`sitesWithOvertimeCount`, `unitsWithOvertimeCount` (all six bounded/nullable together),
+`releasedCount`/`heldCount`/`pendingCount` (always-exact, distinct-entry, 3-bucket — frozen decision
+11), and `correctedEntryCount` (always-exact, distinct-entry), computed over the **complete filtered
+work-line scope**, never the current page. No "Average OT Rate" anywhere in the response (frozen
+decision 10).
+
+### 18.8 Performance evidence (measured, not assumed)
+
+Seeded 10 sites × 1,000 employees × 3 cycles = 30,000 real `PayrollEntry` rows (each with exactly
+one `PayrollEntryWorkLine` — the documented common case), OT hours varied ~1-in-4 so `hasOvertime`
+exercises real, non-degenerate selectivity — a committed, repeatable Jest suite
+(`backend/tests/overtime-report-performance.test.ts`, 9 tests).
+
+| Query | Plan | Execution time (`EXPLAIN ANALYZE`) |
+|---|---|---|
+| List, one cycle only, all sites (10,000 of 10,000 rows matching), `ORDER BY employee.name` | Alternates run to run between an `Index`/`Bitmap Heap Scan` on `PayrollEntry` and a `Parallel Seq Scan` on `PayrollEntry` (see the independent-review addendum below — a genuine, cost-based coin-flip at this fixture's own 33% single-cycle selectivity, not a pathology), hash/nested-loop-joined to `PayrollEntryWorkLine` (see honest finding below) | ~10–190ms |
+| List, one cycle + one site (1,000 of 10,000 rows matching) | `Index Scan` on `PayrollEntry` via `PayrollEntry_siteId_cycleId_idx`, nested-loop into a `Bitmap Index Scan` on `PayrollEntryWorkLine_payrollEntryId_idx` | ~8ms |
+| `hasOvertime=true` (~25% selectivity, the work line's own stored column) | `Bitmap Heap Scan` on `PayrollEntry` via the same cycle index, hash-joined to a `Seq Scan` on `PayrollEntryWorkLine` with `Filter: "otHours" > 0` | ~10ms |
+| Unit-filtered (cycle + site + unit) | `Hash Join`: a `Bitmap Heap Scan` on `PayrollEntryWorkLine` via `PayrollEntryWorkLine_unitId_idx` hashed against a `Bitmap Heap Scan` on `PayrollEntry` via `PayrollEntry_siteId_cycleId_idx` — see the independent-review addendum below for the pre-`ANALYZE` bad-plan finding this replaced | ~5–130ms |
+| Sort by `otHours` desc (a plain stored `PayrollEntryWorkLine` column, no bounded fallback) | Same shape as the unfiltered list query, `Sort Key: pewl."otHours" DESC` | ~16ms |
+| Full HTTP request: list page + totals over 10,000 matching work lines, one cycle, unfiltered | — | ~1.0s |
+| Export: 10,000 matching rows (one cycle, unfiltered) to CSV | — | ~1.8s |
+
+**No `Seq Scan` on `PayrollEntry` occurs in the site-filtered, `hasOvertime`-filtered, unit-filtered,
+or `otHours`-sorted query shapes** — confirming frozen decision 17 ("no schema change... prove this
+with `EXPLAIN ANALYZE`") directly for every filtered/sorted access path this report actually
+exposes. The one exception (the single-cycle, *no*-filter shape) is addressed by its own
+independent-review addendum immediately below, not silently folded into this blanket claim.
+
+**Honest finding, not the assumption going in**: `PayrollEntryWorkLine` has no `cycleId` column of
+its own (only `payrollEntryId`/`siteId`/`unitId`) — every cycle-filtered query in this report
+necessarily joins it to `PayrollEntry`, and for the two shapes that first select a large fraction of
+one cycle's work lines (the unfiltered list and the `otHours`-sort query), the planner chose a `Seq
+Scan on "PayrollEntryWorkLine"` rather than an index-driven access path. This is not a missing-index
+finding: the table itself is small (30,000 rows total across all 3 seeded cycles, ~492 shared
+buffers), the scan itself takes ~3ms of the total ~10–16ms query time, and it is hash-joined against
+an already cycle-filtered ~10,000-row `PayrollEntry` set rather than driving the query — a
+legitimate, fast, non-pathological plan for a table at this size, not a finding this report's own
+assertions needed to rule out (mirroring every sibling report's own precedent of scoping its `Seq
+Scan` assertion to `PayrollEntry`, the table actually carrying the filter predicate, not every joined
+table). At 10,000-employee production scale (Principle 10), this table would still be a small
+multiple of the `PayrollEntry` row count (the documented common case is one line per entry), so this
+finding is not expected to change qualitatively — but no claim is made here beyond what this seed's
+own evidence shows.
+
+**Independent review addendum (2026-08-07, same day, before commit)**: an independent hostile review
+found this checkpoint's original performance seeding never ran a plain `ANALYZE` after its bulk
+`createMany` load, unlike a real production `PayrollEntry` table, whose statistics autovacuum keeps
+continuously current. Confirmed by direct, repeated reproduction (not assumed): without real
+statistics, Postgres's planner drove the site+unit-filtered list query from `PayrollEntryWorkLine`'s
+own `unitId` index first, nested-looping back into `PayrollEntry` once per candidate work line
+(3,000 iterations at this fixture's volume) rather than the far cheaper hash join real statistics
+correctly favor — a genuine, deterministic (5/5 reproductions) 30–100× slowdown (measured 3.2s–11.1s
+against a 3s bound, vs. ~5–130ms with real statistics), the one finding in this section that *is* a
+defect, not an artifact of the test. **Fixed, test-only**: `overtime-report-performance.test.ts`'s
+own seed now runs `ANALYZE "PayrollEntryWorkLine", "PayrollEntry", "Employee"` immediately after
+seeding, before any assertion — matching the statistics a real production table already has by the
+time anyone queries it, not an artificially favorable or unfavorable condition either way. No
+application code changed; the existing indexes were already sufficient, the planner simply lacked
+the statistics to choose correctly among them.
+
+That same fix, by supplying the planner with real (rather than absent) statistics, also surfaced a
+second, pre-existing fragility: the single-cycle, *no*-filter query's own `not Seq Scan on
+"PayrollEntry"` assertion is not a reliable invariant at this fixture's own selectivity — `cycleId`
+alone selects exactly 1-in-3 of this 3-cycle fixture (a real production table accumulates many more
+cycles over its lifetime, so a single cycle's true selectivity is far lower there), and at 33%
+selectivity Postgres's cost-based planner legitimately alternates between an `Index Scan` and a
+`Parallel Seq Scan` run to run — both confirmed, by repeated measurement, to execute well within the
+`ms < 3,000` bound (~1.0–1.3s on an `Index Scan`, ~180ms on a `Parallel Seq Scan` — the sequential
+plan is not slower here). This was never a hidden defect in the *report*; it was an over-precise test
+assertion asserting plan *shape* as a proxy for speed, when wall-clock time is the assertion that
+actually matters and was already present alongside it. **Fixed, test-only**: that one test's `not
+Seq Scan` assertion was removed (renamed to drop its now-inaccurate "not a sequential scan" claim),
+replaced with a doc comment recording why, while its `EXPLAIN ANALYZE` output is still logged for
+every run and its `ms < 3,000` timing assertion — the one that actually matters — is untouched.
+
+Neither finding changes any of this section's other rows, which were re-verified unaffected (five
+consecutive clean full-suite runs, 9/9 passing, after both fixes).
+
+**19,999/20,000/20,001-row boundary, proven at real volume** (`backend/tests/
+overtime-report-boundary.test.ts`, 6 tests, mirroring `deduction-report-boundary.test.ts`'s own
+methodology — one cycle, 20,001 real `PayrollEntryWorkLine` rows split 19,999/1/1 across three
+sites): `totalsComputed` is `true` at 19,999 (~2.8s) and exactly at 20,000 (~2.8s), `false` at
+20,001 (~0.3s, the bounded pass skipped entirely); export succeeds (200, full row count) at 19,999
+(~4.3s) and exactly at 20,000 (~5.3s), and is rejected with a structured 413 at 20,001 in ~0.1s,
+before any row is fetched.
+
+This sandbox's single-node local Postgres (via `embedded-postgres`) is not a production-scale cloud
+database — these numbers are evidence of correct query-plan behavior and rough order of magnitude,
+not a production SLA guarantee, the same caveat every prior report's own performance evidence states.
+
+### 18.9 Tests
+
+`backend/tests/overtime-report.test.ts` (54 tests) — authorization (401/403, `statements:view`-only
+denied, Master Admin global access, site-scoped restriction, an explicit inaccessible-`siteIds`
+filter rejected with 403, a genuine historical-transfer scenario proving `PayrollEntry.siteId`-based
+authorization, a Unit belonging to an inaccessible Site rejected with 403), contracts (missing/
+malformed/nonexistent `cycleId`, malformed `siteIds`, out-of-range `pageSize` rejected not clamped,
+explicit rejection of `sortBy=effectiveOtRate`/`otEarned`, export ignoring `page`/`pageSize`
+entirely, an unrecognized query parameter proven inert via a byte-for-byte baseline comparison),
+**grain correctness** (a single-work-line entry produces exactly 1 row; a 2-work-line entry produces
+exactly 2 rows, never collapsed; each row carries its own Unit-specific OT hours/rate, never
+averaged or shared across lines; entry-level fields repeat identically across a multi-line entry's
+own rows), overtime correctness (effective rate equals the stored `otRate` when set; derives as
+`grossPay / cycleDays / 8` when null; a different `cycleDays` per line changes the derived rate
+independently; zero OT hours produces zero OT earnings, not an absent field; a correction proven
+never to replay into the original row's own OT figures; a full-body sweep proving no CNIC/banking/
+Net Salary/Total Earnings ever appears), filters (`hasOvertime` at `Yes`/`No`/`All`, a Unit filter
+narrowing within a multi-unit entry, Unit+`hasOvertime` AND-composition, the reused `hasCorrection`/
+Site/Row Status filters), row status (all five states including on multi-line entries, one genuine
+release through the real HTTP release endpoint transitioning every one of an entry's rows), sorting/
+pagination (every approved field, database-level pagination across a mix of single- and multi-line
+entries with zero cross-page overlap and a stable `id` tie-break), totals (complete-filtered-scope
+independent of pagination, a multi-unit entry proven never to double-count in the entry-level totals,
+the "with overtime" counts proven to only count the `otHours > 0` subset, status-breakdown counts
+reflecting distinct entries, `NO_PAY_DUE`/`RECOVERY_DUE` entries counted in `matchingCount` but not
+broken into their own bucket while remaining filterable, no "Average OT Rate" field anywhere), and
+export (CSV/XLSX header vocabulary, one export row per matching work line — a multi-unit entry
+contributing multiple export rows, a preflight-`COUNT`-before-work 413 smoke check, a dedicated
+sensitive-field sweep across both formats). All 54 passing.
+
+`backend/tests/overtime-report-performance.test.ts` (9 tests, §18.8's own evidence) — committed and
+repeatable, not an uncommitted smoke test.
+
+`backend/tests/overtime-report-boundary.test.ts` (6 tests, §18.8's own evidence) — the exact
+19,999/20,000/20,001 boundary proven at real seeded volume, mirroring
+`deduction-report-boundary.test.ts`'s own established pattern from day one (not added in a later
+hardening pass, unlike Deduction Report's own M3).
+
+Backend full suite: `typecheck`/`lint`/`build` clean across `shared`/`backend`. Targeted combined
+`--runInBand` run of this report's own 3 files plus every sibling report and the shared row-status
+module, on a freshly re-provisioned local Postgres (`overtime-report{,-performance,-boundary}.test.ts`,
+`deduction-report.test.ts`, `employee-payroll-history.test.ts`, `project-site-payroll-report.test.ts`,
+`payroll-entry-row-status.test.ts` — 250 tests) — **249/250 passing.** The one failure,
+`employee-payroll-history.test.ts` › "Balances and settlement › automatic RECOVERY_DUE at release
+creates a distinct origin path — not a Correction" (expects `201` from the real Unit-release
+endpoint, receives `500`), sits entirely outside every file this checkpoint touches — **confirmed
+pre-existing and unrelated to this checkpoint** by stashing every file this checkpoint added/changed
+and reproducing the identical failure against clean, unmodified `main` on the same freshly-migrated
+database. Along the way, repeated `npx jest` invocations run directly while diagnosing this also
+independently reproduced `docs/SESSION_HANDOFF.md`'s own already-documented `roles.test.ts`
+"second qualifying administrator" hazard (that test deactivates the real `MASTER_ADMIN` system role
+mid-test and restores it in a later statement that never runs if an earlier partial invocation is
+interrupted first, corrupting the shared role row for every later login in that same long-lived
+database) — a pre-existing, previously-diagnosed test-isolation gap, not a new finding, resolved the
+same documented way (drop/recreate the database, then run via a single uninterrupted invocation).
+Neither finding touches any file this checkpoint added or changed.
+
+**Independent review re-verification (2026-08-07, same day, before commit)**: re-ran this section's
+own evidence independently, on a freshly re-provisioned local Postgres — `typecheck`/`lint`/`build`
+clean across `shared`/`backend` (re-confirmed), the combined 4-file run above re-confirmed (217/217
+passing across this report's own 3 files plus `deduction-report.test.ts`/
+`project-site-payroll-report.test.ts`, `employee-payroll-history.test.ts`'s own pre-existing
+"RECOVERY_DUE" failure independently reproduced in total isolation with none of this checkpoint's
+files even loaded, confirming it is unrelated by construction, not merely by the earlier stash-based
+check). Found and fixed the two test-only performance-evidence issues recorded in §18.8's own
+addendum (a genuine stale-statistics bad-plan defect in the unit-filtered query, and an
+over-precise plan-shape assertion on the single-cycle no-filter query); both `overtime-report.test.ts`
+(54 tests) and `overtime-report-boundary.test.ts` (6 tests) were unaffected and re-passed unchanged.
+`overtime-report-performance.test.ts` re-passed 9/9 across five consecutive full-suite runs after the
+fix, up from a deterministic 8/9 before it (§18.8). No production code changed by this review — every
+change is test-only, confined to `overtime-report-performance.test.ts`'s own seeding and one
+assertion.
+
+### 18.10 What Checkpoint 1A did NOT build
+
+Per its own explicit scope boundary: no frontend route, page, filter UI, print, or CSV/XLSX download
+button — the backend/export endpoints exist and are fully functional over HTTP, but nothing in the
+frontend calls them yet (the Reports catalogue's existing placeholder entry, `available: false`, is
+untouched). No detail endpoint (frozen decision 14). No schema or migration change (frozen decision
+17, proven in §18.8). Dashboard and every other Phase 8A-catalogued report remain untouched and
+**Not Started**.
+
+**Known limitations, disclosed**: (1) the totals-latency characteristic already disclosed for every
+sibling report applies identically here — an unfiltered, one-cycle request pays the full
+`calcNet`-per-work-line cost on every request, not only exports; narrowing by site, unit, or
+`hasOvertime` keeps it fast; (2) `effectiveOtRate`/`otEarned` remain unsortable in V1 (frozen
+decision 13) — revisit only if real usage demonstrates the need; (3) "Average OT Rate" is not
+implemented (frozen decision 10) — revisit only as an explicitly hours-weighted figure
+(`totalOtEarnings ÷ totalOtHours`), never a naive per-row average, if a future checkpoint decides
+it's needed; (4) saved filter presets and backend PDF remain out of scope, unchanged from every
+sibling report.
+
+**Checkpoint 1A is backend-only and awaiting independent review before Checkpoint 1B (frontend)
+begins.** No other report or Dashboard work was started.

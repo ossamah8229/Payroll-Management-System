@@ -17,7 +17,59 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-07 (latest, later same day) — Phase 7 Reports, Deduction Report Checkpoint 1B
+> **Update, 2026-08-07 (latest) — Phase 7 Reports, Overtime Report Checkpoint 0 (Architecture,
+> approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.**
+> Backend/shared-contracts/tests only — no frontend page exists yet for this report. Full record:
+> `docs/architecture/workflows/reports.md` §18 and `docs/PROJECT_PROGRESS.md`'s own "Phase 7 Reports
+> — Overtime Report" entry (all 17 frozen decisions; the single-line-`calcNet`-call rationale;
+> performance/boundary evidence) — not duplicated here in full.
+>
+> **Report grain — a frozen, intentional architectural exception**: one row = one
+> `PayrollEntryWorkLine`, not one `PayrollEntry` (every sibling report in this module is
+> `PayrollEntry`-grain). OT hours/rate are genuinely work-line-scoped; this is the only grain where
+> OT Hours/Effective OT Rate/OT Earnings are all unambiguous per Unit. Gated on `reports:view`
+> (never `statements:view`), site authorization always `PayrollEntry.siteId`. Totals split into
+> always-exact entry-level counts (Released/Held/Pending — a deliberate 3-of-5-state narrowing,
+> `NO_PAY_DUE`/`RECOVERY_DUE` remain filterable but aren't their own totals bucket) and a bounded
+> 20,000-row group. No "Average OT Rate" (a naive average wouldn't be hours-weighted).
+>
+> **Built**: `shared/src/schemas/overtime-report.ts`,
+> `backend/src/modules/reports/overtime-report.service.ts`, two routes on the existing
+> `reportsRouter` (`GET /overtime-report`, `GET .../export`). `backend/tests/overtime-report.test.ts`
+> (54 tests), `-performance.test.ts` (9 tests, real `EXPLAIN ANALYZE`, no `Seq Scan` on `PayrollEntry`
+> in every filtered/sorted query shape — see the independent review bullet below for the one
+> no-filter exception — no migration needed), `-boundary.test.ts` (6 tests, the exact
+> 19,999/20,000/20,001 ceiling proven at real volume, from day one rather than a later hardening
+> pass).
+>
+> **Verified**: `typecheck`/`lint`/`build` clean across `shared`/`backend`. A combined `--runInBand`
+> run of this report's own files plus every sibling report (250 tests) passed 249/250 on a freshly
+> re-provisioned local Postgres — the one failure (`employee-payroll-history.test.ts` › "automatic
+> RECOVERY_DUE at release creates a distinct origin path," expects `201` receives `500`) sits
+> entirely outside every file this checkpoint touches, confirmed pre-existing by reproducing it
+> against clean, unmodified `main` on the same freshly-migrated database. Diagnosing this also
+> independently reproduced this file's own already-documented `roles.test.ts` "second qualifying
+> administrator" hazard (§1 below, ~line 3670) — not a new finding.
+>
+> **Independent hostile review (2026-08-07, same day, before commit)**: found and fixed two
+> test-only defects in `overtime-report-performance.test.ts`. (1) A genuine, deterministic (5/5
+> reproductions) stale-Postgres-statistics bad-plan bug: the seed's bulk `createMany` left the
+> database without real statistics, and without them Postgres drove the unit-filtered list query
+> from the wrong side of the join, turning a ~5ms query into a measured 3.2s–11.1s — fixed by an
+> explicit `ANALYZE` immediately after seeding, matching the statistics a real production table
+> already has by the time anyone queries it. (2) That same fix then correctly exposed the
+> single-cycle no-filter query's "no `Seq Scan`" assertion as a legitimate, always-fast (~180ms–1.3s,
+> both well under the 3s bound) cost-based coin-flip at this fixture's own 33% single-cycle
+> selectivity, not a defect — relaxed to test the wall-clock bound that actually matters, not plan
+> shape. No application/production code changed. `overtime-report.test.ts` (54) and
+> `-boundary.test.ts` (6) were re-run unaffected; `-performance.test.ts` re-passed 9/9 across five
+> consecutive full-suite runs after the fix. Full detail: `docs/architecture/workflows/reports.md`
+> §18.8's own independent-review addendum.
+>
+> **No commit, push, or deployment occurred.** No frontend work started (Checkpoint 1B) — the
+> Reports catalogue's existing placeholder entry is untouched.
+
+> **Update, 2026-08-07 (later same day) — Phase 7 Reports, Deduction Report Checkpoint 1B
 > (Frontend, Browser Print, and E2E) — IMPLEMENTED, awaiting review, NOT COMMITTED.** Built over the
 > frozen Checkpoint 1A backend below — no backend, shared-contract, or database change. Full record:
 > `docs/architecture/workflows/reports.md` §17.12 and `docs/PROJECT_PROGRESS.md`'s own "Phase 7
