@@ -14,16 +14,17 @@ export, and print treatment.
 
 **Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report), Phase 7 Employee Payroll History
 (Checkpoints 0, 1A backend, and 1B frontend), and Phase 7 Project Site Payroll Report (Checkpoints
-0, 1A backend, and 1B frontend) are all complete.** Project Site Payroll Report's Checkpoint 1B
-(frontend, browser print, E2E, documentation) is **IMPLEMENTED, awaiting review, NOT COMMITTED** —
-built over the frozen Checkpoint 1A backend, no backend/shared/database change. The remaining
-Phase 8A-investigated report catalogue (Deduction Report, Overtime Report, Advance Recovery Report,
-Salary Release Report, Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each
+0, 1A backend, and 1B frontend) are all complete and merged to `main`.** Phase 7 Deduction Report's
+Checkpoint 0 (architecture review) is approved and Checkpoint 1A (backend foundation only) is
+**IMPLEMENTED, awaiting review, NOT COMMITTED** — no frontend page exists yet for this report. The
+remaining Phase 8A-investigated report catalogue (Overtime Report, Advance Recovery Report, Salary
+Release Report, Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each
 requiring its own separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports
-Module Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History", and
-"Phase 7 Reports — Project Site Payroll Report" entries for the full build record. §15 below covers
-Employee Payroll History in full (backend §15.1–§15.9, frontend §15.10); §16 covers Project Site
-Payroll Report in full (backend §16.1–§16.8, frontend §16.9).
+Module Investigation", "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History",
+"Phase 7 Reports — Project Site Payroll Report", and "Phase 7 Reports — Deduction Report" entries
+for the full build record. §15 below covers Employee Payroll History in full (backend §15.1–§15.9,
+frontend §15.10); §16 covers Project Site Payroll Report in full (backend §16.1–§16.8, frontend
+§16.9); §17 covers Deduction Report Checkpoint 1A (backend only).
 
 ---
 
@@ -982,3 +983,336 @@ from this report (unchanged from the architecture review).
 report (Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report,
 Variance/Month-on-Month Report) and Dashboard each remain **Not Started** and require their own
 separate, explicit authorization — this checkpoint did not begin any of them.
+
+## 17. Deduction Report — Checkpoint 1A (Backend Foundation, 2026-08-07)
+
+Backend, shared contracts, and backend tests only — no frontend page, no detail endpoint, no
+schema/migration change. Built against the approved Checkpoint 0 architecture review's own frozen
+decisions (`docs/PROJECT_PROGRESS.md`'s "Phase 7 Reports — Deduction Report" entries).
+
+### 17.1 Frozen decisions this checkpoint is built against
+
+1. **Business purpose**: a single-cycle, deduction-type-centric operational report — "which
+   employees had which deduction(s) applied this cycle, how much, and what does each type total to
+   company-wide?" — filterable and sortable by deduction type. Not a cross-cycle history, not an
+   Advance Recovery report, not a Variance report, not a second Project Site Payroll Report.
+2. **Report grain**: one row = one `PayrollEntry`. No per-deduction row, no per-deduction-type row,
+   no synthetic deduction-event row, no new reporting table.
+3. **Permission**: `reports:view`, not `statements:view` — the same one-cycle, site-scoped
+   operational disclosure class as Payroll Summary/Project Site Payroll Report.
+4. **Cycle**: exactly one, required. No range, no generic date range, no cross-cycle browsing.
+5. **Site authorization**: always `PayrollEntry.siteId`, never `Employee.siteId` — reusing
+   `assertSiteAccess`/`getAccessibleSiteIds` exactly as every other report in this module.
+6. **Unit**: filtering and display ("Primary Unit (+N more)") only — never a per-Unit deduction
+   total/allocation, the same schema-forced limitation Project Site Payroll Report's own frozen
+   decision already established (deductions live on `PayrollEntry`, not `PayrollEntryWorkLine`).
+7. **Deduction types — exactly five**: effective EOBI (`eobiApplicable ? eobiAmount : 0`, via
+   canonical `calcNet`, never a raw sum/filter of `eobiAmount` alone), Advance Deduction, EID
+   Advance Deduction, Fine, Correction Balance Recovery (this cycle's own already-materialized
+   settlement — never the live, cross-cycle `BalanceAdjustment.remainingAmount`). Correction Balance
+   Payable (an earning) is explicitly out of scope.
+8. **Deduction filter model**: five independent tri-state (`All`/`Yes`/`No`) filters — `hasEobi`,
+   `hasAdvanceDeduction`, `hasEidAdvanceDeduction`, `hasFine`, `hasCorrectionRecovery` — never a
+   single "Deduction Type" multi-select. All provided filters, including the five above and the
+   reused `hasCorrection`, compose with `AND` semantics.
+9. **Columns**: no Gross Pay, no Net Salary, no Correction Balance Payable, no CNIC, no banking, no
+   release/audit-actor identity, no correction reasons, no live `BalanceAdjustment.remainingAmount`
+   — a deliberately tighter vocabulary than Project Site Payroll Report's own 19-column table, kept
+   this way so the two reports stay genuinely distinct rather than near-duplicates.
+10. **Totals**: the approved *unified* bounded computation strategy — every monetary total and
+    `employeesWithAnyDeduction` computed via one fetch-and-`calcNet`/`sumMoney` pass, including the
+    plain-stored-column totals (`advanceDeductionTotal` etc.), deliberately *not* split into a
+    separate always-available SQL-aggregate path for those — reuses the identical
+    `DEDUCTION_REPORT_EXPORT_MAX_ROWS = 20,000` ceiling/reasoning Employee Payroll History/Project
+    Site Payroll Report already established, rather than inventing a second, independently-verified
+    financial-aggregation strategy for this report alone.
+11. **Sorting**: eight approved fields (`employeeCode`/`employeeName`/`site`/`advanceDeduction`/
+    `eidAdvanceDeduction`/`fine`/`correctionBalanceRecovery`/`rowStatus`) — all true database-level
+    `ORDER BY`, no bounded in-memory sort exception anywhere. `eobiDeduction`/`totalDeductions`/
+    `netSalary`/`grossPay`/`cycle` are explicitly **not** sortable in V1 (effective EOBI needs the
+    applicability conditional, Total Deductions is derived — neither is a plain stored column, and
+    this checkpoint does not introduce a bounded-sort exception for either absent real usage proving
+    the need).
+12. **No detail page/endpoint in V1.** No `GET /api/v1/reports/deduction-report/:id`, no frontend
+    detail page in a future Checkpoint 1B, no conditional Employee Payroll History cross-link.
+13. **Export**: CSV/XLSX, complete filtered dataset, the same 20,000-row preflight-`COUNT`/
+    structured-413 pattern every sibling report already uses. No backend PDF.
+14. **Print**: deferred entirely to a future Checkpoint 1B (browser print only, current-page-only,
+    a fresh field vocabulary/`localStorage` key) — no backend work for print in this checkpoint.
+15. **Row-status extraction**: Deduction Report is the *third* consumer of the generic 5-state
+    `PayrollEntry` status derivation (after Employee Payroll History and Project Site Payroll
+    Report) — this project's own documented "extract at the third consumer" threshold. Performed
+    *before* writing this report's own service, not deferred a third time (§17.2).
+16. **No schema/migration change expected** — proven with `EXPLAIN ANALYZE` in this checkpoint
+    rather than assumed (§17.6).
+
+### 17.2 Row-status extraction — the third-consumer threshold reached
+
+What was `backend/src/modules/reports/employee-payroll-history-status.ts`'s
+`deriveEmployeePayrollHistoryRowStatus`/`employeePayrollHistoryRowStatusWhereClause` is now
+`backend/src/modules/reports/payroll-entry-row-status.ts`'s `derivePayrollEntryRowStatus`/
+`payrollEntryRowStatusWhereClause` — a behavior-preserving rename/move only (same five states, same
+precedence, same WHERE semantics, same impossible-state handling), performed once Deduction Report
+became the third consumer (Project Site Payroll Report was already the second, by direct import —
+`reports.md` §16.3's own prior "not yet the third-consumer threshold" note is now superseded).
+`employee-payroll-history.service.ts` and `project-site-payroll.service.ts` both now import from the
+new neutral location instead. The return type is deliberately a local, neutral `PayrollEntryRowStatus`
+union — not imported from any single report's own shared schema — since each report's own public DTO
+still independently declares its own identically-shaped row-status type (`EmployeePayrollHistoryRowStatus`/
+`ProjectSitePayrollReportRowStatus`/`DeductionReportRowStatus`), per this project's own unchanged "no
+confusing cross-report type reference in a public DTO" convention; every one of those is structurally
+assignable to/from `PayrollEntryRowStatus` with no cast required.
+
+Verified behavior-preserving three ways: (1) `backend/tests/payroll-entry-row-status.test.ts` (the
+renamed, otherwise-untouched former `employee-payroll-history-status.test.ts`, 18 tests) passes
+unchanged; (2) `employee-payroll-history.test.ts`'s full suite passes unweakened; (3)
+`project-site-payroll-report.test.ts`'s full suite passes unweakened. No test was loosened to make
+the extraction pass.
+
+### 17.3 Shared contract
+
+`shared/src/schemas/deduction-report.ts` — the third Reports-module report to validate its query
+parameters through a shared Zod schema. Defines: the 5-state `DeductionReportRowStatus` union
+(independently declared, same reasoning as §17.2's own note); the 8 allowed sort fields (no `eobi`,
+no `totalDeductions`, no `netSalary`, no `cycle` — frozen decision 11); list/export query schemas
+covering the base filter set (`cycleId` required, `siteIds`, `unitId`, `rowStatus`, `hasCorrection`)
+plus the five new deduction tri-states (`hasEobi`/`hasAdvanceDeduction`/`hasEidAdvanceDeduction`/
+`hasFine`/`hasCorrectionRecovery`), reusing the established tri-state boolean query-parsing
+convention (design-system.md §2.4) and the same UUID list/single-value parsing helpers Project Site
+Payroll Report's own shared schema already established; and the full response contract
+(`DeductionReportRow`/`Totals`/`ListResponse`/`ExportLimitError`). `DEDUCTION_REPORT_EXPORT_MAX_ROWS
+= 20,000`, independently named per the "extract at the third consumer" convention already applied to
+the ceiling constant twice before.
+
+### 17.4 Backend service
+
+`backend/src/modules/reports/deduction-report.service.ts` — structurally mirrors Project Site
+Payroll Report's own `project-site-payroll.service.ts` (`resolveSiteIdFilter`/`resolveUnitFilter`,
+`ROW_SELECT`/`calcEntryRow`, `mapEntriesToRows`, `buildOrderBy`) but narrowed to this report's own
+approved filter/column/sort set. `buildDeductionPredicates` is the one canonical deduction-presence
+predicate builder shared by list, totals, and export (Step 4 of the authorizing instruction) — each
+tri-state, when provided, becomes its own `Prisma.PayrollEntryWhereInput` fragment, combined via a
+top-level `AND: [...]` array alongside every other filter. `hasEobi` alone needs a two-column,
+applicability-aware predicate (`eobiApplicable: true, eobiAmount: { gt: 0 }` for `Yes`); this is a
+plain boolean/comparison filter over already-authoritative stored columns, not an independent
+computation of the deduction's monetary *value*, so it does not duplicate `calcNet`'s own
+effective-EOBI formula. `hasAnyEffectiveDeduction` (used only for the `employeesWithAnyDeduction`
+total, §17.5) mirrors that same semantic for an in-memory presence check, using `Prisma.Decimal`
+comparisons (`.greaterThan(0)`), never a JS float accumulation.
+
+No `getDeductionReportListSortedByX` bounded-in-memory-sort function exists anywhere in this module
+— unlike Employee Payroll History's/Project Site Payroll Report's own `netSalary` sort, every one of
+this report's eight approved sort fields is either a plain stored column or the shared
+`released`/`hold`/`payoutOutcome` ordering approximation every sibling report's own `rowStatus` sort
+already uses, so `buildOrderBy` is a single, unconditional switch with no `netSalary`-style carve-out
+and no query-shape branch in `getDeductionReportList`/`buildDeductionReportExportData` at all.
+
+### 17.5 Totals
+
+`computeDeductionReportTotals` reuses Project Site Payroll Report's own *unified* bounded-computation
+shape exactly (frozen decision 10) — the five status-breakdown counts and `correctedEntryCount` are
+always-exact DB aggregates, combined with the caller's filter via `AND`; every monetary total and
+`employeesWithAnyDeduction` are computed together, in one pass, only when `matchingCount` is within
+`DEDUCTION_REPORT_EXPORT_MAX_ROWS` — beyond it, `null`/`null` with `totalsComputed: false`. This
+checkpoint's own architecture review (Checkpoint 0) had flagged a genuine open question here — since
+four of the five deduction fields are real stored columns, a split strategy (always-available SQL
+`SUM`/`CASE WHEN` for those, bounded `calcNet` only for effective EOBI/Total Deductions) was a
+possible alternative that would avoid the "totals unavailable above 20,000 rows" state for this
+report's own headline figures. The authorizing Checkpoint 1A instruction resolved this explicitly in
+favor of the unified strategy ("reuse canonical financial calculation semantics... do not create a
+second SQL financial formula... use the same 20,000-row computation ceiling convention already
+established") — recorded here as a resolved architecture conflict, not a silent choice.
+
+### 17.6 Routes
+
+`GET /api/v1/reports/deduction-report` and `GET /api/v1/reports/deduction-report/export`, mounted on
+the existing `reportsRouter`, both gated by `requirePermission(PERMISSIONS.REPORTS_VIEW)`. No `/:id`
+route (frozen decision 12). Both routes are audited (`report.viewed`/`report.exported`,
+`metadata.reportType: 'deduction_report'`), following the same "audit the view, not just the export"
+convention every other report already establishes. The export route preflight-`COUNT`s before
+generating any CSV/XLSX buffer, returning a structured `{ code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+matchingCount, maxRows, message }` (HTTP 413) over the ceiling — never a silently truncated file,
+never `page`/`pageSize` accepted at all.
+
+### 17.7 Table columns and totals
+
+Row: Employee Code, Employee Name, Project Site, Primary Unit (+N more), Designation, EOBI, Advance
+Deduction, EID Advance Deduction, Fine, Correction Balance Recovery, Total Deductions, Row Status,
+Correction Count, Released Date. No Gross Pay, no Net Salary, no Correction Balance Payable, no
+CNIC, no banking field, no release-actor identity, no audit data — verified by a full-response
+recursive sensitive-key sweep in the backend test suite, not just spot-checked fields.
+
+Totals: `matchingCount`, `employeesWithAnyDeduction`, the five per-type sums
+(`eobiTotal`/`advanceDeductionTotal`/`eidAdvanceDeductionTotal`/`fineTotal`/
+`correctionRecoveryTotal`), `totalDeductions`, the five status-breakdown counts, and
+`correctedEntryCount`, computed over the **complete filtered dataset**, never the current page. No
+per-Unit total anywhere in the response (frozen decision 6).
+
+### 17.8 Performance evidence (measured, not assumed)
+
+Seeded 10 sites × 1,000 employees × 3 cycles = 30,000 real `PayrollEntry` rows (plus work lines)
+against a local Postgres instance, with deliberately *varied* deduction values/EOBI applicability per
+employee (not a flat fixture) so the five tri-state filters exercise real, non-degenerate
+selectivity — a committed, repeatable Jest suite
+(`backend/tests/deduction-report-performance.test.ts`, 12 tests), mirroring
+`project-site-payroll-report-performance.test.ts`'s own established methodology.
+
+| Query | Plan | Execution time |
+|---|---|---|
+| List, one cycle only, all sites (10,000 of 30,000 rows matching), `ORDER BY employee.name` | `Index Scan` on `PayrollEntry_cycleId_idx` | ~1.2s (cold), sub-ms on `EXPLAIN ANALYZE` re-run |
+| List, one cycle + one site (1,000 of 10,000 rows matching) | `Bitmap Index Scan` using `PayrollEntry_siteId_cycleId_idx` (see honest finding below) | ~7ms |
+| `hasFine=true` (~10% selectivity) | `Index Scan` on `PayrollEntry_pkey`, `Filter` applied post-scan | ~1.2ms |
+| `hasEobi=true` (~67% selectivity, the two-column applicability+amount predicate) | `Index Scan` on `PayrollEntry_pkey`, `Filter` applied post-scan | ~0.2ms |
+| Sort by `advanceDeduction` desc (a plain stored column, no bounded fallback) | `Bitmap Heap Scan` via `PayrollEntry_cycleId_hold_released_payoutOutcome_idx`, in-DB `Sort` | ~9ms |
+| Unit-filtered (join through `PayrollEntryWorkLine`, bounded by cycle+site first) | — | ~116ms |
+| Full HTTP request: list page + totals over 10,000 matching rows, one cycle, unfiltered | — | ~890ms |
+| Export: 10,000 matching rows (one cycle, unfiltered) to CSV | — | ~1.8s |
+
+**No `Seq Scan` on `PayrollEntry` occurs in any measured query shape** — confirming frozen decision
+16 ("no schema change... prove this with `EXPLAIN ANALYZE`") directly.
+
+**Honest finding, not the assumption going in**: for the one-cycle-plus-one-site shape, Postgres's
+planner chose a `Bitmap Index Scan` via the composite `PayrollEntry_siteId_cycleId_idx`, not a plain
+`Index Scan` — a different access-method choice than Project Site Payroll Report's own §16.6
+evidence saw for a structurally similar query (which used a plain `Index Scan` on the single-column
+`PayrollEntry_cycleId_idx` instead). Both are valid, cost-based, non-sequential-scan plans; the
+difference is attributed to this suite's own varied-deduction-column data distribution affecting the
+planner's row-count estimates, not a regression or a missing index. Recorded as measured evidence,
+not asserted as one specific scan sub-type the data doesn't consistently show.
+
+**Disclosed scope boundary**: this report's single-cycle scope means genuinely exceeding the
+20,000-row export/totals ceiling within one cycle would require seeding more employees than this
+suite's own 10,000-per-cycle scale — the literal boundary (20,000 accepted, 20,001 rejected with a
+structured 413) is proven cheaply at the contract level in `deduction-report.test.ts` instead; this
+performance suite's own job is proving real query-plan behavior and a complete, correctly-filtered
+export at realistic volume, not the literal row-count boundary.
+
+This sandbox's single-node local Postgres (via `embedded-postgres`) is not a production-scale cloud
+database — these numbers are evidence of correct query-plan behavior and rough order of magnitude,
+not a production SLA guarantee, the same caveat every prior report's own performance evidence states.
+
+### 17.9 Tests
+
+**Note**: the counts below are as of Checkpoint 1A's initial IMPLEMENTED state (this section's own
+original text, preserved unchanged). §17.11 records the additional tests and updated total from the
+same-day review-hardening pass — `deduction-report.test.ts` grew from 60 to 63 tests, plus two new
+files (`deduction-report-boundary.test.ts`, 6 tests; `payroll-entry-row-status-regression.test.ts`,
+2 tests) neither of which existed yet when this section was first written.
+
+`backend/tests/deduction-report.test.ts` (60 tests) — authorization (401/403, `statements:view`-only
+denied, Master Admin global access, site-scoped restriction, an explicit inaccessible-`siteIds`
+filter rejected with 403, a genuine historical-transfer scenario proving `PayrollEntry.siteId`-based
+authorization, a Unit belonging to an inaccessible Site rejected with 403), contracts (missing/
+malformed/nonexistent `cycleId`, malformed `siteIds`, out-of-range `pageSize` rejected not clamped,
+an invalid/unapproved `sortBy` including explicit rejection of `eobi`/`totalDeductions`, export
+ignoring `page`/`pageSize` entirely, an unrecognized query parameter proven inert via a
+byte-for-byte baseline comparison), deduction correctness (effective EOBI on/off including the
+"positive amount but not applicable" case, each raw-column deduction field read verbatim, mixed
+deductions summing to a canonical-parity Total Deductions, an all-zero entry, a correction proven
+never to replay into the original row's own deduction figures, a full-body sweep proving no live
+`BalanceAdjustment.remainingAmount` or correction-reason text ever appears), filters (all five
+deduction tri-states individually at `Yes`/`No`/`All`, two independent AND-composition cases — one
+matching, one yielding zero — plus the reused `hasCorrection`/Site/Row Status filters), row status
+(all five states via the extracted generic implementation, plus one genuine release through the real
+HTTP release endpoint), sorting/pagination (every approved field including a default-sort check,
+database-level pagination across 3 pages with zero overlap and a stable `id` tie-break), totals
+(complete-filtered-dataset scope independent of pagination, every deduction total's arithmetic,
+`employeesWithAnyDeduction` correctness, status-count-sums-to-matchingCount, no per-Unit total
+anywhere), export (CSV field-by-field parity against the list endpoint via a real `csv-parse` parse,
+a dedicated sensitive-field sweep, XLSX parsed with `ExcelJS` for exact safe header order and
+representative-row parity, filter/sort parity with the list endpoint, permission enforced before any
+export work), and query discipline (a `jest.spyOn` proof that correction counts are one batched
+query regardless of row count, a multi-unit entry never multiplying row count). All 60 passing.
+
+`backend/tests/deduction-report-performance.test.ts` (12 tests, §17.8's own evidence) — committed
+and repeatable, not an uncommitted smoke test.
+
+`backend/tests/payroll-entry-row-status.test.ts` (18 tests, renamed from
+`employee-payroll-history-status.test.ts`, §17.2) — unchanged behavior-preservation coverage.
+
+Backend full suite: `typecheck`/`lint`/`build` clean across `shared`/`backend`. Targeted re-run of
+every test file this checkpoint touched or depends on (`payroll-entry-row-status.test.ts`,
+`employee-payroll-history.test.ts`, `project-site-payroll-report.test.ts`,
+`project-site-payroll-report-performance.test.ts`, `deduction-report.test.ts`,
+`deduction-report-performance.test.ts` — 195 tests) passes unweakened when run with `--runInBand`
+(this codebase's own established convention for DB-backed suites sharing one Postgres instance —
+running multiple such files in parallel Jest workers produces cross-suite `cleanTestData()` races
+that are environment artifacts of parallel execution, not defects, exactly the class of finding
+Project Site Payroll Report's own Checkpoint 1A review already documented and resolved the same way).
+
+### 17.10 What Checkpoint 1A did NOT build
+
+Per its own explicit scope boundary: no frontend route, page, filter UI, print, or CSV/XLSX download
+button — the backend/export endpoints exist and are fully functional over HTTP, but nothing in the
+frontend calls them yet. No detail endpoint (frozen decision 12). No per-Unit deduction total of any
+kind (frozen decision 6). No schema or migration change (frozen decision 16, proven in §17.8).
+Dashboard and every other Phase 8A-catalogued report remain untouched and **Not Started**.
+
+**Known limitations, disclosed**: (1) the totals-latency characteristic already disclosed for
+Employee Payroll History/Project Site Payroll Report applies identically here — an unfiltered,
+one-cycle request pays the full `calcNet`-over-every-matching-row cost on every request, not only
+exports; narrowing by site, unit, or a deduction-type filter keeps it fast; (2) ~~the literal
+20,000/20,001-row export/totals boundary is proven at the contract level, not at full seeded scale,
+for the reasons disclosed in §17.8~~ — **superseded, §17.11**: this is no longer accurate as of the
+2026-08-07 review-hardening pass, which added `deduction-report-boundary.test.ts`, proving the
+19,999/20,000/20,001 boundary directly at real, seeded volume; (3) `eobiDeduction`/`totalDeductions`
+remain unsortable in V1 (frozen decision 11) — revisit only if real usage demonstrates the need, per
+the authorizing instruction's own "avoid adding another bounded exception unless user value clearly
+justifies it"; (4) saved filter presets and backend PDF remain out of scope, unchanged from every
+sibling report.
+
+**Checkpoint 1A is backend-only and awaiting independent review before Checkpoint 1B (frontend)
+begins.** No other report or Dashboard work was started. See §17.11 for the same-day
+review-hardening pass performed prior to that review.
+
+### 17.11 Review-hardening pass (2026-08-07, same day, targeted — tests/documentation only)
+
+A targeted review/hardening pass, scoped to closing verification gaps left open by Checkpoint 1A
+above — no new feature, no frontend work, no Checkpoint 1B, no other report, no production-code
+change except where a genuine defect would have required one (none was found).
+
+**M1/M2 — export parity and sensitive-field hardening** (`deduction-report.test.ts`, now 63 tests):
+CSV/XLSX parity tests rewritten to reconstruct a header-keyed record (real `csv-parse` with
+`columns: true`; the `ExcelJS`-worksheet equivalent for XLSX) and compare it against the list
+endpoint's own row via a single `toEqual`, rather than positional/spot-checked cells. Added: an
+explicit row-count-ignoring-pagination proof for both formats, an explicit sort-order-parity proof
+for both formats, and a dedicated recursive sensitive-key sweep (`assertNoSensitiveKeys`) over
+XLSX-reconstructed rows — previously only the list response and CSV records were swept.
+
+**M3 — 19,999/20,000/20,001 ceiling boundary proof** (new `deduction-report-boundary.test.ts`, 6
+tests): rather than seed three full ~20,000-row cycles, this file seeds **one** cycle with exactly
+20,001 real `PayrollEntry` rows split across three sites (19,999 / 1 / 1) and reaches each exact
+boundary count via the report's own real `siteIds` filter. Confirms, at real volume, over the real
+HTTP endpoint: `totalsComputed` is `true` at 19,999 and exactly at 20,000, `false` at 20,001;
+export succeeds (200, full row count) at 19,999 and exactly at 20,000, and is rejected with a
+structured 413 at 20,001, before any row is fetched (measured under 3 seconds).
+
+**M4 — row-status extraction cross-consumer regression proof** (new
+`payroll-entry-row-status-regression.test.ts`, 2 tests): proves Employee Payroll History, Project
+Site Payroll Report, and Deduction Report all derive the *identical* `rowStatus` for the same
+underlying `PayrollEntry` rows, across all five statuses and through a genuine Unit release via the
+real release endpoint. This is the one property no report's own individual test suite can catch on
+its own (each independently matches its own expected literal, which would still pass even if one
+consumer had drifted from the shared module) — only a same-fixture, cross-report comparison does.
+
+**M5 — documentation precision**: the §1/"Deduction Report" entry in `docs/PROJECT_PROGRESS.md` had
+left "Full backend suite run once, in the background... result recorded once available" as an open
+placeholder. This pass ran that full suite to completion and recorded the actual result there
+(1,495/1,496; the one failure identified by exact test name, expected/observed counts, and confirmed
+passing in isolation immediately after) rather than leaving the placeholder unresolved or describing
+it in vague terms.
+
+**Verification**: full backend suite run once — **1,495/1,496 passing** (78 suites, 555.9s). The one
+failure, `employee-payroll-history.test.ts` › "the historical employee lookup issues a fixed query
+count regardless of match count (no N+1)" (expected 8 queries, observed 10), sits entirely outside
+every file this checkpoint or this hardening pass touched; run alone immediately afterward, the same
+file passed clean (63/63, including that exact test) — the project's own already-documented pattern
+of query-count assertions sensitive to first-query connection overhead under full-suite ordering
+(`docs/SESSION_HANDOFF.md`'s own prior entry on this pattern), not a regression this work introduced.
+Also re-run individually and passing: `employee-payroll-history.test.ts` (63/63),
+`project-site-payroll-report.test.ts` (37/37), and together in one `--runInBand` pass:
+`project-site-payroll-report-performance.test.ts` + `deduction-report-performance.test.ts` +
+`deduction-report-boundary.test.ts` + `payroll-entry-row-status-regression.test.ts` +
+`payroll-entry-row-status.test.ts` + `deduction-report.test.ts` (106/106). `typecheck`/`lint`/`build`
+clean across `shared`/`backend`; `git diff --check` clean. **No production code changed** — every
+change in this pass is a new or rewritten test, or a documentation correction.

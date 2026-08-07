@@ -29,10 +29,7 @@ import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
 import { searchEmployeesByHistoricalPayroll } from '../../common/historical-payroll-employee-lookup';
-import {
-  deriveEmployeePayrollHistoryRowStatus,
-  employeePayrollHistoryRowStatusWhereClause,
-} from './employee-payroll-history-status';
+import { derivePayrollEntryRowStatus, payrollEntryRowStatusWhereClause } from './payroll-entry-row-status';
 
 /**
  * Phase 7 Reports, Employee Payroll History Checkpoint 1A (approved architecture review +
@@ -168,7 +165,7 @@ async function resolveEmployeePayrollHistoryFilters(
     ...(query.employeeId && { employeeId: query.employeeId }),
     ...(unitId && { workLines: { some: { unitId } } }),
     ...(cycleFilter && { cycle: cycleFilter }),
-    ...(query.rowStatus && employeePayrollHistoryRowStatusWhereClause(query.rowStatus)),
+    ...(query.rowStatus && payrollEntryRowStatusWhereClause(query.rowStatus)),
     ...(query.hasCorrection === true && { corrections: { some: {} } }),
     ...(query.hasCorrection === false && { corrections: { none: {} } }),
     ...(query.hasOutstandingOriginBalance === true && outstandingOriginBalanceCondition),
@@ -334,7 +331,7 @@ async function mapEntriesToRows(entries: RowEntry[]): Promise<EmployeePayrollHis
       totalEarnings: calc.totalEarning,
       totalDeductions: calc.totalDeduction,
       netSalary: calc.netSalary,
-      rowStatus: deriveEmployeePayrollHistoryRowStatus(entry),
+      rowStatus: derivePayrollEntryRowStatus(entry),
       correctionCount: correctionCounts.get(entry.id) ?? 0,
       hasOutstandingOriginBalance: outstandingOriginBalanceIds.has(entry.id),
       releasedAt: entry.releasedAt?.toISOString() ?? null,
@@ -350,7 +347,7 @@ async function mapEntriesToRows(entries: RowEntry[]): Promise<EmployeePayrollHis
  * can't order (e.g. two entries in the same cycle at the same site with the same employee name).
  *
  * `rowStatus`'s own ordering is a disclosed, documented approximation, not the 5-state precedence
- * `deriveEmployeePayrollHistoryRowStatus`/`employeePayrollHistoryRowStatusWhereClause` use: it
+ * `derivePayrollEntryRowStatus`/`payrollEntryRowStatusWhereClause` use: it
  * orders by the three real, stored columns that *determine* status (`released`, `hold`,
  * `payoutOutcome`), which groups every row of the same status contiguously (verified by test),
  * but the relative order *between* groups follows Postgres's own boolean/enum ordering, not the
@@ -400,11 +397,11 @@ async function computeEmployeePayrollHistoryTotals(where: Prisma.PayrollEntryWhe
   const [matchingCount, releasedCount, heldCount, noPayDueCount, recoveryDueCount, pendingCount, correctedEntryCount] =
     await Promise.all([
       prisma.payrollEntry.count({ where }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('RELEASED')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('HELD')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('NO_PAY_DUE')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('RECOVERY_DUE')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('PENDING')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('RELEASED')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('HELD')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('NO_PAY_DUE')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('RECOVERY_DUE')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('PENDING')] } }),
       prisma.payrollEntry.count({ where: { AND: [where, { corrections: { some: {} } }] } }),
     ]);
 

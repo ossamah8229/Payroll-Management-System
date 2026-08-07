@@ -22,9 +22,9 @@ import { excelColumnWidth } from '../../common/excel-utils';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
 import {
-  deriveEmployeePayrollHistoryRowStatus,
-  employeePayrollHistoryRowStatusWhereClause,
-} from './employee-payroll-history-status';
+  derivePayrollEntryRowStatus,
+  payrollEntryRowStatusWhereClause,
+} from './payroll-entry-row-status';
 
 /**
  * Phase 7 Reports, Project Site Payroll Report Checkpoint 1A (approved Checkpoint 0 architecture
@@ -113,7 +113,7 @@ async function resolveProjectSitePayrollReportFilters(
     cycleId: query.cycleId,
     ...(siteIdFilter && { siteId: { in: siteIdFilter } }),
     ...(unitId && { workLines: { some: { unitId } } }),
-    ...(query.rowStatus && employeePayrollHistoryRowStatusWhereClause(query.rowStatus)),
+    ...(query.rowStatus && payrollEntryRowStatusWhereClause(query.rowStatus)),
     ...(query.hasCorrection === true && { corrections: { some: {} } }),
     ...(query.hasCorrection === false && { corrections: { none: {} } }),
   };
@@ -249,7 +249,7 @@ async function mapEntriesToRows(entries: RowEntry[]): Promise<ProjectSitePayroll
       totalEarnings: calc.totalEarning,
       totalDeductions: calc.totalDeduction,
       netSalary: calc.netSalary,
-      rowStatus: deriveEmployeePayrollHistoryRowStatus(entry),
+      rowStatus: derivePayrollEntryRowStatus(entry),
       correctionCount: correctionCounts.get(entry.id) ?? 0,
       releasedAt: entry.releasedAt?.toISOString() ?? null,
     };
@@ -321,11 +321,11 @@ async function computeProjectSitePayrollReportTotals(where: Prisma.PayrollEntryW
   const [matchingCount, releasedCount, heldCount, noPayDueCount, recoveryDueCount, pendingCount, correctedEntryCount] =
     await Promise.all([
       prisma.payrollEntry.count({ where }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('RELEASED')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('HELD')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('NO_PAY_DUE')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('RECOVERY_DUE')] } }),
-      prisma.payrollEntry.count({ where: { AND: [where, employeePayrollHistoryRowStatusWhereClause('PENDING')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('RELEASED')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('HELD')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('NO_PAY_DUE')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('RECOVERY_DUE')] } }),
+      prisma.payrollEntry.count({ where: { AND: [where, payrollEntryRowStatusWhereClause('PENDING')] } }),
       prisma.payrollEntry.count({ where: { AND: [where, { corrections: { some: {} } }] } }),
     ]);
 

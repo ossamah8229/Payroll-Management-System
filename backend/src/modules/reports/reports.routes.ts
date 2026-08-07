@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  DEDUCTION_REPORT_EXPORT_MAX_ROWS,
+  deductionReportExportQuerySchema,
+  deductionReportListQuerySchema,
   EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS,
   employeePayrollHistoryEmployeeLookupQuerySchema,
   employeePayrollHistoryExportQuerySchema,
@@ -9,6 +12,7 @@ import {
   PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS,
   projectSitePayrollReportExportQuerySchema,
   projectSitePayrollReportListQuerySchema,
+  type DeductionReportExportLimitError,
   type EmployeePayrollHistoryExportLimitError,
   type ProjectSitePayrollReportExportLimitError,
 } from '@payroll/shared';
@@ -31,6 +35,12 @@ import {
   exportProjectSitePayrollReportToXlsx,
   getProjectSitePayrollReportList,
 } from './project-site-payroll.service';
+import {
+  buildDeductionReportExportData,
+  exportDeductionReportToCsv,
+  exportDeductionReportToXlsx,
+  getDeductionReportList,
+} from './deduction-report.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -341,6 +351,85 @@ reportsRouter.get('/project-site-payroll/export', requirePermission(PERMISSIONS.
     });
 
     const filename = `project-site-payroll.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Deduction Report (Phase 7 Reports, Checkpoint 1A, approved Checkpoint 0 architecture review
+ * 2026-08-07). Gated by `reports:view` — the same permission Payroll Summary/Project Site Payroll
+ * Report already use, never `statements:view` (frozen decision: a single-cycle, site-scoped,
+ * deduction-type-centric operational report, not a cross-cycle, employee-searchable history). No
+ * detail route exists in V1 — every field the frontend will ever need for this report lives on the
+ * list row itself.
+ */
+reportsRouter.get('/deduction-report', requirePermission(PERMISSIONS.REPORTS_VIEW), async (req, res, next) => {
+  try {
+    const query = deductionReportListQuerySchema.parse(req.query);
+    const report = await getDeductionReportList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'deduction_report', page: report.page, pageSize: report.pageSize, total: report.total },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Preflight-counts before generating any CSV/XLSX output, mirroring every other report's own
+ * export route — `buildDeductionReportExportData` itself never fetches/maps a single row once
+ * `totalMatching` exceeds `DEDUCTION_REPORT_EXPORT_MAX_ROWS`, so the structured
+ * `DeductionReportExportLimitError` below is always returned *before* any expensive work. Always
+ * the complete filtered dataset — no `page`/`pageSize` accepted at all.
+ */
+reportsRouter.get('/deduction-report/export', requirePermission(PERMISSIONS.REPORTS_VIEW), async (req, res, next) => {
+  try {
+    const query = deductionReportExportQuerySchema.parse(req.query);
+    const data = await buildDeductionReportExportData(req.currentUser!, query);
+
+    if (data.totalMatching > DEDUCTION_REPORT_EXPORT_MAX_ROWS) {
+      const errorBody: DeductionReportExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: DEDUCTION_REPORT_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${DEDUCTION_REPORT_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (site, unit, deduction type, or row status) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx' ? await exportDeductionReportToXlsx(data.rows) : exportDeductionReportToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'deduction_report', format: query.format, rowCount },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = `deduction-report.${query.format}`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader(
       'Content-Type',

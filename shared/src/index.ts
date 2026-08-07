@@ -220,6 +220,33 @@ export type {
   ProjectSitePayrollReportUnitRef,
 } from './schemas/project-site-payroll-report';
 
+export {
+  DEDUCTION_REPORT_DEFAULT_PAGE_SIZE,
+  DEDUCTION_REPORT_EXPORT_FORMATS,
+  DEDUCTION_REPORT_EXPORT_MAX_ROWS,
+  DEDUCTION_REPORT_MAX_PAGE_SIZE,
+  DEDUCTION_REPORT_ROW_STATUS_VALUES,
+  DEDUCTION_REPORT_SORT_DIRECTIONS,
+  DEDUCTION_REPORT_SORT_FIELDS,
+  deductionReportExportQuerySchema,
+  deductionReportListQuerySchema,
+  deductionReportRowStatusSchema,
+} from './schemas/deduction-report';
+export type {
+  DeductionReportCycleRef,
+  DeductionReportExportFormat,
+  DeductionReportExportLimitError,
+  DeductionReportExportQuery,
+  DeductionReportListQuery,
+  DeductionReportListResponse,
+  DeductionReportRow,
+  DeductionReportRowStatus,
+  DeductionReportSortDirection,
+  DeductionReportSortField,
+  DeductionReportTotals,
+  DeductionReportUnitRef,
+} from './schemas/deduction-report';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

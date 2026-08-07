@@ -17,7 +17,74 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-06 (latest) — Phase 7 Reports, Project Site Payroll Report Checkpoint 0
+> **Update, 2026-08-07 (latest) — Phase 7 Reports, Deduction Report Checkpoint 0 (Architecture,
+> approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.**
+> Backend/shared-contracts/tests only — no frontend page exists yet for this report. Full record:
+> `docs/architecture/workflows/reports.md` §17 and `docs/PROJECT_PROGRESS.md`'s own "Phase 7
+> Reports — Deduction Report" §1 entry (all 16 frozen decisions; the third-consumer row-status
+> extraction; shared schema; backend service; table columns; totals; exact test counts; performance
+> evidence; known limitations) — not duplicated here.
+>
+> **Business definition (Checkpoint 0)**: a single-cycle, deduction-type-centric operational report
+> — "which employees had which deduction(s) this cycle, how much, and what does each type total to
+> company-wide?" — one row = one `PayrollEntry`, exactly one required Payroll Cycle, never a
+> cross-cycle history, an Advance Recovery report, or a second Project Site Payroll Report.
+>
+> **First step this checkpoint**: extracted the generic 5-state `PayrollEntry` row-status derivation
+> (`deriveEmployeePayrollHistoryRowStatus`/`employeePayrollHistoryRowStatusWhereClause`) out of its
+> Employee-Payroll-History-specific home into a neutral `backend/src/modules/reports/
+> payroll-entry-row-status.ts` (`derivePayrollEntryRowStatus`/`payrollEntryRowStatusWhereClause`) —
+> Deduction Report is the third consumer (after Employee Payroll History and Project Site Payroll
+> Report), this project's own documented extraction threshold. Behavior-preserving rename/move only
+> — verified by the renamed test file passing unchanged plus both existing consumers' full suites
+> passing unweakened.
+>
+> **Built**: `GET /api/v1/reports/deduction-report` and `.../export`, gated by
+> `PERMISSIONS.REPORTS_VIEW`; `shared/src/schemas/deduction-report.ts`; a backend service
+> structurally mirroring Project Site Payroll Report's own, narrowed to five deduction types
+> (effective EOBI, Advance, EID Advance, Fine, Correction Balance Recovery — Correction Balance
+> Payable explicitly excluded as an earning) with five independent tri-state presence filters
+> (`hasEobi`/`hasAdvanceDeduction`/`hasEidAdvanceDeduction`/`hasFine`/`hasCorrectionRecovery`,
+> `AND`-composed); eight fully database-sorted fields with **zero** bounded-in-memory-sort
+> exceptions anywhere in this report (unlike every sibling report's own `netSalary` carve-out) —
+> effective EOBI/Total Deductions/Net Salary/Gross Pay/cycle are deliberately excluded from V1
+> sorting instead; the same *unified* bounded totals strategy (no split SQL-aggregate shortcut) as
+> its siblings, reusing the identical 20,000-row ceiling convention; CSV/XLSX export of the complete
+> filtered dataset. No detail endpoint, no per-Unit deduction total of any kind, no schema or
+> migration change.
+>
+> **Verified**: 60 new backend tests (`deduction-report.test.ts`) plus 12 new committed performance
+> tests (`deduction-report-performance.test.ts`, seeding 30,000 real `PayrollEntry` rows with
+> deliberately varied deduction values/EOBI applicability and running real `EXPLAIN (ANALYZE,
+> BUFFERS)` against every deduction-filter/sort query shape — no `Seq Scan` on `PayrollEntry` in any
+> measured shape), all 72 passing; `typecheck`/`lint`/`build` clean across `shared`/`backend`. A
+> targeted 195-test re-run across every touched/depended-on file (the extraction's own tests, both
+> migrated consumers' full suites, and this report's own two new files) passes unweakened with
+> `--runInBand`. One honest, disclosed performance finding: the cycle+site-filtered query used a
+> `Bitmap Index Scan` via the composite index rather than the plain `Index Scan` Project Site
+> Payroll Report's own identically-shaped query saw — a different, equally valid, cost-based
+> planner choice at this suite's own data distribution, not a regression.
+>
+> **Repository-state note, this session**: this checkpoint restarted from a freshly-verified,
+> fully-synchronized `main` (local `main` == `origin/main` == GitHub `refs/heads/main`) after an
+> earlier same-day Checkpoint 0 pass was found to have been performed against a stale local `main`
+> ref — a read-only, git-only reconciliation (fetch + fast-forward), not a code change, resolved it
+> before any Deduction Report work began.
+>
+> **Update, 2026-08-07 (same day) — targeted review/hardening pass, tests/documentation only, still
+> NOT COMMITTED.** Full record: `docs/architecture/workflows/reports.md` §17.11. Strengthened
+> `deduction-report.test.ts`'s CSV/XLSX export-parity and sensitive-field-sweep coverage (real
+> header-keyed reconstruction against the list endpoint, not positional spot checks; now 63 tests);
+> added `deduction-report-boundary.test.ts` (6 tests, a real seeded-at-volume proof of the
+> 19,999/20,000/20,001 export/totals ceiling) and `payroll-entry-row-status-regression.test.ts` (2
+> tests, proving Employee Payroll History/Project Site Payroll Report/Deduction Report all derive
+> the identical `rowStatus` for the same rows). Full backend suite run once to completion —
+> **1,495/1,496 passing** (78 suites); the one failure (an `employee-payroll-history.test.ts`
+> query-count assertion, expected 8 observed 10) sits outside every file this work touched and
+> passed clean on an isolated re-run of that file — a pre-existing, first-query-connection-overhead
+> pattern this project has documented before, not a regression. No production code changed.
+
+> **Update, 2026-08-06 (superseded by the entry above for status purposes) — Phase 7 Reports, Project Site Payroll Report Checkpoint 0
 > (Architecture, read-only, approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED,
 > awaiting review, NOT COMMITTED.** Backend/shared-contracts/tests only — no frontend page exists
 > yet for this report. Full record: `docs/architecture/workflows/reports.md` §16 and
