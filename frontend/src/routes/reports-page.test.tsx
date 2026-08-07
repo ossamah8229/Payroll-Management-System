@@ -85,3 +85,21 @@ describe('ReportsPage — Deduction Report catalogue card', () => {
     expect(screen.getByText('Deduction Report').closest('a')).not.toBeNull();
   });
 });
+
+describe('ReportsPage — Overtime Report catalogue card', () => {
+  afterEach(() => cleanup());
+
+  it('shows the Overtime Report card as a real link for a user holding only reports:view', () => {
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    const link = screen.getByText('Overtime Report').closest('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('/reports/overtime-report');
+  });
+
+  it('requires no extra permission beyond the page-level reports:view gate (no requiredPermission override)', () => {
+    // Contrast with Employee Payroll History, which is hidden without statements:view — Overtime
+    // Report reuses reports:view alone (frozen decision, reports.md §18.1).
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    expect(screen.getByText('Overtime Report').closest('a')).not.toBeNull();
+  });
+});

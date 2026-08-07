@@ -53,7 +53,12 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     to: '/reports/deduction-report',
     available: true,
   },
-  { title: 'Overtime Report', description: 'Not yet available.', to: '', available: false },
+  {
+    title: 'Overtime Report',
+    description: 'Operational overtime analysis by employee, site, and unit for one payroll cycle — hours, rate, and cost, filterable by Has Overtime.',
+    to: '/reports/overtime-report',
+    available: true,
+  },
   { title: 'Advance Recovery Report', description: 'Not yet available.', to: '', available: false },
   { title: 'Salary Release Report', description: 'Not yet available.', to: '', available: false },
 ];

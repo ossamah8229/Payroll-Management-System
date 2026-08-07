@@ -69,6 +69,9 @@ const ReportsProjectSitePayrollPage = lazy(() =>
 const ReportsDeductionReportPage = lazy(() =>
   import('@/routes/reports-deduction-report-page').then((m) => ({ default: m.ReportsDeductionReportPage })),
 );
+const ReportsOvertimeReportPage = lazy(() =>
+  import('@/routes/reports-overtime-report-page').then((m) => ({ default: m.ReportsOvertimeReportPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -474,6 +477,38 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
             <ReportsDeductionReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Overtime Report (Phase 7 Reports, Checkpoint 1B) — gated on `reports:view`, the same permission
+  // Project Site Payroll Report/Deduction Report already use (frozen decision,
+  // `docs/architecture/workflows/reports.md` §18.1) — no requiredPermission override needed on the
+  // catalogue card. Historical Payroll Cycle Selector routing (same shape as Deduction Report above,
+  // both requiring exactly one Payroll Cycle, no From/To range): the flat route redirects to the
+  // canonical /payroll-cycles/:cycleId/reports/overtime-report URL via useSelectedPayrollCycle. No
+  // detail route exists (frozen decision — no detail endpoint/page; report grain is
+  // `PayrollEntryWorkLine`, not `PayrollEntry`).
+  {
+    path: '/reports/overtime-report',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsOvertimeReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/reports/overtime-report',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsOvertimeReportPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>

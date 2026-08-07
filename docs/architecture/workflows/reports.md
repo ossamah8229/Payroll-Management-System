@@ -1954,3 +1954,211 @@ sibling report.
 
 **Checkpoint 1A is backend-only and awaiting independent review before Checkpoint 1B (frontend)
 begins.** No other report or Dashboard work was started.
+
+## 18.11 Checkpoint 1B — Frontend, Browser Print, and E2E (2026-08-07)
+
+Frontend-only, over the frozen Checkpoint 1A backend above — no backend, shared-contract, or
+database change in this checkpoint. Gated on `reports:view` throughout (route, catalogue card),
+never `statements:view` — the same approved frozen decision above. No detail page was added (frozen
+decision 14) and no other report or Dashboard work was started.
+
+**Report grain, restated for the frontend layer** — one table row = one `PayrollEntryWorkLine`,
+never one `PayrollEntry` (the one behavior genuinely unique to this report among its Checkpoint-1B
+siblings, all of which are `PayrollEntry`-grain). An employee with 2 work lines this cycle
+legitimately renders as 2 table rows, keyed on `row.workLineId` (never `payrollEntryId`, which two
+rows can share) — the page never merges, groups, or deduplicates those rows by employee, and Unit is
+a direct, single field on every row rather than a "primary unit + N more" collapse the way Deduction
+Report/Project Site Payroll Report's own multi-line entries summarize. Because the same employee
+name/code can legitimately repeat across adjacent rows, the Unit column renders as a solid blue
+`Badge` rather than plain text — the one intentional visual departure from every sibling report's
+identical column styling, specifically so a duplicate employee name is never mistaken for duplicate
+data at a glance.
+
+**Route** (`/reports/overtime-report`, plus the canonical `/payroll-cycles/:cycleId/reports/
+overtime-report`), lazy-loaded and `RequirePermission`-gated on `PERMISSIONS.REPORTS_VIEW`, following
+the exact `RequireSession` → `RequirePermission` → page pattern every other gated route already uses
+(`App.tsx`). Mirrors Deduction Report's own dual flat/canonical route pair and
+`useSelectedPayrollCycle` hook — the established precedent for "exactly one required Cycle, no
+From/To range." No detail route exists. The Reports catalogue card (`reports-page.tsx`) needs no
+`requiredPermission` override — it reuses the catalogue page's own `reports:view` gate directly,
+matching Project Site Payroll Report/Deduction Report's own identical treatment rather than Employee
+Payroll History's `statements:view` override. AppShell title "Overtime Report", subtitle "Operational
+overtime analysis by employee, site, and unit for one payroll cycle." — deliberately worded to avoid
+implying any cross-cycle trend.
+
+**Data layer** (`hooks/use-overtime-report.ts`) — imports the DTOs directly from `@payroll/shared`
+(`shared/src/schemas/overtime-report.ts`), mirroring `use-deduction-report.ts`'s own convention. One
+query hook for the list (`enabled: Boolean(cycleId)`, proven by a direct hook-level "no request
+without a Cycle" suite exercising the real `useQuery` configuration through
+`renderHook`/`QueryClientProvider` with `global.fetch` stubbed, not merely a code comment, plus an
+additional test proving a sort/filter change issues exactly one new request and a same-params
+re-render issues no redundant one), and a blob-download export function covering both CSV and XLSX.
+Site ids are sorted before being joined into both the query key and the URL. The export function
+handles the structured 413 `EXPORT_ROW_LIMIT_EXCEEDED` response the same way every sibling report
+does — a dedicated `OvertimeReportExportRowLimitExceededError` (independently declared, matching this
+project's "extract at the third consumer" convention already applied to the backend's own ceiling
+constant) carries the backend's `matchingCount`/`maxRows`/`message` verbatim via `toast.error`.
+
+**Filters** (frozen decisions/Step 5's approved set only): Payroll Cycle (`PayrollCycleSelectField`,
+required, single, navigates the URL — a navigation control, not a filter, per §2.6 of
+`docs/design-system.md`), Site (multi-select), Unit (disabled unless exactly one Site is selected —
+the same established convention every sibling report's own Unit field uses, cleared whenever the Site
+selection becomes incompatible, and never cleared on an unrelated rerender), Row Status, Has
+Correction (the tri-state All/Yes/No select, §2.4 of `docs/design-system.md`), and Has Overtime (the
+one report-specific tri-state — `otHours > 0` on the row's own work line). No Employee search,
+Designation, OT Hours/Rate/Earnings range, date/cycle range, or roster status filter — matching the
+backend's own deliberate exclusions. A filter or sort change resets pagination to page 1; Clear
+Filters restores every filter to its default and resets the page while never touching the currently
+selected Cycle.
+
+**Totals** — the backend's `OvertimeReportTotals` fields render verbatim in three labeled groups:
+**Overtime** (Total OT Hours, Total OT Earnings — both collapse into one explanatory notice, "Totals
+are unavailable for this result size. Narrow the filters to calculate totals.", when `totalsComputed`
+is `false`, since the backend deliberately gates them together — §18's own "one unified bounded
+strategy, not a second SQL financial formula" precedent), **Coverage** (Matching Work Lines — a plain
+DB aggregate, always exact regardless of `totalsComputed` — plus Employees/Sites/Units With Overtime,
+each individually gated to a dash, `—`, never a misleading zero, when `totalsComputed` is `false`,
+since these three are also bounded), and **Status** (Released, Held, Pending, Corrected Entries — all
+four plain DB aggregates over distinct entries, always exact and always visible, never recomputed
+from the currently-visible work-line rows — an entry with 2 OT-matching work lines still counts as 1
+released/held/pending entry, proven directly in both the Vitest and Playwright suites). No "Average OT
+Rate" anywhere (frozen decision — deliberately not implemented). No client-side summation, and no
+`calcNet` import, anywhere in this page.
+
+**Table** — server-paginated (`ReportPagination`), server-sorted only on the six backend-approved
+fields (`employeeCode`/`employeeName`/`site`/`unit`/`otHours`/`rowStatus`; Designation, Effective OT
+Rate, OT Earnings, Gross Pay, and Has Correction render as plain, non-interactive header cells with no
+sort button at all, proven by a dedicated test); clicking a sortable header toggles `sortBy`/`sortDir`,
+always resets to page 1, and reflects `aria-sort` on the active column. Every row status
+(`RELEASED`/`HELD`/`NO_PAY_DUE`/`RECOVERY_DUE`/`PENDING`) gets its own badge tone (green/hold/gray/
+red/amber respectively) via a new, colocated `overtime-report-labels.ts` — never derived
+client-side, mirroring every sibling report's identical tone mapping. Columns, in the exact order the
+authorizing instruction specified: Employee Code, Employee Name, Project Site, Unit, Designation, OT
+Hours, Effective OT Rate, OT Earnings, Gross Pay, Row Status, Has Correction (11 total — the smallest
+column count of any report in this module so far). OT Hours renders via the shared `formatNumber`
+utility (never `formatMoney`); Effective OT Rate/OT Earnings/Gross Pay render via `formatMoney`; Has
+Correction renders as a plain "Yes"/"No" text cell (a boolean presence flag, not a count — unlike
+Deduction Report's `correctionCount` badge). No edit action, no "View Details" action, and no row
+click. The same page-clamp safeguard Project Site Payroll Report's/Deduction Report's own Checkpoint
+1B work already established is included here from the start: a `useEffect` keyed on the resolved
+`report.data` clamps `page` down to the new last valid page whenever the currently-viewed page is no
+longer valid for the backend's current total under an otherwise unchanged filter set, never fires
+below page 1, never fires before a real response exists, and self-terminates after one corrective
+`setPage`.
+
+**Export UI** — Export CSV/Export Excel buttons, page-level `activeExport` state (mutually exclusive
+across both formats), current Cycle/filters/sort always applied, never just the current page; the
+export endpoint accepts no `page`/`pageSize` at all, proven by a request-parity test comparing two
+sequential CSV/XLSX calls' actual arguments. A 413 is shown via the backend's own structured message
+through `toast.error`, and the current filter selection is left completely untouched by an export
+failure. A real Playwright download proves the CSV contains two separate rows for a genuine two-work-
+line employee (the export mirrors the on-screen grain, never collapsing to one row per employee).
+
+**Browser Print (current-page-only scope)** — a dedicated `OvertimeReportPrintOptionsDialog`/
+`overtime-report-print-fields.ts`, a fresh field vocabulary (never a reuse of any sibling report's own
+field-id types — this report's own totals/table are a different shape from all of them). States
+"Print scope: current page only" inside the dialog itself. Prints the current paginated page only —
+never an unbounded fetch of the full filtered result, and never routed through backend Puppeteer (no
+backend PDF for this report, matching every sibling). Defaults to every safe card/column selected (10
+cards, 11 columns; Employee Name locked as the one always-included column); readability thresholds
+(Excellent 0–4 / Good 5–7 / Wide 8–9 / Very Wide 10+) are scaled down from Employee Payroll History's
+own 13-column-scaled thresholds to fit this report's own smaller 11-column maximum — informational
+only, never blocking; the one hard block remains "select at least one column besides Employee Name."
+The selection persists in browser `localStorage` only, under its own versioned key
+(`overtime-report-print-fields:v1`), never PostgreSQL; Reset to Default restores the same complete
+safe-field selection Select All produces. No CNIC, no banking, no release actor, no correction reason,
+no Net Salary, no Total Earnings is ever offered as a print field. When totals are unavailable, the
+print-only cards render the same explanatory notice the on-screen cards show, never zeros. A real
+Playwright print-media-emulated check confirms the printed body text states the report title, every
+applied filter summary (including Has Overtime), a generated timestamp, and "Current page only," and
+confirms no export/download request is ever fired merely by opening or confirming Print.
+
+**Tests**: 4 new colocated Vitest files plus 2 new tests in the existing catalogue test —
+`use-overtime-report.test.ts` (21 tests: URL builders including deterministic Site-id ordering and
+both tri-state query params, the 413/`OvertimeReportExportRowLimitExceededError` path, object-URL
+revocation, filename fallback, a direct hook-level "no request without a Cycle" suite, and a
+stable-query-key test proving one request per genuine change and zero redundant ones on an
+unchanged re-render), `overtime-report-labels.test.ts` (2 tests), `overtime-report-print-fields.test.ts`
+(19 tests: sensitive-field-exclusion sweep, an explicit "Average OT Rate never offered" check,
+readability levels scaled to this report's own 11-column maximum, `localStorage` round-trip under this
+report's own versioned key, defensive-parse behavior), `reports-overtime-report-page.test.tsx` (69
+tests: RBAC including "no View Details action ever renders" and "no row click ever navigates," the
+missing-Cycle state, loading/empty/error states distinguishing "no entries for this cycle" from "no
+match for filters," totals including the three-group layout, the `totalsComputed: false` notice with
+Total OT Earnings/Hours and the three individually-dashed Coverage cards, an explicit proof that
+entry-level Status counts are never recomputed from visible work-line rows, every approved table
+column with a full-body sensitive-field sweep and an explicit assertion that Net Salary/Total Earnings
+never appear, the Yes/No Has Correction text cell, every row-status badge, a dedicated **WorkLine
+grain** suite (one employee/two work lines renders exactly two rows never merged, each row's own
+correct Unit, independently-preserved OT Hours/Effective OT Rate/OT Earnings across both rows,
+entry-level fields repeating identically across both rows, and a table-body-row-count proof against
+accidental client-side deduplication), sorting resetting page to 1 with `aria-sort` reflected and an
+explicit proof that Designation/Effective OT Rate/OT Earnings/Gross Pay/Has Correction expose no sort
+button, pagination using server metadata only including the page-clamp-on-shrunk-total safeguard,
+every filter including both tri-states and the Site-count-gated Unit disable/clear behavior, Clear
+Filters preserving the selected Cycle, export request shape and duplicate-click prevention, the 413
+path, and Print defaults/persistence/readability/no-CNIC-or-banking-or-correction-reason-ever) — plus
+2 new tests in the existing `reports-page.test.tsx` for the catalogue card's own permission-free
+(reuses `reports:view` alone) gating. **111 new frontend tests, all passing (109 in the 4 new files —
+21 hook, 2 labels, 19 print-fields, 69 page — 2 added to the existing catalogue test); full frontend
+suite 689/689.** `typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`,
+`typecheck:e2e` clean, `git diff --check` clean.
+
+**Playwright**: `tests/e2e/specs/22-overtime-report.spec.ts` (10 tests) — real backend, real Chromium,
+no `page.route` interception for any RBAC or financial assertion. Covers: Master User navigation
+(Reports catalogue → Overtime Report → Cycle/Site filter → totals → sorting → pagination), Site
+scoping and historical transfer (a Site-A-scoped user sees only their accessible historical row, a
+live employee transfer to Site B leaves the already-created entry visible under its frozen historical
+Site A, Site B is never offered as a filter option, a direct API call naming the inaccessible Site
+403s, and no cross-site leak from an unrelated Site-B-only employee), Unit filter and Has Overtime (a
+Unit filter narrows to exactly one Unit's row within a shared Site, and Has Overtime distinguishes a
+worked-OT row from a genuine zero-OT row), a dedicated **Multi-unit work-line grain** test — the
+spec's own most important coverage — proving a real employee with two real work lines (two different
+Units, two different explicit OT rates, against the real backend) renders as two real table rows, each
+with its own correct Unit and its own independently-correct OT Hours/Effective OT Rate/OT Earnings
+(4h@120=480 vs. 9h@200=1,800), while the Matching Work Lines/Total OT Hours totals reflect both work
+lines and the Pending status count still reflects the one underlying entry, Row statuses (Held via the
+Hold toggle, No Pay Due via a zero-gross/EOBI-inapplicable/zero-day entry, Recovery Due via the
+zero-worked-days/positive-gross entry, Released via a full month of worked days plus OT, Pending via a
+genuine "Late Entry," plus the Row Status filter itself narrowing to the same value), Corrections (a
+real approved correction leaves the row's own OT Hours/OT Earnings provably unchanged from their
+pre-correction values, shows Has Correction: Yes, and never surfaces the correction's own reason text
+anywhere on the page), Export (CSV downloaded and its contents verified — safe headers present, both
+work-line rows of a multi-unit employee retained as two separate CSV rows, CNIC/IBAN/account-number/Net
+Salary/Total Earnings absent from the CSV content itself; XLSX download/action/filename verified by
+this spec — XLSX content/header/security parity is already covered by the backend's own Overtime
+Report export tests, Checkpoint 1A §18.9 above), Print (current-page-only wording, Print
+Options defaults, Very Wide readability warning at the full 11-column default, browser print invoked,
+zero export requests fired), a Responsive layout check (1024×800 viewport: no document-level
+horizontal scroll per the same invariant `06-ui-regression.spec.ts` already establishes for the app
+shell, every filter field remains individually visible, and the Unit column header remains visible),
+and Permission enforcement (`statements:view` alone: catalogue card and nav link absent, direct
+navigation shows "You do not have permission to access this page."; `reports:view`: full access).
+**10/10 passing standalone, 9/9 for `17-reports.spec.ts` standalone (unaffected), 19/19 combined.**
+
+**Request-count/performance observations** (measured during this checkpoint's own manual and
+Playwright verification, not a production SLA): the list fetch always requested exactly one page
+(`pageSize=25`), a filter/sort/pagination change each produced exactly one new list request with no
+duplicate/storm, multi-select Site state produced no request per checkbox toggle, export produced
+exactly one request with no page/pageSize parameter, and print used the already-loaded page data with
+zero additional fetches (directly proven via a request-listener assertion in the Playwright Print
+test, not just inferred from absence of a spinner). No detail request of any kind — no detail endpoint
+exists for this report to call.
+
+**Known limitations, disclosed**: (1) every Checkpoint 1A backend limitation (§18.10 above) is
+inherited unchanged — this checkpoint touches no backend code; (2) saved filter presets remain
+deferred (unchanged from every sibling report); (3) backend PDF remains intentionally excluded from
+this report (unchanged from every sibling report); (4) the Unit badge (blue tone) is this report's own
+one deliberate visual departure from the shared plain-text column convention every sibling report
+uses for a non-status field — a documented, intentional choice (see the grain note above), not an
+inconsistency to reconcile later.
+
+**Architecture deviations from the authorizing instruction**: none identified. Every frozen backend/
+product decision, filter, column, total, sort field, export/print rule, and test requirement in the
+authorizing instruction was implemented as specified.
+
+**Overtime Report is now fully complete pending review** (Checkpoints 0, 1A, 1B). The remaining
+reports (Advance Recovery Report, Salary Release Report, Variance/Month-on-Month Report) and Dashboard
+each remain **Not Started** and require their own separate, explicit authorization — this checkpoint
+did not begin any of them. This checkpoint was not committed or pushed — it awaits independent review
+before any commit.

@@ -17,6 +17,72 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-08-07 (latest) — Phase 7 Reports, Overtime Report Checkpoint 1B (Frontend, Browser
+> Print, and E2E) — IMPLEMENTED, awaiting review, NOT COMMITTED.** Built over the now-committed
+> (`862c231`, pushed to `origin/main`) Checkpoint 1A backend — no backend, shared-contract, or
+> database change this checkpoint. Full record: `docs/architecture/workflows/reports.md` §18.11 and
+> `docs/PROJECT_PROGRESS.md`'s own "Phase 7 Reports — Overtime Report, Checkpoint 1B" §1 entry — not
+> duplicated here in full.
+>
+> **Gated on `reports:view`**, same as every sibling Checkpoint-1B report — never `statements:view`.
+> Route pair (`/reports/overtime-report` + `/payroll-cycles/:cycleId/reports/overtime-report`),
+> catalogue card now `available: true` with no `requiredPermission` override, no detail route.
+>
+> **Report grain, carried faithfully into the frontend**: one table row = one `PayrollEntryWorkLine`,
+> keyed on `workLineId` (never `payrollEntryId`, which two rows can share) — the page never merges,
+> groups, or deduplicates rows by employee. An employee with 2 work lines this cycle legitimately
+> renders as 2 rows. Because the same employee name/code can legitimately repeat across adjacent
+> rows, the Unit column renders as a solid blue `Badge` rather than plain text — this report's one
+> deliberate visual departure from every sibling report's identical column styling, so a duplicate
+> employee name is never mistaken for duplicate data at a glance.
+>
+> **Built**: `hooks/use-overtime-report.ts` (list query disabled until a Cycle exists, CSV/XLSX
+> export with structured-413 handling, a stable-query-key test proving one request per genuine change
+> and zero redundant ones on an unchanged re-render); filters — Site, Unit (disabled unless exactly
+> one Site selected), Row Status, Has Correction, and the one report-specific Has Overtime tri-state;
+> totals grouped into Overtime (Total OT Hours/Earnings, collapses to a notice when `totalsComputed`
+> is `false`), Coverage (Matching Work Lines always exact; Employees/Sites/Units With Overtime
+> individually dashed when unavailable), and Status (Released/Held/Pending/Corrected Entries, always
+> exact, never recomputed from visible rows — an entry with 2 OT-matching work lines still counts as
+> 1 entry); an 11-column table (the smallest of any report in this module) sorted server-side on the
+> six approved fields only (Designation/Effective OT Rate/OT Earnings/Gross Pay/Has Correction render
+> with no sort button); CSV/XLSX export of the complete filtered result; a dedicated
+> `OvertimeReportPrintOptionsDialog`/`overtime-report-print-fields.ts` (current-page-only,
+> `overtime-report-print-fields:v1` localStorage key, 10 cards/11 columns, readability thresholds
+> scaled down from Employee Payroll History's own 13-column scale to this report's smaller ceiling);
+> the same page-clamp-on-shrunk-total safeguard Project Site Payroll Report's/Deduction Report's own
+> Checkpoint 1B work established, included from the start.
+>
+> **Verified**: 111 new frontend tests, all passing (109 across 4 new colocated Vitest files —
+> 21 hook, 2 labels, 19 print-fields, 69 page, including a dedicated **WorkLine grain** suite proving
+> one employee/two work lines renders as exactly two rows never merged, each with its own correct
+> Unit and independently-preserved OT Hours/Effective OT Rate/OT Earnings — plus 2 added to the
+> existing catalogue test); full frontend suite **689/689**. `typecheck`/`lint`/`build` clean across
+> `shared`/`backend`/`frontend`, `typecheck:e2e` clean, `git diff --check` clean.
+> `tests/e2e/specs/22-overtime-report.spec.ts` — **10/10 passing** standalone, **9/9** for
+> `17-reports.spec.ts` standalone (unaffected), **19/19** combined (real backend, real Chromium, no
+> route mocking) — covering navigation/totals/sorting/pagination, Site scoping with a genuine
+> historical transfer, Unit filter and Has Overtime, a dedicated **Multi-unit work-line grain** test
+> (two real work lines, two different Units, two different explicit OT rates — 4h@120=480 vs.
+> 9h@200=1,800 — both retained as two on-screen rows and two CSV export rows), all five row statuses,
+> a real approved Correction leaving OT Hours/OT Earnings provably unchanged with no reason-text leak,
+> CSV export downloaded and its contents swept for sensitive fields, XLSX download/action/filename
+> verified (XLSX content/header/security parity already covered by the backend's own Checkpoint 1A
+> export tests), Print Options defaults/readability plus a direct proof
+> that zero export requests fire from Print, a responsive-layout check at 1024px, and permission
+> enforcement.
+>
+> **Overtime Report is now fully complete pending review** (Checkpoints 0, 1A, 1B). No
+> commit/push/deploy occurred this session for Checkpoint 1B.
+>
+> **This entry supersedes the Checkpoint 0/1A-only entry immediately below** (backend foundation
+> only, no frontend) **for current-status purposes — that entry's own text is left exactly as
+> originally written**, per this project's "don't rewrite history" documentation convention: a
+> superseding update is always a new, later entry, never an edit to an earlier one's own words. Note
+> one factual update the entry below predates: its own Checkpoint 1A was subsequently reviewed and
+> **committed as `862c231`, pushed to `origin/main`** — the "No commit, push, or deployment occurred"
+> line in that entry describes its state at the time it was written, not the current state.
+
 > **Update, 2026-08-07 (latest) — Phase 7 Reports, Overtime Report Checkpoint 0 (Architecture,
 > approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.**
 > Backend/shared-contracts/tests only — no frontend page exists yet for this report. Full record:
