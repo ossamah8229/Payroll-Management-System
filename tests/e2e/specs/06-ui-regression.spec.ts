@@ -45,17 +45,18 @@ test.describe('UI regression smoke', () => {
   });
 
   /**
-   * Post-Checkpoint-1A UAT Stabilization — "sticky header reveals a blank/underlying strip while
-   * scrolling" defect. Root cause (isolated via direct pixel sampling of a headless-Chromium
-   * screenshot during this checkpoint's own investigation): every virtualized Payroll Entry row
-   * was fully transparent (`background-color: rgba(0,0,0,0)`), relying entirely on the ancestor
-   * Card's own incidental white background rather than painting its own opaque surface — a real
-   * gap when a row shares screen space with the grid's sticky header/totals rows during scroll
-   * compositing. Fixed with an explicit `bg-surface-2` on every row
-   * (`payroll-entry-row.tsx`) — this spec asserts the *computed* style (never overridable by an
-   * ancestor happening to be a different color) on real, currently-scrolled-past rows, at both the
-   * top of the page and after scrolling, across a dataset large enough to genuinely overflow the
-   * grid's own `max-h-[70vh]` scroll region.
+   * Post-Checkpoint-1A UAT Stabilization (2026-08-05) — every virtualized Payroll Entry row was
+   * fully transparent (`background-color: rgba(0,0,0,0)`), relying entirely on the ancestor Card's
+   * own incidental white background. Fixed with an explicit `bg-surface-2` on every row
+   * (`payroll-entry-row.tsx`). A real robustness gap, and this spec's own assertions below still
+   * hold — but UAT on 2026-08-10 reproduced the actual reported "blank strip while scrolling"
+   * defect on Employee Registry, a page with no virtualized rows and no sticky element of its own
+   * at all, proving this fix was never the defect's real root cause (the same-day independent
+   * review that first shipped this fix had already flagged the causal claim as unconfirmed — see
+   * docs/design-system.md §2.1 for the full history). The actual root cause — `html`/`body`
+   * defaulting to `overscroll-behavior-y: auto`, letting the browser's native elastic bounce shift
+   * AppShell's whole chrome within the viewport — is fixed and regression-tested at the shared
+   * layout level in `23-scroll-header-integrity.spec.ts`, not here.
    */
   test('Payroll Entry: every rendered row paints its own opaque background, at top of page and after scrolling (sticky-header containment)', async ({
     authenticatedPage: page,
@@ -111,10 +112,11 @@ test.describe('UI regression smoke', () => {
    * Post-Checkpoint-1A UAT Stabilization — representative audit beyond Payroll Entry, per the
    * checkpoint's own instruction to verify "one ordinary list page, one report/financial page, one
    * settings/admin page." None of these pages have any sticky element of their own (confirmed by
-   * direct repository inspection during this checkpoint) — this asserts the one thing that could
-   * regress for any of them: the document itself never becomes the scrolling surface, and the
-   * topbar stays a fully opaque band, both at rest and (where the page has enough content) after
-   * scrolling `<main>`.
+   * direct repository inspection during this checkpoint) — this asserts the document itself never
+   * becomes the scrolling surface, and the topbar stays a fully opaque band, both at rest and
+   * (where the page has enough content) after scrolling `<main>`. `23-scroll-header-integrity.spec.ts`
+   * covers the shared-layout overscroll-bounce defect these two assertions alone don't catch (see
+   * that file's own header comment).
    */
   for (const [label, path] of [
     ['Employee Registry (ordinary list page)', '/employees'],

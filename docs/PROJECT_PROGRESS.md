@@ -9945,6 +9945,117 @@ Dashboard. **Overtime Report is now fully complete pending review (Checkpoints 0
 
 ---
 
+## UAT 2026-08-10 — Payroll Entry "New Employee" quick action, and scroll/header blank-space
+## defect reopened and correctly fixed — IMPLEMENTED, awaiting review, NOT COMMITTED
+
+Two UAT items resolved before Advance Recovery Report or any Dashboard work begins, per explicit
+instruction. Starting state verified: `main == origin/main == cde6a3e`, working tree clean.
+
+**Issue 1 — Payroll Entry "New Employee" quick action.** No floating/hovering "+" implementation
+ever existed in real application source — confirmed by full-repository search (code, docs, git
+history). It appeared only in the original static prototype (`reference/payroll_prototype.html`'s
+`.quick-add-btn`) and the original spec (`reference/PROJECT_SPEC.md`), and was already dropped
+before the phase-by-phase prototypes that actually drove implementation. `docs/design-system.md`'s
+Components table row for it is now marked superseded/historical rather than deleted, per "preserve
+historical chronology." The approved, shipped pattern: a normal top-level `+ New Employee` button in
+Payroll Entry's own toolbar (`payroll-page-toolbar.tsx`'s `actions` slot), gated on
+`PERMISSIONS.EMPLOYEES_CREATE` exactly like Employee Registry's own button, opening the **same**
+`EmployeeFormModal` — extracted from `employees-page.tsx` (previously page-local) into
+`frontend/src/components/employees/employee-form-modal.tsx` so both callers share one form, one
+validation path, one submission path (`useCreateEmployee`), one backend route
+(`POST /api/v1/employees`, `EMPLOYEES_CREATE`-gated). Employee Registry's own behavior is
+byte-for-byte unchanged (verified via real-Chromium Playwright: New Employee still opens/creates/
+edits correctly, edit still pre-fills, its own create-then-reopen-blank guarantee intact).
+
+**Correction to an earlier premise about payroll-entry auto-creation.** Investigation for this UAT
+initially found (from a code search) no linkage between Employee creation and PayrollEntry creation.
+That was **wrong** — `backend/src/modules/employees/employees.service.ts` already calls
+`syncEmployeeIntoCurrentDraftCycle` synchronously inside `createEmployee` itself (confirmed by
+grep and by a real end-to-end Playwright run showing the `PayrollEntry` row exists immediately after
+the `POST /api/v1/employees` response, before any reconciliation call). This pre-existing behavior
+(not introduced by this checkpoint) already creates a `PayrollEntry` for a new employee in whichever
+cycle is currently `DRAFT`. The only gap was that Payroll Entry's own `usePayrollEntries(cycleId)`
+frontend query cache wasn't invalidated after a creation initiated from its own page — fixed by
+invalidating `payrollEntriesQueryKey(cycleId)` in the New Employee button's `onCreated` callback, so
+the new employee's row appears in the grid without a full browser refresh, with no new
+payroll-entry-creation semantics invented (an earlier draft of this fix mistakenly re-triggered
+`reconcileDraftCycleRoster` instead, which is real but solves a different, unrelated problem — an
+employee who predates this sync-on-create behavior — and always correctly returned
+`reconciledCount: 0` for a brand-new employee, since it was already synced; replaced with the direct
+query invalidation once this was understood).
+
+**Issue 2 — scroll/header blank-space defect, reopened.** The 2026-08-05 Post-Checkpoint-1A UAT
+Stabilization fix (explicit `bg-surface-2` on every Payroll Entry virtualized row,
+`payroll-entry-row.tsx`) was real but never the actual root cause — that same session's own
+independent review had already flagged the causal claim as unconfirmed (never reproduced the live
+symptom, only disproved the initial "bleed-through" hypothesis). UAT on 2026-08-10 reproduced the
+defect on **Employee Registry**, a page with no virtualized rows and no sticky element of its own at
+all, proving the 2026-08-05 fix could not have been the mechanism. Real root cause, found via actual
+Chromium/Playwright investigation (CDP `Input.synthesizeScrollGesture` with `yOverscroll`,
+screenshotting mid-gesture, pixel-sampling the top of the content region — direct, empirical, visual
+proof, not inference): `html`/`body` were left at the browser default `overscroll-behavior-y: auto`,
+so a trackpad/gesture scroll that overshoots the top of the page triggers the browser's own native
+elastic bounce **on the document itself**, shifting AppShell's whole root (Topbar included) down
+within the viewport for the duration of the bounce and exposing `body`'s own `--color-bg`
+(`rgb(240, 237, 232)`) in a strip above the Topbar's opaque white (`rgb(255, 255, 255)`) — visually
+confirmed via pixel sampling before and after the fix. Reproduced identically on every page audited
+(Employee Registry, Payroll Entry, Project Sites, Reports catalogue, a long report, Salary Release)
+since it is a single shared-layout defect. **Fixed once, at the shared layout level**:
+`frontend/src/index.css` sets `overscroll-y-none` on `html`/`body`; `app-shell.tsx`'s `<main>`
+additionally carries `overscroll-y-contain`. See `docs/design-system.md` §2.1 for the full history
+and technical explanation.
+
+**Tests**: frontend `typecheck`/`lint`/`build` clean; `git diff --check` clean.
+`tests/e2e/specs/23-scroll-header-integrity.spec.ts` (new, 12 tests) — deterministic
+`overscroll-behavior` computed-style assertions across all 5 representative pages, scroll-owner/
+header-position/opacity geometry assertions for Employee Registry, Payroll Entry, and a long report
+(Project Site Payroll Report), and real overscroll-gesture pixel-sampling proof for Employee Registry
+and Payroll Entry (the two mandatory pages) — **12/12 passing**.
+`tests/e2e/specs/24-payroll-entry-quick-add-employee.spec.ts` (new, 3 tests) — button placement/no-FAB
+proof, full shared-modal create flow with grid refresh proof, and `employees:create` permission
+parity between Payroll Entry and Employee Registry (including a direct backend-bypass attempt
+confirmed `403`) — **3/3 passing**. `06-ui-regression.spec.ts`'s own sticky-header-containment test
+comment corrected to reflect this history rather than restate the 2026-08-05 fix as confirmed root
+cause; its assertions are unchanged and still pass.
+
+**Files changed**: `frontend/src/index.css`, `frontend/src/components/layout/app-shell.tsx`,
+`frontend/src/components/employees/employee-form-modal.tsx` (new),
+`frontend/src/routes/employees-page.tsx`, `frontend/src/routes/payroll-entry-page.tsx`,
+`tests/e2e/specs/23-scroll-header-integrity.spec.ts` (new),
+`tests/e2e/specs/24-payroll-entry-quick-add-employee.spec.ts` (new),
+`tests/e2e/specs/06-ui-regression.spec.ts` (comment only), `docs/design-system.md`,
+`docs/PROJECT_PROGRESS.md`, `docs/SESSION_HANDOFF.md`.
+
+**Same-day hostile/independent review (2026-08-10) found and fixed one genuine defect.**
+`handleEmployeeCreated`'s post-create query invalidation (`payroll-entry-page.tsx`) originally
+invalidated `payrollEntriesQueryKey(cycleId)` using whichever cycle the page's URL currently named —
+but the Historical Payroll Cycle Selector lets Payroll Entry display a read-only Released/Archived
+cycle, and `employees.service.ts` always syncs a newly created employee into whichever cycle is
+currently *globally DRAFT*, never necessarily the cycle being viewed. Combined with
+`usePayrollEntries`'s own `staleTime: Infinity` (refetched only explicitly), this meant: create an
+employee while viewing an Archived/Released cycle, then switch to the real Draft cycle via the
+in-app Cycle selector within the same session — the new employee's row would not appear without a
+full browser refresh, silently violating the "no full browser refresh" requirement in that one
+scenario. Reproduced live (real Chromium, genuine in-app SPA navigation — not `page.goto`, which
+would trivially mask the bug by wiping the whole client-side cache) before any fix, confirmed
+resolved after. Fixed by resolving the actual Draft cycle from the page's own already-available
+`cycles` list (`cycles.find(c => c.status === 'DRAFT')?.id`) instead of trusting the viewed
+`cycleId`. Regression-tested: a new test in `24-payroll-entry-quick-add-employee.spec.ts` ("New
+Employee created while viewing an Archived cycle still appears on the Draft cycle after switching,
+without a full page reload") — confirmed to fail against the original code and pass against the
+fix. The review also independently re-verified (not merely re-asserted) every other claim from the
+original implementation pass: the Employee Registry modal extraction is a byte-for-byte behavioral
+no-op (diffed against the base commit), `overscroll-y-none` and `overscroll-y-contain` are each
+independently sufficient to fix the scroll defect (tested by removing each in isolation — legitimate
+defense-in-depth, not redundant), the scroll regression spec was proven to fail 7/10 when the
+production fix is reverted, and the 3 pre-existing E2E failures were reconfirmed via full-suite
+re-run plus direct failure-signature inspection (none touch AppShell/CSS/Employee-modal code).
+
+**No commit, push, or deployment occurred — do not mark this checkpoint complete** until reviewed.
+Explicitly NOT done: Advance Recovery Report, Dashboard, any other report work.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -10316,7 +10427,22 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-05 (latest) — Post-Checkpoint-1A UAT Stabilization: IMPLEMENTED, awaiting
+**Updated 2026-08-10 (latest) — two UAT items resolved: IMPLEMENTED, awaiting review — NOT
+committed, NOT pushed, NOT deployed, per explicit instruction to stop after implementation/tests/
+documentation.** (1) Payroll Entry now has a normal top-level `+ New Employee` button (never a
+floating/hovering one — none ever existed in real source) sharing Employee Registry's own
+`EmployeeFormModal`, extracted to `frontend/src/components/employees/employee-form-modal.tsx`. (2)
+The scroll/header blank-space defect — reopened after the 2026-08-05 fix below turned out to target
+the wrong layer — is re-root-caused (undisabled document-level `overscroll-behavior` letting the
+browser's native elastic bounce shift AppShell's whole chrome within the viewport) and fixed once at
+the shared `index.css`/`app-shell.tsx` level. Full record: `docs/PROJECT_PROGRESS.md`'s own "UAT
+2026-08-10" entry (immediately above §2) and this session's own completion report. Frontend
+`typecheck`/`lint`/`build` clean, `git diff --check` clean, two new Playwright specs (15/15 passing)
+plus one corrected comment in an existing spec. **Do not begin Advance Recovery Report, Dashboard, or
+any other work until this checkpoint is reviewed and landed.**
+
+**Updated 2026-08-05 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Post-Checkpoint-1A UAT Stabilization: IMPLEMENTED, awaiting
 review — NOT committed, NOT pushed, NOT deployed, per explicit instruction to stop after
 implementation/tests/documentation.** Three independently-reported UAT defects fixed as one scoped
 checkpoint: (1) Payroll Entry's sticky header revealing scrolled-past row content — root-caused to

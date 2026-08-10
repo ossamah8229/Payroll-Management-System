@@ -25,7 +25,9 @@ export function AppShell({
       <Sidebar user={user} />
       <div className="ml-[220px] flex flex-1 flex-col overflow-hidden print:ml-0 print:block print:overflow-visible">
         <Topbar title={title} subtitle={subtitle} user={user} />
-        <main className="flex-1 overflow-y-auto p-7 print:overflow-visible print:p-0">{children}</main>
+        <main className="flex-1 overflow-y-auto overscroll-y-contain p-7 print:overflow-visible print:p-0">
+          {children}
+        </main>
       </div>
     </div>
   );

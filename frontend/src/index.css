@@ -75,6 +75,20 @@
     @apply border-border;
   }
 
+  /* UAT 2026-08-10 (scroll/header blank-space defect, re-root-caused after the 2026-08-05
+     Payroll Entry row-opacity fix failed to address it — see docs/design-system.md §2.1):
+     `html`/`body` default to `overscroll-behavior-y: auto`, so a trackpad/gesture scroll that
+     overshoots the top of the page triggers the browser's own native elastic bounce on the
+     *document* — shifting AppShell's entire fixed/sticky chrome (Topbar included) down within the
+     viewport and exposing `body`'s own `bg-bg` in a strip above it, where the opaque Topbar should
+     always be. AppShell's `<main>` (app-shell.tsx) is the only element meant to scroll — the
+     document itself never should — so containing/disabling overscroll here is the correct, single,
+     shared fix rather than a per-page background patch. */
+  html,
+  body {
+    @apply overscroll-y-none;
+  }
+
   body {
     @apply bg-bg text-text font-sans antialiased;
   }

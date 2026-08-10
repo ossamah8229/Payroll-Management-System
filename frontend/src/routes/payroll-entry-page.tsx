@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useBlocker } from 'react-router-dom';
 import { Download, FileEdit, Lock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -15,14 +16,20 @@ import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
 import { PrintButton } from '@/components/ui/print-button';
 import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { canRequestCorrection } from '@/lib/permissions';
+import { canRequestCorrection, hasPermission } from '@/lib/permissions';
+import { EmployeeFormModal } from '@/components/employees/employee-form-modal';
 import { payrollEntrySaveStatusStore } from '@/lib/payroll-entry-save-status-store';
 import { useBanks } from '@/hooks/use-banks';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useSelectedPayrollCycle } from '@/hooks/use-selected-payroll-cycle';
 import { formatCycleLabel, useReconcileDraftCycleRoster } from '@/hooks/use-payroll-cycles';
 import { PayrollCycleSelectField, PayrollCycleStatusBadge } from '@/components/payroll-cycle/payroll-cycle-selector';
-import { downloadPayrollEntryExport, usePayrollEntries, type PayrollEntry } from '@/hooks/use-payroll-entries';
+import {
+  downloadPayrollEntryExport,
+  payrollEntriesQueryKey,
+  usePayrollEntries,
+  type PayrollEntry,
+} from '@/hooks/use-payroll-entries';
 import { PayrollEntryGrid } from '@/components/payroll-entry/payroll-entry-grid';
 import { PayrollEntrySaveStatusBanner } from '@/components/payroll-entry/save-status-banner';
 import { NewCycleModal } from '@/components/payroll-entry/new-cycle-modal';
@@ -98,6 +105,7 @@ function filterEntriesBySite(entries: PayrollEntry[], siteIds: string[]): Payrol
 }
 
 export function PayrollEntryPage({ user }: { user: SessionUser }) {
+  const queryClient = useQueryClient();
   // Phase 5 Checkpoint 4 — the shared Historical Payroll Cycle Selector. `cycleId` is the raw,
   // URL-sourced identifier (used for every data fetch below, so an invalid/nonexistent explicit
   // id still reaches the backend and surfaces its own error, per the approved architecture — never
@@ -138,8 +146,14 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   // Entry stays a strictly site-scoped operational domain; holding sites:manage does not widen it.
   const sites = useAccessibleProjectSites(user);
   const [newCycleOpen, setNewCycleOpen] = useState(false);
+  const [createEmployeeOpen, setCreateEmployeeOpen] = useState(false);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
 
+  // UAT 2026-08-10 — the same "+ New Employee" action and create modal as Employee Registry
+  // (EmployeeFormModal, extracted so both callers share one implementation), never a second
+  // employee-create form or a permission bypass: gated by the exact same EMPLOYEES_CREATE
+  // permission Employee Registry itself checks, independently re-enforced by the backend route.
+  const canCreateEmployee = hasPermission(user, PERMISSIONS.EMPLOYEES_CREATE);
   const canManageCycles = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const isLoading = cycleLoading || (Boolean(cycleId) && (entriesLoading || banks.isLoading));
 
@@ -170,6 +184,26 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cycleId, canManageCycles, cycle?.status]);
+
+  // `employees.service.ts` already calls `syncEmployeeIntoCurrentDraftCycle` synchronously inside
+  // employee creation itself (not just this page's own roster-reconciliation effect above) — a new
+  // employee is already a PayrollEntry row in whichever cycle is currently DRAFT, server-side, by
+  // the time this fires. That is *not necessarily the cycle this page is currently viewing* — the
+  // Historical Payroll Cycle Selector lets this same page show a read-only Released/Archived
+  // cycle, and `usePayrollEntries`'s own `staleTime: Infinity` (this file's own comment above: data
+  // is refetched only explicitly, "cycle switch" included) means a cycle whose query was never
+  // invalidated stays showing pre-creation data indefinitely within one session, even after
+  // switching to it. Invalidating the *Draft* cycle's own key specifically — never just whatever
+  // `cycleId` happens to be in the URL right now — is what actually guarantees the new employee
+  // shows up once the user is looking at the cycle it was synced into, without a full browser
+  // refresh, regardless of which cycle they were viewing when they created it. No new linkage
+  // invented here: only invalidating an already-existing query key for the cycle the backend
+  // itself already wrote to.
+  function handleEmployeeCreated() {
+    const draftCycleId = cycles.find((c) => c.status === 'DRAFT')?.id;
+    if (!draftCycleId) return;
+    queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(draftCycleId) });
+  }
 
   const filteredEntries = useMemo(
     () => filterEntriesBySite(entries ?? [], selectedSiteIds),
@@ -243,6 +277,12 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
               hasAnyCycle &&
               cycleId && (
                 <>
+                  {canCreateEmployee && (
+                    <Button size="sm" onClick={() => setCreateEmployeeOpen(true)}>
+                      <Plus className="h-3.5 w-3.5" aria-hidden />
+                      New Employee
+                    </Button>
+                  )}
                   <PrintButton recommendedOrientation="landscape" />
                   <Button variant="secondary" onClick={() => downloadPayrollEntryExport(cycleId, 'csv', selectedSiteIds)}>
                     <Download className="h-3.5 w-3.5" aria-hidden />
@@ -423,6 +463,14 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
       </Card>
 
       <NewCycleModal open={newCycleOpen} onOpenChange={setNewCycleOpen} />
+      {canCreateEmployee && (
+        <EmployeeFormModal
+          open={createEmployeeOpen}
+          onOpenChange={setCreateEmployeeOpen}
+          onCreated={handleEmployeeCreated}
+          user={user}
+        />
+      )}
       {hasReleasedEntries && (
         <RequestCorrectionModal
           open={requestCorrectionOpen}
