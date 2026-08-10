@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS,
+  advanceRecoveryReportEmployeeLookupQuerySchema,
+  advanceRecoveryReportExportQuerySchema,
+  advanceRecoveryReportListQuerySchema,
   DEDUCTION_REPORT_EXPORT_MAX_ROWS,
   deductionReportExportQuerySchema,
   deductionReportListQuerySchema,
@@ -15,6 +19,7 @@ import {
   PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS,
   projectSitePayrollReportExportQuerySchema,
   projectSitePayrollReportListQuerySchema,
+  type AdvanceRecoveryReportExportLimitError,
   type DeductionReportExportLimitError,
   type EmployeePayrollHistoryExportLimitError,
   type OvertimeReportExportLimitError,
@@ -51,6 +56,14 @@ import {
   exportOvertimeReportToXlsx,
   getOvertimeReportList,
 } from './overtime-report.service';
+import {
+  buildAdvanceRecoveryReportExportData,
+  exportAdvanceRecoveryReportToCsv,
+  exportAdvanceRecoveryReportToXlsx,
+  getAdvanceRecoveryReportDetail,
+  getAdvanceRecoveryReportList,
+  searchAdvanceRecoveryReportEmployees,
+} from './advance-recovery-report.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -530,6 +543,152 @@ reportsRouter.get('/overtime-report/export', requirePermission(PERMISSIONS.REPOR
     );
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Advance Recovery Report (Phase 7 Reports, Advance Recovery Report Checkpoint 1A, approved
+ * Checkpoint 0 architecture review). Gated by `reports:view` — the same permission every sibling
+ * report in this module already uses, never `statements:view` — applied independently to list,
+ * export, and the detail/history endpoint below (frozen decision).
+ *
+ * **Report grain is `Advance`, not `PayrollEntry`** — an intentional, frozen architectural
+ * exception from every mandatory-single-cycle sibling report in this module (see
+ * `advance-recovery-report.service.ts`'s own doc comment). `cycleId` is OPTIONAL here — unlike
+ * every sibling report — and adds historical recovery context on top of the roster without ever
+ * redefining the LIVE CURRENT `currentOutstandingBalance`/`recoveredToDate` figures.
+ *
+ * **Route order matters**: `/advance-recovery/employees` and `/advance-recovery/export` are both
+ * registered *before* `/advance-recovery/:advanceId` — Express matches routes in registration
+ * order, so if the param route were registered first, a request to either static path would
+ * incorrectly match it with `advanceId` bound to the literal string `"employees"`/`"export"`.
+ */
+const ADVANCE_RECOVERY_REPORT_PERMISSION = requirePermission(PERMISSIONS.REPORTS_VIEW);
+
+reportsRouter.get('/advance-recovery', ADVANCE_RECOVERY_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = advanceRecoveryReportListQuerySchema.parse(req.query);
+    const report = await getAdvanceRecoveryReportList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'Advance',
+      entityId: null,
+      metadata: {
+        reportType: 'advance_recovery_report',
+        cycleId: query.cycleId ?? null,
+        page: report.page,
+        pageSize: report.pageSize,
+        total: report.total,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** No audit log on this discovery endpoint — matches Employee Payroll History's own
+ * `/employee-payroll-history/employees` precedent for the identical class of lookup query. */
+reportsRouter.get('/advance-recovery/employees', ADVANCE_RECOVERY_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = advanceRecoveryReportEmployeeLookupQuerySchema.parse(req.query);
+    const result = await searchAdvanceRecoveryReportEmployees(req.currentUser!, query);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Preflight-counts before generating any CSV/XLSX output, mirroring every other report's own
+ * export route — `buildAdvanceRecoveryReportExportData` itself never fetches/maps a single row once
+ * `totalMatching` exceeds `ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS`, so the structured
+ * `AdvanceRecoveryReportExportLimitError` below is always returned *before* any expensive work.
+ * Always the complete filtered dataset — no `page`/`pageSize` accepted at all.
+ *
+ * The filename carries an explicit "as of" timestamp (frozen decision — Export section) — CSV's
+ * own row/header shape stays exactly `ADVANCE_RECOVERY_REPORT_EXPORT_HEADERS`, never a non-data
+ * row inserted for this, so this is the CSV-side equivalent of the XLSX title area's own "As of"
+ * line.
+ */
+reportsRouter.get('/advance-recovery/export', ADVANCE_RECOVERY_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = advanceRecoveryReportExportQuerySchema.parse(req.query);
+    const data = await buildAdvanceRecoveryReportExportData(req.currentUser!, query);
+
+    if (data.totalMatching > ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS) {
+      const errorBody: AdvanceRecoveryReportExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (site, employee, advance type, status, or outstanding balance) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx' ? await exportAdvanceRecoveryReportToXlsx(data.rows) : exportAdvanceRecoveryReportToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'Advance',
+      entityId: null,
+      metadata: { reportType: 'advance_recovery_report', format: query.format, cycleId: query.cycleId ?? null, rowCount },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const asOf = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `advance-recovery-report-asof-${asOf}.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Entry-oriented detail (Checkpoint 0-approved dedicated detail surface). Authorization mirrors
+ * `advances.service.ts`'s own `getAdvance` — `assertSiteAccess` against `Advance.employee.siteId`,
+ * a 403 (not 404) for an inaccessible Advance, deliberately following the existing Advances
+ * module's own shipped posture rather than Employee Payroll History's own "reveal nothing via 404"
+ * convention (a different module's own, independently frozen choice — frozen decision §5/§12).
+ * `advanceId` is validated as a UUID before reaching the service — a malformed value is a 400,
+ * never passed through to Prisma.
+ */
+reportsRouter.get('/advance-recovery/:advanceId', ADVANCE_RECOVERY_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const advanceId = z.string().uuid('advanceId must be a valid UUID').parse(req.params.advanceId);
+    const detail = await getAdvanceRecoveryReportDetail(req.currentUser!, advanceId);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'Advance',
+      entityId: advanceId,
+      metadata: { reportType: 'advance_recovery_report_detail' },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(detail);
   } catch (error) {
     next(error);
   }

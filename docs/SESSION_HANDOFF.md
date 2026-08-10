@@ -4328,3 +4328,181 @@ modal). Final verdict: **APPROVE WITH NON-BLOCKING NOTES** (after the one fix ab
 explicit instruction. Advance Recovery Report **NOT** started; Dashboard **NOT** touched; no
 unrelated report work performed.
 
+## 36. Addendum, 2026-08-10 (later same day) — Phase 7 Reports, Advance Recovery Report: Checkpoint 1A (Backend Foundation) — IMPLEMENTED, NOT COMMITTED
+
+Backend, shared contracts, and backend tests only, per explicit Checkpoint 1A authorization —
+Checkpoint 0's own frozen architecture decisions (business purpose, grain, optional Cycle,
+permission, site authorization, canonical financial values, current-vs-historical semantics,
+filters, list columns, DB-native totals, detail/history endpoint, sorting, pagination, employee
+lookup, export, no-schema-change target) carried over verbatim from the authorizing instruction. No
+Checkpoint 1B (frontend) work. Starting state verified first: `main == origin/main ==
+4eca09e58cec740c029b8cf54474c79f19188298`, working tree clean.
+
+**Report grain is `Advance`, not `PayrollEntry`** — a first for this Reports module; every prior
+report in it (Payroll Summary, Employee Payroll History, Project Site Payroll Report, Deduction
+Report, Overtime Report) is grained on some `PayrollEntry`-family row. **Cycle is optional** —
+likewise a first; every sibling report requires exactly one Cycle. Both are intentional, frozen
+architectural exceptions specific to this report's own domain (an Advance's own lifecycle spans many
+cycles, and its live balance is meaningful with no cycle selected at all), not an inconsistency to
+reconcile with the rest of the module.
+
+**Site authorization** uses `Advance.employee.siteId` (the employee's CURRENT site) — `Advance` has
+no historical `siteId` column anywhere in this schema. This deliberately follows the existing
+Advances module's own shipped authorization model (`advances.service.ts`) rather than inventing a
+new one, including its 403-not-404 posture on the new detail endpoint. A disclosed, accepted V1
+limitation: a transferred employee's Advance and its recovery history follow their current site, not
+the site they belonged to when the Advance originated — proven directly by a live
+`prisma.employee.update` mid-test transfer scenario on both the list and detail endpoints, not
+merely asserted. No `siteId` column was added to `Advance`; no migration exists for this checkpoint.
+
+**Totals are true DB aggregates throughout** (`SUM`/`COUNT`/`GROUP BY`) — the one totals contract in
+this Reports module with **no `totalsComputed` flag/fallback at any row count**, unlike every
+`calcNet`-dependent sibling report. Verified directly, not merely asserted from the shared contract's
+own doc comment: a dedicated boundary suite seeds 20,001 real `Advance` rows and proves every total
+stays real/non-null/correctly-summed at all three boundary counts, including one row past the export
+ceiling. The one subtlety this required getting right: a type-split total (`loan`/`eidAdvance`) must
+use `{ AND: [where, { type: 'LOAN' }] }`-style composition, never a shallow `{ ...where, type: 'LOAN'
+}` spread — the latter would silently discard a caller's own `advanceType` filter when computing the
+*other* type's split, incorrectly pulling in every Advance of that type matching the remaining
+filters instead of correctly returning zero. Caught and fixed during the focused test pass (a test
+explicitly proves the correct, filter-respecting zero), not left as a latent defect.
+
+**New dedicated detail/recovery-history endpoint** (`GET /api/v1/reports/advance-recovery/
+:advanceId`) — Checkpoint 0 approved building this now, unlike every sibling report's own "no detail
+endpoint in V1" decision. Returns the Advance's own current summary, every genuinely linked
+`PayrollEntry` recovery event (with that event's own HISTORICAL site — the one field in the whole
+response that is deliberately not current), and the existing append-only `AdvanceScheduleChange`
+history — kept as two clearly separate arrays, never merged, so a recovery event is never mistaken
+for a scheduling/deferral event or vice versa.
+
+**Employee lookup** (`GET /api/v1/reports/advance-recovery/employees`) is a small, purpose-built,
+current-site-scoped query — the existing historical-payroll employee lookup
+(`common/historical-payroll-employee-lookup.ts`, used by Employee Payroll History/Statements) was
+inspected first and correctly rejected: it scopes by historical `PayrollEntry.siteId`, the wrong
+authorization basis for a report whose own model is current-site-based throughout (§19.1 decision 15,
+`docs/architecture/workflows/reports.md`).
+
+**Export** carries an explicit "As of &lt;timestamp&gt;" disclosure so a selected Cycle filter can
+never be misread as implying the current-balance figures are "as of" that cycle — an XLSX subtitle
+row beneath the title; for CSV, a filename-embedded timestamp instead of an extra body row, since an
+extra row would break the CSV's own header/row parity with the declared, potentially
+machine-parsed `ADVANCE_RECOVERY_REPORT_EXPORT_HEADERS`.
+
+**Performance evidence**: seeded 10 sites × 1,000 employees (10,000, the named design-floor
+population), ~15,000 `Advance` rows across a multi-year `dateGiven` spread with mixed type/status,
+plus real cross-cycle recovery `PayrollEntry` history — a committed, repeatable performance suite (9
+tests) measuring all 8 representative shapes named in the authorizing instruction with real
+`EXPLAIN (ANALYZE, BUFFERS)`. Honest finding: `Advance` itself carries only `@@index([employeeId])`
+and `@@index([currentScheduledPeriodId])` — no `type`/`status` index, no `siteId` column at all — so
+the broad-roster and status-filtered shapes do involve a `Seq Scan` at this fixture's ~15,000-row
+scale, a legitimate cost-based planner choice, not evidence of a missing index; every shape still
+completed its real HTTP request in well under one second. **No migration is proposed or recommended
+by this checkpoint** — see `docs/architecture/workflows/reports.md §19.7` for the full evidence table
+and reasoning, including a disclosed caveat about one hand-written approximating raw-SQL `EXPLAIN`
+showing a worse isolated plan than the real, faster end-to-end HTTP measurement above it.
+
+**Tests**: `advance-recovery-report.test.ts` (58), `advance-recovery-report-performance.test.ts` (9),
+`advance-recovery-report-boundary.test.ts` (6) — **73/73 new backend tests passing.**
+`typecheck`/`lint`/`build` clean across `shared`/`backend`, `git diff --check` clean. Targeted
+regression re-run (`advances.test.ts`, `deduction-report.test.ts`, `overtime-report.test.ts`,
+`project-site-payroll-report.test.ts`, `employee-payroll-history.test.ts`) passes unweakened with one
+disclosed, pre-existing exception: 4 `advances.test.ts` failures (a payroll-cycle `finalize` endpoint
+returning 400 instead of 200, across 4 otherwise-unrelated tests) — confirmed genuinely pre-existing,
+not assumed, by a `git stash` round-trip reproducing the identical 4 failures on a clean `4eca09e`
+checkout with zero code from this checkpoint applied, before restoring this checkpoint's own changes
+and rebuilding. This checkpoint touches no payroll-cycle finalize/release code at all.
+
+**Files changed**: `shared/src/schemas/advance-recovery-report.ts` (new), `shared/src/index.ts`,
+`backend/src/modules/reports/advance-recovery-report.service.ts` (new),
+`backend/src/modules/reports/reports.routes.ts`,
+`backend/tests/advance-recovery-report.test.ts` (new),
+`backend/tests/advance-recovery-report-performance.test.ts` (new),
+`backend/tests/advance-recovery-report-boundary.test.ts` (new),
+`docs/architecture/workflows/reports.md` (new §19), `docs/PROJECT_PROGRESS.md`, this addendum.
+
+**Known limitation carried forward**: the current-site-only Advance authorization model (§19.1
+decision 5 above) — disclosed, accepted, not a defect.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for independent
+review, per explicit instruction. Checkpoint 1B (frontend), Dashboard, Salary Release Report, and
+Variance/Month-on-Month Report are all explicitly **NOT** started.
+
+## 37. Addendum, 2026-08-10 (later same day) — Advance Recovery Report Checkpoint 1A: Independent Hostile Review — APPROVE WITH FIXES (no production defect found; regression coverage strengthened)
+
+An adversarial, independent re-review of Checkpoint 1A above, per explicit instruction. Scope: the
+same uncommitted diff (repository/diff integrity re-verified: `main == 4eca09e`, working tree contains
+only Checkpoint 1A's own files, no frontend/Dashboard/schema/migration/unrelated change, `git diff
+--check` clean). Every production code path was independently traced against the schema/frozen
+contract — authorization (all four endpoints, including a fresh detail-endpoint live-transfer test
+and an employeeId-site-bypass test, both added below), transferred-employee semantics, canonical
+financial-value sourcing (cross-checked directly against `advances.service.ts`'s own materialization/
+reversal/release code, confirming `outstandingBalance` decrements at Draft materialization, not
+Release, and that every reversal path nulls `advanceId`/`eidAdvanceId` so a reversed/deferred Draft
+deduction can never leak into `recoveryHistory`), optional-Cycle behavior, totals arithmetic
+(including the `AND`-composition type-split correctness), detail/history query correctness (LOAN vs
+EID_ADVANCE linkage, historical vs current site attribution), export CSV/XLSX field-by-field parity,
+sensitive-field exclusion, the 19,999/20,000/20,001 export boundary, and performance/index evidence
+against the actual `schema.prisma` indexes (`Advance` has only `@@index([employeeId])`/
+`@@index([currentScheduledPeriodId])`, `PayrollEntry` has `@@index([advanceId])`/
+`@@index([eidAdvanceId])`, `AdvanceScheduleChange` has `@@index([advanceId, changedAt(sort: Desc)])`
+— all confirmed to match the performance suite's own claims).
+
+**No production defect found.** Three test-coverage gaps were identified and closed with new
+regression tests in `advance-recovery-report.test.ts` (all passing): (1) the detail endpoint's own
+live-transfer authorization behavior (Site A loses access with 403, Site B gains it with 200) was
+previously only proven on the list endpoint, not the detail endpoint, despite both sharing the
+identical `assertSiteAccess` call; (2) a malformed `advanceId` on the detail route returning 400
+(enforced by the route's own `z.string().uuid()` parse) had no explicit test; (3) `employeeId`
+filtering could not previously be shown, by test, to be incapable of bypassing site scoping — traced
+in code (the site filter and `employeeId` filter are separate top-level keys in one Prisma `where`
+object, therefore implicitly `AND`-composed, never one overriding the other) and now proven directly:
+an explicit `employeeId` belonging to an inaccessible employee returns zero rows, never that
+employee's Advance.
+
+**Test count is now 76, not 73** (`advance-recovery-report.test.ts` 61, up from 58; boundary 6;
+performance 9 — unchanged) — the increase is these three added regression tests, not a correction of
+a wrong prior count (58/73 was accurate for the file set as it stood after Addendum 36).
+
+**The Addendum 36 pre-existing-failure claim (4 `advances.test.ts` failures) was independently
+re-verified**, not merely trusted: `git stash push -u` on this exact session's working tree, confirmed
+clean at `4eca09e` (`git status` empty), `advances.test.ts` run standalone — identical 4 failures at
+the identical 4 line numbers (`tests/advances.test.ts:444/635/951/1476`, all a payroll-cycle `finalize`
+call receiving `400` instead of `200`), then `git stash pop` restored this checkpoint's changes
+byte-for-byte (verified via `git status` matching pre-stash exactly). Confirms the claim precisely.
+
+**Full-suite degradation (§16 of the review instruction) — investigated, not run wholesale.** The
+plain `advance-recovery-report*` Jest run prints "Jest did not exit one second after the test run has
+completed" — but the identical warning, byte-for-byte, also printed on the from-scratch
+`advances.test.ts` run against clean `4eca09e` (zero Checkpoint 1A code present) and on
+`deduction-report.test.ts`/`overtime-report.test.ts` (both pre-existing, unrelated suites). A
+`--detectOpenHandles` re-run of the three new suites together found zero reported open
+handles/leaked timers/connections. This is conclusive evidence the warning is a repo-wide Jest/pg-pool
+teardown-timing characteristic, not a leak introduced by this checkpoint — so the broader ~1,638-test/
+150-failure/76-minute full-suite run this review's own instructions flagged as a possible target was
+correctly judged unnecessary; there was no positive signal pointing at this checkpoint as a
+contributor.
+
+**"As of" disclosure (§12) — assessed, not changed.** The XLSX subtitle row plus CSV's filename-
+embedded timestamp is judged sufficient: the field names themselves (`Current Outstanding Balance`)
+already state the current-vs-historical distinction, and inserting a metadata row into the CSV body
+would break its declared header/row parity with `ADVANCE_RECOVERY_REPORT_EXPORT_HEADERS` for a
+programmatic consumer — the frozen decision's own stated reason for this asymmetry. No change made.
+
+**Verification evidence**: `shared`/`backend` `npx tsc --noEmit` clean; `npm run lint` clean (0
+errors, 10 pre-existing warnings confined to unrelated `backend/scripts/*.ts` files, untouched by this
+diff); `npm run build` clean; `advance-recovery-report*` (3 files, 76/76) passing; `advances.test.ts`
+34/34 with the same 4 pre-existing failures on both the working tree and the clean-`4eca09e` stash
+comparison; `deduction-report.test.ts` + `overtime-report.test.ts` 117/117 passing; `git diff --check`
+clean.
+
+**Files changed by this review pass**: `backend/tests/advance-recovery-report.test.ts` (3 new
+regression tests added, no existing test modified/weakened), `docs/SESSION_HANDOFF.md` (this
+addendum), `docs/PROJECT_PROGRESS.md`, `docs/architecture/workflows/reports.md` (test-count
+correction + this review's findings). No other file touched. No production code changed — no genuine
+defect was found to fix.
+
+**Verdict: APPROVE WITH FIXES** (fixes being the three added regression tests — no production code
+defect existed to fix). Migration: not recommended, consistent with Addendum 36's own conclusion,
+independently re-confirmed against the actual schema. Checkpoint 1B may proceed once explicitly
+authorized. **No commit, push, or deployment occurred during this review.**
+

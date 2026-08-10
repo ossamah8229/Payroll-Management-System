@@ -274,6 +274,42 @@ export type {
   OvertimeReportUnitRef,
 } from './schemas/overtime-report';
 
+export {
+  ADVANCE_RECOVERY_REPORT_DEFAULT_PAGE_SIZE,
+  ADVANCE_RECOVERY_REPORT_EMPLOYEE_LOOKUP_DEFAULT_PAGE_SIZE,
+  ADVANCE_RECOVERY_REPORT_EMPLOYEE_LOOKUP_MAX_PAGE_SIZE,
+  ADVANCE_RECOVERY_REPORT_EXPORT_FORMATS,
+  ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS,
+  ADVANCE_RECOVERY_REPORT_MAX_PAGE_SIZE,
+  ADVANCE_RECOVERY_REPORT_ROW_STATUS_VALUES,
+  ADVANCE_RECOVERY_REPORT_SORT_FIELDS,
+  ADVANCE_RECOVERY_REPORT_SORT_DIRECTIONS,
+  advanceRecoveryReportEmployeeLookupQuerySchema,
+  advanceRecoveryReportExportQuerySchema,
+  advanceRecoveryReportListQuerySchema,
+} from './schemas/advance-recovery-report';
+export type {
+  AdvanceRecoveryReportCycleRef,
+  AdvanceRecoveryReportDetail,
+  AdvanceRecoveryReportDetailEmployeeRef,
+  AdvanceRecoveryReportEmployeeCandidate,
+  AdvanceRecoveryReportEmployeeLookupQuery,
+  AdvanceRecoveryReportEmployeeLookupResponse,
+  AdvanceRecoveryReportExportFormat,
+  AdvanceRecoveryReportExportLimitError,
+  AdvanceRecoveryReportExportQuery,
+  AdvanceRecoveryReportListQuery,
+  AdvanceRecoveryReportListResponse,
+  AdvanceRecoveryReportRecoveryEvent,
+  AdvanceRecoveryReportRow,
+  AdvanceRecoveryReportRowStatus,
+  AdvanceRecoveryReportScheduleChangeEvent,
+  AdvanceRecoveryReportSortDirection,
+  AdvanceRecoveryReportSortField,
+  AdvanceRecoveryReportTotals,
+  AdvanceRecoveryReportTypeTotals,
+} from './schemas/advance-recovery-report';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

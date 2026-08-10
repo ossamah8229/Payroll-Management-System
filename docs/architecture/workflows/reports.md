@@ -2162,3 +2162,331 @@ reports (Advance Recovery Report, Salary Release Report, Variance/Month-on-Month
 each remain **Not Started** and require their own separate, explicit authorization — this checkpoint
 did not begin any of them. This checkpoint was not committed or pushed — it awaits independent review
 before any commit.
+
+## 19. Advance Recovery Report — Checkpoint 1A (Backend Foundation, 2026-08-10)
+
+Backend, shared contracts, and backend tests only — no frontend page, no schema/migration change.
+Built against the approved Checkpoint 0 architecture review's own frozen decisions
+(`docs/PROJECT_PROGRESS.md`'s "Phase 7 Reports — Advance Recovery Report" entry).
+
+### 19.1 Frozen decisions this checkpoint is built against
+
+1. **Business purpose**: an Advance-domain recovery and outstanding-balance report — which employee
+   Advances exist, LOAN vs EID_ADVANCE, original amount, recovered to date, current outstanding
+   balance, current status, and (only when a Payroll Cycle is selected) how much was recovered
+   through that cycle. Not a generic deductions report, not a Correction Recovery report, not a
+   Balance Adjustment report, not an Employee Payroll History replacement, not a Statements
+   replacement. `correctionBalanceRecovery`/Correction/BalanceAdjustment recovery is completely
+   excluded — never incorporated anywhere in this report.
+2. **Report grain**: one row = one `Advance` record, `Advance.id` the stable row identity. Never one
+   row per `PayrollEntry`, per recovery installment, or per employee/cycle. LOAN and EID_ADVANCE
+   share this same grain — one report, not two, `advanceType` a row field/filter.
+3. **Cycle is OPTIONAL** — the one behavior genuinely unique to this report among every sibling
+   report in this module (all of which require exactly one cycle). Omitted: the Advance roster per
+   the other filters, `recoveredThisCycle` absent (`null`) on every row — never a fabricated
+   historical zero. Selected: adds `recoveredThisCycle` historical context on top of the same
+   roster — it never redefines `currentOutstandingBalance`/`recoveredToDate`, which both always
+   remain LIVE CURRENT figures, never "as of" the selected cycle. There is deliberately no
+   `outstandingBalanceAsOfCycle` field — the schema cannot truthfully provide one.
+4. **Permission**: `reports:view`, not `statements:view` — applied independently to list, export,
+   and the new detail/history endpoint (unlike every prior report in this module, which either has
+   no detail endpoint or gates it identically to its own list). Proven with an explicit
+   `statements:view`-only-user-receives-403 test on all three surfaces.
+5. **Site authorization**: `Advance` has no historical `siteId` of its own anywhere in this schema.
+   V1 authorizes every row using `Advance.employee.siteId` — the employee's CURRENT site —
+   deliberately following the existing Advances module's own shipped authorization model
+   (`advances.service.ts`'s `assertSiteAccess`/`getAdvance`, including its 403-not-404 posture for
+   a single-record detail lookup) rather than inventing a new one. A disclosed, accepted V1
+   limitation, not an oversight: a transferred employee's Advance and its recovery history follow
+   their CURRENT site, never the site they belonged to when the Advance originated — proven
+   directly by a live-transfer test (`prisma.employee.update` moving `siteId` mid-test) on both the
+   list and detail endpoints. No `siteId` column was added to `Advance`, no migration exists for
+   this checkpoint.
+6. **Advance types**: one report handles both LOAN and EID_ADVANCE — `advanceType` exposed as a row
+   field/filter, never two side-by-side Standard/EID columns on one row.
+7. **Canonical financial values, never re-derived**: Original Amount = `Advance.totalAmount`.
+   Current Outstanding Balance = `Advance.outstandingBalance` verbatim — the authoritative current
+   balance, never replayed/recomputed from `PayrollEntry` deduction history. Recovered To Date =
+   `totalAmount − outstandingBalance`. Recovered This Cycle (only when a Cycle is selected) = the
+   one genuinely-linked `PayrollEntry`'s own `advanceDeduction` (LOAN, via `advanceId`) or
+   `eidAdvanceDeduction` (EID_ADVANCE, via `eidAdvanceId`) for the selected cycle only — never a
+   replay/re-sum across unrelated cycles.
+8. **Current vs. historical semantics, non-negotiable**: current/live — Original Amount, Recovered
+   To Date, Outstanding Balance, Advance Status, Repayment Type, Scheduled Installment. Historical —
+   Recovered This Cycle, and every individual recovery/schedule event in the detail response. Field
+   names are chosen so the distinction is difficult for a future frontend to misrepresent.
+9. **Filters**: `siteIds`, `employeeId`, `advanceType`, `status`, `hasOutstandingBalance` (tri-state:
+   omitted = All, `true` = `outstandingBalance > 0`, `false` = `outstandingBalance <= 0`), and the
+   one optional `cycleId`. No Unit filter, no amount range, no date range, no roster-status filter,
+   no Has Correction, no correction-recovery filter.
+10. **List columns**: `advanceId`, `employeeId`, `employeeCode`, `employeeName`, `siteId`,
+    `siteName`, `advanceType`, `originalAmount`, `recoveredToDate`, `currentOutstandingBalance`,
+    `status`, `repaymentType`, `dateGiven`, `recoveredThisCycle`. `scheduledInstallmentAmount` was
+    deliberately kept off the list (detail-only) — the smaller, focused vocabulary was preferred
+    absent a strong reason otherwise. No CNIC, no banking, no audit-actor identity, no Correction/
+    BalanceAdjustment field of any kind — verified by a full-response recursive sensitive-key sweep.
+11. **Totals are true DB aggregates throughout** (`SUM`/`COUNT`/`GROUP BY`) — the one totals-strategy
+    decision that genuinely diverges from every `calcNet`-dependent sibling report in this module.
+    There is no bounded fetch-and-`calcNet`/`sumMoney` pass and therefore **no `totalsComputed`
+    flag/fallback at any row count** — verified directly at 20,001 real seeded `Advance` rows
+    (§19.9's own boundary suite), not merely asserted from the shared contract's own doc comment.
+    Required: `matchingAdvanceCount`, `employeesWithAdvanceCount` (distinct), per-type
+    (`loan`/`eidAdvance`) `originalAmountTotal`/`recoveredToDateTotal`/
+    `currentOutstandingBalanceTotal`, four status counts, and — only when a Cycle is selected —
+    `recoveredThisCycleTotal` (+ its own LOAN/EID_ADVANCE split).
+12. **Detail/recovery-history endpoint** (`GET /api/v1/reports/advance-recovery/:advanceId`) — a
+    dedicated surface this checkpoint builds now (Checkpoint 0 approved it, unlike every sibling
+    report's own "no detail endpoint in V1" decision). Returns the Advance summary (current
+    employee/site context, canonical current financial fields), every genuinely linked `PayrollEntry`
+    recovery event (with that entry's own HISTORICAL `siteId`/site name — the one field in this
+    entire response that is not current), and the existing append-only `AdvanceScheduleChange`
+    history — recovery events and schedule/deferral events kept clearly, permanently distinct, never
+    merged into one list or conflated as the same kind of event.
+13. **Sorting**: eight approved, fully database-native fields (`employeeCode`/`employeeName`/`site`/
+    `advanceType`/`status`/`originalAmount`/`currentOutstandingBalance`/`dateGiven`).
+    `recoveredThisCycle` is deliberately not sortable in V1 — not a stored `Advance` column, and no
+    bounded in-memory sort exception is introduced absent real usage proving the need (unlike
+    Employee Payroll History's own disclosed `netSalary` exception).
+14. **Pagination**: server-side, database-native `skip`/`take` throughout — no `paginateInMemory`.
+15. **Employee lookup**: authorized against CURRENT `Employee.siteId` (the same basis as the report's
+    own row authorization) — deliberately not the existing historical-payroll employee lookup
+    (`common/historical-payroll-employee-lookup.ts`, scoped by historical `PayrollEntry.siteId`),
+    which was inspected and correctly rejected as the wrong tool for this report's own current-site
+    model.
+16. **Export**: CSV/XLSX, `ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS = 20,000`, the same preflight-
+    `COUNT`/structured-413 pattern every sibling report already uses; no `page`/`pageSize` accepted.
+    An explicit "As of &lt;timestamp&gt;" disclosure — an XLSX subtitle row beneath the title, and a
+    filename-embedded timestamp for CSV (an extra non-data row in the CSV body would break its
+    header-row parity with the declared `ADVANCE_RECOVERY_REPORT_EXPORT_HEADERS`, which a machine
+    consumer may parse programmatically) — so a selected Cycle filter can never be misread as
+    implying the balance figures are "as of" that cycle. No backend PDF.
+17. **No schema/migration change expected** — proven with `EXPLAIN ANALYZE` against a realistic
+    10,000-employee/~15,000-Advance seeded fixture in this checkpoint (§19.7), never assumed.
+
+### 19.2 Shared contract
+
+`shared/src/schemas/advance-recovery-report.ts` — list/export/employee-lookup query schemas and the
+full response contract (`AdvanceRecoveryReportRow`/`Totals`/`TypeTotals`/`ListResponse`/`Detail`/
+`RecoveryEvent`/`ScheduleChangeEvent`/`ExportLimitError`). Reuses `advanceTypeSchema`/
+`advanceStatusSchema`/`advanceRepaymentTypeSchema` directly from the existing `schemas/advance.ts`
+rather than redeclaring them — the one shared-schema dependency between the Advances module and this
+report. `ADVANCE_RECOVERY_REPORT_ROW_STATUS_VALUES` (for the detail response's own recovery-event row
+status) is independently declared, per this module's own established "no confusing cross-report type
+reference in a public DTO" convention every sibling report's own row-status union already follows.
+
+### 19.3 Backend service
+
+`backend/src/modules/reports/advance-recovery-report.service.ts` — one canonical filter-resolution
+function (`resolveAdvanceRecoveryReportFilters`) shared by list, totals, and export, authorizing via
+`employee: { siteId: { in: siteIdFilter } } }` (a relation filter, never a direct `Advance` column,
+since none exists) and resolving the optional Cycle via the existing `getPayrollCycle` only when
+`cycleId` is present. `computeAdvanceRecoveryReportTotals` uses `{ AND: [where, { type: 'LOAN' }] }`-
+style composition for its own type-split totals, never a shallow `{ ...where, type: 'LOAN' }`
+spread-override — the same documented pitfall Deduction Report's own totals function already guards
+against: a spread-override would silently *discard* a caller's own `advanceType=LOAN` filter when
+computing the EID_ADVANCE split (incorrectly pulling in every EID_ADVANCE Advance matching the other
+filters, instead of correctly returning zero — nothing of that type exists in a LOAN-only-filtered
+dataset). `fetchRecoveryThisCycle` is a single batched query per page (never per-row N+1), returning a
+plain 1:1 map since at most one `PayrollEntry` can genuinely carry a given Advance's deduction for a
+given cycle. `searchAdvanceRecoveryReportEmployees` is a small, purpose-built, current-site-scoped
+query built directly against `Employee` — not a reuse of `employees.service.ts`'s own `listEmployees`
+as-is (which returns its full unbounded match set; this report's own lookup needs bounded
+pagination), and not the historical-payroll lookup either (§19.1 decision 15) — the smallest addition
+that avoids a second, differently-shaped current-site lookup while still fitting this report's own
+paginated contract.
+
+### 19.4 Routes
+
+`GET /api/v1/reports/advance-recovery`, `GET /api/v1/reports/advance-recovery/employees`,
+`GET /api/v1/reports/advance-recovery/export`, and `GET /api/v1/reports/advance-recovery/:advanceId`,
+all mounted on the existing `reportsRouter`, all gated by `requirePermission(PERMISSIONS.REPORTS_VIEW)`
+independently (frozen decision 4). The two static sub-paths (`/employees`, `/export`) are registered
+*before* the `/:advanceId` param route — the same Express route-ordering discipline Employee Payroll
+History's own routes already established, so neither literal path string is ever misinterpreted as an
+`advanceId`. List/export/detail are all audited (`report.viewed`/`report.exported`,
+`metadata.reportType: 'advance_recovery_report'` / `'advance_recovery_report_detail'`); the
+employee-lookup discovery endpoint is not audited, matching Employee Payroll History's own precedent
+for the identical class of typeahead query. The detail route raises a plain 403 (via `assertSiteAccess`)
+for an inaccessible Advance, not Employee Payroll History's own 404 "reveal nothing" convention — a
+deliberate divergence, following the Advances module's own existing shipped posture instead (frozen
+decision 5).
+
+### 19.5 Table columns and totals
+
+Row: Employee Code, Employee Name, Project Site, Advance Type, Status, Repayment Type, Date Given,
+Original Amount, Recovered To Date, Current Outstanding Balance, Recovered This Cycle. No CNIC, no
+banking field, no audit-actor identity, no Correction/BalanceAdjustment field — verified by a
+full-response recursive sensitive-key sweep across the JSON list response, the CSV export, and the
+XLSX export independently.
+
+Totals: `matchingAdvanceCount`, `employeesWithAdvanceCount`, `loan`/`eidAdvance` (each with
+`originalAmountTotal`/`recoveredToDateTotal`/`currentOutstandingBalanceTotal`), `activeCount`/
+`reservedCount`/`paidOffCount`/`cancelledCount`, and — only when a Cycle is selected —
+`recoveredThisCycleTotal`/`recoveredThisCycleTotalByType`. Computed over the **complete filtered
+dataset**, never the current page, and always fully computed regardless of match count (frozen
+decision 11) — the one totals contract in this module with no `totalsComputed` field at all.
+
+### 19.6 Detail / recovery-history endpoint
+
+`getAdvanceRecoveryReportDetail` returns the Advance's own canonical summary (current employee/site
+context, `originalAmount`/`recoveredToDate`/`currentOutstandingBalance`/`status`/`repaymentType`/
+`scheduledInstallmentAmount`/`dateGiven`/`paidOffAt`), `recoveryHistory` (every `PayrollEntry`
+genuinely linked via `advanceId`/`eidAdvanceId` — depending on `Advance.type` — newest cycle first,
+each event's own historical `siteId`/site name, `amountRecovered`, the neutral `rowStatus` via the
+existing `derivePayrollEntryRowStatus`, and `releasedAt`), and `scheduleChanges` (every
+`AdvanceScheduleChange` row, newest first, with its `fromPeriod`/`toPeriod`/`reason`/`changedBy`) —
+two clearly separate arrays, never merged. Authorization mirrors `advances.service.ts`'s own
+`getAdvance` exactly (403, not 404).
+
+### 19.7 Performance evidence (measured, not assumed)
+
+Seeded 10 sites × 1,000 employees (10,000, the named design-floor population) against a local
+Postgres instance — every employee gets one LOAN Advance (status/outstanding-balance varied by index
+across ACTIVE/PAID_OFF/CANCELLED, a multi-year 2020–2026 `dateGiven` spread), roughly half also get
+an EID_ADVANCE, for ~15,000 total `Advance` rows, plus real cross-cycle `PayrollEntry` recovery
+history for a subset — a committed, repeatable Jest suite
+(`backend/tests/advance-recovery-report-performance.test.ts`, 9 tests), mirroring
+`deduction-report-performance.test.ts`'s own established methodology.
+
+| Query | Plan | Execution time |
+|---|---|---|
+| Broad roster, no filter, `ORDER BY employee.name` | `Hash Join` (`Seq Scan` on both `Advance`/`Employee` — no supporting index exists for an unfiltered roster query, an honest finding) | ~30ms |
+| Site-filtered (2,000 of 15,000 matching) | `Nested Loop` via `Employee_siteId_idx` → `Bitmap Index Scan` on `Advance_employeeId_idx` | ~7ms |
+| Status-filtered (`status=ACTIVE`, 5,001 matching) | `Bitmap Heap Scan` via the existing partial `Advance_employeeId_type_active_key` (a byproduct of the ACTIVE/RESERVED uniqueness index, not a purpose-built `status` index) | ~2ms |
+| `advanceType=LOAN` (10,000 matching) | — | ~112ms (full HTTP request) |
+| `hasOutstandingBalance=true` (5,001 matching) | — | ~68ms (full HTTP request) |
+| Employee-filtered (`Advance_employeeId_idx`) | `Bitmap Index Scan` on `Advance_employeeId_idx` | ~0.03ms |
+| Selected-Cycle recovery-context aggregate (site + cycle, 2,000 matching Advances, full HTTP request incl. both type-split aggregates) | — | ~445ms |
+| Detail recovery-history lookup (`PayrollEntry_advanceId_idx`) | `Index Scan` on `PayrollEntry_advanceId_idx` | ~0.02ms |
+
+**No `Seq Scan` occurs for the two shapes with a genuine supporting index chain** (employee-filtered;
+the detail lookup) — confirmed directly. **Honest finding, not the assumption going in**: `Advance`
+itself carries only `@@index([employeeId])` and `@@index([currentScheduledPeriodId])` — no index on
+`type`/`status`, and no `siteId` column at all (site scoping always joins through `Employee.siteId`).
+The broad-roster and status-filtered shapes therefore do involve a `Seq Scan` on `Advance` and/or
+`Employee` at this fixture's own ~10,000–15,000-row scale — a legitimate, cost-based planner choice at
+this table size, not evidence of a missing index, per the frozen instruction's own "do not assert a
+specific index when Postgres legitimately chooses a sequential scan" rule. Every measured shape
+completed the real HTTP request in well under one second; **no migration is proposed or recommended by
+this checkpoint** — if a future, much larger production `Advance` table's own broad-roster/status-only
+query shape genuinely degrades, that would be new evidence to bring back for review, not something
+this checkpoint pre-emptively guards against with a speculative index.
+
+A hand-written raw-SQL `EXPLAIN` approximating the selected-Cycle recovery-context aggregate (a
+literal three-table `JOIN`, since Prisma's real query is a nested relation filter, not a literal join)
+showed a materially worse isolated plan (~634ms) than the real end-to-end HTTP request measured above
+(~445ms, which runs the equivalent query twice, once per Advance-type split, plus every other totals
+aggregate) — disclosed directly in the performance suite's own test comments as an artifact of the
+hand-written join order, not a reproduction of the actual served query; the real HTTP measurement is
+authoritative.
+
+This sandbox's single-node local Postgres (via `embedded-postgres`) is not a production-scale cloud
+database — these numbers are evidence of correct query-plan behavior and rough order of magnitude, not
+a production SLA guarantee, the same caveat every prior report's own performance evidence states.
+
+### 19.8 Tests
+
+`backend/tests/advance-recovery-report.test.ts` (61 tests as of the independent hostile review pass
+below — originally 58; §19.10 added 3 regression tests, no existing test changed) — authorization
+(401/403, `statements:view`-
+only denied, Master Admin global access, site-scoped restriction, an explicit inaccessible-`siteIds`
+filter rejected with 403, a genuine current-site-transfer scenario proving `Advance.employee.siteId`-
+based authorization on both list and detail, the detail endpoint's own 403-not-404 posture, a
+nonexistent Advance returning 404), contracts (optional `cycleId`, a nonexistent `cycleId` rejected
+with 404, malformed `siteIds`, out-of-range `pageSize` rejected not clamped, an invalid `sortBy`,
+default-sort verification, export ignoring `page`/`pageSize`), report grain (one row per Advance, the
+same employee with multiple historical Advances each its own row, LOAN/EID_ADVANCE remaining separate
+rows, an Advance with multiple cross-cycle recovery `PayrollEntry` rows still producing exactly one
+list row), financial semantics (`currentOutstandingBalance`/`recoveredToDate` read verbatim/derived
+correctly, `recoveredThisCycle` reading the correct LOAN/EID_ADVANCE column for the correct cycle
+only, an explicit negative test proving a linked entry's own `correctionBalanceRecovery` never
+contaminates this report), Cycle behavior (no-Cycle nulls every row, a Cycle with zero recovery still
+returns `"0.00"` never a fabricated null, selecting a Cycle never changes the LIVE CURRENT balance
+fields), every filter individually, totals (complete-filtered-dataset scope independent of
+pagination, type-split arithmetic including the `AND`-composition correctness under an explicit
+`advanceType` filter, status-count-sums-to-matchingCount, distinct-employee counting, the Cycle-total
+null-vs-real-split distinction, and an explicit assertion that no `totalsComputed` field exists at
+all), detail/recovery-history (complete linked history newest-first, historical-site-vs-current-site
+proof via a live transfer, CANCELLED and PAID_OFF Advance behavior, no unrelated-employee leakage),
+export (CSV/XLSX exact header order and field-by-field parity against the list endpoint, filter/sort
+parity, pagination ignored, permission enforced before any export work, a dedicated recursive
+sensitive-field sweep across JSON/CSV/XLSX), the employee lookup (current-site authorization, search,
+an explicit inaccessible-`siteId` rejected with 403, no CNIC ever exposed), and pagination (database-
+level, zero overlap across pages, a stable `id` tie-break). All 61 passing (see §19.10 for the 3 tests
+added by the independent review).
+
+`backend/tests/advance-recovery-report-performance.test.ts` (9 tests, §19.7's own evidence) —
+committed and repeatable, not an uncommitted smoke test.
+
+`backend/tests/advance-recovery-report-boundary.test.ts` (6 tests) — a real 20,001-row `Advance`
+fixture (one Advance per employee, no `PayrollCycle`/`PayrollEntry` needed at all, since this
+report's own grain is `Advance`) split across three sites (19,999/1/1, reached via the report's own
+real `siteIds` filter, mirroring `deduction-report-boundary.test.ts`'s own efficient bucket strategy).
+Proves, at real volume: totals stay real, non-null, and correctly summed at all three exact counts —
+**including 20,001, one row past the export ceiling** — directly demonstrating frozen decision 11's
+"no `totalsComputed` gate exists" claim rather than merely asserting it; export succeeds (200, full
+row count) at 19,999 and exactly at 20,000, and is rejected with a structured 413 at 20,001, before
+any row is fetched (measured well under 3 seconds).
+
+**73/73 new backend tests passing at the time this checkpoint was first written (now 76/76 — see
+§19.10).** `typecheck`/`lint`/`build` clean across `shared`/`backend`.
+Targeted regression re-run (`advances.test.ts`, `deduction-report.test.ts`, `overtime-report.test.ts`,
+`project-site-payroll-report.test.ts`, `employee-payroll-history.test.ts`) passes unweakened, with one
+disclosed exception: 4 pre-existing `advances.test.ts` failures (a payroll-cycle `finalize` endpoint
+returning 400 instead of 200 across 4 unrelated tests) — confirmed, not assumed, identical on a clean
+`git stash`-verified checkout of `4eca09e` with zero code from this checkpoint applied, i.e. reproduced
+byte-for-byte on the pre-existing baseline before this checkpoint's own first file was written.
+Genuinely unrelated to Advance Recovery Report — this checkpoint touches no payroll-cycle
+finalize/release code at all. `git diff --check` clean.
+
+### 19.9 What Checkpoint 1A did NOT build
+
+Per its own explicit scope boundary: no frontend route, page, filter UI, print, or CSV/XLSX download
+button — the backend/export/detail endpoints exist and are fully functional over HTTP, but nothing in
+the frontend calls them yet. No Correction/BalanceAdjustment recovery of any kind anywhere in this
+report (frozen decision 1). No `siteId` column or migration on `Advance` (frozen decision 5). No
+schema or migration change of any other kind (frozen decision 17, proven in §19.7). Dashboard, Salary
+Release Report, and Variance/Month-on-Month Report remain untouched and **Not Started**.
+
+### 19.10 Independent hostile review (2026-08-10, same day) — APPROVE WITH FIXES
+
+An adversarial re-review of every item above: repository/diff integrity, contract-vs-implementation
+tracing (including live re-derivation of the `siteIds`/`employeeId`/`advanceType`/`status`/
+`hasOutstandingBalance`/`cycleId` Zod parsing behavior), authorization attacked on all four endpoints,
+transferred-employee semantics (re-derived independently, not just re-read), financial semantics
+cross-checked directly against `advances.service.ts`'s own materialization/reversal/release code
+(confirming `Advance.outstandingBalance` decrements at Draft materialization, not Release — the same
+figure this report's `recoveredToDate`/`currentOutstandingBalance` read verbatim — and that every
+reversal/defer/cancel path nulls `advanceId`/`eidAdvanceId` on the `PayrollEntry`, so a reversed Draft
+deduction can never remain linked and leak into `recoveryHistory`), optional-Cycle behavior, totals
+arithmetic, detail/history correctness, export CSV/XLSX field-by-field parity, sensitive-field
+exclusion, the 19,999/20,000/20,001 boundary, and performance/index evidence cross-checked directly
+against `prisma/schema.prisma` (confirmed: `Advance` has only `@@index([employeeId])`/
+`@@index([currentScheduledPeriodId])`; `PayrollEntry` has `@@index([advanceId])`/
+`@@index([eidAdvanceId])`; `AdvanceScheduleChange` has `@@index([advanceId, changedAt(sort: Desc)])`
+— all matching §19.7's claims exactly).
+
+**No production code defect found.** Three test-coverage gaps were closed with new regression tests
+(no existing test weakened): (1) the detail endpoint's live-transfer authorization (previously proven
+only on the list endpoint); (2) a malformed `advanceId` returning 400; (3) `employeeId` filtering
+cannot bypass site scoping (traced in code — `employeeId` and the site filter are separate keys in one
+Prisma `where` object, therefore implicitly `AND`-composed — and now proven directly by test). Test
+count: 76 (61 + 6 + 9), up from 73.
+
+The Addendum 36 pre-existing-`advances.test.ts`-failure claim was independently re-verified via a
+fresh `git stash push -u` / clean-`4eca09e` test run / `git stash pop` round-trip in this review's own
+session — identical 4 failures at the identical 4 line numbers. Full-suite degradation was
+investigated (not run wholesale): the "Jest did not exit" warning printed identically on the clean-
+`4eca09e` `advances.test.ts` run (zero Checkpoint 1A code present) and on unrelated sibling suites,
+and `--detectOpenHandles` on the three new suites together found zero reported leaks — conclusive
+evidence this is a repo-wide Jest/pg-pool teardown-timing characteristic, not something this
+checkpoint introduced, so the broader full-suite run was correctly judged unnecessary. The "as of"
+CSV/XLSX disclosure (frozen decision 16) was assessed and left unchanged — sufficient as designed.
+
+**Verdict: APPROVE WITH FIXES** (the fixes being the three added regression tests; no production
+defect existed). No commit, push, or deployment occurred during this review. See `docs/
+SESSION_HANDOFF.md` Addendum 37 for the full evidence log.
+
+**Advance Recovery Report Checkpoint 1A is backend-only and awaits explicit authorization before
+Checkpoint 1B (frontend) begins.** No other report or Dashboard work was started. This checkpoint was
+not committed or pushed.
