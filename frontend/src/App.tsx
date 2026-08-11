@@ -72,6 +72,14 @@ const ReportsDeductionReportPage = lazy(() =>
 const ReportsOvertimeReportPage = lazy(() =>
   import('@/routes/reports-overtime-report-page').then((m) => ({ default: m.ReportsOvertimeReportPage })),
 );
+const ReportsAdvanceRecoveryReportPage = lazy(() =>
+  import('@/routes/reports-advance-recovery-report-page').then((m) => ({ default: m.ReportsAdvanceRecoveryReportPage })),
+);
+const ReportsAdvanceRecoveryReportDetailPage = lazy(() =>
+  import('@/routes/reports-advance-recovery-report-detail-page').then((m) => ({
+    default: m.ReportsAdvanceRecoveryReportDetailPage,
+  })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -509,6 +517,52 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
             <ReportsOvertimeReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Advance Recovery Report (Phase 7 Reports, Checkpoint 1B) — gated on `reports:view`, the same
+  // permission every other operational report in this module uses (frozen backend decision,
+  // `docs/architecture/workflows/reports.md` §19.1) — no requiredPermission override needed on the
+  // catalogue card. Cycle is OPTIONAL for this report (unlike every sibling above) — the flat
+  // `/reports/advance-recovery` route is never auto-redirected to a resolved default cycle (this
+  // page does not use `useSelectedPayrollCycle`); it stays the true no-cycle-context roster until a
+  // user explicitly picks a Cycle from the page's own selector, which then navigates to the
+  // canonical `/payroll-cycles/:cycleId/reports/advance-recovery` URL below. A detail route exists
+  // (unlike Deduction/Overtime/Project Site Payroll Report) — the report grain is one `Advance`, and
+  // its own Recovery History / Schedule-Deferral History are drill-down-only.
+  {
+    path: '/reports/advance-recovery',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsAdvanceRecoveryReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/reports/advance-recovery',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsAdvanceRecoveryReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/reports/advance-recovery/:advanceId',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsAdvanceRecoveryReportDetailPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>

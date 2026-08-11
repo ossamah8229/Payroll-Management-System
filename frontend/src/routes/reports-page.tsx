@@ -59,7 +59,12 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     to: '/reports/overtime-report',
     available: true,
   },
-  { title: 'Advance Recovery Report', description: 'Not yet available.', to: '', available: false },
+  {
+    title: 'Advance Recovery Report',
+    description: 'Current Advance balances (Loan/Eid Advance) and recovery history, with optional payroll-cycle recovery context.',
+    to: '/reports/advance-recovery',
+    available: true,
+  },
   { title: 'Salary Release Report', description: 'Not yet available.', to: '', available: false },
 ];
 

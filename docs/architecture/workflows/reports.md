@@ -14,21 +14,24 @@ export, and print treatment.
 
 **Status:** **Phase 8B Checkpoint 1 (Payroll Summary Report), Phase 7 Employee Payroll History
 (Checkpoints 0, 1A backend, and 1B frontend), and Phase 7 Project Site Payroll Report (Checkpoints
-0, 1A backend, and 1B frontend) are all complete and merged to `main`.** Phase 7 Deduction Report's
-Checkpoint 0 (architecture review) is approved, and Checkpoint 1A (backend foundation) and
-Checkpoint 1B (frontend, browser print, E2E) are both **IMPLEMENTED, awaiting review, NOT
-COMMITTED** — Deduction Report is functionally complete pending review. Phase 7 Overtime Report's
-Checkpoint 0 (architecture review) is approved, and Checkpoint 1A (backend foundation) is
-**IMPLEMENTED, awaiting review, NOT COMMITTED** — no frontend yet (Checkpoint 1B). The remaining
-Phase 8A-investigated report catalogue (Advance Recovery Report, Salary Release Report,
+0, 1A backend, and 1B frontend) are all complete and merged to `main`.** Phase 7 Deduction Report and
+Phase 7 Overtime Report are each **fully IMPLEMENTED (Checkpoints 0, 1A backend, 1B frontend/browser
+print/E2E), awaiting review, NOT COMMITTED**. Phase 7 Advance Recovery Report is likewise **fully
+IMPLEMENTED (Checkpoints 0, 1A backend, 1B frontend/detail page/browser print/E2E) and independently
+hostile-reviewed (Checkpoint 1B review: APPROVE WITH FIXES, §19.12), awaiting final authorization,
+NOT COMMITTED**. The remaining Phase 8A-investigated report catalogue (Salary Release Report,
 Variance/Month-on-Month Report) and Dashboard are all **Not Started**, each requiring its own
 separate authorization. See `docs/PROJECT_PROGRESS.md`'s "Phase 8A — Reports Module Investigation",
 "Phase 8B Checkpoint 1", "Phase 7 Reports — Employee Payroll History", "Phase 7 Reports — Project
-Site Payroll Report", "Phase 7 Reports — Deduction Report", and "Phase 7 Reports — Overtime Report"
-entries for the full build record. §15 below covers Employee Payroll History in full (backend
-§15.1–§15.9, frontend §15.10); §16 covers Project Site Payroll Report in full (backend §16.1–§16.8,
-frontend §16.9); §17 covers Deduction Report in full (backend §17.1–§17.11, frontend §17.12); §18
-covers Overtime Report's backend foundation (§18.1–§18.10) — frontend not yet started.
+Site Payroll Report", "Phase 7 Reports — Deduction Report", "Phase 7 Reports — Overtime Report", and
+"Phase 7 Reports — Advance Recovery Report" entries for the full build record. §15 below covers
+Employee Payroll History in full (backend §15.1–§15.9, frontend §15.10); §16 covers Project Site
+Payroll Report in full (backend §16.1–§16.8, frontend §16.9); §17 covers Deduction Report in full
+(backend §17.1–§17.11, frontend §17.12); §18 covers Overtime Report's backend foundation
+(§18.1–§18.10) — its frontend (Checkpoint 1B) is implemented in code (`reports-overtime-report-page.tsx`
+and siblings) but not yet separately documented in this section, a pre-existing gap outside this
+checkpoint's own scope to backfill; §19 covers Advance Recovery Report in full (backend §19.1–§19.10,
+frontend §19.11, Checkpoint 1B hostile review §19.12).
 
 ---
 
@@ -2490,3 +2493,316 @@ SESSION_HANDOFF.md` Addendum 37 for the full evidence log.
 **Advance Recovery Report Checkpoint 1A is backend-only and awaits explicit authorization before
 Checkpoint 1B (frontend) begins.** No other report or Dashboard work was started. This checkpoint was
 not committed or pushed.
+
+### 19.11 Checkpoint 1B — Frontend, Detail Page, Browser Print, Playwright, and Documentation (2026-08-10)
+
+Frontend-only, over the frozen Checkpoint 1A backend above — no backend, shared-contract, schema, or
+migration change in this checkpoint. Gated on `reports:view` throughout (routes, catalogue card),
+matching §19.1 decision 4.
+
+**Routes** — `/reports/advance-recovery` and, once a Cycle is explicitly selected,
+`/payroll-cycles/:cycleId/reports/advance-recovery`, both `RequirePermission`-gated on
+`PERMISSIONS.REPORTS_VIEW`, plus `/reports/advance-recovery/:advanceId` for the detail/history page.
+**Deliberately does not use `useSelectedPayrollCycle`** — that shared hook force-redirects a flat
+route to a resolved default Cycle, which is exactly the behavior the "Cycle is optional, never forced"
+requirement (§19.1 decision 3) rules out. Instead, `reports-advance-recovery-report-page.tsx` reads
+the optional `:cycleId` route param directly via `useParams`, with no redirect of any kind — the flat
+route always renders the true no-Cycle roster until a user explicitly picks one from the page's own
+Cycle `<select>` (first option: "All Cycles / No Cycle Context"), which then navigates to the
+canonical cycle-scoped URL. All three routes are lazy-loaded (`App.tsx`), following the same
+`RequireSession` → `RequirePermission` → page pattern every other gated route already uses. The
+catalogue card (`reports-page.tsx`) is now `available: true`, `to: '/reports/advance-recovery'`, with
+no `requiredPermission` override needed (the page's own `reports:view` gate is sufficient, unlike
+Employee Payroll History's `statements:view` override).
+
+**Data layer** (`hooks/use-advance-recovery-report.ts`) — imports every DTO directly from
+`@payroll/shared` (`shared/src/schemas/advance-recovery-report.ts`). `useAdvanceRecoveryReportList` is
+**never `enabled`-gated on `cycleId`** — unlike every sibling report's single-required-cycle hook, an
+omitted Cycle is itself a complete, valid request here. `useAdvanceRecoveryReportEmployeeSearch` hits
+the dedicated current-site-scoped `/employees` endpoint (§19.1 decision 15) — never the historical
+`EmployeePayrollHistoryEmployeeLookup`'s endpoint, never the plain org-wide `EmployeeLookup`
+(Advances/Corrections' own component), since the backend's own dedicated lookup returns a distinct
+`AdvanceRecoveryReportEmployeeCandidate` shape. `useAdvanceRecoveryReportDetail` covers the
+`/:advanceId` endpoint. `downloadAdvanceRecoveryReportExport` handles the structured 413
+`EXPORT_ROW_LIMIT_EXCEEDED` response via a dedicated `AdvanceRecoveryReportExportRowLimitExceededError`
+(extends `ApiError`), surfaced via `toast.error`, never a generic "export failed" message; it prefers
+the server's own `Content-Disposition` filename (which already embeds the export's "as of" timestamp,
+§19.1 decision 16) via the existing shared `extractFilenameFromContentDisposition` helper rather than
+a second, hand-rolled parser. Every list/export URL builder sorts `siteIds` before joining, so an
+equivalent Site selection in a different pick order never produces a different query string/query key
+(no duplicate request churn).
+
+**Employee lookup component** (`components/reports/advance-recovery-report-employee-lookup.tsx`) — a
+third independent fork of the debounced-listbox interaction shape `EmployeePayrollHistoryEmployeeLookup`
+already established (same 300ms debounce, same keyboard-navigable `role="combobox"`/listbox, same
+collapsed "selected" chip), pointed at this report's own current-site-scoped endpoint. Not a shared
+base component — this module's own established precedent (§15.10's doc comment) is that each report's
+disclosure class and endpoint shape earns its own lookup fork rather than a premature abstraction.
+
+**Optional Cycle UX** (Step 4) — the on-screen Cycle `<select>` (`#arr-cycle`) only renders once at
+least one `PayrollCycle` exists; its first option reads "All Cycles / No Cycle Context," never
+implying an all-time historical reconstruction. Selecting a Cycle only ever adds `recoveredThisCycle`
+context — verified end-to-end (unit + Playwright) that `currentOutstandingBalance`/`recoveredToDate`
+render byte-identical whether or not a Cycle is selected. A persistent, always-visible disclosure note
+(`data-testid="arr-current-vs-historical-note"`, never only a tooltip) sits directly below the filter
+row, wording itself to whichever state (no Cycle / a named Cycle) is currently active.
+
+**Filters** (Step 5, exactly the approved set) — Site (multi-select), Employee (the lookup above,
+narrowed to a single selected Site when exactly one is chosen), Advance Type, Status, Has Outstanding
+Balance (the established tri-state All/Yes/No `<select>`, `docs/design-system.md` §2.4), and the
+optional Cycle. No Unit, no Has Correction, no amount/date range, no roster-status filter — matching
+the backend's own deliberate exclusions (§19.1 decision 9). **Clear Filters decision, as required to
+be documented**: Cycle is treated as a navigation control, not a filter (`docs/design-system.md` §2.6,
+and identical to every sibling report's own treatment of its own Cycle selector) — Clear Filters
+resets Site/Employee/Advance Type/Status/Has Outstanding Balance to their defaults and resets the page
+to 1, but never touches the current Cycle selection encoded in the URL; the current sort is likewise
+left untouched. The Employee selection is also defensively cleared if a subsequent Site-filter change
+narrows the Site scope to no longer include the already-selected employee's own current site (Step
+11's "clears appropriately if Site scope changes incompatibly").
+
+**List table** (Step 6, exactly the frozen 11 columns) — Employee Code, Employee Name, Current Site,
+Advance Type, Original Amount, Recovered To Date, Current Outstanding Balance, Status, Repayment Type,
+Date Given, Recovered This Cycle, plus a View Details action (a detail page exists in V1, unlike
+Deduction/Overtime/Project Site Payroll Report). `recoveredThisCycle === null` renders literally as
+"Not selected" — never a fabricated `0.00` — both on-screen and in print. No CNIC, no banking, no Unit,
+no correction/balance-adjustment field anywhere, verified by both a unit-test body-text sweep and a
+real Playwright CSV-content sweep.
+
+**Totals** (Step 8) — every figure renders the backend's own `AdvanceRecoveryReportTotals` verbatim,
+grouped Summary / Advance (LOAN) / Eid Advance / Status / (conditionally) Recovered This Cycle — the
+last group renders only when `recoveredThisCycleTotal !== null`, never a misleading cycle-recovery
+total when no Cycle is selected. Unlike every `calcNet`-dependent sibling report, this report's own
+totals are always true DB aggregates with no `totalsComputed` flag at all (§19.1 decision 11) — this
+page therefore never renders a "totals unavailable" fallback state, matching the backend contract
+exactly.
+
+**Sorting/pagination** (Step 9) — only the eight backend-approved fields expose a sortable column
+header (`employeeCode`/`employeeName`/`site`/`advanceType`/`status`/`originalAmount`/
+`currentOutstandingBalance`/`dateGiven`); Recovered To Date and Recovered This Cycle render as plain,
+non-interactive headers, matching the backend's own sort-field list exactly. `ReportPagination` plus
+the same page-clamp safeguard every sibling report already establishes (if the backend's own total for
+the currently-viewed page shrinks below what's being shown, the page is clamped down rather than
+silently rendering a stale, empty page).
+
+**Detail page** (`reports-advance-recovery-report-detail-page.tsx`, Step 10) — a dedicated route,
+never a modal. Sections: (A) Advance Summary — Employee Code, Current Site, Advance Type, Original
+Amount, Recovered To Date, Current Outstanding Balance, Status, Repayment Type, Scheduled Installment,
+Date Given, Paid Off Date, with an explicit "current, live figures" disclosure line, mirroring the list
+page's own wording; (B) Recovery History — every genuinely linked `PayrollEntry` event, each with its
+own HISTORICAL Site (explicitly noted as potentially differing from the Advance Summary's current
+Site above); (C) Schedule / Deferral History — every `AdvanceScheduleChange` event, in a fully separate
+table/section from Recovery History, never merged or mislabeled as a recovery. Both (B) and (C) render
+a plain, worded empty state when their own array is empty. **403 and 404 are deliberately CONCEALED
+behind one identical message** — the backend itself does distinguish a nonexistent Advance (404) from
+one outside the caller's current Site access (403, §19.1 decision 5, mirroring the Advances module's
+own precedent), but this page never surfaces that distinction to the user (corrected during the
+Checkpoint 1B hostile review below — the checkpoint's own first draft had briefly shown two different
+messages here, which would have let any `reports:view` holder confirm "an Advance with this id exists,
+just outside my Site access" via nothing more than a shared/guessed link; Employee Payroll History's
+own "reveal nothing" posture is the safer default for this read-only report's much broader
+`reports:view` population, even though the two backends' own status codes still differ). "Back to Report"
+(`AdvanceRecoveryReportListNavigationState`, carried via React Router's own `location.state`, the same
+lightweight mechanism Employee Payroll History's own detail page already established) restores the
+list's filters/sort/page and, when the list was viewed with a Cycle selected, the exact cycle-scoped
+canonical URL.
+
+**Export UI** (Step 12) — Export CSV/Export Excel, current filters/sort always applied, never
+page-limited (the export endpoint accepts no `page`/`pageSize` at all). A 413 surfaces the backend's
+own structured message via `toast.error`, matching every sibling report's identical convention.
+
+**Browser Print** (Step 13) — a dedicated `advance-recovery-report-print-fields.ts` (13 summary-card
+fields, 11 table-column fields, `LOCKED_COLUMN_FIELD_ID = 'employeeName'`) and
+`advance-recovery-report-print-options-dialog.tsx`, versioned `localStorage` key
+`advance-recovery-report-print-fields:v1`, defaulting to the complete report (never a silently
+narrowed default, matching every sibling report's identical "Full Report" default and its own
+Readability guidance — informational only, never blocking beyond the shared "at least one column
+besides Employee Name" floor). Current page only, browser print only — no backend PDF (§19.1 decision
+16). When no Cycle is selected, both the Recovered This Cycle summary card and table column print as
+"Not selected," never a fabricated `0.00` — verified directly in both the Vitest and Playwright
+suites.
+
+**Tests** — 5 new colocated Vitest files: `use-advance-recovery-report.test.ts` (URL builders
+including the always-enabled-without-`cycleId` proof, the 413/`ExportRowLimitExceededError` path,
+filename fallback), `advance-recovery-report-labels.test.ts`, `advance-recovery-report-print-fields.test.ts`
+(sensitive-field exclusion sweep, readability levels, `localStorage` round-trip/defensive-parse/
+versioned-key isolation), `reports-advance-recovery-report-page.test.tsx` (RBAC, the full optional-
+Cycle behavior matrix, every filter including the Has Outstanding Balance tri-state and Clear-Filters-
+never-touches-Cycle decision, one-row-per-Advance including a same-employee LOAN+EID_ADVANCE case,
+totals, sorting/pagination including the page-clamp, export request/error handling, Print defaults/
+no-backend-request/"Not selected" print value, and accessibility basics), and
+`reports-advance-recovery-report-detail-page.test.tsx` (Advance Summary disclosure, Recovery History's
+own historical-Site-vs-current-Site distinction, Schedule/Deferral History kept structurally separate
+from Recovery History, 403/404 concealment, and Back-preserves-cycle-scoped-list-state).
+Plus 2 new tests in `reports-page.test.tsx` for the catalogue card's own link/permission behavior.
+**87 new frontend tests (10+33+19+6+17+2 across the 5 dedicated files plus the 2 catalogue tests), all
+passing; full frontend suite 776/776 — corrected, §19.12, from this checkpoint's own first-draft
+undercount ("52 new frontend tests"), which never matched 689 (Overtime Report Checkpoint 1B's own
+documented full-suite baseline) + 776.** `typecheck`/`lint`/`build` clean across `shared`/`backend`/
+`frontend`, `typecheck:e2e` clean.
+
+**Playwright** (`tests/e2e/specs/25-advance-recovery-report.spec.ts`, 11 tests — 10 in this checkpoint's
+own first draft, plus 1 added during the §19.12 hostile review below) — real backend, real
+Chromium, no `page.route` interception for any RBAC or financial assertion. Fixture design note: since
+creating an Advance whose `originalPeriod` is the current Draft cycle immediately materializes a
+deduction onto that employee's own Draft `PayrollEntry` in the same request (`advances.service.ts`),
+most scenarios here need no separate release step to produce a real recovery event — an `INSTALLMENT`
+Advance with a `scheduledInstallmentAmount` smaller than its `totalAmount` yields both a genuine
+Recovered This Cycle figure and a genuine residual Current Outstanding Balance in one API call. Covers:
+navigation (Reports catalogue → Advance Recovery Report), the no-Cycle roster showing "Not selected"
+never a fabricated zero, selecting a Cycle revealing Recovered This Cycle while the current balance
+stays byte-identical, one row per Advance (a real LOAN + EID_ADVANCE pair for one employee), Site and
+Employee-lookup filters narrowing independently, the Has Outstanding Balance tri-state, sorting
+(`aria-sort` toggling a real backend request) and pagination, a genuine Site-A→Site-B employee-transfer
+scenario (a Site-A-scoped user loses all visibility of the Advance the instant the employee transfers,
+an explicit cross-site 403 on a direct API call, and the detail page — viewed by an unrestricted admin
+— showing the CURRENT Site in the Advance Summary while the Recovery History event keeps its own
+original HISTORICAL Site), the detail page (Advance Summary, Recovery History, and a real
+`/advances/:id/defer` call producing a Schedule/Deferral History entry kept in a structurally separate
+section from Recovery History), a nonexistent Advance's plain not-found state, CSV/XLSX export (safe
+headers, no CNIC/IBAN/"account number"/correction terms anywhere in the downloaded CSV content itself,
+and the Cycle-specific Recovered This Cycle figure verified correct in the CSV body — XLSX verified via
+filename/download-action only, per this checkpoint's own documented allowance to rely on the backend
+Checkpoint 1A suite for binary content parity), browser print (current-page scope, safe fields only,
+"Not selected" printed rather than a fabricated zero), a responsive check at 1024px (no horizontal
+document scroll, every filter remains visible), and permission enforcement (`reports:view`: full
+access; `statements:view` alone: card hidden from view, direct navigation shows "You do not have
+permission to access this page." on both the list AND detail routes). **11/11 passing** (run twice
+standalone to rule out flakiness), both standalone and combined with `17-reports.spec.ts` (9/9 passing,
+unweakened) — **20/20 passing together**.
+
+**Accessibility/responsive** — every sortable column header exposes `aria-sort`; the Has Outstanding
+Balance tri-state renders as plain text options (All/Yes/No), never color-only; View Details exposes a
+full accessible name including the employee's own name (`aria-label="View Details for {name}"`), never
+a bare icon button; the Print dialog and its Escape/focus behavior reuse the existing shared
+`Modal`/Radix Dialog primitive unchanged. Verified at 1024px (Playwright) with no horizontal document
+scroll and every filter remaining independently visible/usable.
+
+**Known limitations, disclosed** — (1) the disclosed V1 site-authorization limitation (§19.1 decision
+5: Advance visibility follows the employee's CURRENT site, not any historical site) is a backend
+behavior this frontend only ever displays, never controls; (2) `ReportPagination`'s on-screen "No
+sites"/"Showing X–Y of Z site(s)" wording is a pre-existing wart in the shared component (originating
+from Project Site Payroll Report, `docs/architecture/workflows/reports.md` §16.9's own disclosure) —
+this checkpoint reuses the component unchanged rather than silently patching shared, out-of-scope
+wording as a side effect; (3) as with every sibling report, navigating between the flat and
+canonical cycle-scoped URLs remounts the page component, so in-progress filter state (other than what
+`location.state` explicitly restores on a Back navigation) is not preserved across a Cycle-selector
+change — the same accepted, documented limitation Deduction/Overtime Report already carry.
+
+**No backend, shared-contract, schema, or migration change was made in this checkpoint.** Files
+changed: `frontend/src/hooks/use-advance-recovery-report.ts` (new),
+`frontend/src/components/reports/advance-recovery-report-labels.ts` (new),
+`frontend/src/components/reports/advance-recovery-report-employee-lookup.tsx` (new),
+`frontend/src/components/reports/advance-recovery-report-print-fields.ts` (new),
+`frontend/src/components/reports/advance-recovery-report-print-options-dialog.tsx` (new),
+`frontend/src/routes/reports-advance-recovery-report-page.tsx` (new),
+`frontend/src/routes/reports-advance-recovery-report-detail-page.tsx` (new), their 6 matching
+colocated `*.test.ts(x)` files (new), `tests/e2e/specs/25-advance-recovery-report.spec.ts` (new),
+`frontend/src/App.tsx` (routes added), `frontend/src/routes/reports-page.tsx` (catalogue card
+activated), `frontend/src/routes/reports-page.test.tsx` (2 tests added), and this file/
+`docs/PROJECT_PROGRESS.md`/`docs/SESSION_HANDOFF.md` (documentation).
+
+**Advance Recovery Report is now functionally complete (Checkpoints 0, 1A, 1B), pending independent
+review — not committed, not pushed, not deployed.** Salary Release Report, Variance/Month-on-Month
+Report, and Dashboard remain **Not Started** and require their own separate, explicit authorization —
+this checkpoint did not begin any of them.
+
+### 19.12 Independent hostile review (Checkpoint 1B, 2026-08-10, same day) — APPROVE WITH FIXES
+
+An adversarial re-review of Checkpoint 1B against §19.1's frozen backend decisions and the project's
+own established frontend conventions: repository/diff scope re-verified (`HEAD == main == origin/main
+== 4804c46`, working tree limited to this checkpoint's own files, `git diff --check` clean);
+routes/catalogue/permission traced directly in `App.tsx`/`reports-page.tsx` (all three routes
+independently `RequirePermission(reports:view)`-gated, no permission living only at the catalogue-card
+level); the optional-Cycle mechanism read end to end (`useParams` only, no `useSelectedPayrollCycle`,
+confirmed no auto-redirect); current-vs-historical field provenance cross-checked directly against
+`advance-recovery-report.service.ts` (`mapAdvanceToRow`/`getAdvanceRecoveryReportDetail`) — confirmed
+Original Amount/Recovered To Date/Current Outstanding Balance/Status/Repayment Type/current Site never
+vary with `cycleId`, and `recoveredThisCycle`/`recoveredThisCycleTotal(ByType)` are literal `null`
+(never a fabricated zero) whenever no Cycle is selected; the Site/Employee-lookup interaction (the
+lookup narrows only when exactly one Site is selected — confirmed as this module's own established
+convention, identical in `EmployeePayrollHistoryEmployeeLookup`, not a new gap); export request parity
+and the 413 `EXPORT_ROW_LIMIT_EXCEEDED` shape re-derived directly against the backend route/schema; and
+every colocated test file read in full, not just its pass/fail status.
+
+**One genuine production defect found and fixed — an information-disclosure issue in the detail page's
+403/404 handling.** The checkpoint's own first draft deliberately showed two different messages for a
+403 ("You do not have access to this Advance... belongs to an employee outside your current Site
+access") versus a 404 ("This Advance could not be found"), reasoning that the backend itself already
+distinguishes the two (§19.1 decision 5, mirroring the Advances module's own precedent). On hostile
+re-examination this reasoning does not hold for THIS surface: unlike the Advances module (where a user
+can only ever construct/see an Advance id for an employee already within their own site scope), this
+report's `reports:view` population routinely holds a valid grant scoped to only *some* sites, and the
+list endpoint itself already filters every visible row to the caller's own accessible sites — so the
+*only* way a `reports:view` holder ever reaches an out-of-scope `advanceId` at all is a shared/guessed
+direct link. A distinguishing 403 message on that path would confirm "an Advance with this id exists,
+just outside your Site access" to exactly that population, an existence disclosure with no legitimate
+use on a read-only report. **Fix**: `reports-advance-recovery-report-detail-page.tsx` now renders the
+identical "This Advance could not be found" copy for both a 403 and a 404 (verified byte-identical, not
+just similarly worded) — matching Employee Payroll History's own "reveal nothing"
+(`getEmployeePayrollHistoryDetail`) posture, even though the two backends' own status codes still
+differ (backend semantics were not touched — `assertSiteAccess` still throws 403, `notFound` still
+throws 404; only the frontend's own presentation was collapsed). Regression coverage added: two updated
++ one new Vitest case (byte-identical-body-text proof) plus a new Playwright assertion, appended to the
+existing Site-A→Site-B transfer scenario, proving the now-out-of-scope-but-real Advance's detail page
+renders identically to a genuinely nonexistent one for the Site-A-scoped user.
+
+**Two test-coverage gaps closed, no existing test weakened**: (1) the "Back to Report" restoration test
+was asserting only that generic title text re-rendered — true on either the flat or cycle-scoped route,
+so it did not actually prove the canonical cycle-scoped URL was restored as the test's own comment
+claimed; it now asserts the restored Cycle `<select>`'s own value directly (`useParams().cycleId`
+end to end). (2) the Site-filter-narrows-away-the-selected-Employee interaction (§Filters, "the Employee
+selection is also defensively cleared...") had zero test coverage in either Vitest or Playwright,
+despite being exactly the class of restoration/clearing bug this project has been burned by before
+(Employee Payroll History's own Unit-clearing mount-effect defect) — a new Playwright assertion now
+proves the Employee lookup collapses back to its own empty search box, and the roster reflects the new
+Site scope, the instant a Site-filter change excludes the already-selected Employee's own Site.
+
+**Three additional Playwright regressions added for hostile-navigation coverage this checkpoint's own
+first draft had not exercised**: a real browser Back/Forward test across no-Cycle ⇄ a selected Cycle
+(URL and the Cycle `<select>`'s own value staying in sync, no full page reload — necessarily
+single-Cycle rather than two-distinct-Cycles, since only one `PayrollCycle` is ever in Draft state
+system-wide and this suite has no shared multi-cycle fixture to draw a second one from when this spec
+runs standalone); a direct-URL-bypass check on the DETAIL route (not just the list route) for a user
+holding only `statements:view`; and the 403-concealment proof described above.
+
+**Corrected an arithmetic documentation defect, independent of anything this review changed**: this
+checkpoint's own first draft undercounted its own test additions as "52 new frontend tests." The actual
+count — verified directly via Vitest's own per-file test counts, not by re-reading the claim — is 87
+(10 + 33 + 19 + 6 + 17 across the 5 dedicated new files, plus 2 new catalogue tests in
+`reports-page.test.tsx`), which is what actually reconciles: 689 (Overtime Report Checkpoint 1B's own
+documented full-suite baseline) + 87 = 776, the full-suite total this checkpoint's own draft already
+(correctly) claimed. Corrected to 88/777 below, reflecting this review's own added test. This was a
+counting/arithmetic mistake in the checkpoint's own summary prose, not a misrepresentation of what the
+tests actually cover — every one of the 87 (now 88) tests was real, colocated, and passing throughout.
+
+**Other sections hostile-reviewed with no defect found**: row grain (one row per Advance, confirmed via
+a real LOAN+EID_ADVANCE Playwright fixture, keyed on `advanceId` not `employeeId`); totals (verified
+backend-verbatim, no client-side recomputation anywhere in the page component); sorting/pagination
+(only the eight backend-approved fields are sortable; Recovered To Date/Recovered This Cycle render as
+plain headers); CSV/XLSX export parity (identical query strings except `format`, no `page`/`pageSize`,
+no unsupported filter, verified by both unit test and a real Playwright CSV-content sweep); print
+(current-page-only scope, safe vocabulary, "Not selected" disclosure, verified with
+`page.emulateMedia({ media: 'print' })` reading actual rendered content, not just that
+`window.print` was invoked); accessibility (`aria-sort` only on sortable headers, `View Details`
+carries a full accessible name, the tri-state renders text not color-only); responsive (1024px, no
+horizontal document scroll, verified via `document.documentElement.scrollWidth`); and the "as with every
+sibling report, navigating between the flat and canonical cycle-scoped URLs remounts the page
+component" disclosed limitation (§19.11 above) — confirmed intentional and consistent with
+Deduction/Overtime Report's own identical, already-reviewed precedent, not something to redesign here.
+
+**Final verification** (after the fixes above): focused Advance Recovery Report Vitest files 97/97;
+full frontend suite **777/777** (was 776/776 — net +1 from the new byte-identical-403/404 regression
+test); `typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`, `typecheck:e2e` clean;
+`25-advance-recovery-report.spec.ts` **11/11**, run standalone twice to rule out flakiness in the newly
+added tests; `17-reports.spec.ts` **9/9** standalone, unweakened; both combined **20/20**; `git diff
+--check` clean. Backend suites were not re-run — no backend/shared file changed in this review.
+
+**Verdict: APPROVE WITH FIXES.** One genuine frontend information-disclosure defect (403/404
+concealment) was found and fixed; a documentation arithmetic defect (test count) was corrected; two
+test-coverage gaps were closed; three additional Playwright hostile-navigation regressions were added.
+No other production defect found across the 24-section review scope (routes/permission, optional-Cycle
+navigation, current-vs-historical semantics, filters, employee lookup, transferred-employee
+authorization, row grain, totals, detail/history, Back-state restoration, sorting/pagination,
+export/CSV/XLSX, print, accessibility, responsive, request/query-cache behavior). No commit, push, or
+deployment occurred during this review. Advance Recovery Report (Checkpoints 0, 1A, 1B) remains pending
+final authorization. No other report or Dashboard work was started or touched.

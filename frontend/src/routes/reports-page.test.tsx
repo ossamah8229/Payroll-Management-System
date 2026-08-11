@@ -103,3 +103,21 @@ describe('ReportsPage — Overtime Report catalogue card', () => {
     expect(screen.getByText('Overtime Report').closest('a')).not.toBeNull();
   });
 });
+
+describe('ReportsPage — Advance Recovery Report catalogue card', () => {
+  afterEach(() => cleanup());
+
+  it('shows the Advance Recovery Report card as a real link for a user holding only reports:view (Checkpoint 1B: available: true)', () => {
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    const link = screen.getByText('Advance Recovery Report').closest('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('/reports/advance-recovery');
+  });
+
+  it('requires no extra permission beyond the page-level reports:view gate (no requiredPermission override)', () => {
+    // Contrast with Employee Payroll History, which is hidden without statements:view — Advance
+    // Recovery Report reuses reports:view alone (frozen backend decision, reports.md §19.1).
+    renderCatalogue({ ...baseUser, permissions: ['reports:view'] as SessionUser['permissions'] });
+    expect(screen.getByText('Advance Recovery Report').closest('a')).not.toBeNull();
+  });
+});
