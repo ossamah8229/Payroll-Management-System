@@ -98,22 +98,34 @@ describe('isNavItemVisible', () => {
     });
   });
 
-  // --- Reports sidebar entry (Phase 8B Checkpoint 1) --------------------------------------------
-  // Reuses the existing, previously-unused reports:view permission (Phase 8A investigation report
-  // §11) — never a newly-created permission.
+  // --- Reports sidebar entry (Phase 8B Checkpoint 1; widened Checkpoint 1B, Salary Release Report)
+  // Phase 8B Checkpoint 1 gated this item on the existing, previously-unused reports:view
+  // permission (Phase 8A investigation report §11) alone. Checkpoint 1B widened it to an any-of
+  // gate — reports:view OR payroll:view — so a Finance user (holds payroll:view, never
+  // reports:view) has a normal, discoverable navigation path to the one report the catalogue now
+  // admits them to (Salary Release Report), rather than needing a direct URL. These four cases pin
+  // the corrected OR rule, mirroring the Corrections item's own regression coverage above.
 
   describe('the Reports sidebar item', () => {
-    it('requires the reports:view permission', () => {
-      expect(reportsNavItem().requiredPermission).toBe('reports:view');
+    it('requires reports:view OR payroll:view', () => {
+      expect(reportsNavItem().requiredPermission).toEqual(['reports:view', 'payroll:view']);
     });
 
-    it('is visible when reports:view is held', () => {
+    it('is visible for reports:view only', () => {
       expect(isNavItemVisible(reportsNavItem(), fakeUser(['reports:view']))).toBe(true);
     });
 
-    it('is hidden without reports:view, even for a user holding related payroll permissions', () => {
+    it('is visible for payroll:view only (the Finance case — never reports:view)', () => {
+      expect(isNavItemVisible(reportsNavItem(), fakeUser(['payroll:view']))).toBe(true);
+    });
+
+    it('is visible when both permissions are held', () => {
+      expect(isNavItemVisible(reportsNavItem(), fakeUser(['reports:view', 'payroll:view']))).toBe(true);
+    });
+
+    it('is hidden without either admitting permission, even for a user holding unrelated payroll permissions', () => {
       expect(
-        isNavItemVisible(reportsNavItem(), fakeUser(['payroll:entry', 'payroll:view', 'bank-sheets:view'])),
+        isNavItemVisible(reportsNavItem(), fakeUser(['payroll:entry', 'bank-sheets:view'])),
       ).toBe(false);
     });
 

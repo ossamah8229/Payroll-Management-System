@@ -3,19 +3,37 @@ import { Link } from 'react-router-dom';
 import { PERMISSIONS, type PermissionKey, type SessionUser } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { hasAnyPermission } from '@/lib/permissions';
 
 interface ReportCatalogueEntry {
   title: string;
   description: string;
   to: string;
   available: boolean;
-  /** Additive, optional (Employee Payroll History Checkpoint 1B) — most catalogue entries need no
-   * permission beyond this page's own `reports:view` gate, since they reuse that same permission
-   * for their own route. Employee Payroll History is gated on `statements:view` instead (approved
-   * decision 1, `docs/architecture/workflows/reports.md` §15.1.1), a materially more sensitive
-   * disclosure than a company-wide aggregate — so its own card must independently check for it
-   * rather than assume `reports:view` alone is enough. Absent for every other entry. */
-  requiredPermission?: PermissionKey;
+  /**
+   * Every entry's own real permission requirement, checked independently of this page's own
+   * top-level gate (Checkpoint 1B, Salary Release Report — the page-level gate widened to `reports:
+   * view OR payroll:view`, so an absent value can no longer be read as "no requirement beyond
+   * whatever let the user onto this page"). Absent means "the ordinary `reports:view` requirement
+   * every ordinary report shares" (`isCatalogueEntryVisible`'s own default) — every entry before
+   * Salary Release Report reuses that default rather than repeating `PERMISSIONS.REPORTS_VIEW`
+   * explicitly. Employee Payroll History is the one pre-existing exception, requiring
+   * `statements:view` instead (approved decision 1, `docs/architecture/workflows/reports.md`
+   * §15.1.1) — a materially more sensitive disclosure than a company-wide aggregate. Salary Release
+   * Report is the first entry needing an any-of array — mirrors its own route's identical OR gate
+   * (`App.tsx`, `docs/architecture/workflows/reports.md` §20.1) so the catalogue and the route can
+   * never silently disagree about who may open it.
+   */
+  requiredPermission?: PermissionKey | PermissionKey[];
+}
+
+/** True if `entry` should render as a real link for `user` — absent `requiredPermission` means the
+ * ordinary `reports:view` requirement every report before Salary Release Report already assumed
+ * (never "no requirement," which would have let a payroll:view-only Finance user see every other
+ * report's own card as a live link that still 403s on its own reports:view-only route). */
+function isCatalogueEntryVisible(user: SessionUser, entry: ReportCatalogueEntry): boolean {
+  const required = entry.requiredPermission ?? PERMISSIONS.REPORTS_VIEW;
+  return hasAnyPermission(user, Array.isArray(required) ? required : [required]);
 }
 
 /**
@@ -65,11 +83,25 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     to: '/reports/advance-recovery',
     available: true,
   },
-  { title: 'Salary Release Report', description: 'Not yet available.', to: '', available: false },
+  {
+    title: 'Salary Release Report',
+    description: 'Release reconciliation for one payroll cycle — released, pending, held, and resolved entries, with corrections shown separately.',
+    to: '/reports/salary-release',
+    available: true,
+    // The first Reports-module report on an any-of gate — mirrors its own route's identical OR
+    // permission (`App.tsx`, frozen Checkpoint 1A backend decision, reports.md §20.1). Never
+    // narrowed to `reports:view` alone, which would hide this card from the Finance role that
+    // actually executes the releases this report reconciles.
+    requiredPermission: [PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW],
+  },
 ];
 
 export function ReportsPage({ user }: { user: SessionUser }) {
-  const canView = user.permissions.includes(PERMISSIONS.REPORTS_VIEW);
+  // Widened from `reports:view` alone (Checkpoint 1B, Salary Release Report) so a payroll:view-only
+  // Finance user can reach the catalogue shell itself — every individual card below still
+  // independently gates on its own real requirement via `isCatalogueEntryVisible`, so this widened
+  // top-level check alone can never expose a card such a user isn't actually authorized to open.
+  const canView = hasAnyPermission(user, [PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]);
 
   if (!canView) {
     return (
@@ -91,9 +123,7 @@ export function ReportsPage({ user }: { user: SessionUser }) {
           <CardTitle>Report Catalogue</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {REPORT_CATALOGUE.filter(
-            (entry) => !entry.requiredPermission || user.permissions.includes(entry.requiredPermission),
-          ).map((entry) =>
+          {REPORT_CATALOGUE.filter((entry) => isCatalogueEntryVisible(user, entry)).map((entry) =>
             entry.available ? (
               <Link
                 key={entry.title}

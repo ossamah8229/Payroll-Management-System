@@ -4932,3 +4932,192 @@ production code defect existed to fix). Migration: not recommended, independentl
 against the actual schema and real `EXPLAIN ANALYZE` evidence. Checkpoint 1B may proceed once
 explicitly authorized. **No commit, push, or deployment occurred during this review.**
 
+## 42. Addendum, 2026-08-11 (later same day) — Phase 7 Reports, Salary Release Report: Checkpoint 1B (Frontend, OR Permission Gate, Browser Print, and E2E) — IMPLEMENTED, NOT COMMITTED
+
+Frontend, browser print, and Playwright only, per explicit Checkpoint 1B authorization — the frozen
+Checkpoint 1A backend above (Addenda 40/41, independently hostile-reviewed, APPROVE WITH FIXES,
+70/70 backend tests) receives no change of any kind. Starting state verified first: `main ==
+origin/main == 6b5fdca33c1dc6d5d543c8811a41501f0234ccc5`, working tree clean. Two pre-existing,
+unrelated files were investigated and ruled out as conflicts before any work began: a stray
+`frontend/src/routes/salary-release-page.tsx` (the Phase 4 payroll *release action* page, tracked
+since commit `cedf386`, an unrelated naming collision — this checkpoint's own new page is named
+`reports-salary-release-report-page.tsx`, following the established `reports-<name>-report-page.tsx`
+convention) and a separate, gitignored `.claude/worktrees/reports+project-site-payroll-1b/` directory
+(an unrelated task's own isolated worktree, not part of this repository's tracked state).
+
+**The first Reports-module report gated on an OR permission, carried through the frontend — and the
+one place this checkpoint found a genuine, undisclosed architectural gap.** `RequirePermission`
+(`components/layout/require-permission.tsx`) already accepted `permission: PermissionKey[]` with
+any-of semantics (added Post-Phase-5 Stabilization Checkpoint 4B) — no new guard component was
+needed, and the report's own route (`App.tsx`) was gated on `[PERMISSIONS.REPORTS_VIEW,
+PERMISSIONS.PAYROLL_VIEW]` directly. But investigating the actual `/reports` catalogue route and
+`ReportsPage`'s own internal `canView` check (both previously `reports:view`-only) surfaced that a
+payroll:view-only Finance user could not reach the catalogue shell *at all* — failing the
+authorizing instruction's own required scenario ("payroll:view-only user: catalogue access; route
+access") regardless of how correctly Salary Release Report's own card/route were gated. This was
+caught by the instruction's own §23 hostile self-check ("Can a payroll:view-only legitimate Finance
+user really reach the page? Did the catalogue accidentally remain reports:view-only?") before
+shipping, not discovered afterward.
+
+**Fix, and the judgment call behind its shape.** Widened both the `/reports` route's own
+`RequirePermission` and `ReportsPage`'s own `canView` to `hasAnyPermission(user, [REPORTS_VIEW,
+PAYROLL_VIEW])`. This alone would have been unsafe in isolation — every *other* catalogue entry
+(Payroll Summary, Project Site Payroll Report, Deduction Report, Overtime Report, Advance Recovery
+Report) had an implicit, undeclared `requiredPermission` of "none beyond whatever gate got the user
+onto this page," which was only ever safe while that page-level gate was `reports:view` alone. Left
+unchanged, widening the page-level gate would have shown a payroll:view-only user five other reports'
+own cards as live-looking links that still 403 on their own unchanged, still-`reports:view`-only
+individual routes. Fixed by making the implicit assumption explicit:
+`ReportCatalogueEntry.requiredPermission` absent now means "the ordinary `reports:view` requirement
+every report before this one already assumed" (`isCatalogueEntryVisible`'s own default), so a
+payroll:view-only user sees the catalogue shell and exactly the one card — Salary Release Report,
+whose own `requiredPermission` is the explicit `[REPORTS_VIEW, PAYROLL_VIEW]` array — they are
+actually authorized to open. Employee Payroll History's own pre-existing `statements:view` override
+is untouched. Proven directly: `reports-page.test.tsx` gained tests asserting a payroll:view-only
+user sees the Salary Release Report card and *none* of the five reports:view-only sibling cards, plus
+the widened page-level admit/deny boundary itself — none of the pre-existing tests were weakened.
+
+**Fixed during independent hostile review (2026-08-11) — the Reports *sidebar* nav item is now widened
+to the same OR gate.** The original Checkpoint 1B submission left `nav-config.ts`'s "Reports" entry
+pinned to `reports:view` alone, disclosing it as a deliberate limitation on the reasoning that sidebar
+visibility is a UX convenience only, never the actual security boundary. The hostile review rejected
+that as insufficient: a payroll:view-only Finance user still had no normal, discoverable navigation
+path to a report whose whole subject is the releases Finance itself executes — only a bookmark, a
+shared link, or direct URL entry. Fixed: `nav-config.ts`'s "Reports" item now requires
+`['reports:view', 'payroll:view']`, the same any-of shape already used for the Corrections item. The
+previously-frozen `nav-config.test.ts` case was updated, not preserved — "do not weaken existing
+tests" means don't silently drop coverage, not "never correct a test pinning behavior the approved
+architecture has since superseded." `26-salary-release-report.spec.ts`'s Finance permission test now
+asserts the sidebar "Reports" link is visible and clickable before falling back to the same
+direct-navigation assertions the other permission cases already use.
+
+**Route/catalogue**: `/reports/salary-release` plus the canonical
+`/payroll-cycles/:cycleId/reports/salary-release`, lazy-loaded. The catalogue's previously-disabled
+card (`available: false`) is now a real link with the OR `requiredPermission` above. AppShell title
+"Salary Release Report", subtitle "Release reconciliation for one payroll cycle — released, pending,
+held, and resolved entries."
+
+**Data layer** (`hooks/use-salary-release-report.ts`) mirrors `use-deduction-report.ts`'s convention
+exactly: one list query (`enabled: Boolean(cycleId)`, proven by a direct hook-level suite with
+`global.fetch` stubbed — empty Cycle issues zero requests, a real Cycle issues exactly one, an
+unchanged re-render issues no duplicate), sorted Site ids in both query key and URL, a blob-download
+export function for CSV/XLSX, and a dedicated `SalaryReleaseReportExportRowLimitExceededError`
+carrying the backend's structured 413 body verbatim.
+
+**Filters** (frozen Checkpoint 1A set only): Payroll Cycle (required, single, navigation control),
+Site (multi-select), Unit (disabled unless exactly one Site selected, cleared on an incompatible Site
+change, never cleared by an unrelated rerender — proven by a dedicated test), Row Status, Has
+Correction (tri-state). Clear Filters restores every filter to default and resets pagination, never
+touching the selected Cycle.
+
+**Release-semantics disclosure** (§6 of the authorizing instruction) — a concise on-screen
+`ReleaseSemanticsNotice` (mirrors `reports-payroll-summary-page.tsx`'s own `Info`-icon banner
+convention) states Original Released Amount is fixed once released, and Correction Balance Payable/
+Recovery are later, separate settlement amounts never folded back in — plain wording naming neither
+`calcNet` nor any other implementation detail. The print context header carries the same disclosure
+as one concise extra line, alongside every active filter — never omitting one, the Deduction Report
+defect this checkpoint's own authorizing instruction named explicitly as the one not to repeat.
+
+**Totals, table, sorting, pagination** — the backend's `SalaryReleaseReportTotals` render verbatim in
+two groups (Release Amounts/Status), with the four monetary figures collapsing into the standard
+"Totals are unavailable for this result size" notice (never a misleading zero) when `totalsComputed`
+is `false`, while all seven status/count figures stay always-exact and always visible. The 11-column
+table (Employee Code, Employee Name, Project Site, Primary Unit, Designation, Row Status, Original
+Released Amount, Released At, Correction Count, Correction Balance Payable, Correction Balance
+Recovery) is server-sorted on exactly the five backend-approved fields, server-paginated with the
+same page-clamp-on-shrunk-total safeguard every sibling report's own Checkpoint 1B work established.
+A non-`RELEASED` row always renders `—` for Original Released Amount/Released At, never a fabricated
+figure. No Released By, Payment Method, banking, CNIC, correction reason, or audit actor anywhere —
+none of these exist on the frozen row contract to begin with. No edit action, no "View Details"
+action, no row click, no detail route — proven both by a direct component test and by a real `GET
+/api/v1/reports/salary-release/:id` returning 404 in Playwright (no such route exists in the frozen
+backend). No client-side summation and no `calcNet` import anywhere in this page.
+
+**Export/Print** — Export CSV/Excel always covers the complete filtered result, never just the
+current page, with request-parity proven at the URL-construction level (identical query strings
+except `format`); a 413 shows the backend's own structured message via `toast.error`. Browser Print
+is current-page-only, backed by a dedicated `SalaryReleaseReportPrintOptionsDialog`/
+`salary-release-report-print-fields.ts` under its own versioned `salary-release-report-print-
+fields:v1` `localStorage` key, defaulting to every safe card/column selected (11 cards, 11 columns,
+Employee Name locked); readability thresholds (Excellent 0–4/Good 5–7/Wide 8–9/Very Wide 10+) are
+reused verbatim from Overtime Report's own identical 11-column ceiling.
+
+**Tests**: `use-salary-release-report.test.ts` (21), `salary-release-report-labels.test.ts` (6),
+`salary-release-report-print-fields.test.ts` (19 — its sensitive-field sweep deliberately does not
+forbid `correctionBalancePayable`/`correctionBalanceRecovery`, this report's own frozen, approved
+fields, unlike every sibling report's sweep which correctly does forbid its own analogous field),
+`reports-salary-release-report-page.test.tsx` (42 — the full OR-gate permission matrix, Cycle
+requirement, totals including `totalsComputed: false` never rendering a financial zero, every table
+column with a full sensitive-field sweep, all five statuses with no fabricated amount/timestamp on a
+non-RELEASED row, Original Released Amount kept visibly separate from both correction balances at
+once, server-only sorting, the page-clamp safeguard, Unit-filter compatibility clearing and an
+unrelated-rerender-preserves-Unit proof, Clear Filters preserving the Cycle, export, print context) —
+88 new tests across 4 dedicated files, plus 8 new tests in `reports-page.test.tsx` (the catalogue
+card's OR-gate visibility matrix and the widened page-level admit/deny boundary), none weakening an
+existing test — 96 new/changed frontend tests, 98 including the hostile-review sidebar fix
+(`nav-config.test.ts`'s four Reports-item cases grew to six). **Full frontend suite: 875/875
+passing.** `npx tsc --noEmit` clean across `shared`/`backend`/`frontend`, `npm run build` clean,
+`typecheck:e2e` (`tsc -p tests/e2e/tsconfig.json`) clean, `git diff --check` clean.
+
+**Playwright** (`tests/e2e/specs/26-salary-release-report.spec.ts`, 15 tests) — real backend, real
+Chromium, no `page.route` interception for any RBAC or financial assertion. All five row statuses
+constructed through real release/hold actions within one shared Draft cycle: `RELEASED` (full worked
+days, a real Unit release), `HELD` (a real hold before release, excluded from the sweep), `PENDING` (a
+genuinely positive net salary, never released — proving Pending Release Amount totals a real positive
+figure, not a negative default-fixture net), `NO_PAY_DUE` (`eobiApplicable: false` plus the default
+zero worked days, reaching `netSalary = 0` exactly, `payroll-release-eligibility.ts`'s own documented
+condition), and `RECOVERY_DUE` (the default zero-worked-days fixture's own negative net through the
+EOBI deduction alone, needing no changes — the same construction `02-payroll-lifecycle.spec.ts`'s own
+bootstrap already documents). A dedicated Multi-Unit release test proves a real entry spanning two
+Units stays non-RELEASED until both release, then resolves to exactly one row with one Original
+Released Amount and one Released At, its Primary Unit column showing `"(+1 more)"`. A real
+post-release Correction test submits and approves a genuine `CorrectionRequest` through the real
+backend (`assertEntryIsReleased` only requires the entry itself be released, not the cycle be
+Archived — no rollover/archive dance was needed) via a second reviewer session (`corrections:approve`,
+self-review is blocked by `assertNotSelfReview`), proving Original Released Amount is byte-identical
+before and after while Correction Count increments to 1. Site scoping and historical transfer mirrors
+Overtime Report's own identical pattern (`PayrollEntry.siteId` is always historical, never the
+employee's current Site) — a real employee transfer after release, the transferred-away Site B never
+offered as a filter to the Site-A-scoped user, and a direct API call naming the inaccessible Site
+403s. Filters, sorting/pagination, Export (CSV/XLSX, safe headers only), Print (current-page scope,
+print body content asserted under `page.emulateMedia`), Responsive layout (1024px, no horizontal
+document scroll), and No detail action round out the suite. **The Permission describe block proves
+the full OR matrix**: `reports:view` alone and `payroll:view` alone (via a **real seeded
+`FINANCE`-role** user, constructed the same way `create-scoped-user.ts`'s own doc comment describes —
+upserting against the already-seeded `Role` row rather than inventing a synthetic one — never
+`reports:view`) both admit; neither permission, `payroll:release` alone, and `statements:view` alone
+all deny. **15/15 passing.** Combined regression run alongside every sibling report's own Playwright
+spec (`17-reports.spec.ts`, `20-project-site-payroll-report.spec.ts`, `21-deduction-report.spec.ts`,
+`22-overtime-report.spec.ts`, `25-advance-recovery-report.spec.ts`) — **63/63 passing, unweakened.**
+
+**Request discipline observed** (§18 of the authorizing instruction): zero list requests before a
+Cycle exists; exactly one list request per genuine filter/sort/pagination change, none for an
+unrelated re-render; zero backend requests fired merely by opening or confirming Print; no client-side
+all-row fetch for totals or print; export always sends the current filter/sort state with no
+`page`/`pageSize`.
+
+**Files changed**: `frontend/src/hooks/use-salary-release-report.ts` (new) + `.test.ts` (new),
+`frontend/src/components/reports/salary-release-report-labels.ts` (new) + `.test.ts` (new),
+`frontend/src/components/reports/salary-release-report-print-fields.ts` (new) + `.test.ts` (new),
+`frontend/src/components/reports/salary-release-report-print-options-dialog.tsx` (new),
+`frontend/src/routes/reports-salary-release-report-page.tsx` (new) + `.test.tsx` (new),
+`frontend/src/App.tsx` (two new routes, one new lazy import), `frontend/src/routes/reports-page.tsx`
+(catalogue card enabled, OR gate widened), `frontend/src/routes/reports-page.test.tsx` (8 new tests),
+`frontend/src/components/layout/nav-config.ts` (Reports sidebar item widened to the OR gate — hostile
+review fix), `frontend/src/components/layout/nav-config.test.ts` (Reports sidebar OR coverage updated),
+`tests/e2e/specs/26-salary-release-report.spec.ts` (new; sidebar assertion added by the hostile
+review), `docs/architecture/workflows/reports.md` (new §20.9), `docs/PROJECT_PROGRESS.md` (new §1
+entry, §2 table row updated, §5 next-action updated), this addendum. No backend, shared-contract,
+schema, or migration file touched.
+
+**Known limitations, disclosed**: every Checkpoint 1A backend limitation (no Released By, no payment
+method, Original Released Amount not sortable) carries through unchanged, since none of it is a
+frontend decision to begin with. (The Reports sidebar nav item previously stayed `reports:view`-only,
+leaving Finance without a discoverable navigation path — fixed during the 2026-08-11 independent
+hostile review; no longer a limitation.)
+
+**No backend/shared/schema/migration change of any kind.** No Variance/Month-on-Month Report or
+Dashboard work — neither was started or touched. **No commit, push, or deployment occurred this
+session** — stopped deliberately for independent review, per explicit instruction. Salary Release
+Report is now fully implemented pending final authorization (Checkpoints 0, 1A, 1B).
+

@@ -130,10 +130,17 @@ export const navSections: NavSection[] = [
         label: 'Reports',
         to: '/reports',
         icon: FileBarChart,
-        // Phase 8B Checkpoint 1 — reuses the existing, previously-unused `reports:view` permission
-        // (already seeded, already default-granted to Payroll Staff — Phase 8A investigation report
-        // §11), never a newly-created permission this checkpoint.
-        requiredPermission: 'reports:view',
+        // Phase 8B Checkpoint 1 introduced this item on the existing, previously-unused
+        // `reports:view` permission (already seeded, already default-granted to Payroll Staff —
+        // Phase 8A investigation report §11). Widened to an any-of gate in Checkpoint 1B (Salary
+        // Release Report, `docs/architecture/workflows/reports.md` §20.1): Finance holds
+        // `payroll:view` but never `reports:view`, and needs a normal, discoverable navigation path
+        // to the one report the catalogue now admits them to (Salary Release Report) rather than
+        // requiring knowledge of a direct URL. Mirrors the Corrections item's own established OR
+        // pattern above. The catalogue page (`reports-page.tsx`) and every individual card still
+        // independently gate on their own real requirement — this sidebar item only ever gets a
+        // payroll:view-only user as far as the catalogue shell, exactly like the route itself.
+        requiredPermission: ['reports:view', 'payroll:view'],
       },
     ],
   },

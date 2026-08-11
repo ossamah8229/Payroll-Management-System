@@ -80,6 +80,9 @@ const ReportsAdvanceRecoveryReportDetailPage = lazy(() =>
     default: m.ReportsAdvanceRecoveryReportDetailPage,
   })),
 );
+const ReportsSalaryReleaseReportPage = lazy(() =>
+  import('@/routes/reports-salary-release-report-page').then((m) => ({ default: m.ReportsSalaryReleaseReportPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -361,11 +364,20 @@ const routes: RouteObject[] = [
     ),
   },
   {
+    // Widened from `reports:view` alone (Checkpoint 1B, Salary Release Report) — a Finance user
+    // (holds `payroll:view`, never `reports:view`) must be able to reach the catalogue itself to
+    // navigate to the one report that admits them. Each individual catalogue entry/route still
+    // independently gates on its own real requirement (`reports-page.tsx`'s own
+    // `isCatalogueEntryVisible`) — this widened gate only ever gets a payroll:view-only user as far
+    // as the catalogue shell; every other report's own card/route remains reports:view-only, exactly
+    // as before. The Reports *sidebar* nav item is widened the same way (`nav-config.ts`'s own
+    // `reports:view OR payroll:view`), so a Finance user has a normal, discoverable navigation path
+    // to this page rather than needing a direct URL.
     path: '/reports',
     element: (
       <RequireSession>
         {(user) => (
-          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+          <RequirePermission user={user} permission={[PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]}>
             <ReportsPage user={user} />
           </RequirePermission>
         )}
@@ -563,6 +575,41 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
             <ReportsAdvanceRecoveryReportDetailPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Salary Release Report (Phase 7 Reports, Checkpoint 1B) — the first Reports-module report gated
+  // on an OR permission: `reports:view` OR `payroll:view` (frozen Checkpoint 1A backend decision,
+  // `docs/architecture/workflows/reports.md` §20.1 — the same any-of pattern
+  // `payroll-entry.routes.ts`'s own `VIEW_PERMISSIONS` already established, and
+  // `RequirePermission`'s existing `permission: PermissionKey[]` support, reused verbatim, no custom
+  // guard). Finance holds `payroll:view` but never `reports:view` — gating on `reports:view` alone
+  // would exclude the role that actually executes releases from a report whose whole subject is
+  // release reconciliation. Historical Payroll Cycle Selector routing (same shape as every other
+  // single-required-Cycle report above): the flat route redirects to the canonical
+  // /payroll-cycles/:cycleId/reports/salary-release URL via useSelectedPayrollCycle. No detail route
+  // exists (frozen decision — no detail endpoint/page).
+  {
+    path: '/reports/salary-release',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={[PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]}>
+            <ReportsSalaryReleaseReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  {
+    path: '/payroll-cycles/:cycleId/reports/salary-release',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={[PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]}>
+            <ReportsSalaryReleaseReportPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>
