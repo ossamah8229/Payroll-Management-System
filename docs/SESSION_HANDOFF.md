@@ -4738,3 +4738,197 @@ review scope. **No commit, push, or deployment occurred during this review.** Ad
 (Checkpoints 0, 1A, 1B) remains pending final authorization. No other report or Dashboard work was
 started or touched.
 
+## 40. Addendum — Phase 7 Reports, Salary Release Report: Checkpoint 0 (Architecture Review, approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, NOT COMMITTED
+
+Backend, shared contracts, and backend tests only, per explicit Checkpoint 1A authorization —
+Checkpoint 0's own frozen architecture decisions (business purpose, grain, cycle scope, permission,
+site authorization, release-status model, Original Released Amount semantics, correction/balance-
+salary boundary, actor exposure, payment method, filters, columns, totals, sorting, no detail
+endpoint, export, no-schema-change target) carried over verbatim from the authorizing instruction. No
+Checkpoint 1B (frontend), Variance/Month-on-Month Report, or Dashboard work. Starting state verified
+first: `main == origin/main == 9a9dee19a323d44922f71cb9646ec6cff432421d`, working tree clean.
+
+**The first Reports-module report gated on an OR permission.** Every prior report in this module
+gates on exactly one permission (`reports:view` or `statements:view`). Salary Release Report gates on
+`reports:view` **OR** `payroll:view` — Finance holds `payroll:view`/`payroll:release` but has never
+held `reports:view`; Payroll Staff holds `reports:view` but not `payroll:view`. Gating on
+`reports:view` alone would have excluded Finance, the role that actually executes releases, from a
+report whose whole subject is release reconciliation. Investigated before implementation began:
+`requirePermission` (`backend/src/common/middleware/require-permission.ts`) already natively accepts
+either a single permission or an array (any-of semantics) — `payroll-entry.routes.ts`'s own
+`VIEW_PERMISSIONS = [PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.PAYROLL_VIEW]` is the exact real
+precedent this checkpoint's own `SALARY_RELEASE_REPORT_PERMISSION` reuses — no custom middleware was
+written. A dedicated test proves `payroll:release` alone (without `payroll:view`) does **not** imply
+access, and a real `ROLE_CODES.FINANCE`-coded agent (holding Finance's own actual permission set) is
+proven allowed, not merely a synthetic `payroll:view`-only test role.
+
+**Original Released Amount — the financial-correctness gate this checkpoint could not proceed past
+without resolving first.** Before writing any implementation code, traced every Corrections/
+Balance-Adjustment write path against the actual code (not the architecture docs' own claims) to
+answer: can `calcNet` applied to a `RELEASED` `PayrollEntry`'s own stored columns ever change after a
+later correction? Findings: `corrections.service.ts`'s `approveCorrectionRequest` never issues a
+`tx.payrollEntry.update` of any kind — only `Correction`/`BalanceAdjustment`/`CorrectionRequest` rows
+are written, and the entry must already be `released = true` before a correction may even be
+proposed. `correctionBalancePayable`/`correctionBalanceRecovery` — the two calc-input columns a
+settlement could plausibly touch — are written exclusively by `recomputeAndPersistEntryAggregates`,
+whose sole caller hard-rejects any target entry with `released = true`
+(`determineMaterialization`'s `TARGET_ENTRY_ALREADY_RELEASED` gate) — a materialization can only ever
+land on a still-unreleased, later Draft-cycle entry, never back onto the entry that originated the
+obligation. `assertEntryEditable` blocks every ordinary mutation path the instant `released = true`.
+**Conclusion: yes, proven immutable — no STOP condition triggered.** This is the identical property
+`employee-payroll-history.test.ts`'s own "the original released Net Salary on the main row is never
+replaced by a correction-replayed figure" test already proves for an equivalent figure; this
+checkpoint's own test suite (`salary-release-report.test.ts`) adds two dedicated regression tests
+under its own name: one releases an entry for real, captures its amount, performs a real post-release
+Correction, and verifies both the stored `PayrollEntry` row (`version`/`updatedAt` included) and the
+report's own amount are byte-for-byte unchanged; the other proves a materialized settlement landing
+on a *later* cycle's entry never contaminates the *originating* released entry.
+
+**Release actor and payment method — both deliberately excluded from V1, per frozen decision.**
+Released At is shown; Released By is not — `PayrollEntry.releasedBy` may represent whichever
+Unit-release action happened to complete the final touched Unit for a multi-Unit entry, not a
+semantically reliable "who released this employee." A derived Bank/Cash column (from `bankId IS
+NULL`) was considered and rejected — the schema stores no canonical release/payment channel, and
+presenting an inference as authoritative release metadata was judged the wrong call for a report this
+report's own subject makes plausible to over-trust.
+
+**Totals keep `releasedAmount` and `pendingReleaseAmount` strictly separate** — reusing Payroll
+Summary's own field/bucket model (never combined into one "Total Released" figure), gated by the same
+bounded fetch-and-`calcNet`/`sumMoney` strategy (`SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS = 20,000`)
+every sibling report's own monetary totals already use. `correctionBalancePayableTotal`/
+`correctionBalanceRecoveryTotal` sum the raw stored columns across every matching row regardless of
+status, mirroring Payroll Summary's own `balancePayableIncluded`/`recoveryDeducted` convention.
+
+**Performance evidence**: seeded 10 sites × 1,000 employees × 3 cycles (30,000 total `PayrollEntry`
+rows), the target cycle's own 10,000-employee population deliberately distributed across every
+release-state bucket (40% RELEASED/30% PENDING/10% HELD/10% NO_PAY_DUE/10% RECOVERY_DUE — mutually
+exclusive per the schema's own CHECK constraint), plus multi-Unit and corrected-entry subsets — a
+committed, repeatable performance suite (12 tests) measuring the 8 representative shapes named in the
+authorizing instruction with real `EXPLAIN (ANALYZE, BUFFERS)`. **No `Seq Scan` occurs on
+`PayrollEntry` in any measured shape** — the existing composite
+`PayrollEntry_cycleId_hold_released_payoutOutcome_idx`, `PayrollEntry_siteId_cycleId_idx`, and
+`PayrollEntry_cycleId_siteId_idx` indexes already cover every filtered/sorted shape this report needs,
+including `releasedAt` sorting. **No migration is proposed or recommended by this checkpoint** — see
+`docs/architecture/workflows/reports.md §20.5` for the full evidence table.
+
+**Tests**: `salary-release-report.test.ts` (51), `salary-release-report-performance.test.ts` (12),
+`salary-release-report-boundary.test.ts` (6) — **69/69 new backend tests passing.**
+`typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`, `git diff --check` clean.
+Combined regression run with every sibling report's own suite (`payroll-entry-row-status.test.ts`,
+`project-site-payroll-report.test.ts`, `deduction-report.test.ts`, `overtime-report.test.ts`,
+`advance-recovery-report.test.ts`, `employee-payroll-history.test.ts`) — **365/365 passing,
+unweakened.**
+
+**Files changed**: `shared/src/schemas/salary-release-report.ts` (new), `shared/src/index.ts`,
+`backend/src/modules/reports/salary-release-report.service.ts` (new),
+`backend/src/modules/reports/reports.routes.ts`, `backend/tests/salary-release-report.test.ts` (new),
+`backend/tests/salary-release-report-performance.test.ts` (new),
+`backend/tests/salary-release-report-boundary.test.ts` (new),
+`docs/architecture/workflows/reports.md` (new §20, status header updated), `docs/PROJECT_PROGRESS.md`
+(new §1 entry, §2 table row updated, §5 next-action updated), this addendum.
+
+**Known limitations, disclosed**: (1) Released By is a genuine, deliberate V1 exclusion, not an
+oversight — a future audit-focused report is the correct home if actor identity is ever needed; (2)
+no Payment Method/channel field — the schema does not store one; (3) `originalReleasedAmount` is
+deliberately not sortable in V1, mirroring Deduction Report's/Overtime Report's own restraint (a
+`calcNet`-derived, status-gated figure, not a plain stored column) absent real usage proving the need.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for independent
+review, per explicit instruction. Checkpoint 1B (frontend), Variance/Month-on-Month Report, and
+Dashboard are all explicitly **NOT** started.
+
+## 41. Addendum, 2026-08-11 — Salary Release Report Checkpoint 1A: Independent Hostile Review — APPROVE WITH FIXES (no production defect found; regression coverage strengthened)
+
+An adversarial, independent re-review of Checkpoint 1A above (Addendum 40), per explicit instruction.
+Scope: the same uncommitted diff (repository/diff integrity re-verified: `main == origin/main ==
+9a9dee19a323d44922f71cb9646ec6cff432421d`, working tree contains only Checkpoint 1A's own shared
+contract/service/routes/tests/docs, no frontend/Dashboard/schema/migration/unrelated change, `git diff
+--check` clean).
+
+**Original Released Amount immutability — re-derived independently, not trusted from the checkpoint's
+own doc comment.** Every `payrollEntry.update`/`updateMany` call site in the entire backend was
+individually located and inspected: `payroll-release.service.ts` (the release write itself — the
+Master Data Boundary's `liveMasterByEntryId` spread, including `grossPay`, is written atomically in
+the same statement that sets `released: true`, never as a separate later write against an
+already-released row; candidates are filtered `released: false` up front, so a row can never be
+"released" twice); `corrections.repository.ts`'s `updatePayrollEntryCorrectionAggregates` (reachable
+only through `recomputeAndPersistEntryAggregates`, whose sole caller hard-rejects
+`targetEntryReleased: true` via `determineMaterialization`'s `TARGET_ENTRY_ALREADY_RELEASED` gate);
+`advances.service.ts`'s `materializeOneAdvanceDeduction` (every call site — `createAdvance`,
+`settleAdvancesForReleasedEntries`'s own release-time `Advance` settlement never touches `PayrollEntry`
+— is gated on `released: false`); `eobi-sync.service.ts` (only ever targets the current Draft cycle's
+entry, explicitly excluding `released`/`payoutOutcome`-resolved rows); and every path in
+`payroll-entry.service.ts` (single-entry, work-line, and bulk-update) behind `assertEntryEditable`,
+which rejects `released = true`, `payoutOutcome != null`, or an `ARCHIVED` cycle. This independently
+confirms — from the production architecture side, not merely from `approveCorrectionRequest` never
+issuing a `PayrollEntry` write — that no code path in this system can mutate a released entry's own
+`calcNet` inputs. Category: **both** (A: production architecture: confirmed by direct trace; C: the
+checkpoint's own two dedicated regression tests, re-run against real Postgres, also confirm it
+end-to-end through the real release/correction HTTP endpoints).
+
+**No production code defect found.** Every other claim in Addendum 40 (release-status financial
+semantics, multi-Unit/Late-Entry release semantics, the OR-permission gate and its inability to widen
+Site access, historical Site-A/B authorization via `PayrollEntry.siteId`, correction/balance-field
+separation, Released At semantics, sensitive-field/value exclusion, the 19,999/20,000/20,001 boundary,
+CSV/XLSX/list parity, sort/pagination stability, and query discipline) was independently traced against
+the actual code and re-verified against real seeded-Postgres test runs — all held.
+
+**Three test-coverage gaps were identified and closed with new regression tests** (no existing test
+weakened): (1) `salary-release-report.test.ts`'s multi-status test proved `originalReleasedAmount`
+is `null` for HELD/PENDING/NO_PAY_DUE/RECOVERY_DUE but never explicitly asserted `releasedAt === null`
+for HELD (a plain stored column an operator's hold never touches, but never directly proven by test);
+(2) no test filtered a multi-Unit `PayrollEntry` by its *second*, non-primary Unit and proved exactly
+one row returned — the "Prisma's `workLines: { some }` never fans out the root row" property had only
+been proven for the unfiltered case, not the filtered one the review instruction specifically named;
+(3) `payroll-entry-row-status-regression.test.ts` — the cross-consumer proof that
+`derivePayrollEntryRowStatus` produces identical results across every real report endpoint — had not
+been extended to include Salary Release Report as a fourth consumer, despite it consuming the exact
+same shared derivation. Test count is now **70, not 69** (`salary-release-report.test.ts` 52, up from
+51; boundary 6; performance 12 — unchanged) — the increase is this added regression test, not a
+correction of a wrong prior count (51/69 was accurate for the file set as it stood after Addendum 40).
+`payroll-entry-row-status-regression.test.ts` grew from 2 to 2 tests (unchanged count, each test
+extended in place to add Salary Release Report as a fourth assertion target).
+
+**The §18-class incident narrative (contaminated DB state / stale fixture rows / Puppeteer timeouts)
+this review's own instructions asked to be investigated does not apply to this checkpoint** — checked
+directly, not assumed: no "ScrollInvestigation Site" or any related term appears anywhere in
+`docs/SESSION_HANDOFF.md`, `docs/PROJECT_PROGRESS.md`, or the wider repository; Addendum 40 discloses
+no such incident; and a live `ps aux` check during this review found exactly one, idle,
+this-session's-own `payroll_dev` Postgres process and zero stray Puppeteer/Chrome-headless processes.
+This class of incident belongs to a different checkpoint's own history (see the project-memory note on
+known stale-process test flakiness), not this one — nothing here needed cleanup.
+
+**Performance evidence re-verified at real volume, not re-read from Addendum 40's own table.** The full
+30,000-row performance fixture was re-seeded and every `EXPLAIN (ANALYZE, BUFFERS)` shape re-run:
+`Index Scan using "PayrollEntry_cycleId_idx"` (or the composite/site-scoped equivalent) on every
+measured shape, zero `Seq Scan`, `releasedAt` sorting confirmed genuinely DB-native and fast (~8ms at
+10,000 rows). The suite does not run a standalone `ANALYZE "PayrollEntry"` before its own `EXPLAIN
+ANALYZE` calls — checked against every sibling report's own performance suite
+(`deduction-report-performance.test.ts`, `project-site-payroll-report-performance.test.ts`,
+`advance-recovery-report-performance.test.ts`) and confirmed this is the *majority* existing
+convention in this module already (only `overtime-report-performance.test.ts` explicitly `ANALYZE`s),
+not a gap this checkpoint introduced. No migration is recommended, consistent with Addendum 40's own
+conclusion.
+
+**Verification evidence**: `shared`/`backend` `npx tsc --noEmit` clean; `npm run lint` clean (0
+errors, 10 pre-existing warnings confined to unrelated `backend/scripts/*.ts` files, untouched by this
+diff); `npm run build` clean across `shared`/`backend`/`frontend`; `salary-release-report.test.ts`
+(52/52), `salary-release-report-boundary.test.ts` (6/6, real 19,999/20,000/20,001-row volume),
+`salary-release-report-performance.test.ts` (12/12, real `EXPLAIN ANALYZE`),
+`payroll-entry-row-status.test.ts` + `payroll-entry-row-status-regression.test.ts` (both green),
+combined with `project-site-payroll-report.test.ts`/`deduction-report.test.ts`/
+`overtime-report.test.ts`/`advance-recovery-report.test.ts`/`employee-payroll-history.test.ts` —
+**368/368 passing, unweakened.** `git diff --check` clean.
+
+**Files changed by this review pass**: `backend/tests/salary-release-report.test.ts` (2 new
+assertions in an existing test, 1 new regression test added, no existing test weakened),
+`backend/tests/payroll-entry-row-status-regression.test.ts` (extended to a fourth report, no existing
+test removed), `docs/SESSION_HANDOFF.md` (this addendum), `docs/PROJECT_PROGRESS.md`,
+`docs/architecture/workflows/reports.md §20.6/§20.8` (test-count correction + this review's
+findings). No other file touched. No production code changed — no genuine defect was found to fix.
+
+**Verdict: APPROVE WITH FIXES** (fixes being the three added/extended regression tests — no
+production code defect existed to fix). Migration: not recommended, independently re-confirmed
+against the actual schema and real `EXPLAIN ANALYZE` evidence. Checkpoint 1B may proceed once
+explicitly authorized. **No commit, push, or deployment occurred during this review.**
+

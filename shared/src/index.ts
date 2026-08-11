@@ -310,6 +310,33 @@ export type {
   AdvanceRecoveryReportTypeTotals,
 } from './schemas/advance-recovery-report';
 
+export {
+  SALARY_RELEASE_REPORT_DEFAULT_PAGE_SIZE,
+  SALARY_RELEASE_REPORT_EXPORT_FORMATS,
+  SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS,
+  SALARY_RELEASE_REPORT_MAX_PAGE_SIZE,
+  SALARY_RELEASE_REPORT_ROW_STATUS_VALUES,
+  SALARY_RELEASE_REPORT_SORT_DIRECTIONS,
+  SALARY_RELEASE_REPORT_SORT_FIELDS,
+  salaryReleaseReportExportQuerySchema,
+  salaryReleaseReportListQuerySchema,
+  salaryReleaseReportRowStatusSchema,
+} from './schemas/salary-release-report';
+export type {
+  SalaryReleaseReportCycleRef,
+  SalaryReleaseReportExportFormat,
+  SalaryReleaseReportExportLimitError,
+  SalaryReleaseReportExportQuery,
+  SalaryReleaseReportListQuery,
+  SalaryReleaseReportListResponse,
+  SalaryReleaseReportRow,
+  SalaryReleaseReportRowStatus,
+  SalaryReleaseReportSortDirection,
+  SalaryReleaseReportSortField,
+  SalaryReleaseReportTotals,
+  SalaryReleaseReportUnitRef,
+} from './schemas/salary-release-report';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

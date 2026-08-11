@@ -19,11 +19,15 @@ import {
   PROJECT_SITE_PAYROLL_REPORT_EXPORT_MAX_ROWS,
   projectSitePayrollReportExportQuerySchema,
   projectSitePayrollReportListQuerySchema,
+  SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS,
+  salaryReleaseReportExportQuerySchema,
+  salaryReleaseReportListQuerySchema,
   type AdvanceRecoveryReportExportLimitError,
   type DeductionReportExportLimitError,
   type EmployeePayrollHistoryExportLimitError,
   type OvertimeReportExportLimitError,
   type ProjectSitePayrollReportExportLimitError,
+  type SalaryReleaseReportExportLimitError,
 } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
@@ -64,6 +68,12 @@ import {
   getAdvanceRecoveryReportList,
   searchAdvanceRecoveryReportEmployees,
 } from './advance-recovery-report.service';
+import {
+  buildSalaryReleaseReportExportData,
+  exportSalaryReleaseReportToCsv,
+  exportSalaryReleaseReportToXlsx,
+  getSalaryReleaseReportList,
+} from './salary-release-report.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -689,6 +699,94 @@ reportsRouter.get('/advance-recovery/:advanceId', ADVANCE_RECOVERY_REPORT_PERMIS
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json(detail);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Salary Release Report (Phase 7 Reports, Salary Release Report Checkpoint 1A, approved Checkpoint 0
+ * architecture review). A single-cycle operational release-reconciliation report — one row per
+ * `PayrollEntry`. `cycleId` is required and singular, mirroring Project Site Payroll Report's/
+ * Deduction Report's/Overtime Report's own "one cycle at a time" shape. No detail route exists in V1
+ * — every field the frontend will ever need for this report lives on the list row itself.
+ *
+ * **Permission — the first Reports-module report on an OR gate**: `reports:view` OR `payroll:view`
+ * (`SALARY_RELEASE_REPORT_PERMISSION` below), the same any-of pattern `payroll-entry.routes.ts`'s own
+ * `VIEW_PERMISSIONS` already established. Finance holds `payroll:view`/`payroll:release` but not
+ * `reports:view`; Payroll Staff holds `reports:view` but not `payroll:view`. `payroll:release` alone
+ * does not imply access — only `payroll:view` (which Finance's own role grant also carries) does.
+ * Master/global bypass is unaffected — it is handled entirely by the existing authorization
+ * architecture (`req.currentUser.permissions`/`isMasterAdmin`), not by this route's own gate.
+ */
+const SALARY_RELEASE_REPORT_PERMISSION = requirePermission([PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]);
+
+reportsRouter.get('/salary-release', SALARY_RELEASE_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = salaryReleaseReportListQuerySchema.parse(req.query);
+    const report = await getSalaryReleaseReportList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'salary_release_report', page: report.page, pageSize: report.pageSize, total: report.total },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Preflight-counts before generating any CSV/XLSX output, mirroring every other report's own export
+ * route — `buildSalaryReleaseReportExportData` itself never fetches/maps a single row once
+ * `totalMatching` exceeds `SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS`, so the structured
+ * `SalaryReleaseReportExportLimitError` below is always returned *before* any expensive work. Always
+ * the complete filtered dataset — no `page`/`pageSize` accepted at all.
+ */
+reportsRouter.get('/salary-release/export', SALARY_RELEASE_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = salaryReleaseReportExportQuerySchema.parse(req.query);
+    const data = await buildSalaryReleaseReportExportData(req.currentUser!, query);
+
+    if (data.totalMatching > SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS) {
+      const errorBody: SalaryReleaseReportExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (site, unit, or row status) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx' ? await exportSalaryReleaseReportToXlsx(data.rows) : exportSalaryReleaseReportToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'salary_release_report', format: query.format, rowCount },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = `salary-release-report.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
   } catch (error) {
     next(error);
   }
