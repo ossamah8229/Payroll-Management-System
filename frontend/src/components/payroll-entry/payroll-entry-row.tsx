@@ -1,12 +1,20 @@
 import { Fragment, memo, useCallback, useEffect, useState } from 'react';
+import { MoreHorizontal } from 'lucide-react';
 import { formatMoney, pluralize } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 import { ToggleSwitch } from '@/components/ui/toggle-switch';
 import { Badge } from '@/components/ui/badge';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { Bank } from '@/hooks/use-banks';
+import type { Employee } from '@/hooks/use-employees';
 import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { PAYROLL_COLUMNS, type PayrollColumnId } from './columns';
+import { PAYROLL_COLUMNS, stickyActionsCellClassName, type PayrollColumnId } from './columns';
 import { BalanceLabel, gridNavProps, InlineNumberCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
 import { SaveStatusIndicator } from './save-status-indicator';
 import { SplitWorkLinesModal } from './split-work-lines-modal';
@@ -29,6 +37,28 @@ interface PayrollEntryRowProps {
    * header/totals row on the exact same computation, never a second, possibly-stale copy. */
   gridTemplateColumns: string;
   style: React.CSSProperties;
+  /** Employee Row Actions (UAT 2026-08-11, RBAC-split revision) — `Edit Employee` is
+   * employee-master-data administration and stays gated on `EMPLOYEES_EDIT` (the exact permission
+   * Employee Registry's own row menu checks — mirrored, never a separate/looser gate). A Payroll
+   * Entry permission alone must never grant this. */
+  canEditEmployee: boolean;
+  /** `Mark as Left` is a Payroll Entry operational action, governed solely by the Payroll Entry
+   * operational permission (`payroll:entry`) — never `EMPLOYEES_EDIT` (an earlier revision OR'd the
+   * two together, which incorrectly let an employee-edit-only caller with no Payroll Entry access
+   * mark someone left; corrected). Computed by the page (`hasPermission`), forwarded here as a
+   * plain boolean the same way `canEditEmployee` already is. The `⋯` trigger itself renders
+   * whenever either flag is true; each menu item renders independently off its own flag — never a
+   * disabled/dead item for the one the caller lacks. */
+  canMarkEmployeeLeft: boolean;
+  /** Opens the shared `EmployeeFormModal` (`components/employees/employee-form-modal.tsx`)
+   * pre-populated with this row's own `entry.employee` — the exact same `Employee` shape and
+   * component Employee Registry's own Edit action uses, never a second edit form. Defined at the
+   * page level (a stable reference across renders) so this memoized row never needs it in its own
+   * comparator beyond a plain reference check. */
+  onEditEmployee: (employee: Employee) => void;
+  /** Opens the shared `MarkLeftModal` (`components/employees/mark-left-modal.tsx`) — same
+   * reasoning as `onEditEmployee` above. */
+  onMarkLeftEmployee: (employee: Employee) => void;
 }
 
 function PayrollEntryRowImpl({
@@ -40,6 +70,10 @@ function PayrollEntryRowImpl({
   liveTotalsStore,
   gridTemplateColumns,
   style,
+  canEditEmployee,
+  canMarkEmployeeLeft,
+  onEditEmployee,
+  onMarkLeftEmployee,
 }: PayrollEntryRowProps) {
   const editor = usePayrollEntryEditor(entry, cycleId, cycleStatus);
   const { effectiveEntry, effectiveLine, cycleDaysInputValue, calc, status, errorMessage, editable } = editor;
@@ -93,6 +127,11 @@ function PayrollEntryRowImpl({
   ]);
 
   const disabled = !editable || status === 'conflict';
+  // Single source of truth for this row's real opaque background — shared by the row's own
+  // outer div and the sticky-right actions cell (`cells.actions` below), so the two can never
+  // silently drift out of sync the way M4's own translucent-conflict-row fix originally guarded
+  // against.
+  const rowBackgroundClassName = status === 'conflict' ? 'bg-danger-light' : 'bg-surface-2';
   const nav = (col: string) => gridNavProps(rowIndex, col);
 
   // Phase 7E durability checkpoint (A6) — a 409 conflict's "Reload row" action discards whatever
@@ -425,6 +464,48 @@ function PayrollEntryRowImpl({
         </span>
       </ReadOnlyCell>
     ),
+
+    // Employee Row Actions (UAT 2026-08-11, RBAC-split revision) — sticky-right (see `columns.ts`'s
+    // `ACTIONS_COLUMN_ID` doc comment for why), so its own background must be explicitly opaque and
+    // match this row's real background exactly (`rowBackgroundClassName`, computed once below) —
+    // the same "translucent sticky cell" defect class the row's own M4 fix above already guards
+    // against for the *vertical* sticky header/totals rows, now extended to this *horizontal* sticky
+    // column. No trigger at all when the caller has neither `canEditEmployee` nor
+    // `canMarkEmployeeLeft` (never a visible-but-dead action) — the column's width slot still
+    // renders empty, matching Employee Registry's own `<TableHead className="w-10" />` convention
+    // for the same permission-absent case. Each menu item renders off its own independent flag: a
+    // Payroll Entry-only caller sees Mark as Left but not Edit Employee; an `employees:edit`-only
+    // caller (reaching this page some other way) sees the reverse; never a disabled item for
+    // whichever action the caller lacks.
+    actions: (
+      <div
+        role="cell"
+        data-col-id="actions"
+        className={cn('z-10 flex items-center justify-center', stickyActionsCellClassName(rowBackgroundClassName))}
+      >
+        {(canEditEmployee || canMarkEmployeeLeft) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+                aria-label={`Employee actions for ${entry.employee.name}`}
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {canEditEmployee && (
+                <DropdownMenuItem onSelect={() => onEditEmployee(entry.employee)}>Edit Employee</DropdownMenuItem>
+              )}
+              {canMarkEmployeeLeft && !entry.employee.dateOfLeaving && (
+                <DropdownMenuItem onSelect={() => onMarkLeftEmployee(entry.employee)}>Mark as Left</DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    ),
   };
 
   return (
@@ -440,7 +521,7 @@ function PayrollEntryRowImpl({
         // Stabilization) — a transparent row has no defense against underlying content becoming
         // visible during sticky/virtualized composition, regardless of the exact browser mechanism
         // — every row is now its own fully opaque paint surface, regardless of what's behind it.
-        'grid items-center border-b border-border bg-surface-2 text-xs',
+        'grid items-center border-b border-border text-xs',
         // Independent-review remediation (M4) — `twMerge` resolves a `bg-*` conflict by keeping only
         // the *last* class in this list, so a naive `bg-danger-light/40` here previously dropped
         // `bg-surface-2` entirely for a conflict row, silently reintroducing the exact translucent-
@@ -448,7 +529,7 @@ function PayrollEntryRowImpl({
         // the same solid, already-vetted semantic color badge.tsx's own `hold`/`red` variants and
         // the Print Options dialog's warning banner already use at full opacity — fully opaque,
         // still visually distinct from the row's ordinary white, never translucent.
-        status === 'conflict' && 'bg-danger-light',
+        rowBackgroundClassName,
       )}
     >
       {PAYROLL_COLUMNS.map((column) => (
@@ -475,7 +556,16 @@ export const PayrollEntryRow = memo(PayrollEntryRowImpl, (prev, next) => {
     // The shared grid template changes whenever any loaded value (on any row) needs a wider
     // column than before — every mounted row must re-render to stay pixel-aligned when it does.
     prev.gridTemplateColumns === next.gridTemplateColumns &&
-    prev.style.transform === next.style.transform
+    prev.style.transform === next.style.transform &&
+    // Employee Row Actions (UAT 2026-08-11) — `canEditEmployee`/`canMarkEmployeeLeft` are plain
+    // booleans and `onEditEmployee`/`onMarkLeftEmployee` are stable references defined once at the
+    // page level and forwarded verbatim through the grid (never rewrapped in a new inline closure
+    // per render), so a reference/value check here is exactly as cheap and correct as every other
+    // field in this comparator — never stale once `entry` itself is confirmed unchanged above.
+    prev.canEditEmployee === next.canEditEmployee &&
+    prev.canMarkEmployeeLeft === next.canMarkEmployeeLeft &&
+    prev.onEditEmployee === next.onEditEmployee &&
+    prev.onMarkLeftEmployee === next.onMarkLeftEmployee
   );
 });
 

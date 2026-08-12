@@ -5121,3 +5121,193 @@ Dashboard work — neither was started or touched. **No commit, push, or deploym
 session** — stopped deliberately for independent review, per explicit instruction. Salary Release
 Report is now fully implemented pending final authorization (Checkpoints 0, 1A, 1B).
 
+---
+
+## 43. Addendum, 2026-08-11 (later same day) — UAT: Payroll Entry Employee Row Actions — IMPLEMENTED, NOT COMMITTED
+
+Small, frontend-only UAT item, not part of the Phase 7 Reports sequence — explicitly *not*
+Variance/Month-on-Month Report or Dashboard, neither of which was started. Starting state verified
+first: `main == origin/main == caa8e50fd25dfa0a05f0d11fbd6b47570d8576e8`, working tree clean.
+
+**What was built**: a row-level `⋯` overflow menu in Payroll Entry (Edit Employee / Mark as Left),
+placed at the frozen far-right position, using the exact same shared `EmployeeFormModal`
+(`components/employees/employee-form-modal.tsx`) and newly-extracted `MarkLeftModal`
+(`components/employees/mark-left-modal.tsx`) Employee Registry itself renders — one edit
+implementation, one mark-left implementation, one permission (`EMPLOYEES_EDIT`, independently
+enforced server-side), reused rather than duplicated. Full record, including the investigation
+findings, the genuine architecture gap deliberately left open, the sticky-right judgment call, and
+exact test/E2E results: `docs/PROJECT_PROGRESS.md`'s own "UAT — Payroll Entry Employee Row Actions"
+§1 entry — not duplicated here in full.
+
+**The one thing to know before touching this area again**: `markEmployeeLeft` does not remove or
+exclude an employee's existing Draft `PayrollEntry` row — an employee already in the current Draft
+cycle before being marked Left stays there, fully editable, until a *not-yet-built* roster-exclusion
+rule is added. This was investigated and explicitly reported rather than silently invented, per the
+authorizing instruction's own stop condition. Do not build that removal logic without a separate,
+explicit go-ahead — it is a new business rule (which of Draft-delete / query-filter-exclude / hold /
+defer-to-next-cycle-rollover the product actually wants is an open decision), not a bug fix.
+
+**Files changed**: `frontend/src/components/employees/mark-left-modal.tsx` (new, extracted from
+`employees-page.tsx`), `frontend/src/components/payroll-entry/payroll-entry-row-actions.test.tsx`
+(new), `tests/e2e/specs/27-payroll-entry-employee-row-actions.spec.ts` (new), plus edits to
+`employee-form-modal.tsx` (new `onUpdated` callback), `employees-page.tsx` (now imports the extracted
+modal), `columns.ts`/`payroll-entry-row.tsx`/`payroll-entry-grid.tsx`/`payroll-entry-totals-row.tsx`
+(the new sticky-right `actions` column, consistently across all four rendering layers),
+`payroll-entry-page.tsx` (state, permission gate, cycle-targeted invalidation), and the pre-existing
+`payroll-entry-alignment.test.tsx`/`payroll-entry-grid.test.tsx`/`master-data-boundary.test.tsx`/
+`payroll-entry-row.test.tsx`/`payroll-entry-page.test.tsx` (updated for the two new row props and the
+one documented sticky-right exception). `docs/design-system.md` gained a new "Row action menu (`⋯`)"
+component-table entry.
+
+**Verification**: full frontend suite **884/884**, `typecheck`/`lint`/`build` clean across every
+workspace, `typecheck:e2e` clean, `git diff --check` clean. New Playwright spec standalone: **5/5**.
+Full-suite Playwright regression (160 tests, `workers: 1`): **154 passed, 3 failed, 3 skipped** — all
+3 failures independently confirmed pre-existing (exact match with this file's own already-documented
+rollover/released-badge/PDF-export flaky set; the released-badge one further root-caused by direct
+code inspection to a stale test expecting a per-row Correction button removed from that cell back on
+2026-07-25, unrelated to this checkpoint's own purely additive final column); the 3 skips are this
+checkpoint's own Historical-cycle scenario plus two pre-existing tests, all three via the same
+graceful "no Draft cycle exists at this point in the sequential run" `test.skip` pattern those specs
+already use elsewhere.
+
+**No backend/shared/schema/migration change of any kind.** No Variance/Month-on-Month Report or
+Dashboard work. **No commit, push, or deployment occurred this session** — stopped deliberately for
+independent review, per explicit instruction.
+
+---
+
+## 44. Addendum, 2026-08-11 (same day, continuation) — UAT: Payroll Entry Employee Row Actions —
+## RBAC Split + Draft-Payroll Removal — IMPLEMENTED, NOT COMMITTED
+
+Continuation of §43 — two business requirements arrived after that checkpoint closed, closing both
+open items it deliberately left: the RBAC question ("no separate mark-as-left permission to mirror")
+and the Draft-payroll finding ("markEmployeeLeft does not remove or exclude... a new business rule,
+not a bug fix"). Full record: `docs/PROJECT_PROGRESS.md`'s own "UAT — Payroll Entry Employee Row
+Actions — RBAC Split + Draft-Payroll Removal" entry — not duplicated here in full.
+
+**RBAC**: `Edit Employee` stays `EMPLOYEES_EDIT`-only. `Mark as Left` now accepts `EMPLOYEES_EDIT`
+**OR** `PAYROLL_ENTRY` (`payroll:entry`, the exact operational permission `payroll-entry.routes.ts`
+already gates every write on) via `requirePermission`'s existing any-of-list support —
+`employees.routes.ts`'s `POST /:id/leave` — no new permission introduced, `PATCH /:id`/`/reactivate`
+unchanged. Frontend `payroll-entry-row.tsx` split one `canEditEmployee` flag into two independent
+ones (`canEditEmployee`, `canMarkEmployeeLeft`), each gating its own menu item.
+
+**Draft removal**: new `removeEmployeeFromCurrentDraftCycle` (`payroll-processing.service.ts`, beside
+its own inverse, `syncEmployeeIntoCurrentDraftCycle`) — resolves the actual current Draft cycle
+(never the viewed one), deletes the employee's entry in it unless it has already individually
+resolved (a per-Unit Late Release, left untouched — Principle 9) or a real financial obligation
+(`AdvanceScheduleChange`/`BalanceAdjustmentMaterialization`, both traced by direct schema reading, the
+only two FK types that can reference a still-Draft `PayrollEntry`) already points at it, in which case
+it is held (`hold: true`) rather than deleted — the same convention `bootstrapPayrollEntries`'s own
+departed-obligation-employee path already establishes. `markEmployeeLeft` (`employees.service.ts`)
+now wraps the `Employee` update, its own audit entry, and this removal in one transaction. Reactivate
+investigated and left unchanged — it already calls `syncEmployeeIntoCurrentDraftCycle`, so the
+"inverse of the inverse" needed no new code.
+
+**Verification**: 11 new backend tests (RBAC matrix + Draft removal + historical preservation +
+financial-linkage retention + Reactivate restore), full backend regression sweep across
+employees/payroll-processing/advances/corrections/payroll-cycle/payroll-release (368 tests total)
+all green; full frontend suite 889/889; new/rewritten Playwright spec 27 (Scenarios A–E, real
+permission-scoped users, real backend) 5/5. `typecheck`/`lint`/`build`/`typecheck:e2e`/`git diff
+--check` all clean.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for independent
+review, per explicit instruction. Variance/Month-on-Month Report and Dashboard remain untouched.
+
+---
+
+## 45. Addendum, 2026-08-12 — CORRECTION to §44: the OR-gate was a confirmed defect, not the
+## approved model — Mark as Left is now `PAYROLL_ENTRY`-only. IMPLEMENTED, STILL NOT COMMITTED
+
+**This entry corrects §44 above. §44 is left unedited as a historical record — it accurately
+describes what was built at the time, but what was built there does not satisfy the approved RBAC
+architecture.** A forensic audit (2026-08-12) reconciled the working tree against the original stop
+instruction and its later clarification, and found: `Edit Employee` and `Mark as Left` were *not*
+independent, because `Mark as Left` accepted `EMPLOYEES_EDIT` **OR** `PAYROLL_ENTRY`. Under that
+gate, a user holding `employees:edit` but no `payroll:entry` access could mark an employee left —
+exactly the case the approved architecture forbids ("Mark as Left must NOT be granted merely
+because they can edit employees, if Payroll Entry access is absent"). The audit further found this
+incorrect behavior had been baked into the checkpoint's own tests as the expected/passing case
+(backend `payroll-entry-employee-row-actions.test.ts`, frontend `payroll-entry-page.test.tsx`, and
+this file's own E2E spec 27) — the tests were validating the implementation against itself, not
+against the requirement.
+
+**Approved RBAC model** (now implemented):
+
+| Permission held | Edit Employee | Mark as Left |
+|---|---|---|
+| `payroll:entry` only | hidden/denied | visible/allowed |
+| `employees:edit` only | visible/allowed | hidden/denied |
+| both | visible/allowed | visible/allowed |
+| neither | hidden/denied | hidden/denied |
+
+No new permission was introduced — `PERMISSIONS.PAYROLL_ENTRY` (`payroll:entry`) already existed
+and already governed every other Payroll Entry write; it now governs Mark as Left exclusively, in
+Payroll Entry's own row menu and in Employee Registry's, so the two surfaces agree.
+
+**Files changed this correction**:
+- `backend/src/modules/employees/employees.routes.ts` — `POST /:id/leave`:
+  `requirePermission([EMPLOYEES_EDIT, PAYROLL_ENTRY])` → `requirePermission(PAYROLL_ENTRY)`.
+  `PATCH /:id` and `/:id/reactivate` unchanged (`EMPLOYEES_EDIT`-only).
+- `backend/src/modules/employees/employees.service.ts` — `markEmployeeLeft`'s own doc comment
+  corrected (no code-path change; the transactional Draft-removal behavior from §44 is unchanged
+  and unaffected by this fix).
+- `frontend/src/routes/payroll-entry-page.tsx` — `canMarkEmployeeLeft`:
+  `hasAnyPermission(user, [EMPLOYEES_EDIT, PAYROLL_ENTRY])` → `hasPermission(user, PAYROLL_ENTRY)`.
+  `hasAnyPermission` import removed (no longer used in this file). `canEditEmployee` unchanged.
+- `frontend/src/routes/employees-page.tsx` — Employee Registry's own row menu, previously gated
+  entirely on one `canEdit` flag (`EMPLOYEES_EDIT`) covering Edit/Mark as Left/Reactivate together,
+  split into `canEditEmployee` (`EMPLOYEES_EDIT` — gates Edit and Reactivate, both unchanged
+  server-side) and `canMarkEmployeeLeft` (`PAYROLL_ENTRY` — gates Mark as Left only). The `⋯`
+  trigger itself now renders whenever either flag is true (previously `canEdit` alone).
+- `frontend/src/components/employees/mark-left-modal.tsx`,
+  `frontend/src/components/payroll-entry/payroll-entry-row.tsx` — stale doc comments describing the
+  OR-gate corrected to describe the `PAYROLL_ENTRY`-only model.
+- Tests: `backend/tests/payroll-entry-employee-row-actions.test.ts` (RBAC matrix rewritten: the
+  `employees:edit only` case now asserts Mark as Left returns 403, not 200),
+  `frontend/src/routes/payroll-entry-page.test.tsx` (same correction, plus a new explicit "both
+  permissions" case), `tests/e2e/specs/27-payroll-entry-employee-row-actions.spec.ts` (new Scenario
+  A2: an `employees:edit`-only user cannot reach `/payroll-entry` at all — the route's own
+  `RequirePermission` guard already requires `payroll:entry` — so the requirement is proven via
+  Employee Registry's own row menu instead, plus a direct `POST /:id/leave` bypass attempt, both
+  asserting denial). No existing test was weakened or deleted.
+
+**Requirement #2 (Draft PayrollEntry removal/hold) is unaffected by this correction** — it was
+already correctly implemented in §44 and needed no change: `removeEmployeeFromCurrentDraftCycle`
+still resolves the actual current Draft cycle, deletes an unreleased/unobligated entry, holds
+(never deletes) one a real financial obligation already points at, never touches a released or
+historical entry, and both remain covered by their existing, unmodified backend tests (verified
+green below).
+
+**Verification**:
+- Focused backend: `payroll-entry-employee-row-actions.test.ts`, 11/11 passing (RBAC matrix
+  corrected; Draft-removal/hold/historical-preservation cases unchanged and still passing).
+- Backend regression: `employees`/`payroll-entry-draft-cycle-sync`/
+  `payroll-entry-draft-roster-reconciliation`/`employee-identifier-uniqueness`/
+  `employees-import-export` (123/123), plus
+  `advances`/`corrections-materialization`/`corrections-service`/`payroll-cycle-finalize`/
+  `payroll-cycle-rollover`/`payroll-cycle`/`payroll-release-all`/`payroll-release`/
+  `payroll-release-negative-salary` (234/234) — both sweeps green.
+- Focused frontend: the six Payroll Entry row-action/grid/alignment test files, 59/59. **Full
+  frontend suite: 890/890** (one net new test — the added "both permissions" case).
+- `typecheck` (all four workspaces + `typecheck:e2e`), `lint` (0 errors, only pre-existing unrelated
+  warnings), `build` (all workspaces), `git diff --check` — all clean.
+- E2E spec 27 standalone: 6/6 (5 original scenarios + new Scenario A2).
+- **Full Playwright suite, once** (`workers: 1`, 161 tests): 154 passed, 4 failed, 3 skipped. Three
+  failures are the already-documented pre-existing set (`07-corrections.spec.ts` Scenario 4,
+  `12-corrections-completion.spec.ts` Released-badge, `15-statements.spec.ts` Export PDF) —
+  reconfirmed unchanged by this fix. **One new failure not previously documented**:
+  `08-role-administration.spec.ts` — "renaming a role does not change its user's access; removing a
+  permission takes effect immediately" (expects `403` after removing `employees:view` from a role,
+  received `200`). This diff never touches `GET /employees`, role administration, or session/
+  permission-cache invalidation — confirmed unrelated by direct code inspection — and it reproduces
+  deterministically when the spec is run alone, so it is not this fix's own flakiness surfacing
+  differently. **Not investigated or fixed here — out of scope for this RBAC correction; flagged for
+  separate attention**, likely a permission-cache invalidation timing issue (the user's very next
+  request after a role's permission is edited via the UI still succeeds once before the removal
+  takes effect).
+
+**No commit, push, or deployment occurred this session.** Variance/Month-on-Month Report and
+Dashboard remain untouched. **This checkpoint (§43 + §44 + this correction) is still not authorized
+for commit** — leave the working tree as-is for a fresh independent hostile review.
+

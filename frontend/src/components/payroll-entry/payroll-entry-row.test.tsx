@@ -163,6 +163,10 @@ describe('PayrollEntryRow — conflict-status background stays fully opaque (Pos
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,

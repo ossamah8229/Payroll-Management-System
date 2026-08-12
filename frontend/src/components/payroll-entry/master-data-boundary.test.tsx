@@ -132,6 +132,10 @@ function renderRow(entry: PayrollEntry, banks: Bank[] = [testBank]) {
         banks={banks}
         liveTotalsStore={new LiveTotalsStore()}
         gridTemplateColumns={gridTemplateColumns(resolved)}
+        canEditEmployee={false}
+        canMarkEmployeeLeft={false}
+        onEditEmployee={() => {}}
+        onMarkLeftEmployee={() => {}}
         style={{}}
       />
     </QueryClientProvider>,

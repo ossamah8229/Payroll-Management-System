@@ -64,6 +64,7 @@ export function EmployeeFormModal({
   defaultSiteId,
   onReactivateRequested,
   onCreated,
+  onUpdated,
   user,
 }: {
   open: boolean;
@@ -75,6 +76,12 @@ export function EmployeeFormModal({
    * action uses this to re-run its own Draft-cycle roster reconciliation so the new employee can
    * appear in the grid without a full refresh; Employee Registry has no use for it and omits it. */
   onCreated?: () => void;
+  /** Fires after a successful *edit* only (never create) — Payroll Entry's row-level "Edit
+   * Employee" action (UAT 2026-08-11) uses this to refresh the currently-viewed cycle's Payroll
+   * Entry data (its live-synced, unreleased-entry master-data fields), since this modal's own
+   * mutation only invalidates the employees query. Employee Registry has no use for it and omits
+   * it. */
+  onUpdated?: () => void;
   user: SessionUser;
 }) {
   const banks = useBanks();
@@ -171,6 +178,7 @@ export function EmployeeFormModal({
       if (isEdit && employee) {
         await updateEmployee.mutateAsync({ id: employee.id, input });
         toast.success('Employee updated');
+        onUpdated?.();
       } else {
         await createEmployee.mutateAsync(input);
         toast.success('Employee created');

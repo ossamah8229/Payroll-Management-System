@@ -152,7 +152,15 @@ function renderGrid(entries: PayrollEntry[]) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <PayrollEntryGrid cycle={testCycle} entries={entries} banks={[testBank]} />
+      <PayrollEntryGrid
+        cycle={testCycle}
+        entries={entries}
+        banks={[testBank]}
+        canEditEmployee={false}
+        canMarkEmployeeLeft={false}
+        onEditEmployee={() => {}}
+        onMarkLeftEmployee={() => {}}
+      />
     </QueryClientProvider>,
   );
 }

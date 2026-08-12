@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useBlocker } from 'react-router-dom';
 import { Download, FileEdit, Lock, Plus } from 'lucide-react';
@@ -18,6 +18,8 @@ import { PrintContextHeader } from '@/components/ui/print-context-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { canRequestCorrection, hasPermission } from '@/lib/permissions';
 import { EmployeeFormModal } from '@/components/employees/employee-form-modal';
+import { MarkLeftModal } from '@/components/employees/mark-left-modal';
+import type { Employee } from '@/hooks/use-employees';
 import { payrollEntrySaveStatusStore } from '@/lib/payroll-entry-save-status-store';
 import { useBanks } from '@/hooks/use-banks';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
@@ -154,6 +156,23 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   // employee-create form or a permission bypass: gated by the exact same EMPLOYEES_CREATE
   // permission Employee Registry itself checks, independently re-enforced by the backend route.
   const canCreateEmployee = hasPermission(user, PERMISSIONS.EMPLOYEES_CREATE);
+  // Employee Row Actions (UAT 2026-08-11, corrected 2026-08-12 — independent-permission revision)
+  // — `Edit Employee` and `Mark as Left` are governed by two entirely independent permissions,
+  // never an any-of gate between them. `Edit Employee` is employee-master-data administration and
+  // stays on `EMPLOYEES_EDIT` alone (a Payroll Entry permission must never grant it), exactly the
+  // permission Employee Registry's own row menu checks (`employees.routes.ts`'s `PATCH /:id`).
+  // `Mark as Left` is a Payroll Entry operational action and is governed solely by `PAYROLL_ENTRY`
+  // — mirrors `employees.routes.ts`'s own `requirePermission(PAYROLL_ENTRY)` gate on `POST
+  // /:id/leave` exactly. Holding `EMPLOYEES_EDIT` alone must NOT grant Mark as Left (a confirmed
+  // defect in an earlier revision of this checkpoint, which OR'd the two permissions together — a
+  // user with employee-edit but no Payroll Entry access could mark an employee left, which the
+  // approved architecture forbids). No menu at all renders when both are false, same as Employee
+  // Registry's own convention for the absent-permission case (this page's own route guard already
+  // requires `PAYROLL_ENTRY` to be here at all, so in practice `canMarkEmployeeLeft` is only ever
+  // false for a caller who somehow reaches this page without it — never render an unauthorized
+  // action regardless).
+  const canEditEmployee = hasPermission(user, PERMISSIONS.EMPLOYEES_EDIT);
+  const canMarkEmployeeLeft = hasPermission(user, PERMISSIONS.PAYROLL_ENTRY);
   const canManageCycles = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const isLoading = cycleLoading || (Boolean(cycleId) && (entriesLoading || banks.isLoading));
 
@@ -204,6 +223,44 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
     if (!draftCycleId) return;
     queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(draftCycleId) });
   }
+
+  // Employee Row Actions (UAT 2026-08-11) — `editingEmployee`/`leavingEmployee` are lifted to this
+  // page level (never row-local state) so the virtualizer recycling a row's DOM node can never
+  // leave a modal pointed at the wrong employee: only one `EmployeeFormModal`/`MarkLeftModal` pair
+  // is ever mounted for the whole grid, and `onEditEmployee`/`onMarkLeftEmployee` below are stable
+  // `useCallback` references forwarded unchanged through `PayrollEntryGrid` to every row, exactly
+  // what `PayrollEntryRow`'s own memo comparator expects.
+  const [editingEmployee, setEditingEmployee] = useState<Employee | undefined>(undefined);
+  const [leavingEmployee, setLeavingEmployee] = useState<Employee | undefined>(undefined);
+  const handleEditEmployee = useCallback((employee: Employee) => setEditingEmployee(employee), []);
+  const handleMarkLeftEmployee = useCallback((employee: Employee) => setLeavingEmployee(employee), []);
+
+  // Refreshes the *currently viewed* cycle after an Edit Employee save — never the resolved Draft
+  // cycle the way `handleEmployeeCreated` above does. Editing is a master-data change visible from
+  // any cycle's row menu (Draft, Released, or Archived — the Historical-Cycle-Safety judgment call
+  // documented alongside this feature), and `withLiveMasterData` (`payroll-entry.service.ts`) only
+  // ever re-syncs an entry's own designation/bank/gross-pay fields from Employee Registry while
+  // that specific entry is unreleased — a Released/Archived entry's snapshot is already immune to
+  // this refetch by construction, so invalidating the viewed cycle's query is always safe and never
+  // silently rewrites a historical row.
+  const handleEmployeeUpdated = useCallback(() => {
+    if (!cycleId) return;
+    queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(cycleId) });
+  }, [cycleId, queryClient]);
+
+  // Mirrors `handleEmployeeCreated`'s own explicit, cycle-targeted invalidation exactly (this
+  // file's own comment above it) — never the viewed `cycleId`, which may not be the Draft cycle at
+  // all. `markEmployeeLeft` (`employees.service.ts`) now transactionally removes/retains the
+  // employee's `PayrollEntry` in the actual current Draft cycle too
+  // (`removeEmployeeFromCurrentDraftCycle`, `payroll-processing.service.ts`) — resolving the real
+  // Draft cycle here, exactly like the backend does, is what makes the row disappear live if the
+  // caller happens to already be viewing that Draft cycle, without ever touching (or refetching
+  // into nonexistence) a Released/Archived cycle the caller might be viewing instead.
+  const handleEmployeeMarkedLeft = useCallback(() => {
+    const draftCycleId = cycles.find((c) => c.status === 'DRAFT')?.id;
+    if (!draftCycleId) return;
+    queryClient.invalidateQueries({ queryKey: payrollEntriesQueryKey(draftCycleId) });
+  }, [cycles, queryClient]);
 
   const filteredEntries = useMemo(
     () => filterEntriesBySite(entries ?? [], selectedSiteIds),
@@ -366,6 +423,10 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                       cycle={cycle}
                       entries={filteredEntries}
                       banks={banks.data ?? []}
+                      canEditEmployee={canEditEmployee}
+                      canMarkEmployeeLeft={canMarkEmployeeLeft}
+                      onEditEmployee={handleEditEmployee}
+                      onMarkLeftEmployee={handleMarkLeftEmployee}
                     />
                   </div>
                   {/*
@@ -469,6 +530,28 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
           onOpenChange={setCreateEmployeeOpen}
           onCreated={handleEmployeeCreated}
           user={user}
+        />
+      )}
+      {/* Employee Row Actions (UAT 2026-08-11) — the exact same shared `EmployeeFormModal`/
+          `MarkLeftModal` Employee Registry itself renders, just a second, independently-open
+          instance keyed to whichever row's `⋯` menu was used. `editingEmployee`/`leavingEmployee`
+          undefined between opens (mirroring Employee Registry's own conditional-render convention)
+          means no modal instance lingers mounted with a stale employee once closed. */}
+      {editingEmployee && (
+        <EmployeeFormModal
+          open={Boolean(editingEmployee)}
+          onOpenChange={(open) => !open && setEditingEmployee(undefined)}
+          employee={editingEmployee}
+          onUpdated={handleEmployeeUpdated}
+          user={user}
+        />
+      )}
+      {leavingEmployee && (
+        <MarkLeftModal
+          open={Boolean(leavingEmployee)}
+          onOpenChange={(open) => !open && setLeavingEmployee(undefined)}
+          employee={leavingEmployee}
+          onMarked={handleEmployeeMarkedLeft}
         />
       )}
       {hasReleasedEntries && (

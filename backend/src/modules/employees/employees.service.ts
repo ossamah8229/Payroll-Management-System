@@ -19,7 +19,10 @@ import { diffFields, omitKeys, type JsonPrimitive } from '../../common/audit-dif
 import type { RequestMeta } from '../../common/request-meta';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
-import { syncEmployeeIntoCurrentDraftCycle } from '../payroll-processing/payroll-processing.service';
+import {
+  removeEmployeeFromCurrentDraftCycle,
+  syncEmployeeIntoCurrentDraftCycle,
+} from '../payroll-processing/payroll-processing.service';
 import { syncEobiApplicability } from '../payroll-entry/eobi-sync.service';
 
 export type { RequestMeta };
@@ -702,17 +705,53 @@ export async function updateEmployee(
   return { employee, changes: allChanges, transferred: isTransfer };
 }
 
-export async function markEmployeeLeft(currentUser: SessionUser, id: string, input: MarkEmployeeLeftInput) {
+/**
+ * Mark as Left (extended, Payroll Entry Row Actions checkpoint, UAT 2026-08-11, corrected
+ * 2026-08-12) — callable from either Employee Registry's own row menu or Payroll Entry's row menu,
+ * both gated on the same `PAYROLL_ENTRY` permission the route now requires (`employees.routes.ts`
+ * — never `EMPLOYEES_EDIT`, which governs Edit Employee alone), one canonical implementation
+ * either way. Transactional (§13): the `Employee.dateOfLeaving` write, its own `employee.left`
+ * audit entry, and the current Draft cycle's `PayrollEntry` removal/retention
+ * (`removeEmployeeFromCurrentDraftCycle`) all commit or roll back together — never a departed
+ * Employee with a stale still-active Draft entry, or vice versa.
+ */
+export async function markEmployeeLeft(
+  currentUser: SessionUser,
+  id: string,
+  input: MarkEmployeeLeftInput,
+  requestMeta: RequestMeta,
+) {
   const existing = await getEmployee(currentUser, id);
 
   if (existing.dateOfLeaving) {
     throw badRequest('Employee has already left');
   }
 
-  return prisma.employee.update({
-    where: { id },
-    data: { dateOfLeaving: isoDateToUtcDate(input.dateOfLeaving) },
-    include: { site: true, unit: true, bank: true },
+  return prisma.$transaction(async (tx) => {
+    const employee = await tx.employee.update({
+      where: { id },
+      data: { dateOfLeaving: isoDateToUtcDate(input.dateOfLeaving) },
+      include: { site: true, unit: true, bank: true },
+    });
+
+    // Distinct from `employee.updated` per docs/architecture/database/employee.md §9 — a
+    // dateOfLeaving change is a business event in its own right, not an incidental field edit.
+    await recordAuditLog(
+      {
+        actorUserId: currentUser.id,
+        action: 'employee.left',
+        entityType: 'Employee',
+        entityId: employee.id,
+        metadata: { dateOfLeaving: input.dateOfLeaving },
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+      },
+      tx,
+    );
+
+    await removeEmployeeFromCurrentDraftCycle(tx, employee, currentUser.id, requestMeta);
+
+    return employee;
   });
 }
 

@@ -219,26 +219,39 @@ employeesRouter.post('/:id/reactivate', requirePermission(PERMISSIONS.EMPLOYEES_
   }
 });
 
-employeesRouter.post('/:id/leave', requirePermission(PERMISSIONS.EMPLOYEES_EDIT), async (req, res, next) => {
-  try {
-    const id = requireIdParam(req.params.id);
-    const input = markEmployeeLeftSchema.parse(req.body);
-    const employee = await markEmployeeLeft(req.currentUser!, id, input);
+// Mark as Left RBAC (UAT 2026-08-11 Payroll Entry Row Actions checkpoint, corrected 2026-08-12 —
+// independent-permission revision) — Mark as Left is a Payroll Entry operational action, governed
+// solely by `PAYROLL_ENTRY` (Payroll Staff's day-to-day Payroll Entry operational permission — the
+// same permission `payroll-entry.routes.ts` gates every write on, not the narrower read-only
+// `PAYROLL_VIEW`), independently of `EMPLOYEES_EDIT`. An earlier revision of this checkpoint
+// accepted `EMPLOYEES_EDIT` OR `PAYROLL_ENTRY` — that was a confirmed defect (an employee-edit-only
+// caller with no Payroll Entry access could mark an employee left, which the approved architecture
+// forbids: Edit Employee and Mark as Left must be independently controlled, never merged via an
+// any-of gate) and has been corrected. Employee Registry's own row menu (`employees-page.tsx`) is
+// aligned to this same `PAYROLL_ENTRY`-only rule so the two surfaces never disagree. This
+// deliberately does NOT widen `PATCH /:id` (Edit Employee) or `/:id/reactivate` — both stay
+// `EMPLOYEES_EDIT`-only, since neither is an approved Payroll Entry operational action the way
+// Mark as Left is.
+employeesRouter.post(
+  '/:id/leave',
+  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = markEmployeeLeftSchema.parse(req.body);
+      // Audit logging (`employee.left`) and the Draft-payroll-membership removal both happen inside
+      // `markEmployeeLeft` itself, in the same transaction as the `Employee` row update — same
+      // convention as `updateEmployee`/`reactivateEmployee` above, and required here specifically so
+      // the two changes this one business action makes (Employee departs; their current Draft
+      // `PayrollEntry` is removed/retained accordingly) commit or roll back together, never partially.
+      const employee = await markEmployeeLeft(req.currentUser!, id, input, {
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
 
-    // Distinct from `employee.updated` per docs/architecture/database/employee.md §9 — a
-    // dateOfLeaving change is a business event in its own right, not an incidental field edit.
-    await recordAuditLog({
-      actorUserId: req.currentUser!.id,
-      action: 'employee.left',
-      entityType: 'Employee',
-      entityId: employee.id,
-      metadata: { dateOfLeaving: input.dateOfLeaving },
-      ipAddress: req.ip ?? null,
-      userAgent: req.get('user-agent') ?? null,
-    });
-
-    res.status(200).json({ employee });
-  } catch (error) {
-    next(error);
-  }
-});
+      res.status(200).json({ employee });
+    } catch (error) {
+      next(error);
+    }
+  },
+);

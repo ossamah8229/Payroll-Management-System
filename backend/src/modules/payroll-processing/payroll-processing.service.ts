@@ -385,6 +385,95 @@ export async function syncEmployeeIntoCurrentDraftCycle(
 }
 
 /**
+ * The inverse of `syncEmployeeIntoCurrentDraftCycle` above (Payroll Entry Row Actions checkpoint,
+ * UAT 2026-08-11) — called from `employees.service.ts`'s `markEmployeeLeft`, in the same
+ * transaction as the `Employee.dateOfLeaving` write, so a departure and its Draft-payroll
+ * consequence commit or roll back together (§13, never a two-request partial state). No-op (and
+ * therefore safe to call unconditionally) if there is no Draft cycle, or this employee has no
+ * `PayrollEntry` in it — mirrors the sync function's own no-op conditions exactly.
+ *
+ * **Never touches a Released/Archived cycle, and never touches an individual entry that has
+ * already resolved even though its cycle is still nominally Draft** — a per-Unit "Late Entry"
+ * release can leave a specific entry `released = true` (or with a non-null `payoutOutcome`) while
+ * the cycle it belongs to has not yet been finalized as a whole (see `payroll-entry-page.tsx`'s own
+ * comment on this). Such an entry is exactly as immutable as any other released record (Principle
+ * 9) and this function leaves it completely alone, same as `assertEntryEditable` would reject an
+ * ordinary edit against it.
+ *
+ * **Deletes only when it is actually safe to.** An unreleased Draft entry can still be the target
+ * of a real, materialized financial obligation — a deferred `AdvanceScheduleChange` moved away from
+ * it, or a `BalanceAdjustmentMaterialization` reserving a Correction-originated recovery/payable
+ * installment against it (both `Restrict`-FK'd to `PayrollEntry`, `schema.prisma`) — and destroying
+ * that row would destroy the obligation record's own referential integrity, which no permission
+ * grant should be able to do incidentally via Mark as Left. When either exists, this holds the
+ * entry instead of deleting it (`hold: true`) — the exact convention `bootstrapPayrollEntries`'
+ * `departedObligationEmployees` path already establishes for "a departed employee who still
+ * owes/is owed money must stay visible, flagged, and un-released, never silently paid," just
+ * applied to an entry that already exists rather than one freshly bootstrapped at rollover. This is
+ * a known, documented limitation (not a guess): in this rare case, Mark as Left does not fully
+ * exclude the employee from the current Draft grid — payroll staff still see one held row for them,
+ * exactly as they would for any other flagged obligation.
+ *
+ * Work lines cascade-delete at the database level when the entry itself is deleted (§12a, `ON
+ * DELETE CASCADE`) — no separate cleanup needed here, same as `deletePayrollEntry`
+ * (`payroll-entry.service.ts`), the route-level twin of this same delete this function reuses the
+ * shape of (never called directly from here — that route owns its own optimistic-locking/RBAC
+ * concerns, irrelevant to this system-triggered, already-transactional removal).
+ */
+export async function removeEmployeeFromCurrentDraftCycle(
+  tx: PrismaTransactionClient,
+  employee: Employee,
+  actorUserId: string,
+  requestMeta: RequestMeta,
+): Promise<void> {
+  const draftCycle = await tx.payrollCycle.findFirst({ where: { status: 'DRAFT' } });
+  if (!draftCycle) {
+    return;
+  }
+
+  const entry = await tx.payrollEntry.findUnique({
+    where: { cycleId_employeeId: { cycleId: draftCycle.id, employeeId: employee.id } },
+  });
+  if (!entry) {
+    return;
+  }
+
+  if (entry.released || entry.payoutOutcome != null) {
+    return;
+  }
+
+  const [scheduleChange, materialization] = await Promise.all([
+    tx.advanceScheduleChange.findFirst({ where: { payrollEntryId: entry.id }, select: { id: true } }),
+    tx.balanceAdjustmentMaterialization.findFirst({ where: { payrollEntryId: entry.id }, select: { id: true } }),
+  ]);
+
+  if (scheduleChange || materialization) {
+    if (!entry.hold) {
+      await tx.payrollEntry.update({
+        where: { id: entry.id },
+        data: { hold: true, version: { increment: 1 } },
+      });
+    }
+    return;
+  }
+
+  await tx.payrollEntry.delete({ where: { id: entry.id } });
+
+  await recordAuditLog(
+    {
+      actorUserId,
+      action: 'payroll_entry.deleted',
+      entityType: 'PayrollEntry',
+      entityId: entry.id,
+      metadata: { cycleId: draftCycle.id, employeeId: employee.id, trigger: 'employee_marked_left' },
+      ipAddress: requestMeta.ipAddress,
+      userAgent: requestMeta.userAgent,
+    },
+    tx,
+  );
+}
+
+/**
  * Draft Payroll Roster Reconciliation (2026-07-24) — closes the residual gap
  * `syncEmployeeIntoCurrentDraftCycle` above cannot: an employee who was already active before that
  * fix was deployed, and so never passed through the create/reactivate/import hooks it lives on,

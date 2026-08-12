@@ -1,7 +1,14 @@
 import { useSyncExternalStore } from 'react';
 import { formatMoney, formatNumber } from '@payroll/shared';
 import { cn } from '@/lib/cn';
-import { MONEY_TOTAL_COLUMN_IDS, NUMERIC_TOTAL_COLUMN_IDS, PAYROLL_COLUMNS, type PayrollColumnId } from './columns';
+import {
+  ACTIONS_COLUMN_ID,
+  MONEY_TOTAL_COLUMN_IDS,
+  NUMERIC_TOTAL_COLUMN_IDS,
+  PAYROLL_COLUMNS,
+  stickyActionsCellClassName,
+  type PayrollColumnId,
+} from './columns';
 import type { LiveTotals, LiveTotalsStore } from './live-totals-store';
 
 const DEDUCTION_COLUMNS = new Set(['advanceDeduction', 'eidAdvanceDeduction', 'fine']);
@@ -61,6 +68,7 @@ export function PayrollEntryTotalsRow({
   // codebase's established rule that business-critical/financial values are never truncated.
   function cellClassName(columnId: string): string {
     const base = 'overflow-visible px-1.5 py-2';
+    if (columnId === ACTIONS_COLUMN_ID) return cn(base, stickyActionsCellClassName('bg-surface'));
     if (columnId === 'serial') return cn(base, 'text-center text-text-muted');
     if (columnId === 'employeeName') return cn(base, 'text-text');
     if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId as PayrollColumnId)) {

@@ -10552,6 +10552,358 @@ Month-on-Month Report, Dashboard. **Salary Release Report is now fully complete 
 
 ---
 
+## UAT — Payroll Entry Employee Row Actions — IMPLEMENTED, 2026-08-11, awaiting review, NOT COMMITTED
+
+Small, frontend-only UAT item, not part of the Phase 7 Reports sequence. Starting state verified
+first: `main == origin/main == caa8e50fd25dfa0a05f0d11fbd6b47570d8576e8`, working tree clean.
+
+**Requirement**: a row-level `⋯` overflow menu in Payroll Entry offering Edit Employee / Mark as
+Left, both routed through Employee Registry's own canonical, already-shared implementation — never a
+second employee-edit/employee-status implementation local to Payroll Entry.
+
+**Investigation findings** (before any code was written): Employee Registry's own row menu already
+gates both actions on the single `EMPLOYEES_EDIT` permission (`employees.routes.ts`: PATCH,
+`/reactivate`, and `/leave` all require it — there is no separate "mark as left" permission).
+`EmployeeFormModal` (`components/employees/employee-form-modal.tsx`) was already extracted and
+reused by Payroll Entry's own "New Employee" quick action (2026-08-10), so it needed no further
+extraction, only a new optional `onUpdated` callback (mirroring the existing `onCreated`) so a caller
+can refresh its own view after an edit. `MarkLeftModal` was still page-local inside
+`employees-page.tsx` — extracted verbatim into `components/employees/mark-left-modal.tsx` (the same
+pattern `EmployeeFormModal` itself was extracted by), with an equivalent optional `onMarked`
+callback. `entry.employee` on a `PayrollEntry` (`use-payroll-entries.ts`) is already typed as the
+exact same `Employee` interface `use-employees.ts` exports — no adapter/second employee shape was
+ever needed to wire either modal to a Payroll Entry row.
+
+**Genuine architecture gap found and deliberately NOT closed this checkpoint** (per the authorizing
+instruction's own explicit stop condition): `markEmployeeLeft` (`employees.service.ts`) only ever
+sets the `Employee` row's own `dateOfLeaving` — it does not delete, exclude, or otherwise touch any
+existing `PayrollEntry`. An employee already synced into the current Draft cycle before being marked
+Left stays exactly where they are, fully editable, indefinitely — departed employees are excluded
+only from *new* cycle creation/rollover (`bootstrapPayrollEntries`'s own `dateOfLeaving: null`
+filter), never removed from an *already-open* Draft. A generic `DELETE /api/v1/payroll-entries/:id`
+route exists (Draft-only, unreleased-only, `PAYROLL_ENTRY` permission) but is not wired to Mark as
+Left and has no frontend hook calling it. Implementing automatic Draft-row removal/exclusion would be
+a new business rule, not an extension of existing behavior — left unimplemented and reported, exactly
+as instructed. The UI, tests, and E2E spec below all assert the *actual* current behavior (the row
+stays), not an invented one.
+
+**Frozen placement**: the `⋯` (`MoreHorizontal`) trigger is the grid's far-right column, appended
+last to `PAYROLL_COLUMNS` (`columns.ts`) — after `netSalary`, never before `employeeCode`. **Sticky-
+right, a deliberate judgment call, not the default**: this grid's ~26 other columns already sum past
+2,300px (well beyond any realistic viewport), so a plain final column would put a "commonly needed
+while working" action behind a full horizontal scroll on every row. Implemented once
+(`stickyActionsCellClassName`, `columns.ts`) and applied consistently across all four layers that
+render this column — the group-row span, the column-header cell, every virtualized body row's own
+cell, and the totals row's cell — each with an explicit opaque background matching that row's own
+(never inherited), including the conflict-row `bg-danger-light` case. A dedicated existing regression
+test (`payroll-entry-alignment.test.tsx`'s "no individual data cell is independently sticky" check)
+was updated to carve out exactly this one documented exception, rather than weakened generally.
+
+**Row menu**: gated by `canEditEmployee` (`EMPLOYEES_EDIT`) computed once at the page level — no
+trigger renders at all when absent (never a visible-but-dead action), matching Employee Registry's
+own convention. Accessible name `"Employee actions for <name>"`. Mark as Left is hidden once the
+row's own employee already has `dateOfLeaving` set (the same conditional Employee Registry's own menu
+already uses) — the one reachable edge case given the gap above (an already-Left employee whose Draft
+row was never removed). State (`editingEmployee`/`leavingEmployee`) is lifted to the page level, never
+row-local, with stable `useCallback` references forwarded unchanged through `PayrollEntryGrid` to
+every row — the virtualizer recycling a row's DOM node can never leave a modal pointed at the wrong
+employee, and only one `EmployeeFormModal`/`MarkLeftModal` pair is ever mounted for the whole grid.
+
+**Query invalidation**: Edit Employee invalidates the *currently viewed* cycle's query
+(`handleEmployeeUpdated`) — safe from any cycle status, since `withLiveMasterData`
+(`payroll-entry.service.ts`) only re-syncs designation/bank/gross-pay from Employee Registry for an
+*unreleased* entry; a Released/Archived entry's snapshot is structurally immune to this refetch, so
+editing an employee from a historical cycle's row menu can never rewrite that cycle's own data
+(verified directly by Playwright Scenario D below). Mark as Left invalidates the resolved *Draft*
+cycle's query specifically (`handleEmployeeMarkedLeft`), mirroring the existing
+`handleEmployeeCreated` pattern exactly (2026-08-10's own "invalidate the cycle actually mutated,
+never the viewed cycleId" fix) — a forward-looking refresh for whenever the gap above is eventually
+closed, not a correction for anything visibly different today (no column on the grid currently
+depends on `dateOfLeaving`).
+
+**Historical-cycle judgment call**: both actions stay available regardless of the cycle being viewed
+(Draft/Released/Archived) — neither one can rewrite historical payroll data (confirmed above/below),
+so restricting them to Draft-only would just be an arbitrary UX restriction on a canonical
+employee-domain action, not a data-safety requirement.
+
+**Tests**: 15 new/changed frontend tests — `payroll-entry-row-actions.test.tsx` (6, new: far-right
+placement, no trigger in `employeeCode`, permission gating, both menu items call back with the row's
+own `entry.employee`, Mark as Left hidden once already-Left, sticky-right styling) and 9 new cases in
+`payroll-entry-page.test.tsx` (shared-modal reuse with populated fields, shared `MarkLeftModal` reuse,
+page-wide permission gating) — plus the one updated alignment-regression case above. `columns.ts`,
+`payroll-entry-row.tsx`, `payroll-entry-grid.tsx`, `payroll-entry-totals-row.tsx` changed; existing
+`payroll-entry-alignment.test.tsx`/`payroll-entry-grid.test.tsx`/`master-data-boundary.test.tsx`/
+`payroll-entry-row.test.tsx` updated for the two new required row props. `employees-page.tsx` shrank
+(the extraction), `employee-form-modal.tsx` gained `onUpdated`. **Full frontend suite: 884/884.**
+`typecheck`/`lint`/`build` clean across `shared`/`backend`/`frontend`, `typecheck:e2e` clean, `git
+diff --check` clean.
+
+**Playwright**: `tests/e2e/specs/27-payroll-entry-employee-row-actions.spec.ts` (5 tests) — real
+backend, real Chromium. Scenario A (Edit Employee opens the shared modal populated with the row's
+employee; the change appears in both Payroll Entry's Draft row and Employee Registry). Scenario B
+(Mark as Left uses the canonical workflow; Employee Registry shows Left; the Draft row is confirmed
+to still be present — the documented gap above, asserted as real current behavior, not silently
+"fixed" by the test). Scenario C (no `⋯` menu without `employees:edit`; a direct `PATCH`/`.../leave`
+bypass attempt both 403). Scenario D (editing an employee from an Archived cycle's row menu updates
+Employee Registry but leaves that Archived cycle's own row untouched). Scenario E (virtualization:
+scroll to the bottom and back, opening the menu at both ends — the recycled row always shows its own
+current employee, never a stale one). **Standalone run: 5/5 passing.** Full-suite regression run
+(160 tests, all specs, `workers: 1`): **154 passed, 3 failed, 3 skipped** — every failure
+(`07-corrections.spec.ts` Scenario 4, `12-corrections-completion.spec.ts`'s Released-badge test,
+`15-statements.spec.ts`'s Export PDF test) matches this project's own already-documented pre-existing
+flaky/stale set exactly (rollover/released-badge/PDF export); the `12-corrections-completion.spec.ts`
+failure was further confirmed by direct code inspection to be a stale test expecting a per-row
+Create Correction button that `payroll-entry-row.tsx`'s own doc comments record as intentionally
+removed from that cell on 2026-07-25 (moved to the page-level toolbar) — unrelated to this
+checkpoint's own, purely additive, far-right column. The 3 skips are Scenario D above plus two
+existing tests (`12-corrections-completion.spec.ts`'s Advances lookup test, cascading from the same
+file's earlier failure; `24-payroll-entry-quick-add-employee.spec.ts`'s Archived-cycle test) whose
+own precondition ("a Draft cycle exists at this point in the sequential run") wasn't met — the same
+graceful `test.skip` pattern those specs already use elsewhere, not a new failure mode.
+
+**No backend/shared/schema/migration change of any kind.** No Variance/Month-on-Month Report or
+Dashboard work — neither was started or touched. **No commit, push, or deployment occurred this
+session** — stopped deliberately for independent review, per explicit instruction.
+`docs/design-system.md` gained a new "Row action menu (`⋯`)" component-table entry formalizing this
+now-twice-used convention (Employee Registry's own pre-existing pattern, plus this checkpoint's
+sticky-right extension).
+
+---
+
+## UAT — Payroll Entry Employee Row Actions — RBAC Split + Draft-Payroll Removal (2026-08-11, same
+## day, continuation) — IMPLEMENTED, awaiting review, NOT COMMITTED
+
+Continuation of the UAT entry immediately above — two business requirements arrived after that
+checkpoint's own implementation/review, resolving both the RBAC question left as "no separate
+mark-as-left permission to mirror" and the "genuine architecture gap... deliberately NOT closed"
+Draft-payroll finding, both now closed. Starting state: the previous entry's own uncommitted
+frontend-only diff, working tree otherwise clean at `caa8e50`. **Still not committed.**
+
+**Requirement 1 — Edit Employee and Mark as Left no longer share one RBAC gate.** `Edit Employee`
+remains employee-master-data administration, `EMPLOYEES_EDIT`-only — a Payroll Entry permission
+alone must never grant it. `Mark as Left`, invoked from Payroll Entry, is a legitimate Payroll Entry
+operational action, so it now accepts `EMPLOYEES_EDIT` **OR** `PAYROLL_ENTRY` (`payroll:entry` —
+"Edit payroll entries," the exact permission `payroll-entry.routes.ts` already gates every write on,
+deliberately not the narrower read-only `PAYROLL_VIEW`). No new permission was introduced.
+
+- **Backend** (`employees.routes.ts`): `POST /:id/leave` changed from `requirePermission(EMPLOYEES_EDIT)`
+  to `requirePermission([EMPLOYEES_EDIT, PAYROLL_ENTRY])`, reusing `requirePermission`'s existing
+  any-of-list support verbatim (already used elsewhere, e.g. `payroll-entry.routes.ts`'s own
+  `VIEW_PERMISSIONS`) — no custom authorization logic written. `PATCH /:id` (Edit Employee) and
+  `POST /:id/reactivate` are unchanged (`EMPLOYEES_EDIT`-only) — Reactivate was investigated and
+  deliberately NOT broadened; nothing in its own implementation or FK structure makes it inseparable
+  from Mark as Left at the endpoint level, so broadening it would have been an unauthorized, silent
+  product decision.
+- **Frontend**: `payroll-entry-row.tsx`'s `PayrollEntryRowProps` split one `canEditEmployee` boolean
+  into two — `canEditEmployee` (`EMPLOYEES_EDIT`, gates the Edit Employee menu item) and
+  `canMarkEmployeeLeft` (`hasAnyPermission(user, [EMPLOYEES_EDIT, PAYROLL_ENTRY])`, gates Mark as
+  Left) — computed once in `payroll-entry-page.tsx` and threaded through `PayrollEntryGrid` exactly
+  like the original single flag was (stable booleans, no new per-row closures). The `⋯` trigger
+  itself renders whenever either flag is true; each menu item renders off its own independent flag —
+  never a disabled/dead item for whichever the caller lacks.
+
+**Requirement 2 — Mark as Left now actually removes the employee from the active Draft payroll.**
+Previous investigation found `markEmployeeLeft` only ever set `Employee.dateOfLeaving`; the row
+stayed in whatever Draft cycle it was already in, indefinitely. Full dependency trace of `PayrollEntry`
+before choosing a mechanism: `PayrollEntryWorkLine` cascade-deletes; `CorrectionRequest`/`Correction`/
+`BalanceAdjustment.originPayrollEntryId` are all `Restrict`-FK'd but can only ever reference an
+already-*released* entry (corrections/negative-payroll-recovery both require `released`/
+`payoutOutcome` to exist first) — never a still-Draft one, so they can never block this. Two real
+exceptions can: `AdvanceScheduleChange.payrollEntryId` (a deferral moved a materialized deduction
+*away* from a still-Draft entry) and `BalanceAdjustmentMaterialization.payrollEntryId` ("Draft-cycle
+projection reservations" — a Correction/negative-payroll-recovery installment already materialized
+into this specific Draft entry) — both `Restrict`, both real, both confirmed reachable against a
+still-Draft entry by direct schema/service-code reading, not assumed.
+
+- **Chosen mechanism** (Option C, "domain-level remove-from-current-Draft operation," mirroring the
+  existing inverse): `removeEmployeeFromCurrentDraftCycle` (new function, `payroll-processing.service.ts`,
+  placed immediately beside `syncEmployeeIntoCurrentDraftCycle` — the employee-create/reactivate
+  auto-sync function whose exact inverse this is). Resolves the one current Draft cycle, finds that
+  employee's entry in it (no-op if either doesn't exist), leaves it completely untouched if it has
+  already individually resolved (`released` or a non-null `payoutOutcome` — the per-Unit "Late Entry"
+  release case, where a specific entry can be released while its cycle is still nominally `DRAFT`;
+  Principle 9 applies to it exactly as to any other released record), checks for the two real
+  dependency types above and **holds** (`hold: true`, never deletes) the entry if either exists —
+  the same convention `bootstrapPayrollEntries`' own `departedObligationEmployees` path already
+  establishes for "a departed employee who still owes/is owed money must stay visible, flagged, and
+  un-released, never silently paid" — otherwise deletes the entry (work lines cascade) and records a
+  `payroll_entry.deleted` audit entry (`trigger: 'employee_marked_left'`, the same action name/shape
+  the existing `DELETE /payroll-entries/:id` route already uses for its own analogous case). The
+  existing generic `DELETE` route/service function was deliberately **not** called directly — it opens
+  its own transaction and cannot be nested inside `markEmployeeLeft`'s; this new function reuses the
+  same *shape* (guarded conditional delete, cascade, one audit action name) without duplicating or
+  reusing its transaction.
+- **Transactionality** (§13's requirement): `markEmployeeLeft` (`employees.service.ts`) now opens one
+  `prisma.$transaction` covering the `Employee.dateOfLeaving` write, its own `employee.left` audit
+  entry (moved inside the transaction, out of the route — matching `updateEmployee`/
+  `reactivateEmployee`'s own established convention, "the route never logs a second, redundant entry
+  after the fact"), and `removeEmployeeFromCurrentDraftCycle`. `markEmployeeLeft` gained a new
+  required `requestMeta` parameter (it previously took none) to support this — mirrors every other
+  audited mutation in this service.
+- **Historical preservation**: never reachable — `removeEmployeeFromCurrentDraftCycle` resolves the
+  Draft cycle explicitly via `payrollCycle.findFirst({ where: { status: 'DRAFT' } })`, never the
+  cycle the caller happened to be viewing. Marking an employee Left from an Archived cycle's own row
+  menu changes only that employee's roster status and the *actual* current Draft cycle's membership;
+  the Archived cycle's own `PayrollEntry` row is untouched (verified byte-for-byte, backend
+  integration test and Playwright alike).
+- **Reactivation**: investigated, not changed. `reactivateEmployee` already calls
+  `syncEmployeeIntoCurrentDraftCycle` (existing code, 2026-07-24) — a rehired employee is already
+  re-synced into whatever cycle is currently Draft, the same idempotent no-op-if-already-present
+  function a new hire uses. No domain gap: the "inverse of the inverse" already existed and needed no
+  change. Reactivate's own authorization is untouched (`EMPLOYEES_EDIT`-only, confirmed via a
+  dedicated RBAC test that a `payroll:entry`-only caller gets 403 from it).
+- **Known, disclosed limitation** (not a guess, not silently worked around): in the rare case where a
+  Draft entry already carries a real financial obligation (a deferred `AdvanceScheduleChange` or a
+  materialized Correction/recovery installment), Mark as Left does not fully exclude that employee
+  from the Draft grid — payroll staff still see one held row, flagged exactly like any other
+  obligation-carrying entry, deliberately never silently destroyed. Confirmed exercised (not just
+  theorized) by both a dedicated backend integration test (seeds a real `AdvanceScheduleChange`
+  against the target entry, asserts `hold: true`, no delete) and, unintentionally-but-usefully, by an
+  early Playwright run of Scenario D that initially failed for exactly this reason (a zero-attendance
+  fixture entry resolved to `RECOVERY_DUE` at release, materializing a real recovery obligation into
+  the next Draft cycle) — fixed by giving that scenario's fixture non-zero attendance before release,
+  which itself re-confirms the retention branch fires correctly on genuinely negative-net entries.
+
+**Query invalidation**: `handleEmployeeMarkedLeft` (`payroll-entry-page.tsx`) was already invalidating
+the resolved Draft cycle's query specifically (not the viewed `cycleId`) as of the previous
+checkpoint — that targeting was already correct; only its own doc comment (previously "forward-
+looking... markEmployeeLeft... does not delete or otherwise touch any existing PayrollEntry") was
+updated to describe the real backend behavior it now matches.
+
+**Backend tests**: new `backend/tests/payroll-entry-employee-row-actions.test.ts`, 11 cases — RBAC
+matrix (PE-only: leave allowed/edit 403; `employees:edit`-only: both allowed; both permissions: both
+allowed; neither: both 403; Reactivate stays `employees:edit`-only against a PE-only caller) and
+Draft-payroll removal (removes the Draft entry same-transaction as `dateOfLeaving`; no-op with no
+Draft cycle; historical preservation across a real finalize/archive rollover, byte-for-byte; never
+deletes an already-individually-released entry in a nominally-Draft cycle; retains/holds an entry a
+real `AdvanceScheduleChange` points at; Reactivate restores Draft eligibility after removal). **11/11
+passing**, plus the full existing `employees`/`payroll-entry-draft-cycle-sync`/
+`payroll-entry-draft-roster-reconciliation`/`employee-identifier-uniqueness`/`employees-import-export`
+regression set (134/134) and a broader collateral sweep — `advances`/`corrections-materialization`/
+`corrections-service`/`payroll-cycle-finalize`/`payroll-cycle-rollover`/`payroll-cycle`/
+`payroll-release-all`/`payroll-release`/`payroll-release-negative-salary` (234/234) — since this
+checkpoint's changes touch `payroll-processing.service.ts`, a file every one of those domains
+depends on.
+
+**Frontend tests**: `payroll-entry-row-actions.test.tsx` extended with the RBAC-split matrix (PE-only:
+trigger renders, Mark as Left only; `employees:edit`-only: trigger renders, Edit Employee only; both:
+both items) — its `renderRow` helper and every hardcoded-`canEditEmployee`-only test file
+(`payroll-entry-row.test.tsx`, `payroll-entry-grid.test.tsx`, `master-data-boundary.test.tsx`,
+`payroll-entry-alignment.test.tsx`) updated for the new required `canMarkEmployeeLeft` prop.
+`payroll-entry-page.test.tsx`'s own stale "no trigger without `employees:edit`" test was rewritten
+into three: PE-only (Mark as Left only), `employees:edit`-only-no-`payroll:entry` (**both** items —
+`employees:edit` alone already satisfies Mark as Left's own OR, confirmed by an initially-wrong test
+assertion that had to be corrected against the actual, correct implementation), and neither
+permission (no trigger at all). **Full frontend suite: 889/889.**
+
+**Playwright**: `tests/e2e/specs/27-payroll-entry-employee-row-actions.spec.ts` rewritten around the
+required Scenario A–E shape, real backend, real permission-scoped users via `createScopedUser`
+(never `page.route` fakes). A: PE-only — Mark as Left exists, Edit Employee doesn't, Mark as Left
+succeeds, and the same session's own direct `PATCH /employees/:id` bypass attempt independently gets
+403 from the backend. B: PE + `employees:edit` — both menu items, Edit Employee opens the canonical
+shared modal, change propagates. C: Mark as Left removes the Draft `PayrollEntry` — the row
+disappears live (no `page.reload()`/`page.goto()` anywhere in that assertion), confirmed against the
+backend's own entries list, Employee Registry shows Left. D: historical preservation — Mark as Left
+invoked from an Archived cycle's own row menu leaves that cycle's `PayrollEntry` snapshot unchanged
+(compared with each entry's nested, correctly-live `employee` sub-object stripped out first — only
+the historical `PayrollEntry` row's own frozen fields are asserted unchanged, not the joined
+Employee's current roster status, which correctly does change) and removes only the new Draft cycle's
+own membership. E: virtualization (unchanged from the previous checkpoint, still passing with the new
+props threaded through). **Standalone run: 5/5 passing** (one debugging detour during authoring: an
+initial version of Scenario D used a zero-attendance fixture, which resolved to `RECOVERY_DUE` at
+release and correctly triggered the hold-not-delete branch described above — not a bug, but the wrong
+fixture for the "ordinary preservation" scenario it meant to test; fixed by setting real attendance
+before release, matching the backend integration suite's own identical fix for the same reason).
+
+**Verification**: `typecheck` (all four workspaces + `typecheck:e2e`) clean, `lint` clean (zero
+errors, only pre-existing unrelated warnings), `build` clean across `shared`/`backend`/`frontend`,
+`git diff --check` clean.
+
+**Files changed this continuation**: `backend/src/modules/employees/employees.routes.ts` (OR
+permission, `markEmployeeLeft` call signature, audit logging moved into the service),
+`backend/src/modules/employees/employees.service.ts` (`markEmployeeLeft` now transactional, new
+`requestMeta` param), `backend/src/modules/payroll-processing/payroll-processing.service.ts` (new
+`removeEmployeeFromCurrentDraftCycle`), `backend/tests/payroll-entry-employee-row-actions.test.ts`
+(new), `frontend/src/components/payroll-entry/payroll-entry-row.tsx`/`payroll-entry-grid.tsx`
+(two-flag menu matrix), `frontend/src/routes/payroll-entry-page.tsx` (`canMarkEmployeeLeft`
+computation, updated doc comment), `frontend/src/components/payroll-entry/payroll-entry-row-actions.test.tsx`/
+`payroll-entry-row.test.tsx`/`payroll-entry-grid.test.tsx`/`master-data-boundary.test.tsx`/
+`payroll-entry-alignment.test.tsx`/`../../routes/payroll-entry-page.test.tsx` (new prop, new/rewritten
+RBAC cases), `tests/e2e/specs/27-payroll-entry-employee-row-actions.spec.ts` (rewritten around
+Scenarios A–E). No schema/migration change — every dependency check reads existing tables.
+
+**No commit, push, or deployment occurred this session** — stopped deliberately for independent
+review, per explicit instruction. Variance/Month-on-Month Report and Dashboard remain untouched.
+
+---
+
+## CORRECTION (2026-08-12) to "UAT — Payroll Entry Employee Row Actions — RBAC Split + Draft-Payroll
+## Removal" above — the OR-gate was a confirmed defect. Mark as Left is now `PAYROLL_ENTRY`-only.
+## IMPLEMENTED, STILL NOT COMMITTED
+
+**The entry immediately above this one is left unedited as a historical record of what was actually
+built.** It is not being rewritten. This entry corrects it: a forensic audit (2026-08-12) reconciled
+the working tree against the original stop instruction and its later clarification and found that
+`Edit Employee`/`Mark as Left` were never actually independent — `Mark as Left` accepted
+`EMPLOYEES_EDIT` **OR** `PAYROLL_ENTRY`, so a user holding `employees:edit` alone (no Payroll Entry
+access) could still mark an employee left. That is the exact case the approved architecture
+forbids. The audit also found this incorrect behavior had been encoded as the *expected, passing*
+case in the checkpoint's own tests (backend, frontend, and E2E alike) — the tests were checked
+against the implementation, not against the requirement.
+
+**Approved model, now implemented, no new permission introduced:**
+
+| Permission held | Edit Employee | Mark as Left |
+|---|---|---|
+| `payroll:entry` only | hidden/denied | visible/allowed |
+| `employees:edit` only | visible/allowed | hidden/denied |
+| both | visible/allowed | visible/allowed |
+| neither | hidden/denied | hidden/denied |
+
+**Backend**: `employees.routes.ts`'s `POST /:id/leave` changed from
+`requirePermission([EMPLOYEES_EDIT, PAYROLL_ENTRY])` to `requirePermission(PAYROLL_ENTRY)`. `PATCH
+/:id` and `/:id/reactivate` unchanged. `markEmployeeLeft`'s (`employees.service.ts`) own doc comment
+corrected — its transactional Draft-removal behavior (Requirement #2, from the entry above) is
+unaffected and unchanged.
+
+**Frontend**: `payroll-entry-page.tsx`'s `canMarkEmployeeLeft` changed from
+`hasAnyPermission(user, [EMPLOYEES_EDIT, PAYROLL_ENTRY])` to `hasPermission(user, PAYROLL_ENTRY)`.
+`employees-page.tsx` (Employee Registry) — previously one `canEdit` flag gated Edit/Mark as
+Left/Reactivate together — split into `canEditEmployee` (`EMPLOYEES_EDIT`, gates Edit and
+Reactivate) and `canMarkEmployeeLeft` (`PAYROLL_ENTRY`, gates Mark as Left alone), so Employee
+Registry and Payroll Entry's row menus now agree. Stale doc comments in `mark-left-modal.tsx` and
+`payroll-entry-row.tsx` describing the old OR-gate corrected.
+
+**Tests rewritten, none weakened or deleted**: backend `payroll-entry-employee-row-actions.test.ts`
+— the `employees:edit only` RBAC case now asserts `POST /:id/leave` returns `403` (previously
+asserted `200`). Frontend `payroll-entry-page.test.tsx` — same correction, plus a new "both
+permissions" case for completeness. E2E `tests/e2e/specs/27-payroll-entry-employee-row-actions.spec.ts`
+— new Scenario A2 proves an `employees:edit`-only user cannot reach `/payroll-entry` at all (the
+route's own `RequirePermission` guard already requires `payroll:entry`, discovered while writing
+this scenario), so the denial is proven against Employee Registry's own row menu instead, plus a
+direct `POST /:id/leave` bypass attempt from that same session (`403`).
+
+**Verification**: focused backend `payroll-entry-employee-row-actions.test.ts` 11/11; backend
+regression sweep (employees/payroll-processing/advances/corrections/payroll-cycle/payroll-release,
+357 tests across two sweeps) all green; focused frontend row-action/grid/alignment suite 59/59;
+**full frontend suite 890/890**; `typecheck`/`lint`/`build`/`git diff --check` all clean; E2E spec
+27 standalone 6/6. Full Playwright suite once (161 tests, `workers: 1`): 154 passed, 4 failed, 3
+skipped — three failures are the already-documented pre-existing set
+(`07-corrections.spec.ts`/`12-corrections-completion.spec.ts`/`15-statements.spec.ts`), reconfirmed
+unchanged by this fix. **One new, previously-undocumented failure**:
+`08-role-administration.spec.ts`'s "removing a permission takes effect immediately" case (expects
+`403` after removing `employees:view` from a role, got `200`) — reproduces deterministically in
+isolation; this diff never touches `GET /employees`, role administration, or permission-cache
+invalidation, so it is unrelated to this fix by direct code inspection. **Not investigated or fixed
+here** (out of scope for this RBAC correction) — flagged for separate attention, most likely a
+permission-cache invalidation timing gap.
+
+**No commit, push, or deployment occurred this session.** Variance/Month-on-Month Report and
+Dashboard remain untouched. **This checkpoint (both entries above, together) is still not
+authorized for commit** — left uncommitted for a fresh independent hostile review.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -10930,33 +11282,26 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated (latest) — Salary Release Report Checkpoint 1B (Frontend, OR Permission Gate, Browser
-Print, and E2E): IMPLEMENTED, awaiting review — NOT committed, NOT pushed, NOT deployed, per
-explicit instruction to stop for independent review.** Full record:
-`docs/PROJECT_PROGRESS.md`'s own "Phase 7 Reports — Salary Release Report, Checkpoint 1B" entry
-(§1) and `docs/architecture/workflows/reports.md §20.9`. Starting state verified first: `main ==
-origin/main == 6b5fdca33c1dc6d5d543c8811a41501f0234ccc5`, working tree clean. No backend/shared/
-schema change. The first Reports-module report on an OR permission gate carried through the
-frontend — required widening the shared `/reports` catalogue route and `ReportsPage`'s own internal
-gate to `[REPORTS_VIEW, PAYROLL_VIEW]` (otherwise a payroll:view-only Finance user could not reach
-the catalogue at all), while every other catalogue card's own permission requirement was made
-explicit so it stays hidden from that same user rather than rendering as a dead link. An independent
-hostile review (2026-08-11) then found the Reports sidebar nav item had been left `reports:view`-only,
-leaving Finance without a discoverable navigation path, and widened it to the same
-`[REPORTS_VIEW, PAYROLL_VIEW]` OR gate, updating the previously-frozen `nav-config.test.ts` case that
-had pinned the old behavior. Filters (Cycle/Site/Unit/Row Status/Has Correction), an on-screen release-semantics
-disclosure, totals (Release Amounts/Status groups), an 11-column table, 5-field server sorting,
-pagination with the established page-clamp safeguard, CSV/XLSX export, and browser Print (its own
-versioned `localStorage` key, a print context header that states every active filter plus the
-Original Released Amount disclosure) were all built over the unchanged Checkpoint 1A backend. 88 new
-frontend tests plus 8 new catalogue tests plus 2 more from the sidebar fix (`nav-config.test.ts`'s
-Reports-item cases, four grew to six), 98 new/changed frontend tests total, full suite 875/875;
-15/15 Playwright tests standalone ×3 (stable), 9/9 `17-reports.spec.ts` standalone, 63/63 combined
-with every sibling report's own Playwright spec, unweakened.
-`typecheck`/`build` clean across `shared`/`backend`/`frontend`, `typecheck:e2e` clean, `git diff
---check` clean. **Salary Release Report is now fully complete pending review (Checkpoints 0, 1A,
-1B). Do not begin Variance/Month-on-Month Report, Dashboard, or any other work until this checkpoint
-is authorized.**
+**Updated (latest) — UAT: Payroll Entry Employee Row Actions, RBAC Split + Draft-Payroll Removal,
+CORRECTED: IMPLEMENTED, awaiting a fresh independent hostile review — NOT committed, NOT pushed, NOT
+deployed.** Full record: `docs/PROJECT_PROGRESS.md`'s own "CORRECTION (2026-08-12) to ... RBAC Split
++ Draft-Payroll Removal" entry (§1, immediately before §2) — a forensic audit found the entry
+directly above it (kept unedited as a historical record) had implemented Mark as Left as
+`EMPLOYEES_EDIT` **OR** `PAYROLL_ENTRY`, which is a confirmed defect: it let an `employees:edit`-only
+user (no Payroll Entry access) mark an employee left, contradicting the approved architecture. This
+has been corrected: `Mark as Left` is now governed solely by `PAYROLL_ENTRY`, independently of
+`Edit Employee` (`EMPLOYEES_EDIT`), in both Payroll Entry's row menu and Employee Registry's own —
+no new permission introduced. The Draft-Payroll-Removal work (`removeEmployeeFromCurrentDraftCycle`
+— delete/hold/never-touch-released, as documented in the entry above) was already correct and is
+unaffected. 11/11 focused backend tests, 357/357 backend regression (two sweeps), 890/890 full
+frontend suite, 6/6 Playwright spec 27 (Scenarios A, A2, B–E).
+`typecheck`/`lint`/`build`/`typecheck:e2e`/`git diff --check` all clean. A full Playwright run found
+one new, previously-undocumented, unrelated failure (`08-role-administration.spec.ts`) — confirmed
+unrelated to this fix by code inspection, flagged for separate attention, not fixed here. **Do not
+begin Variance/Month-on-Month Report, Dashboard, or any other work until this UAT item (both entries
+together) is authorized following a fresh independent hostile review.** Once authorized, Salary
+Release Report (Checkpoints 0, 1A, 1B — also implemented, also awaiting its own separate review)
+remains the next queued Phase 7 item after this.
 
 **Updated 2026-08-11 (superseded by the entry above for status purposes, kept for its own still-
 useful record) — Salary Release Report Checkpoint 1A: Independent Hostile Review CLOSED —

@@ -1,4 +1,5 @@
 import { calcNet, formatMoney, formatNumber } from '@payroll/shared';
+import { cn } from '@/lib/cn';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import { buildCalcInput, computeServerSnapshot } from './calc-input';
@@ -91,12 +92,39 @@ export const PAYROLL_COLUMNS = [
   { id: 'hold', label: 'Hold', align: 'center', fixedWidth: 70 },
   { id: 'remarks', label: 'Remarks', minWidth: 120 },
   { id: 'netSalary', label: 'Net Salary', align: 'right', minWidth: 90 },
+  // Employee Row Actions (UAT 2026-08-11) — the row's `⋯` overflow menu (Edit Employee / Mark as
+  // Left, both Employee Registry's own canonical workflows). Frozen placement: the far-right end
+  // of the row, after Net Salary — never before Employee Code, so identity stays the left-side
+  // scanning anchor and payroll figures stay uninterrupted. Fixed: an icon-button trigger, not
+  // loaded text content. Sticky-right (see `PayrollEntryGrid`'s `ACTIONS_COLUMN_ID` usage) because
+  // this grid's ~26 other columns already sum past 2,300px — a plain final column would put a
+  // "commonly needed while working" action behind a full horizontal scroll on every row.
+  { id: 'actions', label: '', align: 'center', fixedWidth: 44 },
 ] as const satisfies PayrollColumnDef[];
 
 /** The literal union of every column id — `Record<PayrollColumnId, ...>` (used by
  * `payroll-entry-row.tsx`'s per-column cell map) is what turns "every column has exactly one cell,
  * in canonical order" from a convention into a compile-time guarantee. */
 export type PayrollColumnId = (typeof PAYROLL_COLUMNS)[number]['id'];
+
+/** The one sticky-right column this grid has — single source of truth for the id every layer
+ * (group-row span, column header, body row, totals row) checks to apply the shared sticky-right
+ * treatment, rather than each layer repeating the string literal independently. */
+export const ACTIONS_COLUMN_ID: PayrollColumnId = 'actions';
+
+/** The one sticky-right treatment (UAT 2026-08-11), applied consistently across all four layers
+ * of this grid that render the `actions` column — the group-row span, the column-header cell,
+ * every virtualized body row's own cell, and the totals row's cell. Grid width already sums past
+ * 2,300px across ~26 columns (`ACTIONS_COLUMN_ID`'s own doc comment above), so a plain final
+ * column would put a "commonly needed while working" action behind a full horizontal scroll on
+ * every row — sticky-right keeps it reachable without disabling virtualization or introducing a
+ * second, independently-scrolled action rail. Takes the cell's own real background as a parameter
+ * (never a hardcoded guess) so a conflict body row's `bg-danger-light` carries through to its own
+ * sticky cell exactly the way the M4 fix already requires for that row's outer background, and the
+ * header/group/totals rows carry through their own already-established `bg-surface`. */
+export function stickyActionsCellClassName(backgroundClassName: string): string {
+  return cn('sticky right-0 border-l border-border', backgroundClassName);
+}
 
 /** One column's rendered text for a given entry — must match exactly what `payroll-entry-row.tsx`
  * actually displays for that cell, or the measured width would silently drift from reality. Reads

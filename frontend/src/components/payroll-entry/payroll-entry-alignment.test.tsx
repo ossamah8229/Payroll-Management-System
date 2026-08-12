@@ -163,6 +163,10 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -186,6 +190,10 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -208,8 +216,14 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
    * it fails immediately if a future change reintroduces a per-column sticky/frozen offset or an
    * isolated Released-badge margin/transform hack, exactly what this checkpoint was told not to do
    * again.
+   *
+   * The one deliberate exception (Employee Row Actions, UAT 2026-08-11): the `actions` column is
+   * intentionally sticky on the *horizontal* axis (`right-0`), the documented, judgment-call
+   * response to this grid's ~26 columns already summing past 2,300px — see `columns.ts`'s
+   * `ACTIONS_COLUMN_ID`/`stickyActionsCellClassName` doc comments. Carved out by id below; every
+   * other column must still pass the strict check this test exists for.
    */
-  it('no individual data cell (including the Released status cell) is independently sticky/frozen or carries a one-off repositioning hack', () => {
+  it('no individual data cell (including the Released status cell) is independently sticky/frozen or carries a one-off repositioning hack, other than the documented sticky-right actions column', () => {
     const releasedEntry = makeEntry({ released: true, releasedAt: '2026-07-01T00:00:00.000Z' });
     const resolved = computeColumnWidths([releasedEntry], [testBank]);
     const queryClient = new QueryClient();
@@ -224,6 +238,10 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -235,6 +253,12 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     for (const cell of cells) {
       const colId = cell.getAttribute('data-col-id');
       const className = cell.className;
+      if (colId === 'actions') {
+        // The one documented exception — see this test's own doc comment above.
+        expect(className).toMatch(/\bsticky\b/);
+        expect(className).toMatch(/\bright-0\b/);
+        continue;
+      }
       expect(className).not.toMatch(/\bsticky\b/);
       expect(className).not.toMatch(/\bfixed\b/);
       expect(className).not.toMatch(/\bleft-\d/);
@@ -314,6 +338,10 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -352,6 +380,10 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,
@@ -392,6 +424,10 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
           style={{}}
         />
       </QueryClientProvider>,

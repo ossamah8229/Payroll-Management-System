@@ -6,10 +6,13 @@ import { cn } from '@/lib/cn';
 import type { PayrollCycle } from '@/hooks/use-payroll-cycles';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import type { Bank } from '@/hooks/use-banks';
+import type { Employee } from '@/hooks/use-employees';
 import {
+  ACTIONS_COLUMN_ID,
   PAYROLL_COLUMNS,
   computeColumnWidths,
   gridTemplateColumns,
+  stickyActionsCellClassName,
   totalGridWidth,
   type PayrollColumnDef,
   type ResolvedPayrollColumnDef,
@@ -50,12 +53,12 @@ function headerAlignClassName(columnId: string): string {
  * `PAYROLL_COLUMNS` directly) so a group's span always reflects the same dynamically-computed
  * widths every other layer uses — never a second, independently-sized copy. */
 function computeGroupSpans(resolvedColumns: ResolvedPayrollColumnDef[]) {
-  const spans: { label: string; width: number }[] = [];
+  const spans: { label: string; width: number; isActionsSpan: boolean }[] = [];
   let i = 0;
   while (i < resolvedColumns.length) {
     const column = resolvedColumns[i]!;
     if (!column.group) {
-      spans.push({ label: '', width: column.width });
+      spans.push({ label: '', width: column.width, isActionsSpan: column.id === ACTIONS_COLUMN_ID });
       i += 1;
       continue;
     }
@@ -64,7 +67,7 @@ function computeGroupSpans(resolvedColumns: ResolvedPayrollColumnDef[]) {
       width += resolvedColumns[i]!.width;
       i += 1;
     }
-    spans.push({ label: column.group, width });
+    spans.push({ label: column.group, width, isActionsSpan: false });
   }
   return spans;
 }
@@ -73,10 +76,20 @@ export function PayrollEntryGrid({
   cycle,
   entries,
   banks,
+  canEditEmployee,
+  canMarkEmployeeLeft,
+  onEditEmployee,
+  onMarkLeftEmployee,
 }: {
   cycle: PayrollCycle;
   entries: PayrollEntry[];
   banks: Bank[];
+  /** Employee Row Actions (UAT 2026-08-11) — forwarded verbatim to every row (see
+   * `PayrollEntryRow`'s own doc comments for why these must stay stable references). */
+  canEditEmployee: boolean;
+  canMarkEmployeeLeft: boolean;
+  onEditEmployee: (employee: Employee) => void;
+  onMarkLeftEmployee: (employee: Employee) => void;
 }) {
   const liveTotalsStore = useMemo(() => new LiveTotalsStore(), []);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -177,7 +190,10 @@ export function PayrollEntryGrid({
               <div
                 key={i}
                 style={{ width: span.width }}
-                className="truncate px-1.5 py-1 text-center text-[9.5px] font-semibold uppercase tracking-wide text-text-muted"
+                className={cn(
+                  'truncate px-1.5 py-1 text-center text-[9.5px] font-semibold uppercase tracking-wide text-text-muted',
+                  span.isActionsSpan && stickyActionsCellClassName('bg-surface'),
+                )}
               >
                 {span.label}
               </div>
@@ -203,6 +219,7 @@ export function PayrollEntryGrid({
                     className={cn(
                       'truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted',
                       headerAlignClassName(header.column.id),
+                      header.column.id === ACTIONS_COLUMN_ID && stickyActionsCellClassName('bg-surface'),
                     )}
                   >
                     {sortable ? (
@@ -244,6 +261,10 @@ export function PayrollEntryGrid({
                   banks={banks}
                   liveTotalsStore={liveTotalsStore}
                   gridTemplateColumns={gridTemplate}
+                  canEditEmployee={canEditEmployee}
+                  canMarkEmployeeLeft={canMarkEmployeeLeft}
+                  onEditEmployee={onEditEmployee}
+                  onMarkLeftEmployee={onMarkLeftEmployee}
                   style={{
                     position: 'absolute',
                     top: 0,

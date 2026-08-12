@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download, MoreHorizontal, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import { PERMISSIONS, ROLE_CODES, toIsoDateOnly, type SessionUser } from '@payroll/shared';
+import { PERMISSIONS, ROLE_CODES, type SessionUser } from '@payroll/shared';
 import { hasPermission } from '@/lib/permissions';
 import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { DateInput } from '@/components/ui/date-input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Modal, ModalContent, ModalFooter } from '@/components/ui/modal';
@@ -28,13 +27,13 @@ import { useBanks } from '@/hooks/use-banks';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { SiteUnitSelect } from '@/components/ui/site-unit-select';
 import { EmployeeFormModal } from '@/components/employees/employee-form-modal';
+import { MarkLeftModal } from '@/components/employees/mark-left-modal';
 import {
   downloadEmployeeExport,
   downloadEmployeeImportTemplate,
   useEmployee,
   useEmployees,
   useImportEmployees,
-  useMarkEmployeeLeft,
   useReactivateEmployee,
   type Employee,
   type ImportResult,
@@ -43,59 +42,9 @@ import {
 const selectClassName =
   'flex h-9 w-full rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
 
-function MarkLeftModal({
-  open,
-  onOpenChange,
-  employee,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  employee: Employee;
-}) {
-  const markLeft = useMarkEmployeeLeft();
-  const [dateOfLeaving, setDateOfLeaving] = useState(() => toIsoDateOnly(new Date()));
-
-  async function handleSubmit() {
-    try {
-      await markLeft.mutateAsync({ id: employee.id, input: { dateOfLeaving } });
-      toast.success(`${employee.name} marked as left`);
-      onOpenChange(false);
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Something went wrong');
-    }
-  }
-
-  return (
-    <Modal open={open} onOpenChange={(next) => !markLeft.isPending && onOpenChange(next)}>
-      <ModalContent title="Mark Employee as Left" widthClassName="max-w-[420px]">
-        <p className="mb-3 text-xs text-text-muted">
-          <span className="font-medium text-text">{employee.name}</span> will be marked as having left.
-          This preserves their history rather than deleting the record.
-        </p>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="leave-date">Date of leaving</Label>
-          <DateInput id="leave-date" value={dateOfLeaving} onChange={setDateOfLeaving} />
-        </div>
-        <ModalFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={markLeft.isPending}>
-            Cancel
-          </Button>
-          <Button
-            className="bg-danger hover:brightness-110"
-            onClick={handleSubmit}
-            disabled={markLeft.isPending}
-          >
-            Confirm
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
 /**
  * The Reactivate Employee action (docs/architecture/database/schema-invariants.md §26 item 6) — symmetric to
- * `MarkLeftModal` above. Fetches the full current record (rather than relying on whatever partial
+ * `MarkLeftModal` (`components/employees/mark-left-modal.tsx`). Fetches the full current record (rather than relying on whatever partial
  * detail the CNIC duplicate-check surfaced) so every current-employment field can be reviewed and,
  * if needed, updated in the same call that clears `dateOfLeaving`, via the single `reactivateEmployee`
  * workflow the backend exposes at `POST /employees/:id/reactivate`.
@@ -336,11 +285,16 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
   const [siteFilter, setSiteFilter] = useState('');
   const [search, setSearch] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
-  // Action-control gating (Post-Phase-5 Stabilization Checkpoint 4B remediation) — a usability
-  // layer only; the backend's own employees.routes.ts independently enforces every one of these
-  // (employees:create for New Employee/Import, employees:edit for Edit/Mark as left/Reactivate).
+  // Action-control gating (Post-Phase-5 Stabilization Checkpoint 4B remediation, corrected
+  // 2026-08-12 for the Employee Row Actions RBAC-independence fix) — a usability layer only; the
+  // backend's own employees.routes.ts independently enforces every one of these: employees:create
+  // for New Employee/Import, employees:edit for Edit/Reactivate, payroll:entry for Mark as Left
+  // (aligned with Payroll Entry's own row menu so the two surfaces never disagree — an earlier
+  // revision gated Mark as Left on employees:edit here, which let an employee-edit-only user mark
+  // someone left with no Payroll Entry access, a confirmed defect now corrected).
   const canCreate = hasPermission(user, PERMISSIONS.EMPLOYEES_CREATE);
-  const canEdit = hasPermission(user, PERMISSIONS.EMPLOYEES_EDIT);
+  const canEditEmployee = hasPermission(user, PERMISSIONS.EMPLOYEES_EDIT);
+  const canMarkEmployeeLeft = hasPermission(user, PERMISSIONS.PAYROLL_ENTRY);
   // Distinguishes "genuinely zero employees at your accessible sites" from "you have no accessible
   // sites at all" (System-Wide RBAC Consistency remediation) — the latter previously rendered as
   // the same generic "No employees found" empty state, indistinguishable from an actual empty
@@ -516,7 +470,7 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                         </Badge>
                       </TableCell>
                       <TableCell className="print:hidden">
-                        {canEdit && (
+                        {(canEditEmployee || canMarkEmployeeLeft) && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <button
@@ -527,13 +481,15 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                               </button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem onSelect={() => setEditingEmployee(employee)}>Edit</DropdownMenuItem>
-                              {!employee.dateOfLeaving && (
+                              {canEditEmployee && (
+                                <DropdownMenuItem onSelect={() => setEditingEmployee(employee)}>Edit</DropdownMenuItem>
+                              )}
+                              {canMarkEmployeeLeft && !employee.dateOfLeaving && (
                                 <DropdownMenuItem onSelect={() => setLeavingEmployee(employee)}>
                                   Mark as left
                                 </DropdownMenuItem>
                               )}
-                              {employee.dateOfLeaving && (
+                              {canEditEmployee && employee.dateOfLeaving && (
                                 <DropdownMenuItem onSelect={() => setReactivatingEmployeeId(employee.id)}>
                                   Reactivate
                                 </DropdownMenuItem>
