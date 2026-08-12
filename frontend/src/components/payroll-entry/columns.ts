@@ -92,14 +92,6 @@ export const PAYROLL_COLUMNS = [
   { id: 'hold', label: 'Hold', align: 'center', fixedWidth: 70 },
   { id: 'remarks', label: 'Remarks', minWidth: 120 },
   { id: 'netSalary', label: 'Net Salary', align: 'right', minWidth: 90 },
-  // Employee Row Actions (UAT 2026-08-11) — the row's `⋯` overflow menu (Edit Employee / Mark as
-  // Left, both Employee Registry's own canonical workflows). Frozen placement: the far-right end
-  // of the row, after Net Salary — never before Employee Code, so identity stays the left-side
-  // scanning anchor and payroll figures stay uninterrupted. Fixed: an icon-button trigger, not
-  // loaded text content. Sticky-right (see `PayrollEntryGrid`'s `ACTIONS_COLUMN_ID` usage) because
-  // this grid's ~26 other columns already sum past 2,300px — a plain final column would put a
-  // "commonly needed while working" action behind a full horizontal scroll on every row.
-  { id: 'actions', label: '', align: 'center', fixedWidth: 44 },
 ] as const satisfies PayrollColumnDef[];
 
 /** The literal union of every column id — `Record<PayrollColumnId, ...>` (used by
@@ -107,23 +99,61 @@ export const PAYROLL_COLUMNS = [
  * in canonical order" from a convention into a compile-time guarantee. */
 export type PayrollColumnId = (typeof PAYROLL_COLUMNS)[number]['id'];
 
-/** The one sticky-right column this grid has — single source of truth for the id every layer
- * (group-row span, column header, body row, totals row) checks to apply the shared sticky-right
- * treatment, rather than each layer repeating the string literal independently. */
-export const ACTIONS_COLUMN_ID: PayrollColumnId = 'actions';
+/** The row-level trailing `⋯` action control's own fixed width (Payroll Entry Row Actions UAT
+ * correction, 2026-08-12) — **not** a `PAYROLL_COLUMNS` entry. UAT feedback on the original
+ * implementation (a dedicated sticky-right `actions` column, see git history) was that the `⋯`
+ * menu is a characteristic/action of the row itself, not a payroll data column: it must never
+ * appear in column count/order, sorting, visibility, or totals-calculation logic, and must never be
+ * sticky. `PayrollEntryRow` is the only layer that renders content into this space (as a trailing
+ * flex sibling after its own data-cell grid, scrolling naturally with the row) — this constant
+ * exists purely so `PayrollEntryGrid` can reserve the same trailing width across the header/
+ * group-header/totals rows too, so their own right edge doesn't stop short of where a body row's
+ * trailing control actually sits. Reuses the previous sticky column's own 44px — an icon-button
+ * trigger, not loaded text content, so a fixed pixel size (not dynamic measurement) is correct here
+ * exactly as it was before. */
+export const ROW_ACTION_WIDTH = 44;
 
-/** The one sticky-right treatment (UAT 2026-08-11), applied consistently across all four layers
- * of this grid that render the `actions` column — the group-row span, the column-header cell,
- * every virtualized body row's own cell, and the totals row's cell. Grid width already sums past
- * 2,300px across ~26 columns (`ACTIONS_COLUMN_ID`'s own doc comment above), so a plain final
- * column would put a "commonly needed while working" action behind a full horizontal scroll on
- * every row — sticky-right keeps it reachable without disabling virtualization or introducing a
- * second, independently-scrolled action rail. Takes the cell's own real background as a parameter
- * (never a hardcoded guess) so a conflict body row's `bg-danger-light` carries through to its own
- * sticky cell exactly the way the M4 fix already requires for that row's outer background, and the
- * header/group/totals rows carry through their own already-established `bg-surface`. */
-export function stickyActionsCellClassName(backgroundClassName: string): string {
-  return cn('sticky right-0 border-l border-border', backgroundClassName);
+/** Frozen Employee Identity Pane (UAT 2026-08-12) — the minimum column set that unambiguously
+ * identifies which employee a payroll row's editable values belong to, kept permanently visible on
+ * the LEFT while this grid's ~26 columns scroll horizontally underneath (data-entry safety: a
+ * payroll value must never be entered against a row whose employee identity has scrolled out of
+ * view). `employeeName` alone was judged insufficient — two employees can share a name — so
+ * `employeeCode` (Employee Registry's own unique business identifier, already this row's leftmost
+ * identity column) is frozen alongside it. Deliberately excludes `serial`/`status` (before it) and
+ * `designation`/`site`/... (after it): freezing more than the minimum needed to identify the
+ * employee was explicitly out of scope for this checkpoint. Single source of truth reused by every
+ * layer that renders these two columns — the group-header row, the column-header row, every
+ * virtualized body row, and the totals row. */
+export const FROZEN_LEFT_COLUMN_IDS: readonly PayrollColumnId[] = ['employeeCode', 'employeeName'];
+
+/** The one sticky-left treatment (UAT 2026-08-12) — takes the cell's own real background (never a
+ * hardcoded guess) so header/body/totals rows each carry through their own already-established
+ * background, and a conflict body row's `bg-danger-light` carries through to its own sticky identity
+ * cells the same way it carries through to the row's outer background (`payroll-entry-row.tsx`'s M4
+ * fix). The trailing-edge divider (`border-r`) is applied only to
+ * `FROZEN_LEFT_COLUMN_IDS`'s own last entry (`employeeName`) — the visual separator belongs at the
+ * frozen pane's right edge, not between its own two adjacent columns. */
+export function stickyIdentityCellClassName(columnId: PayrollColumnId, backgroundClassName: string): string {
+  const isTrailingEdge = FROZEN_LEFT_COLUMN_IDS[FROZEN_LEFT_COLUMN_IDS.length - 1] === columnId;
+  return cn('sticky', isTrailingEdge && 'border-r border-border', backgroundClassName);
+}
+
+/** Each frozen-left column's own pixel offset from the scroll container's left edge once stuck —
+ * cumulative *only* across `FROZEN_LEFT_COLUMN_IDS` (their own combined widths), never across the
+ * full column set: `serial`/`status` come before `employeeCode` in `PAYROLL_COLUMNS` but are not
+ * part of the frozen pane, so they scroll away with the rest of the grid rather than contributing to
+ * this offset. Derived from the same `resolvedColumns` array every other layer already shares —
+ * never an independently-measured guess. */
+export function stickyLeftOffsets(columns: ResolvedPayrollColumnDef[]): Partial<Record<PayrollColumnId, number>> {
+  const offsets: Partial<Record<PayrollColumnId, number>> = {};
+  let cumulative = 0;
+  for (const column of columns) {
+    const id = column.id as PayrollColumnId;
+    if (!FROZEN_LEFT_COLUMN_IDS.includes(id)) continue;
+    offsets[id] = cumulative;
+    cumulative += column.width;
+  }
+  return offsets;
 }
 
 /** One column's rendered text for a given entry — must match exactly what `payroll-entry-row.tsx`

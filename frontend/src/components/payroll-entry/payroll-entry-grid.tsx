@@ -8,13 +8,16 @@ import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import type { Bank } from '@/hooks/use-banks';
 import type { Employee } from '@/hooks/use-employees';
 import {
-  ACTIONS_COLUMN_ID,
+  FROZEN_LEFT_COLUMN_IDS,
   PAYROLL_COLUMNS,
+  ROW_ACTION_WIDTH,
   computeColumnWidths,
   gridTemplateColumns,
-  stickyActionsCellClassName,
+  stickyIdentityCellClassName,
+  stickyLeftOffsets,
   totalGridWidth,
   type PayrollColumnDef,
+  type PayrollColumnId,
   type ResolvedPayrollColumnDef,
 } from './columns';
 import { PayrollEntryRow, ROW_HEIGHT } from './payroll-entry-row';
@@ -53,12 +56,21 @@ function headerAlignClassName(columnId: string): string {
  * `PAYROLL_COLUMNS` directly) so a group's span always reflects the same dynamically-computed
  * widths every other layer uses — never a second, independently-sized copy. */
 function computeGroupSpans(resolvedColumns: ResolvedPayrollColumnDef[]) {
-  const spans: { label: string; width: number; isActionsSpan: boolean }[] = [];
+  const spans: { label: string; width: number; identityColumnId?: PayrollColumnId }[] = [];
   let i = 0;
   while (i < resolvedColumns.length) {
     const column = resolvedColumns[i]!;
     if (!column.group) {
-      spans.push({ label: '', width: column.width, isActionsSpan: column.id === ACTIONS_COLUMN_ID });
+      spans.push({
+        label: '',
+        width: column.width,
+        // Frozen Employee Identity Pane (UAT 2026-08-12) — `employeeCode`/`employeeName` have no
+        // `group`, so each is already its own single-column span here; tagging it lets the render
+        // below apply the shared sticky-left treatment.
+        identityColumnId: FROZEN_LEFT_COLUMN_IDS.includes(column.id as PayrollColumnId)
+          ? (column.id as PayrollColumnId)
+          : undefined,
+      });
       i += 1;
       continue;
     }
@@ -67,7 +79,7 @@ function computeGroupSpans(resolvedColumns: ResolvedPayrollColumnDef[]) {
       width += resolvedColumns[i]!.width;
       i += 1;
     }
-    spans.push({ label: column.group, width, isActionsSpan: false });
+    spans.push({ label: column.group, width });
   }
   return spans;
 }
@@ -161,7 +173,17 @@ export function PayrollEntryGrid({
   const resolvedColumns = useMemo(() => computeColumnWidths(entries, banks), [entries, banks]);
   const gridTemplate = useMemo(() => gridTemplateColumns(resolvedColumns), [resolvedColumns]);
   const groupSpans = useMemo(() => computeGroupSpans(resolvedColumns), [resolvedColumns]);
-  const width = totalGridWidth(resolvedColumns);
+  // Frozen Employee Identity Pane (UAT 2026-08-12) — the one shared per-column `left` offset
+  // calculation (`columns.ts`'s `stickyLeftOffsets`), recomputed only when `resolvedColumns` itself
+  // changes and reused as-is by the group-header row, the column-header row, every virtualized body
+  // row, and the totals row below — never four independent copies.
+  const identityOffsets = useMemo(() => stickyLeftOffsets(resolvedColumns), [resolvedColumns]);
+  // `+ ROW_ACTION_WIDTH` (UAT 2026-08-12 row-action correction) — reserves the same trailing width
+  // a body row's own `⋯` action occupies (`payroll-entry-row.tsx`), so the group-header/header/
+  // totals rows' own right edge lines up with where a body row's trailing control actually sits,
+  // even though none of `PAYROLL_COLUMNS`/`gridTemplateColumns`/`resolvedColumns` know this space
+  // exists — it is deliberately not a column, just a shared reserved margin.
+  const width = totalGridWidth(resolvedColumns) + ROW_ACTION_WIDTH;
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -189,10 +211,14 @@ export function PayrollEntryGrid({
             {groupSpans.map((span, i) => (
               <div
                 key={i}
-                style={{ width: span.width }}
+                style={{
+                  width: span.width,
+                  ...(span.identityColumnId !== undefined && { left: identityOffsets[span.identityColumnId] }),
+                }}
                 className={cn(
                   'truncate px-1.5 py-1 text-center text-[9.5px] font-semibold uppercase tracking-wide text-text-muted',
-                  span.isActionsSpan && stickyActionsCellClassName('bg-surface'),
+                  span.identityColumnId !== undefined &&
+                    stickyIdentityCellClassName(span.identityColumnId, 'bg-surface'),
                 )}
               >
                 {span.label}
@@ -210,16 +236,19 @@ export function PayrollEntryGrid({
               {headerGroup.headers.map((header) => {
                 const sortable = isSortableColumnId(header.column.id);
                 const isActive = sortable && sort?.columnId === header.column.id;
+                const isIdentityColumn = FROZEN_LEFT_COLUMN_IDS.includes(header.column.id as PayrollColumnId);
                 return (
                   <div
                     role="columnheader"
                     key={header.id}
                     data-col-id={header.column.id}
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : sortable ? 'none' : undefined}
+                    style={isIdentityColumn ? { left: identityOffsets[header.column.id as PayrollColumnId] } : undefined}
                     className={cn(
                       'truncate px-1.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted',
                       headerAlignClassName(header.column.id),
-                      header.column.id === ACTIONS_COLUMN_ID && stickyActionsCellClassName('bg-surface'),
+                      isIdentityColumn &&
+                        stickyIdentityCellClassName(header.column.id as PayrollColumnId, 'bg-surface'),
                     )}
                   >
                     {sortable ? (
@@ -261,6 +290,7 @@ export function PayrollEntryGrid({
                   banks={banks}
                   liveTotalsStore={liveTotalsStore}
                   gridTemplateColumns={gridTemplate}
+                  identityOffsets={identityOffsets}
                   canEditEmployee={canEditEmployee}
                   canMarkEmployeeLeft={canMarkEmployeeLeft}
                   onEditEmployee={onEditEmployee}
@@ -279,7 +309,11 @@ export function PayrollEntryGrid({
           </div>
 
           <div className="sticky bottom-0 z-20" style={{ width }}>
-            <PayrollEntryTotalsRow store={liveTotalsStore} gridTemplateColumns={gridTemplate} />
+            <PayrollEntryTotalsRow
+              store={liveTotalsStore}
+              gridTemplateColumns={gridTemplate}
+              identityOffsets={identityOffsets}
+            />
           </div>
         </div>
       </div>

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import { LiveTotalsStore } from './live-totals-store';
-import { gridTemplateColumns, computeColumnWidths } from './columns';
+import { gridTemplateColumns, computeColumnWidths, stickyLeftOffsets } from './columns';
 
 /**
  * Independent-review remediation (M4, Post-Checkpoint-1A UAT Stabilization) — root cause: `cn()`
@@ -163,6 +163,7 @@ describe('PayrollEntryRow — conflict-status background stays fully opaque (Pos
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -191,5 +192,27 @@ describe('PayrollEntryRow — conflict-status background stays fully opaque (Pos
     const row = screen.getByRole('row', { name: /Conflict Test Employee/ });
     expect(row.className).toMatch(/\bbg-surface-2\b/);
     expect(row.className).not.toMatch(/\bbg-danger-light\b/);
+  });
+
+  /**
+   * Frozen Employee Identity Pane (UAT 2026-08-12) — extends the M4 fix above to the sticky-left
+   * `employeeCode`/`employeeName` cells: they carry `stickyIdentityCellClassName(colId,
+   * rowBackgroundClassName)`, the same "own real background, never inherited" discipline the
+   * sticky-right `actions` cell already follows. Without it, a conflict row's frozen identity cells
+   * would fall back to `bg-surface-2` (or transparent) while the rest of the row shows
+   * `bg-danger-light`, letting non-sticky content scrolled underneath bleed through the one cell the
+   * data-entry-safety fix exists to keep trustworthy.
+   */
+  it('a conflict-status row carries its own opaque bg-danger-light background onto its sticky-left identity cells too, not the ordinary bg-surface-2', async () => {
+    await renderRowWithStatus('conflict');
+
+    const codeCell = document.querySelector('[data-col-id="employeeCode"]') as HTMLElement;
+    const nameCell = document.querySelector('[data-col-id="employeeName"]') as HTMLElement;
+    for (const cell of [codeCell, nameCell]) {
+      expect(cell.className).toMatch(/\bsticky\b/);
+      expect(cell.className).toMatch(/\bbg-danger-light\b/);
+      expect(cell.className).not.toMatch(/\bbg-surface-2\b/);
+      expect(cell.className).not.toMatch(/\bbg-[a-z-]+\/\d+\b/);
+    }
   });
 });

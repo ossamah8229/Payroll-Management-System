@@ -147,6 +147,8 @@ export function ReadOnlyCell({
   align = 'left',
   muted = true,
   truncate = true,
+  className,
+  style,
 }: {
   children: React.ReactNode;
   /** The `PAYROLL_COLUMNS` id this cell renders — same `data-col-id` convention every other cell in
@@ -163,17 +165,27 @@ export function ReadOnlyCell({
    * `white-space: nowrap` instead and rely on the grid's own horizontal scroll if content is ever
    * wider than its column (2026-07-12 fix: `truncate` was silently clipping Employee Code). */
   truncate?: boolean;
+  /** Frozen Employee Identity Pane (UAT 2026-08-12) — lets `employeeCode`/`employeeName` layer the
+   * shared `stickyIdentityCellClassName` (`columns.ts`) on top of this cell's own base styling,
+   * exactly the way the sticky-right actions cell already layers its own treatment on top of its
+   * base classes. `undefined` for every other caller, unchanged from before this checkpoint. */
+  className?: string;
+  /** Pairs with `className` above — the frozen pane's own dynamic per-column `left` pixel offset
+   * (`columns.ts`'s `stickyLeftOffsets`), which can't be expressed as a static Tailwind class. */
+  style?: React.CSSProperties;
 }) {
   return (
     <div
       role="cell"
       data-col-id={colId}
+      style={style}
       className={cn(
         'px-1.5 py-1 text-xs',
         truncate ? 'truncate' : 'overflow-visible whitespace-nowrap',
         muted ? 'text-text-muted' : 'text-text',
         align === 'right' && 'text-right tabular-nums',
         align === 'center' && 'text-center',
+        className,
       )}
     >
       {children}

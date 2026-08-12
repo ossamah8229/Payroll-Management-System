@@ -4,7 +4,7 @@ import { render } from '@testing-library/react';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { computeColumnWidths, gridTemplateColumns } from './columns';
+import { computeColumnWidths, gridTemplateColumns, stickyLeftOffsets } from './columns';
 import { PayrollEntryRow, ROW_HEIGHT } from './payroll-entry-row';
 import { measureColumnWidth } from './measure-column-width';
 import { LiveTotalsStore } from './live-totals-store';
@@ -132,6 +132,7 @@ function renderRow(entry: PayrollEntry, banks: Bank[] = [testBank]) {
         banks={banks}
         liveTotalsStore={new LiveTotalsStore()}
         gridTemplateColumns={gridTemplateColumns(resolved)}
+        identityOffsets={stickyLeftOffsets(resolved)}
         canEditEmployee={false}
         canMarkEmployeeLeft={false}
         onEditEmployee={() => {}}

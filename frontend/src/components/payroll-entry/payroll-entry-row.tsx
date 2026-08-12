@@ -14,7 +14,12 @@ import type { Bank } from '@/hooks/use-banks';
 import type { Employee } from '@/hooks/use-employees';
 import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { PAYROLL_COLUMNS, stickyActionsCellClassName, type PayrollColumnId } from './columns';
+import {
+  PAYROLL_COLUMNS,
+  ROW_ACTION_WIDTH,
+  stickyIdentityCellClassName,
+  type PayrollColumnId,
+} from './columns';
 import { BalanceLabel, gridNavProps, InlineNumberCell, InlineTextCell, ReadOnlyCell } from './inline-cells';
 import { SaveStatusIndicator } from './save-status-indicator';
 import { SplitWorkLinesModal } from './split-work-lines-modal';
@@ -36,6 +41,12 @@ interface PayrollEntryRowProps {
    * `gridTemplateColumns()` independently, so every row is guaranteed pixel-aligned with the
    * header/totals row on the exact same computation, never a second, possibly-stale copy. */
   gridTemplateColumns: string;
+  /** Frozen Employee Identity Pane (UAT 2026-08-12) — the shared per-column `left` pixel offsets
+   * (`columns.ts`'s `stickyLeftOffsets`, derived from the same `resolvedColumns` the grid template
+   * above already comes from) for `employeeCode`/`employeeName`, passed down rather than computed
+   * per row for the same reason `gridTemplateColumns` is: one calculation, reused pixel-aligned by
+   * every row instead of a second, possibly-stale copy. */
+  identityOffsets: Partial<Record<PayrollColumnId, number>>;
   style: React.CSSProperties;
   /** Employee Row Actions (UAT 2026-08-11, RBAC-split revision) — `Edit Employee` is
    * employee-master-data administration and stays gated on `EMPLOYEES_EDIT` (the exact permission
@@ -69,6 +80,7 @@ function PayrollEntryRowImpl({
   banks,
   liveTotalsStore,
   gridTemplateColumns,
+  identityOffsets,
   style,
   canEditEmployee,
   canMarkEmployeeLeft,
@@ -128,9 +140,9 @@ function PayrollEntryRowImpl({
 
   const disabled = !editable || status === 'conflict';
   // Single source of truth for this row's real opaque background — shared by the row's own
-  // outer div and the sticky-right actions cell (`cells.actions` below), so the two can never
-  // silently drift out of sync the way M4's own translucent-conflict-row fix originally guarded
-  // against.
+  // outer div and its sticky-left identity cells (`cells.employeeCode`/`employeeName` below), so
+  // the two can never silently drift out of sync the way M4's own translucent-conflict-row fix
+  // originally guarded against.
   const rowBackgroundClassName = status === 'conflict' ? 'bg-danger-light' : 'bg-surface-2';
   const nav = (col: string) => gridNavProps(rowIndex, col);
 
@@ -208,13 +220,28 @@ function PayrollEntryRowImpl({
     // Employee Code is a business-critical identifier under the permanent Layout Integrity
     // Rule — never ellipsis-clipped, even though every other read-only cell in this row still
     // truncates by default.
+    // Frozen Employee Identity Pane (UAT 2026-08-12) — sticky-left, "own real background, never
+    // inherited" so a conflict row's `bg-danger-light` carries through here too rather than letting
+    // scrolled-under content show through a translucent frozen cell. `z-10` because this row is
+    // absolutely positioned/virtualized, and the sticky cell must paint above its own sibling data
+    // cells as they scroll underneath it.
     employeeCode: (
-      <ReadOnlyCell colId="employeeCode" truncate={false}>
+      <ReadOnlyCell
+        colId="employeeCode"
+        truncate={false}
+        className={cn('z-10', stickyIdentityCellClassName('employeeCode', rowBackgroundClassName))}
+        style={{ left: identityOffsets.employeeCode }}
+      >
         {entry.employee.employeeCode ?? '—'}
       </ReadOnlyCell>
     ),
     employeeName: (
-      <ReadOnlyCell colId="employeeName" muted={false}>
+      <ReadOnlyCell
+        colId="employeeName"
+        muted={false}
+        className={cn('z-10', stickyIdentityCellClassName('employeeName', rowBackgroundClassName))}
+        style={{ left: identityOffsets.employeeName }}
+      >
         <span className="font-medium">{entry.employee.name}</span>
       </ReadOnlyCell>
     ),
@@ -464,55 +491,46 @@ function PayrollEntryRowImpl({
         </span>
       </ReadOnlyCell>
     ),
-
-    // Employee Row Actions (UAT 2026-08-11, RBAC-split revision) — sticky-right (see `columns.ts`'s
-    // `ACTIONS_COLUMN_ID` doc comment for why), so its own background must be explicitly opaque and
-    // match this row's real background exactly (`rowBackgroundClassName`, computed once below) —
-    // the same "translucent sticky cell" defect class the row's own M4 fix above already guards
-    // against for the *vertical* sticky header/totals rows, now extended to this *horizontal* sticky
-    // column. No trigger at all when the caller has neither `canEditEmployee` nor
-    // `canMarkEmployeeLeft` (never a visible-but-dead action) — the column's width slot still
-    // renders empty, matching Employee Registry's own `<TableHead className="w-10" />` convention
-    // for the same permission-absent case. Each menu item renders off its own independent flag: a
-    // Payroll Entry-only caller sees Mark as Left but not Edit Employee; an `employees:edit`-only
-    // caller (reaching this page some other way) sees the reverse; never a disabled item for
-    // whichever action the caller lacks.
-    actions: (
-      <div
-        role="cell"
-        data-col-id="actions"
-        className={cn('z-10 flex items-center justify-center', stickyActionsCellClassName(rowBackgroundClassName))}
-      >
-        {(canEditEmployee || canMarkEmployeeLeft) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
-                aria-label={`Employee actions for ${entry.employee.name}`}
-              >
-                <MoreHorizontal className="h-4 w-4" aria-hidden />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {canEditEmployee && (
-                <DropdownMenuItem onSelect={() => onEditEmployee(entry.employee)}>Edit Employee</DropdownMenuItem>
-              )}
-              {canMarkEmployeeLeft && !entry.employee.dateOfLeaving && (
-                <DropdownMenuItem onSelect={() => onMarkLeftEmployee(entry.employee)}>Mark as Left</DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-    ),
   };
+
+  // Employee Row Actions (UAT 2026-08-11, RBAC-split revision; row-level-control correction, UAT
+  // 2026-08-12) — the row's `⋯` overflow menu is a characteristic of the row, not a payroll data
+  // column: it is rendered below as a trailing flex sibling *after* the data-cell grid, never as a
+  // `PAYROLL_COLUMNS`/`cells` entry, so it can never re-enter column count, sorting, visibility, or
+  // totals-calculation logic, and is never sticky. No trigger at all when the caller has neither
+  // `canEditEmployee` nor `canMarkEmployeeLeft` (never a visible-but-dead action) — the reserved
+  // trailing width slot still renders, empty, matching Employee Registry's own
+  // `<TableHead className="w-10" />` convention for the same permission-absent case. Each menu item
+  // renders off its own independent flag: a Payroll Entry-only caller sees Mark as Left but not
+  // Edit Employee; an `employees:edit`-only caller (reaching this page some other way) sees the
+  // reverse; never a disabled item for whichever action the caller lacks.
+  const rowActionsMenu = (canEditEmployee || canMarkEmployeeLeft) && (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="rounded p-1 text-text-muted transition-colors hover:bg-bg hover:text-text"
+          aria-label={`Employee actions for ${entry.employee.name}`}
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {canEditEmployee && (
+          <DropdownMenuItem onSelect={() => onEditEmployee(entry.employee)}>Edit Employee</DropdownMenuItem>
+        )}
+        {canMarkEmployeeLeft && !entry.employee.dateOfLeaving && (
+          <DropdownMenuItem onSelect={() => onMarkLeftEmployee(entry.employee)}>Mark as Left</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <>
     <div
       role="row"
-      style={{ ...style, gridTemplateColumns }}
+      style={style}
       className={cn(
         // Explicit opaque background (not left to inherit from the ancestor Card's own bg-surface-2)
         // — this row is absolutely positioned and transformed by the virtualizer, sharing screen
@@ -521,7 +539,10 @@ function PayrollEntryRowImpl({
         // Stabilization) — a transparent row has no defense against underlying content becoming
         // visible during sticky/virtualized composition, regardless of the exact browser mechanism
         // — every row is now its own fully opaque paint surface, regardless of what's behind it.
-        'grid items-center border-b border-border text-xs',
+        // `flex` (not `grid`) at this outer level (UAT 2026-08-12 row-action correction) — the row's
+        // data-cell grid and its trailing `⋯` action are two flex siblings below, not grid tracks,
+        // so the action can never become a `gridTemplateColumns` track/column.
+        'flex border-b border-border text-xs',
         // Independent-review remediation (M4) — `twMerge` resolves a `bg-*` conflict by keeping only
         // the *last* class in this list, so a naive `bg-danger-light/40` here previously dropped
         // `bg-surface-2` entirely for a conflict row, silently reintroducing the exact translucent-
@@ -532,9 +553,23 @@ function PayrollEntryRowImpl({
         rowBackgroundClassName,
       )}
     >
-      {PAYROLL_COLUMNS.map((column) => (
-        <Fragment key={column.id}>{cells[column.id]}</Fragment>
-      ))}
+      <div className="grid shrink-0 items-center" style={{ gridTemplateColumns }}>
+        {PAYROLL_COLUMNS.map((column) => (
+          <Fragment key={column.id}>{cells[column.id]}</Fragment>
+        ))}
+      </div>
+      {/* Trailing row action (UAT 2026-08-12 correction) — deliberately carries no `data-col-id`/
+          `role="cell"`: it is not a table column, just the row's own final control, so it must never
+          be picked up by either convention's "one cell per PAYROLL_COLUMNS entry" queries.
+          `shrink-0` + the shared fixed `ROW_ACTION_WIDTH` keeps it pinned to its own reserved slot
+          regardless of how wide the data-cell grid to its left ends up. */}
+      <div
+        data-row-action="employee-actions"
+        className="flex shrink-0 items-center justify-center"
+        style={{ width: ROW_ACTION_WIDTH }}
+      >
+        {rowActionsMenu}
+      </div>
     </div>
     <SplitWorkLinesModal
       open={isSplitOpen}
@@ -556,6 +591,10 @@ export const PayrollEntryRow = memo(PayrollEntryRowImpl, (prev, next) => {
     // The shared grid template changes whenever any loaded value (on any row) needs a wider
     // column than before — every mounted row must re-render to stay pixel-aligned when it does.
     prev.gridTemplateColumns === next.gridTemplateColumns &&
+    // Frozen Employee Identity Pane (UAT 2026-08-12) — recomputed by the grid whenever
+    // `resolvedColumns` changes (the same trigger `gridTemplateColumns` above already reacts to),
+    // and reused as-is by every row via reference equality, exactly like that prop.
+    prev.identityOffsets === next.identityOffsets &&
     prev.style.transform === next.style.transform &&
     // Employee Row Actions (UAT 2026-08-11) — `canEditEmployee`/`canMarkEmployeeLeft` are plain
     // booleans and `onEditEmployee`/`onMarkLeftEmployee` are stable references defined once at the

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Bank } from '@/hooks/use-banks';
 import type { Employee } from '@/hooks/use-employees';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns } from './columns';
+import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, stickyLeftOffsets } from './columns';
 import { PayrollEntryRow } from './payroll-entry-row';
 import { LiveTotalsStore } from './live-totals-store';
 
@@ -172,6 +172,7 @@ function renderRow(opts: {
         banks={[testBank]}
         liveTotalsStore={new LiveTotalsStore()}
         gridTemplateColumns={gridTemplateColumns(resolved)}
+        identityOffsets={stickyLeftOffsets(resolved)}
         canEditEmployee={opts.canEditEmployee ?? true}
         canMarkEmployeeLeft={opts.canMarkEmployeeLeft ?? true}
         onEditEmployee={onEditEmployee}
@@ -189,29 +190,65 @@ function openMenu(name: string) {
 
 afterEach(() => cleanup());
 
-describe('Payroll Entry row — employee actions `⋯` menu (UAT 2026-08-11)', () => {
-  it('is the last (far-right) data column — never before employeeCode', () => {
-    // `actions` must be the final entry in the canonical column order, matching the frozen UX
-    // placement decision, and the last entry ever appended.
-    expect(PAYROLL_COLUMNS[PAYROLL_COLUMNS.length - 1]!.id).toBe('actions');
+describe('Payroll Entry row — employee actions `⋯` menu (UAT 2026-08-11, row-level-control correction UAT 2026-08-12)', () => {
+  it('is never a `PAYROLL_COLUMNS` entry — the `⋯` menu is a row characteristic, not a payroll data column', () => {
+    const columnIds: readonly string[] = PAYROLL_COLUMNS.map((c) => c.id);
+    expect(columnIds.includes('actions')).toBe(false);
   });
 
-  it('renders the accessible trigger at the far right, with no action control in the employeeCode cell', () => {
+  it('does not alter the shared column model at all — resolved column count/order matches PAYROLL_COLUMNS exactly, with no actions entry', () => {
+    const resolved = computeColumnWidths([makeEntry()], [testBank]);
+    const resolvedIds: readonly string[] = resolved.map((c) => c.id);
+    expect(resolvedIds).toEqual(PAYROLL_COLUMNS.map((c) => c.id));
+    expect(resolvedIds.includes('actions')).toBe(false);
+    // The rendered grid template (one track per resolved column) never gains an extra track for
+    // the row action — it is a trailing flex sibling, not a grid column.
+    expect(gridTemplateColumns(resolved).split(' ').length).toBe(PAYROLL_COLUMNS.length);
+  });
+
+  it('renders the accessible trigger as the trailing control after the final payroll data cell (netSalary), carrying no data-col-id/role=cell of its own', () => {
     const { container } = renderRow();
     const trigger = screen.getByRole('button', { name: 'Employee actions for Row Actions Test Employee' });
     expect(trigger).toBeTruthy();
 
-    const actionsCell = trigger.closest('[data-col-id="actions"]');
-    expect(actionsCell).toBeTruthy();
+    // The trigger is not inside any `[data-col-id]` cell — it is not a table column.
+    expect(trigger.closest('[data-col-id]')).toBeNull();
+    expect(trigger.closest('[role="cell"]')).toBeNull();
 
-    // The last `[data-col-id]` cell in DOM order is the actions cell — proving right-edge
-    // placement mechanically, not just "a trigger exists somewhere."
+    // The last `[data-col-id]` cell in DOM order is netSalary — the actions control comes after
+    // it, as a sibling of the whole data-cell grid, never as one more cell inside it.
     const cells = Array.from(container.querySelectorAll<HTMLElement>('[data-col-id]'));
-    expect(cells[cells.length - 1]!.getAttribute('data-col-id')).toBe('actions');
+    expect(cells[cells.length - 1]!.getAttribute('data-col-id')).toBe('netSalary');
+
+    // The row's own trailing action wrapper is a sibling of (not nested inside) the data-cell grid.
+    const row = screen.getByRole('row', { name: /Row Actions Test Employee/ });
+    expect(row.children.length).toBe(2);
+    const rowChildren = Array.from(row.children) as HTMLElement[];
+    const dataGrid = rowChildren[0]!;
+    const actionSlot = rowChildren[1]!;
+    expect(dataGrid.contains(cells[cells.length - 1]!)).toBe(true);
+    expect(actionSlot.contains(trigger)).toBe(true);
+    expect(actionSlot.hasAttribute('data-col-id')).toBe(false);
 
     // Employee Code — the left-side scanning anchor — carries no action trigger of any kind.
     const codeCell = container.querySelector<HTMLElement>('[data-col-id="employeeCode"]')!;
     expect(within(codeCell).queryByRole('button')).toBeNull();
+  });
+
+  it('is not sticky-right and creates no sticky-right pane — it scrolls in normal flow with the rest of the row', () => {
+    const { container } = renderRow();
+    const actionSlot = container.querySelector<HTMLElement>('[data-row-action]')!;
+    expect(actionSlot).toBeTruthy();
+    expect(actionSlot.className).not.toMatch(/\bsticky\b/);
+    expect(actionSlot.className).not.toMatch(/\bfixed\b/);
+    expect(actionSlot.className).not.toMatch(/\bright-0\b/);
+    expect(actionSlot.getAttribute('style') ?? '').not.toMatch(/position\s*:\s*(sticky|fixed|absolute)/);
+  });
+
+  it('is rendered exactly once per employee row', () => {
+    const { container } = renderRow();
+    expect(container.querySelectorAll('[data-row-action]').length).toBe(1);
+    expect(screen.getAllByRole('button', { name: /Employee actions for/ }).length).toBe(1);
   });
 
   it('renders no `⋯` trigger at all when the caller has neither employees:edit nor the Payroll Entry operational permission', () => {
@@ -272,11 +309,10 @@ describe('Payroll Entry row — employee actions `⋯` menu (UAT 2026-08-11)', (
     });
   });
 
-  it('the actions cell is the one documented sticky-right column, with an opaque background matching the row', () => {
-    const { container } = renderRow();
-    const actionsCell = container.querySelector('[data-col-id="actions"]')!;
-    expect(actionsCell.className).toMatch(/\bsticky\b/);
-    expect(actionsCell.className).toMatch(/\bright-0\b/);
-    expect(actionsCell.className).toMatch(/\bbg-surface-2\b/);
+  it('renders no `⋯` trigger at all when the row has no permission — the reserved trailing slot still renders, empty', () => {
+    const { container } = renderRow({ canEditEmployee: false, canMarkEmployeeLeft: false });
+    const actionSlot = container.querySelector<HTMLElement>('[data-row-action]')!;
+    expect(actionSlot).toBeTruthy();
+    expect(within(actionSlot).queryByRole('button')).toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns } from './columns';
+import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, stickyLeftOffsets } from './columns';
 import { PayrollEntryRow } from './payroll-entry-row';
 import { PayrollEntryTotalsRow } from './payroll-entry-totals-row';
 import { LiveTotalsStore } from './live-totals-store';
@@ -142,7 +142,11 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     store.setBase([{ id: entry.id, snapshot: { grossPay: 30000, days: 30, otHours: 0, otRate: null, cycleDays: 30, leaveDays: 0, leaveRate: null, allowance: 0, eobiAmount: 400, advanceDeduction: 0, eidAdvanceDeduction: 0, fine: 0, netSalary: 29600 } }]);
 
     const { container } = render(
-      <PayrollEntryTotalsRow store={store} gridTemplateColumns={gridTemplateColumns(resolved)} />,
+      <PayrollEntryTotalsRow
+        store={store}
+        gridTemplateColumns={gridTemplateColumns(resolved)}
+        identityOffsets={stickyLeftOffsets(resolved)}
+      />,
     );
 
     expect(dataColIds(container)).toEqual(expectedColumnIds);
@@ -163,6 +167,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -190,6 +195,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -217,13 +223,22 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
    * isolated Released-badge margin/transform hack, exactly what this checkpoint was told not to do
    * again.
    *
-   * The one deliberate exception (Employee Row Actions, UAT 2026-08-11): the `actions` column is
-   * intentionally sticky on the *horizontal* axis (`right-0`), the documented, judgment-call
-   * response to this grid's ~26 columns already summing past 2,300px — see `columns.ts`'s
-   * `ACTIONS_COLUMN_ID`/`stickyActionsCellClassName` doc comments. Carved out by id below; every
-   * other column must still pass the strict check this test exists for.
+   * One deliberate exception lives here now — **Frozen Employee Identity Pane (UAT 2026-08-12)**:
+   * `employeeCode`/`employeeName` are intentionally sticky on the *horizontal* axis with a dynamic
+   * `left` offset (no static `left-0` class — the offset is per-column and computed from measured
+   * widths), the data-entry-safety fix for employee identity scrolling out of view while entering
+   * payroll values — see `columns.ts`'s `FROZEN_LEFT_COLUMN_IDS`/`stickyIdentityCellClassName` doc
+   * comments. Carved out by id below; every other column must still pass the strict check this test
+   * exists for.
+   *
+   * **Employee Row Actions (UAT 2026-08-11) no longer has a sticky-right exception at all** — UAT
+   * feedback on that original implementation (a dedicated sticky-right `actions` column) was that
+   * the `⋯` menu is a row characteristic, not a payroll data column; it was corrected (UAT
+   * 2026-08-12) to render as a trailing flex sibling *outside* this row's own `[data-col-id]`
+   * data-cell grid entirely (see `payroll-entry-row.tsx`), so it never appears among the `cells`
+   * this test iterates below and needs no carve-out here.
    */
-  it('no individual data cell (including the Released status cell) is independently sticky/frozen or carries a one-off repositioning hack, other than the documented sticky-right actions column', () => {
+  it('no individual data cell (including the Released status cell) is independently sticky/frozen or carries a one-off repositioning hack, other than the documented sticky-left identity columns', () => {
     const releasedEntry = makeEntry({ released: true, releasedAt: '2026-07-01T00:00:00.000Z' });
     const resolved = computeColumnWidths([releasedEntry], [testBank]);
     const queryClient = new QueryClient();
@@ -238,6 +253,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -250,13 +266,20 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     const cells = Array.from(container.querySelectorAll<HTMLElement>('[data-col-id]'));
     expect(cells.length).toBeGreaterThan(0);
 
+    // `actions` is never among these cells at all — it was removed from `PAYROLL_COLUMNS` entirely
+    // (row-level-control correction, UAT 2026-08-12); confirmed explicitly, not just by absence.
+    expect(cells.some((cell) => cell.getAttribute('data-col-id') === 'actions')).toBe(false);
+
     for (const cell of cells) {
       const colId = cell.getAttribute('data-col-id');
       const className = cell.className;
-      if (colId === 'actions') {
-        // The one documented exception — see this test's own doc comment above.
+      if (colId === 'employeeCode' || colId === 'employeeName') {
+        // The documented sticky-left exception — see this test's own doc comment above. The offset
+        // is dynamic (measured column widths), so it lives in the inline `style`, never a static
+        // `left-\d` Tailwind class — asserted explicitly by the next block, not skipped here.
         expect(className).toMatch(/\bsticky\b/);
-        expect(className).toMatch(/\bright-0\b/);
+        expect(className).not.toMatch(/\bleft-\d/);
+        expect(cell.style.left).not.toBe('');
         continue;
       }
       expect(className).not.toMatch(/\bsticky\b/);
@@ -272,11 +295,19 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
       }
     }
 
-    // The row root itself carries the one shared `gridTemplateColumns` (inline style) and no
-    // sticky/fixed positioning of its own — the whole row moves as a single horizontal unit.
+    // The row root itself carries no sticky/fixed positioning of its own — the whole row (its
+    // data-cell grid and its own trailing `⋯` action alike) moves as a single horizontal unit.
     const rowRoot = container.querySelector('[role="row"]') as HTMLElement;
     expect(rowRoot.className).not.toMatch(/\bsticky\b/);
     expect(rowRoot.className).not.toMatch(/\bfixed\b/);
+
+    // The trailing row-action slot (row-level-control correction, UAT 2026-08-12) is likewise never
+    // sticky/fixed — it scrolls in normal flow with the rest of the row, not as a second frozen pane.
+    const actionSlot = container.querySelector('[data-row-action]') as HTMLElement;
+    expect(actionSlot).toBeTruthy();
+    expect(actionSlot.className).not.toMatch(/\bsticky\b/);
+    expect(actionSlot.className).not.toMatch(/\bfixed\b/);
+    expect(actionSlot.className).not.toMatch(/\bright-\d/);
   });
 
   /**
@@ -297,7 +328,11 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     );
 
     const { container } = render(
-      <PayrollEntryTotalsRow store={store} gridTemplateColumns={gridTemplateColumns(resolved)} />,
+      <PayrollEntryTotalsRow
+        store={store}
+        gridTemplateColumns={gridTemplateColumns(resolved)}
+        identityOffsets={stickyLeftOffsets(resolved)}
+      />,
     );
 
     const employeeNameCell = container.querySelector('[data-col-id="employeeName"]');
@@ -338,6 +373,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -380,6 +416,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -424,6 +461,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
           banks={[testBank]}
           liveTotalsStore={new LiveTotalsStore()}
           gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
           canEditEmployee={false}
           canMarkEmployeeLeft={false}
           onEditEmployee={() => {}}
@@ -447,5 +485,112 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     expect(badge.getAttribute('title')).toBe('Reasons:\n• Duplicate Account Number\n• Duplicate CNIC');
     // Never another employee's own identifying details in the tooltip — only generic reason text.
     expect(badge.getAttribute('title')).not.toMatch(/employee-|SHARED|ACC-/i);
+  });
+});
+
+/**
+ * Frozen Employee Identity Pane (UAT 2026-08-12) — payroll values directly affect salary
+ * calculations, so employee identity (`employeeCode`/`employeeName`) must stay visible while the
+ * grid's ~26 columns scroll horizontally, never scrolling out of view alongside them. These tests
+ * assert the mechanics `columns.ts`'s `stickyLeftOffsets`/`stickyIdentityCellClassName` are built
+ * on: correct, cumulative-only-across-the-frozen-pair pixel offsets, and that the header, body, and
+ * totals row all render those columns pixel-aligned on the exact same shared offsets — never three
+ * independently-computed copies that could silently drift apart under horizontal scroll.
+ */
+describe('Payroll Entry grid — Frozen Employee Identity Pane (UAT 2026-08-12)', () => {
+  it('employeeCode sticks at offset 0 and employeeName sticks immediately after it — never offset by serial/status, which are not part of the frozen pane', () => {
+    const entry = makeEntry();
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const offsets = stickyLeftOffsets(resolved);
+
+    const employeeCodeWidth = resolved.find((c) => c.id === 'employeeCode')!.width;
+    expect(offsets.employeeCode).toBe(0);
+    expect(offsets.employeeName).toBe(employeeCodeWidth);
+
+    // Sanity check the exclusion: `serial`/`status` precede `employeeCode` in `PAYROLL_COLUMNS` and
+    // together are non-trivially wide, so a bug that accidentally included them in the cumulative
+    // sum would produce a non-zero `employeeCode` offset — this assertion would catch that class of
+    // regression, not just happen to pass by coincidence.
+    const serialWidth = resolved.find((c) => c.id === 'serial')!.width;
+    const statusWidth = resolved.find((c) => c.id === 'status')!.width;
+    expect(serialWidth + statusWidth).toBeGreaterThan(0);
+    expect(offsets.employeeCode).not.toBe(serialWidth + statusWidth);
+  });
+
+  it('every non-frozen column has no entry in the offsets map at all', () => {
+    const entry = makeEntry();
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const offsets = stickyLeftOffsets(resolved);
+
+    for (const column of resolved) {
+      if (column.id === 'employeeCode' || column.id === 'employeeName') continue;
+      expect(offsets[column.id as keyof typeof offsets]).toBeUndefined();
+    }
+  });
+
+  it('the body row renders employeeCode/employeeName as sticky-left at those exact offsets, with the trailing divider only on employeeName', () => {
+    const entry = makeEntry();
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const offsets = stickyLeftOffsets(resolved);
+    const queryClient = new QueryClient();
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={entry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={offsets}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    const codeCell = container.querySelector('[data-col-id="employeeCode"]') as HTMLElement;
+    const nameCell = container.querySelector('[data-col-id="employeeName"]') as HTMLElement;
+
+    expect(codeCell.className).toMatch(/\bsticky\b/);
+    expect(codeCell.className).not.toMatch(/\bleft-\d/); // dynamic offset, not a static Tailwind class
+    expect(codeCell.style.left).toBe(`${offsets.employeeCode}px`);
+    expect(codeCell.className).not.toMatch(/\bborder-r\b/); // no divider between the pane's own two columns
+
+    expect(nameCell.className).toMatch(/\bsticky\b/);
+    expect(nameCell.style.left).toBe(`${offsets.employeeName}px`);
+    expect(nameCell.className).toMatch(/\bborder-r\b/); // the pane's own right-edge divider
+
+    // Body and its own offsets must resolve to the same numbers `computeColumnWidths` produced —
+    // the mechanical proof that this row is pixel-aligned with the header/totals row, which are fed
+    // the identical `offsets` object from the same grid-level calculation in real usage.
+    const employeeCodeWidth = resolved.find((c) => c.id === 'employeeCode')!.width;
+    expect(codeCell.style.left).toBe('0px');
+    expect(nameCell.style.left).toBe(`${employeeCodeWidth}px`);
+  });
+
+  it('the totals row renders employeeCode/employeeName as sticky-left at the same offsets the body row uses', () => {
+    const entry = makeEntry();
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const offsets = stickyLeftOffsets(resolved);
+    const store = new LiveTotalsStore();
+    store.setBase([{ id: entry.id, snapshot: { grossPay: 30000, days: 30, otHours: 0, otRate: null, cycleDays: 30, leaveDays: 0, leaveRate: null, allowance: 0, eobiAmount: 400, advanceDeduction: 0, eidAdvanceDeduction: 0, fine: 0, netSalary: 29600 } }]);
+
+    const { container } = render(
+      <PayrollEntryTotalsRow store={store} gridTemplateColumns={gridTemplateColumns(resolved)} identityOffsets={offsets} />,
+    );
+
+    const codeCell = container.querySelector('[data-col-id="employeeCode"]') as HTMLElement;
+    const nameCell = container.querySelector('[data-col-id="employeeName"]') as HTMLElement;
+    expect(codeCell.className).toMatch(/\bsticky\b/);
+    expect(codeCell.style.left).toBe(`${offsets.employeeCode}px`);
+    expect(nameCell.className).toMatch(/\bsticky\b/);
+    expect(nameCell.style.left).toBe(`${offsets.employeeName}px`);
+    expect(nameCell.className).toMatch(/\bborder-r\b/);
   });
 });

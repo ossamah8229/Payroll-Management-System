@@ -6,6 +6,7 @@ import type { Bank } from '@/hooks/use-banks';
 import type { PayrollCycle } from '@/hooks/use-payroll-cycles';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
 import { PayrollEntryGrid } from './payroll-entry-grid';
+import { computeColumnWidths, stickyLeftOffsets } from './columns';
 
 // jsdom reports every element as 0×0 and has no real ResizeObserver, so `@tanstack/react-virtual`
 // (which sizes its visible window from the scroll container's measured height) would otherwise
@@ -24,6 +25,19 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 800 });
   HTMLElement.prototype.getBoundingClientRect = () =>
     ({ width: 1200, height: 800, top: 0, left: 0, bottom: 800, right: 1200, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+  // Real Radix `DropdownMenu` interaction in jsdom (row-action recycling test below) needs the same
+  // polyfills already established for `payroll-entry-row-actions.test.tsx` — a plain `fireEvent.click`
+  // on the trigger never opens a Radix dropdown in jsdom.
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+  if (!window.PointerEvent) {
+    window.PointerEvent = MouseEvent as unknown as typeof PointerEvent;
+  }
 });
 
 function makeEntry(overrides: Partial<PayrollEntry> & { id: string }): PayrollEntry {
@@ -148,7 +162,15 @@ function employeeNamesInOrder(): string[] {
   return screen.getAllByRole('row').map((row) => within(row).queryByText(/Employee /)?.textContent ?? '').filter(Boolean);
 }
 
-function renderGrid(entries: PayrollEntry[]) {
+function renderGrid(
+  entries: PayrollEntry[],
+  opts: {
+    canEditEmployee?: boolean;
+    canMarkEmployeeLeft?: boolean;
+    onEditEmployee?: (employee: PayrollEntry['employee']) => void;
+    onMarkLeftEmployee?: (employee: PayrollEntry['employee']) => void;
+  } = {},
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
@@ -156,10 +178,10 @@ function renderGrid(entries: PayrollEntry[]) {
         cycle={testCycle}
         entries={entries}
         banks={[testBank]}
-        canEditEmployee={false}
-        canMarkEmployeeLeft={false}
-        onEditEmployee={() => {}}
-        onMarkLeftEmployee={() => {}}
+        canEditEmployee={opts.canEditEmployee ?? false}
+        canMarkEmployeeLeft={opts.canMarkEmployeeLeft ?? false}
+        onEditEmployee={opts.onEditEmployee ?? (() => {})}
+        onMarkLeftEmployee={opts.onMarkLeftEmployee ?? (() => {})}
       />
     </QueryClientProvider>,
   );
@@ -354,5 +376,133 @@ describe('PayrollEntryGrid — Status column header alignment (Presentation & Wo
     const header = document.querySelector('[data-col-id="employeeName"][role="columnheader"]') as HTMLElement;
     expect(header).toBeTruthy();
     expect(header.className).not.toMatch(/\btext-center\b/);
+  });
+});
+
+describe('PayrollEntryGrid — Frozen Employee Identity Pane (UAT 2026-08-12)', () => {
+  afterEach(() => cleanup());
+
+  it('the group-header span and column-header cell for employeeCode/employeeName are both sticky-left at the same computed offsets', () => {
+    const entry = makeEntry({ id: '1' });
+    renderGrid([entry]);
+
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const offsets = stickyLeftOffsets(resolved);
+
+    const codeHeader = document.querySelector('[data-col-id="employeeCode"][role="columnheader"]') as HTMLElement;
+    const nameHeader = document.querySelector('[data-col-id="employeeName"][role="columnheader"]') as HTMLElement;
+    expect(codeHeader.className).toMatch(/\bsticky\b/);
+    expect(codeHeader.style.left).toBe(`${offsets.employeeCode}px`);
+    expect(nameHeader.className).toMatch(/\bsticky\b/);
+    expect(nameHeader.style.left).toBe(`${offsets.employeeName}px`);
+
+    // The blank group-label row ("Bank Details"/"EOBI" spans) above the column headers carries the
+    // same two columns as their own individual (ungrouped) spans — must be pixel-aligned with the
+    // column header directly beneath, or the frozen pane would visibly split under horizontal
+    // scroll (the header/group-row misalignment this checkpoint's UAT acceptance criteria G calls
+    // out explicitly).
+    const groupRow = codeHeader.closest('[role="row"]')!.previousElementSibling as HTMLElement;
+    const groupSpans = Array.from(groupRow.children) as HTMLElement[];
+    const codeSpanIndex = Array.from(
+      codeHeader.parentElement!.querySelectorAll('[role="columnheader"]'),
+    ).indexOf(codeHeader);
+    const nameSpanIndex = codeSpanIndex + 1;
+    expect(groupSpans[codeSpanIndex]!.style.left).toBe(`${offsets.employeeCode}px`);
+    expect(groupSpans[nameSpanIndex]!.style.left).toBe(`${offsets.employeeName}px`);
+  });
+
+  it('the sticky-left identity pane ends well before the grid’s own right edge, and no column header is sticky-right (row-level-control correction, UAT 2026-08-12: the `⋯` action is no longer a column at all)', () => {
+    const entry = makeEntry({ id: '1' });
+    renderGrid([entry]);
+
+    // `actions` was never a `PAYROLL_COLUMNS` entry to begin with — no such header cell exists.
+    expect(document.querySelector('[data-col-id="actions"]')).toBeNull();
+    // No column header carries the sticky-right treatment; that pattern is retired entirely.
+    for (const header of Array.from(document.querySelectorAll<HTMLElement>('[role="columnheader"]'))) {
+      expect(header.className).not.toMatch(/\bright-0\b/);
+      expect(header.className).not.toMatch(/\bsticky\b.*\bright-/);
+    }
+
+    const nameHeader = document.querySelector('[data-col-id="employeeName"][role="columnheader"]') as HTMLElement;
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const offsets = stickyLeftOffsets(resolved);
+    expect(nameHeader.style.left).toBe(`${offsets.employeeName}px`);
+    const nameWidth = resolved.find((c) => c.id === 'employeeName')!.width;
+    const identityPaneRightEdge = offsets.employeeName! + nameWidth;
+    // The grid sums past 2,300px across ~26 columns (`columns.ts`'s own documented figure) — the
+    // frozen pane's own right edge is nowhere near that total, so there is ample scrollable content
+    // to its right at every column-width configuration this dataset can produce.
+    const totalWidth = resolved.reduce((sum, c) => sum + c.width, 0);
+    expect(identityPaneRightEdge).toBeLessThan(totalWidth - 500);
+  });
+
+  /**
+   * Virtualization/recycling safety (UAT acceptance criteria E/F) — `PayrollEntryGrid` keys each
+   * virtualized row by the entry's own stable `id` (`payroll-entry-grid.tsx`'s
+   * `<PayrollEntryRow key={entry.id} .../>`), not by virtual slot index, so React never reuses one
+   * row's DOM subtree — including its own sticky identity cells — for a different employee's data;
+   * a slot simply mounts/unmounts per entry identity. This test proves that holds after a real
+   * scroll-down/scroll-up cycle: the row that scrolls back into view must show its own original
+   * employee's frozen identity, not whatever entry last occupied that screen position.
+   */
+  it('after scrolling down and back up, the frozen identity cell for the first row still shows that row’s own employee — no stale identity from a recycled slot', () => {
+    const entries = Array.from({ length: 60 }, (_, i) =>
+      makeEntry({ id: String(i), employee: { ...makeEntry({ id: String(i) }).employee, name: `Employee Scroll ${i}` } }),
+    );
+    renderGrid(entries);
+
+    const grid = screen.getByRole('table', { name: 'Payroll Entry grid' });
+    expect(within(grid).getAllByText('Employee Scroll 0').length).toBeGreaterThan(0);
+
+    fireEvent.scroll(grid, { target: { scrollTop: 4000 } });
+    fireEvent.scroll(grid, { target: { scrollTop: 0 } });
+
+    // Same query as the pre-scroll assertion above — after the scroll-down/scroll-up round trip,
+    // the first row's own frozen identity cell must still resolve to its own employee, and that
+    // element must be the sticky-left `employeeName` cell specifically (not the header, which also
+    // renders the literal string "Employee" but never "Employee Scroll 0").
+    const matches = within(grid).getAllByText('Employee Scroll 0');
+    expect(matches.length).toBeGreaterThan(0);
+    const identityCell = matches[0]!.closest('[data-col-id="employeeName"]') as HTMLElement | null;
+    expect(identityCell).toBeTruthy();
+    expect(identityCell!.className).toMatch(/\bsticky\b/);
+  });
+
+  /**
+   * Row-level-control correction (UAT 2026-08-12) — the trailing `⋯` menu is rendered per row
+   * (`payroll-entry-row.tsx`), not as a `PAYROLL_COLUMNS` cell, but it is still subject to the same
+   * keyed-by-`entry.id` mount/unmount discipline as the identity cells above: a virtualized slot
+   * scrolled far enough out of view fully unmounts its `PayrollEntryRow` (and with it, Radix
+   * `DropdownMenu`'s own internal open/closed state), then mounts a fresh instance — closed by
+   * default — for whichever employee now occupies that slot. This proves an open menu never survives
+   * a recycle and reappears open for, or attached to, a different employee.
+   */
+  it('a scrolled-away-and-back row never leaves a stale open ⋯ menu, or one attached to the wrong employee, after virtualized recycling', () => {
+    const entries = Array.from({ length: 60 }, (_, i) =>
+      makeEntry({ id: String(i), employee: { ...makeEntry({ id: String(i) }).employee, name: `Employee Action Scroll ${i}` } }),
+    );
+    renderGrid(entries, { canEditEmployee: true, canMarkEmployeeLeft: true });
+
+    const grid = screen.getByRole('table', { name: 'Payroll Entry grid' });
+    const firstName = 'Employee Action Scroll 0';
+    expect(within(grid).getAllByText(firstName).length).toBeGreaterThan(0);
+
+    // Open the first row's own menu — a real Radix `DropdownMenu`, not a mock.
+    fireEvent.pointerDown(screen.getByRole('button', { name: `Employee actions for ${firstName}` }), { button: 0 });
+    expect(screen.getByRole('menu')).toBeTruthy();
+
+    // Scroll far enough that the first row's slot genuinely unmounts (well beyond virtualizer
+    // overscan for 60 rows), then scroll back.
+    fireEvent.scroll(grid, { target: { scrollTop: 4000 } });
+    fireEvent.scroll(grid, { target: { scrollTop: 0 } });
+
+    // The menu must not still be open — a stale-open Radix menu would otherwise survive the
+    // unmount/remount and misleadingly appear attached to whichever employee recycled into that slot.
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    // The recycled slot's own trigger still resolves to its own, correct employee.
+    const trigger = screen.getByRole('button', { name: `Employee actions for ${firstName}` });
+    fireEvent.pointerDown(trigger, { button: 0 });
+    expect(screen.getByRole('menuitem', { name: 'Edit Employee' })).toBeTruthy();
   });
 });

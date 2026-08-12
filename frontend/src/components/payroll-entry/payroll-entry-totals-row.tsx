@@ -2,11 +2,11 @@ import { useSyncExternalStore } from 'react';
 import { formatMoney, formatNumber } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 import {
-  ACTIONS_COLUMN_ID,
+  FROZEN_LEFT_COLUMN_IDS,
   MONEY_TOTAL_COLUMN_IDS,
   NUMERIC_TOTAL_COLUMN_IDS,
   PAYROLL_COLUMNS,
-  stickyActionsCellClassName,
+  stickyIdentityCellClassName,
   type PayrollColumnId,
 } from './columns';
 import type { LiveTotals, LiveTotalsStore } from './live-totals-store';
@@ -34,11 +34,16 @@ const DEDUCTION_COLUMNS = new Set(['advanceDeduction', 'eidAdvanceDeduction', 'f
 export function PayrollEntryTotalsRow({
   store,
   gridTemplateColumns,
+  identityOffsets,
 }: {
   store: LiveTotalsStore;
   /** The one shared, dynamically-computed grid template — see `PayrollEntryRow`'s identical prop
    * for why this is passed down rather than computed here independently. */
   gridTemplateColumns: string;
+  /** Frozen Employee Identity Pane (UAT 2026-08-12) — see `PayrollEntryRow`'s identical prop; the
+   * totals row's own `employeeCode`/`employeeName` cells must stay pixel-aligned with the header and
+   * body's frozen columns, on the same shared offsets, never a second, independently-derived pair. */
+  identityOffsets: Partial<Record<PayrollColumnId, number>>;
 }) {
   const totals = useSyncExternalStore(store.subscribe, store.getTotals, store.getTotals);
 
@@ -68,9 +73,16 @@ export function PayrollEntryTotalsRow({
   // codebase's established rule that business-critical/financial values are never truncated.
   function cellClassName(columnId: string): string {
     const base = 'overflow-visible px-1.5 py-2';
-    if (columnId === ACTIONS_COLUMN_ID) return cn(base, stickyActionsCellClassName('bg-surface'));
+    // Frozen Employee Identity Pane (UAT 2026-08-12) — the totals row's own frozen cells, same
+    // background/border treatment every other layer of this pane shares.
+    if (FROZEN_LEFT_COLUMN_IDS.includes(columnId as PayrollColumnId)) {
+      return cn(
+        base,
+        stickyIdentityCellClassName(columnId as PayrollColumnId, 'bg-surface'),
+        columnId === 'employeeName' && 'text-text',
+      );
+    }
     if (columnId === 'serial') return cn(base, 'text-center text-text-muted');
-    if (columnId === 'employeeName') return cn(base, 'text-text');
     if (NUMERIC_TOTAL_COLUMN_IDS.has(columnId as PayrollColumnId)) {
       return cn(
         base,
@@ -82,6 +94,11 @@ export function PayrollEntryTotalsRow({
     return base;
   }
 
+  function cellStyle(columnId: string): React.CSSProperties | undefined {
+    if (!FROZEN_LEFT_COLUMN_IDS.includes(columnId as PayrollColumnId)) return undefined;
+    return { left: identityOffsets[columnId as PayrollColumnId] };
+  }
+
   return (
     <div
       role="row"
@@ -89,7 +106,13 @@ export function PayrollEntryTotalsRow({
       className="grid items-center whitespace-nowrap border-t-2 border-border-strong bg-surface text-xs font-semibold"
     >
       {PAYROLL_COLUMNS.map((column) => (
-        <div key={column.id} role="cell" data-col-id={column.id} className={cellClassName(column.id)}>
+        <div
+          key={column.id}
+          role="cell"
+          data-col-id={column.id}
+          className={cellClassName(column.id)}
+          style={cellStyle(column.id)}
+        >
           {cellContent(column.id)}
         </div>
       ))}
