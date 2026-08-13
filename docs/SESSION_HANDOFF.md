@@ -5311,3 +5311,91 @@ green below).
 Dashboard remain untouched. **This checkpoint (§43 + §44 + this correction) is still not authorized
 for commit** — leave the working tree as-is for a fresh independent hostile review.
 
+## 46. Addendum — Phase 7 Reports, Variance / Month-on-Month Report: Checkpoint 0 (Architecture
+Review, approved) and Checkpoint 1A (Backend Foundation) — IMPLEMENTED, NOT COMMITTED
+
+Backend, shared contracts, and backend tests only, per explicit Checkpoint 1A authorization —
+Checkpoint 0's own frozen architecture decisions (business purpose, two-explicit-cycle model,
+employee-grain pairing, population classification, Direction, financial basis, correction boundary,
+transfer/Unit context, permission, two-sided Site authorization, filters, sorting, totals, no
+detail page, export, performance strategy, no-schema-change target) carried over verbatim from the
+authorizing instruction. No Checkpoint 1B (frontend), Dashboard, or unrelated report work. Starting
+state verified first: `main == origin/main == a14d425083bd14653a3022bcf30ef13bff8511e5`, working
+tree clean.
+
+**The first cross-cycle report in this module.** Every prior report (§15–§20 of
+`docs/architecture/workflows/reports.md`) is scoped to exactly one Payroll Cycle at a time; several
+explicitly disclaim cross-cycle comparison as this report's own future territory (Payroll Summary's
+own §3, Deduction Report's §17.1.1, Overtime Report's §18.1.1). Report grain is one row per
+Employee, paired by `PayrollEntry.employeeId` across two explicit, independently-choosable Cycles
+(`currentCycleId`/`comparisonCycleId`) — arbitrary, non-adjacent comparison is permitted; the API
+never infers "previous month." Population classification (New/Departed/Continued) is derived purely
+from `PayrollEntry` row presence/absence on each side, proven independent of `Employee.dateOfLeaving`
+by a dedicated test (an active employee with `dateOfLeaving IS NULL` and no current-side entry is
+still classified `DEPARTED`). Direction (Increased/Decreased/Unchanged) applies only to `CONTINUED`
+rows — a `NEW`/`DEPARTED` row is never represented as a salary change from/to zero. Financial basis
+is canonical `calcNet` over each side's own stored `PayrollEntry` columns, identical in spirit to
+Salary Release Report's own "Original Released Amount" precedent — corrections are existence-only
+context (`hasComparisonCorrection`/`hasCurrentCorrection`), never replayed into the compared figure.
+
+**Query strategy — the one genuine architectural departure from every sibling report.** No single
+Prisma query can express "this employee's row in a different Cycle," so `variance-report.service.ts`
+fetches each Cycle's own accessible candidate rows independently and pairs them in application
+memory by `employeeId` (safe and unambiguous because of `PayrollEntry`'s own `@@unique([cycleId,
+employeeId])` constraint). This means the report cannot avoid materializing every accessible
+candidate row on **both** Cycles regardless of which page is requested — a real, disclosed cost
+`variance-report-performance.test.ts` measures directly at ~10,000-employees-per-cycle scale (all
+ten required query shapes complete in ~2s each; `EXPLAIN (ANALYZE, BUFFERS)` confirms `Index Scan`
+via the existing `PayrollEntry_cycleId_hold_released_payoutOutcome_idx`/
+`PayrollEntry_siteId_cycleId_idx` indexes, never `Seq Scan` — no new index required).
+
+**Two-sided Site authorization — the security invariant this checkpoint's own test suite caught a
+real pre-sign-off defect in.** The frozen rule: a `CONTINUED` employee is visible only when *both*
+sides are individually accessible against the caller's full accessible-Site set
+(`PayrollEntry.siteId`, never `Employee.siteId`); one inaccessible side must make the row
+*completely absent* — never shown as a misclassified `NEW`/`DEPARTED` row, never with a partial or
+redacted side, never with a variance amount computable against a value the caller couldn't
+otherwise see. The first implementation pre-filtered each side's own fetch to accessible Sites
+*before* pairing — which meant a genuinely `CONTINUED` employee with one inaccessible side was built
+from the other side's data alone and misclassified as `NEW` or `DEPARTED`, and shown, in direct
+violation of the frozen rule. The dedicated two-sided-authorization tests in
+`variance-report.test.ts` caught this immediately, before any review was sought. **Fix**: a second,
+deliberately Site-*unfiltered* existence-only query per side (`fetchExistingEmployeeIds` — returning
+only the bare set of `employeeId`s with any entry in that Cycle, never a Site, an amount, or any
+other field), cross-checked against every candidate pair to suppress a row outright whenever a side
+that *globally* exists was not also fetched as data. This existence check leaks nothing to the
+client — a suppressed row's non-appearance is indistinguishable from that employee never having
+existed in that Cycle at all.
+
+**A second real defect, also caught by this checkpoint's own boundary test before sign-off:** this
+report's own correction-existence batch lookup spans **both** Cycles' candidate sets — up to
+~40,000 entry ids at the real 20,001-employee-per-cycle boundary-test scale — enough to exceed
+PostgreSQL's hard 32,767-bind-parameter-per-statement limit in a single `IN (...)` clause (`too many
+bind variables in prepared statement, expected maximum of 32767, received 40003`, a genuine
+`prisma.correction.groupBy()` failure reproduced and fixed, not a hypothetical). Fixed by chunking
+at `CORRECTION_LOOKUP_CHUNK_SIZE = 5,000` — still a small, bounded number of calls at design-floor
+scale (verified: fewer than 10 `groupBy` calls at the ~19,000-entry-id performance fixture), never
+one call per row.
+
+**Totals**: population/Direction/Site-Transfer/corrected-entry counts are always exact, regardless
+of `matchingCount` — they fall out of the same pairing pass this report's own grain already
+requires, unlike a sibling report's independent single-table status counts. The four monetary
+fields are gated by the standard `VARIANCE_REPORT_EXPORT_MAX_ROWS = 20,000` ceiling.
+`aggregateVariancePercent` is derived from the two aggregate totals themselves — a dedicated test
+constructs a fixture whose aggregate percent deliberately differs from every individual row's own
+percent, proving the two are never averaged/summed together.
+
+**Tests**: `variance-report.test.ts` (48), `variance-report-boundary.test.ts` (8, real
+19,999/20,000/20,001-row proof), `variance-report-performance.test.ts` (11) — **67/67 passing**.
+Every sibling report's own suite plus `payroll-entry-row-status`/`-regression` re-run unweakened —
+**382/382 passing**. Full repo typecheck (`shared`/`backend`/`frontend`) clean, backend lint clean
+(zero errors, only pre-existing unrelated warnings), backend build clean, `git diff --check` clean.
+Files changed: `shared/src/schemas/variance-report.ts` (new), `shared/src/index.ts` (purely
+additive), `backend/src/modules/reports/variance-report.service.ts` (new),
+`backend/src/modules/reports/reports.routes.ts` (purely additive, 0 lines removed), three new test
+files. No existing report's code was modified.
+
+**No commit, push, or deployment occurred this session.** Checkpoint 1B (frontend) and Dashboard
+remain untouched. **This checkpoint is not authorized for commit** — leave the working tree as-is
+for independent hostile review.
+

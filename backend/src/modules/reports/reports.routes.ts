@@ -22,12 +22,17 @@ import {
   SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS,
   salaryReleaseReportExportQuerySchema,
   salaryReleaseReportListQuerySchema,
+  VARIANCE_REPORT_EXPORT_MAX_ROWS,
+  varianceReportEmployeeLookupQuerySchema,
+  varianceReportExportQuerySchema,
+  varianceReportListQuerySchema,
   type AdvanceRecoveryReportExportLimitError,
   type DeductionReportExportLimitError,
   type EmployeePayrollHistoryExportLimitError,
   type OvertimeReportExportLimitError,
   type ProjectSitePayrollReportExportLimitError,
   type SalaryReleaseReportExportLimitError,
+  type VarianceReportExportLimitError,
 } from '@payroll/shared';
 import { requireAuth } from '../../common/middleware/attach-user';
 import { requirePermission } from '../../common/middleware/require-permission';
@@ -74,6 +79,13 @@ import {
   exportSalaryReleaseReportToXlsx,
   getSalaryReleaseReportList,
 } from './salary-release-report.service';
+import {
+  buildVarianceReportExportData,
+  exportVarianceReportToCsv,
+  exportVarianceReportToXlsx,
+  getVarianceReportList,
+  searchVarianceReportEmployees,
+} from './variance-report.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -780,6 +792,118 @@ reportsRouter.get('/salary-release/export', SALARY_RELEASE_REPORT_PERMISSION, as
     });
 
     const filename = `salary-release-report.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Variance / Month-on-Month Report (Phase 7 Reports, Variance Report Checkpoint 1A, approved
+ * Checkpoint 0 architecture review). Gated by `reports:view` — a single permission, no
+ * `statements:view`, no OR gate (frozen decision). Report grain is one row per Employee, pairing
+ * that employee's `PayrollEntry` across two explicit, independently-chosen Payroll Cycles
+ * (`currentCycleId`/`comparisonCycleId`) — the first cross-cycle report in this module. No detail
+ * route exists in V1 — a "View Full History" link to Employee Payroll History is a frontend
+ * (Checkpoint 1B) concern, not a new backend endpoint.
+ *
+ * **Route order matters**: `/variance/employees` and `/variance/export` are both registered
+ * *before* any future param route — matching every sibling report's own established convention,
+ * even though this report currently has no `:id` param route to conflict with.
+ */
+const VARIANCE_REPORT_PERMISSION = requirePermission(PERMISSIONS.REPORTS_VIEW);
+
+reportsRouter.get('/variance', VARIANCE_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = varianceReportListQuerySchema.parse(req.query);
+    const report = await getVarianceReportList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollCycle',
+      entityId: query.currentCycleId,
+      metadata: {
+        reportType: 'variance_report',
+        currentCycleId: query.currentCycleId,
+        comparisonCycleId: query.comparisonCycleId,
+        page: report.page,
+        pageSize: report.pageSize,
+        total: report.total,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** No audit log on this discovery endpoint — matches every sibling report's own `.../employees`
+ * precedent for the identical class of lookup query. */
+reportsRouter.get('/variance/employees', VARIANCE_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = varianceReportEmployeeLookupQuerySchema.parse(req.query);
+    const result = await searchVarianceReportEmployees(req.currentUser!, query);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Preflight-counts before generating any CSV/XLSX output, mirroring every other report's own
+ * export route — `buildVarianceReportExportData` itself never renders a single row once
+ * `totalMatching` exceeds `VARIANCE_REPORT_EXPORT_MAX_ROWS`, so the structured
+ * `VarianceReportExportLimitError` below is always returned *before* any expensive work. Always
+ * the complete filtered dataset — no `page`/`pageSize` accepted at all.
+ */
+reportsRouter.get('/variance/export', VARIANCE_REPORT_PERMISSION, async (req, res, next) => {
+  try {
+    const query = varianceReportExportQuerySchema.parse(req.query);
+    const data = await buildVarianceReportExportData(req.currentUser!, query);
+
+    if (data.totalMatching > VARIANCE_REPORT_EXPORT_MAX_ROWS) {
+      const errorBody: VarianceReportExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: VARIANCE_REPORT_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${VARIANCE_REPORT_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (site, unit, employee, direction, or has correction) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx' ? await exportVarianceReportToXlsx(data.rows) : exportVarianceReportToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'PayrollCycle',
+      entityId: query.currentCycleId,
+      metadata: {
+        reportType: 'variance_report',
+        format: query.format,
+        currentCycleId: query.currentCycleId,
+        comparisonCycleId: query.comparisonCycleId,
+        rowCount,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = `variance-report.${query.format}`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader(
       'Content-Type',

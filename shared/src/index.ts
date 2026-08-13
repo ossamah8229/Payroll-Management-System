@@ -337,6 +337,42 @@ export type {
   SalaryReleaseReportUnitRef,
 } from './schemas/salary-release-report';
 
+export {
+  VARIANCE_REPORT_BOUNDED_SORT_FIELDS,
+  VARIANCE_REPORT_DEFAULT_PAGE_SIZE,
+  VARIANCE_REPORT_DIRECTION_VALUES,
+  VARIANCE_REPORT_EXPORT_FORMATS,
+  VARIANCE_REPORT_EXPORT_MAX_ROWS,
+  VARIANCE_REPORT_MAX_PAGE_SIZE,
+  VARIANCE_REPORT_POPULATION_STATUS_VALUES,
+  VARIANCE_REPORT_SORT_DIRECTIONS,
+  VARIANCE_REPORT_SORT_FIELDS,
+  VARIANCE_REPORT_STRUCTURAL_SORT_FIELDS,
+  varianceReportDirectionSchema,
+  varianceReportEmployeeLookupQuerySchema,
+  varianceReportExportQuerySchema,
+  varianceReportListQuerySchema,
+  varianceReportPopulationStatusSchema,
+} from './schemas/variance-report';
+export type {
+  VarianceReportCycleRef,
+  VarianceReportDirection,
+  VarianceReportEmployeeCandidate,
+  VarianceReportEmployeeLookupQuery,
+  VarianceReportEmployeeSearchResponse,
+  VarianceReportExportFormat,
+  VarianceReportExportLimitError,
+  VarianceReportExportQuery,
+  VarianceReportListQuery,
+  VarianceReportListResponse,
+  VarianceReportPopulationStatus,
+  VarianceReportRow,
+  VarianceReportSortDirection,
+  VarianceReportSortField,
+  VarianceReportTotals,
+  VarianceReportUnitRef,
+} from './schemas/variance-report';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';
