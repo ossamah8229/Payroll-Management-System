@@ -39,6 +39,73 @@ async function filterToSite(page: Page, siteLabel: string) {
   await page.keyboard.press('Escape');
 }
 
+/**
+ * Layering correction (UAT 2026-08-12b — production report: scrolling content, e.g. a sort arrow,
+ * painting over the frozen identity pane). The root cause: this grid's header/group-header/body/
+ * totals rows are all `display: grid` or `display: flex` containers, and per the CSS Grid/Flexbox
+ * stacking rules, sibling items with equally-`auto` z-index paint in *document order* — every
+ * scrolling `PAYROLL_COLUMNS` entry sorts after `employeeCode`/`employeeName`, so without an
+ * explicit z-index a scrolling sibling wins the tie wherever its own rendered box (including a small
+ * child like a sort-chevron icon, not just the cell's own background) happens to physically coincide
+ * with the frozen pane's fixed on-screen position. Confirmed via real-Chromium `elementFromPoint`
+ * hit-testing during triage, then fixed by moving `z-10` into `stickyIdentityCellClassName` itself
+ * (`columns.ts`) so it's a shared, mandatory part of the frozen-cell treatment rather than a detail
+ * only `payroll-entry-row.tsx` happened to add for the body row.
+ *
+ * This helper is the direct, real-browser proof of that invariant: for a real `identityBox` (the
+ * frozen pane's own *actual, currently-stuck* `getBoundingClientRect()`, not a guessed x-range),
+ * sweep a wide spread of horizontal scroll offsets and hit-test multiple points across the frozen
+ * pane's own width at the given row's own y-coordinate — every hit must resolve to an element whose
+ * ancestor chain includes the frozen pane's own `data-col-id` (`employeeCode`/`employeeName`).
+ * Never asserts CSS class/z-index presence alone (that would only prove the intended styling exists,
+ * not that it actually wins in a real paint), and never hardcodes a specific scroll offset the
+ * defect happened to reproduce at during triage (`computeColumnWidths` sizes every column from
+ * loaded content, so a fixed pixel offset is not portable run to run) — it instead sweeps the whole
+ * scrollable range so a regression at *any* offset, from any column, is caught.
+ */
+async function assertNoScrollingContentPaintsOverIdentity(
+  page: Page,
+  grid: import('@playwright/test').Locator,
+  identityBox: { x: number; width: number },
+  rowY: number,
+  rowLabel: string,
+) {
+  const { scrollWidth, clientWidth } = await grid.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  const maxScrollLeft = scrollWidth - clientWidth;
+  const xs = [identityBox.x + 2, identityBox.x + identityBox.width / 2, identityBox.x + identityBox.width - 2];
+
+  for (let frac = 0.1; frac <= 1; frac += 0.06) {
+    const target = Math.round(maxScrollLeft * frac);
+    await grid.evaluate((el, d) => {
+      el.scrollLeft = d;
+    }, target);
+    // Settling the sticky/virtualizer layout, matching this file's own `scrollGridHorizontally` convention.
+    await page.waitForTimeout(40);
+
+    for (const x of xs) {
+      const hasIdentityAncestor = await page.evaluate(
+        ({ x, y }) => {
+          let node = document.elementFromPoint(x, y);
+          for (let i = 0; i < 8 && node; i++) {
+            const colId = node.getAttribute?.('data-col-id');
+            if (colId === 'employeeCode' || colId === 'employeeName') return true;
+            node = node.parentElement;
+          }
+          return false;
+        },
+        { x, y: rowY },
+      );
+      expect(
+        hasIdentityAncestor,
+        `${rowLabel}: scrolling content painted over the frozen identity pane at scrollLeft=${target}, x=${Math.round(x)}`,
+      ).toBe(true);
+    }
+  }
+}
+
 /** Scrolls the grid's own single scroll container (`role="table"`, `payroll-entry-grid.tsx`'s
  * `containerRef`) horizontally to an explicit pixel offset — never `page.mouse.wheel`, which would
  * scroll whichever element happens to be under the cursor; this targets the exact element under
@@ -354,6 +421,58 @@ test.describe('Payroll Entry — Frozen Employee Identity Pane', () => {
     const totalsBox = await totalsNameCell.boundingBox();
     expect(totalsBox).not.toBeNull();
     expect(Math.round(totalsBox!.x)).toBe(Math.round(bodyBox.x));
+  });
+
+  test('Scenario J: no scrolling content — including sort arrows and the Units badge — ever paints over the frozen identity pane, at any horizontal scroll offset, in the header, body, or totals row', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    await apiPost(context, '/api/v1/payroll-cycles', { year: 2902, month: 6 }).catch(() => undefined);
+    const label = `FrozenIdJ ${Date.now()}`;
+    const { siteId, unitId } = await createSiteAndUnit(context, label);
+    const employeeNames = [0, 1, 2].map((i) => `E2E FrozenId J Employee ${i} ${Date.now()}`);
+    await Promise.all(
+      employeeNames.map((name) =>
+        apiPost(context, '/api/v1/employees', { name, designation: 'Guard', siteId, unitId, grossPay: '35000' }),
+      ),
+    );
+
+    await page.goto('/payroll-entry');
+    await page.waitForLoadState('networkidle');
+    await filterToSite(page, `E2E ${label}`);
+
+    const grid = page.getByRole('table', { name: 'Payroll Entry grid' });
+    await expect(grid.getByText(employeeNames[0]!)).toBeVisible({ timeout: 5000 });
+
+    // Sort by a *scrolling* sortable column (Deputed Branch/`unitCode`) so its own active chevron
+    // icon — the exact kind of element the production report showed painting over the frozen pane —
+    // is on-screen and swept underneath it below, not just the column's plain background.
+    await page.locator('[data-col-id="unitCode"][role="columnheader"] button').click();
+
+    // Engage stickiness (well past the `serial`+`status` natural-flow threshold) before capturing
+    // the frozen pane's own *stuck* geometry — its unstuck, natural-flow position at scrollLeft 0 is
+    // not where it visually sits once actually scrolled (see Scenario B/C's own comment on this).
+    await scrollGridHorizontally(page, 400);
+    const codeHeaderBox = (await page.locator('[data-col-id="employeeCode"][role="columnheader"]').boundingBox())!;
+    const nameHeaderBox = (await page.locator('[data-col-id="employeeName"][role="columnheader"]').boundingBox())!;
+    const identityBox = { x: codeHeaderBox.x, width: nameHeaderBox.x + nameHeaderBox.width - codeHeaderBox.x };
+
+    const columnHeaderY = codeHeaderBox.y + codeHeaderBox.height / 2;
+    // The group-header row sits directly above the column-header row (`GROUP_ROW_HEIGHT`, 22px).
+    const groupHeaderY = codeHeaderBox.y - 11;
+    const bodyNameBox = (await grid.locator('[data-col-id="employeeName"][role="cell"]').first().boundingBox())!;
+    const bodyRowY = bodyNameBox.y + bodyNameBox.height / 2;
+    const totalsNameBox = (await grid.locator('[data-col-id="employeeName"][role="cell"]').last().boundingBox())!;
+    const totalsRowY = totalsNameBox.y + totalsNameBox.height / 2;
+
+    await assertNoScrollingContentPaintsOverIdentity(page, grid, identityBox, groupHeaderY, 'group-header row');
+    await assertNoScrollingContentPaintsOverIdentity(page, grid, identityBox, columnHeaderY, 'column-header row (sort arrows)');
+    await assertNoScrollingContentPaintsOverIdentity(page, grid, identityBox, bodyRowY, 'body row (Units badge etc.)');
+    await assertNoScrollingContentPaintsOverIdentity(page, grid, identityBox, totalsRowY, 'totals row');
+
+    // The sort itself is still genuinely functional after all that scrolling — this test must not
+    // silently pass by having broken sorting instead of fixing layering.
+    await expect(page.locator('[data-col-id="unitCode"][role="columnheader"]')).toHaveAttribute('aria-sort', 'ascending');
   });
 
   /** Responsive/viewport coverage — a narrower, tablet-like viewport (UAT acceptance criteria's own

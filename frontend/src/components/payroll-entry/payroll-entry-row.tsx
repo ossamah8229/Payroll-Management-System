@@ -222,14 +222,15 @@ function PayrollEntryRowImpl({
     // truncates by default.
     // Frozen Employee Identity Pane (UAT 2026-08-12) — sticky-left, "own real background, never
     // inherited" so a conflict row's `bg-danger-light` carries through here too rather than letting
-    // scrolled-under content show through a translucent frozen cell. `z-10` because this row is
-    // absolutely positioned/virtualized, and the sticky cell must paint above its own sibling data
-    // cells as they scroll underneath it.
+    // scrolled-under content show through a translucent frozen cell. The paint-order-over-scrolling-
+    // siblings `z-10` itself lives in `stickyIdentityCellClassName` (`columns.ts`), not duplicated
+    // here (layering correction, UAT 2026-08-12b) — every layer that renders these two columns needs
+    // the exact same protection, not just this one.
     employeeCode: (
       <ReadOnlyCell
         colId="employeeCode"
         truncate={false}
-        className={cn('z-10', stickyIdentityCellClassName('employeeCode', rowBackgroundClassName))}
+        className={stickyIdentityCellClassName('employeeCode', rowBackgroundClassName)}
         style={{ left: identityOffsets.employeeCode }}
       >
         {entry.employee.employeeCode ?? '—'}
@@ -239,7 +240,7 @@ function PayrollEntryRowImpl({
       <ReadOnlyCell
         colId="employeeName"
         muted={false}
-        className={cn('z-10', stickyIdentityCellClassName('employeeName', rowBackgroundClassName))}
+        className={stickyIdentityCellClassName('employeeName', rowBackgroundClassName)}
         style={{ left: identityOffsets.employeeName }}
       >
         <span className="font-medium">{entry.employee.name}</span>

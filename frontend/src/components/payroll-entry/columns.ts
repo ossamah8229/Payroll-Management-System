@@ -126,16 +126,33 @@ export const ROW_ACTION_WIDTH = 44;
  * virtualized body row, and the totals row. */
 export const FROZEN_LEFT_COLUMN_IDS: readonly PayrollColumnId[] = ['employeeCode', 'employeeName'];
 
-/** The one sticky-left treatment (UAT 2026-08-12) — takes the cell's own real background (never a
- * hardcoded guess) so header/body/totals rows each carry through their own already-established
- * background, and a conflict body row's `bg-danger-light` carries through to its own sticky identity
- * cells the same way it carries through to the row's outer background (`payroll-entry-row.tsx`'s M4
- * fix). The trailing-edge divider (`border-r`) is applied only to
- * `FROZEN_LEFT_COLUMN_IDS`'s own last entry (`employeeName`) — the visual separator belongs at the
- * frozen pane's right edge, not between its own two adjacent columns. */
+/** The one sticky-left treatment (UAT 2026-08-12; layering correction, UAT 2026-08-12b) — takes the
+ * cell's own real background (never a hardcoded guess) so header/body/totals rows each carry
+ * through their own already-established background, and a conflict body row's `bg-danger-light`
+ * carries through to its own sticky identity cells the same way it carries through to the row's
+ * outer background (`payroll-entry-row.tsx`'s M4 fix). The trailing-edge divider (`border-r`) is
+ * applied only to `FROZEN_LEFT_COLUMN_IDS`'s own last entry (`employeeName`) — the visual separator
+ * belongs at the frozen pane's right edge, not between its own two adjacent columns.
+ *
+ * **`z-10` lives here, not at each call site** (root-cause correction, UAT 2026-08-12b — production
+ * report: scrolling content, e.g. a sort arrow, painting over the frozen identity pane). `position:
+ * sticky` alone does not guarantee paint order against sibling grid/flex items: this codebase's own
+ * header/group-header/body/totals rows are all `display: grid` or `display: flex` containers, and
+ * per the CSS Grid/Flexbox stacking rules, sibling items with equally-`auto` z-index are painted in
+ * *document order* — every scrolling `PAYROLL_COLUMNS` entry sorts after `employeeCode`/
+ * `employeeName` there, so without an explicit z-index the scrolling sibling always wins the tie
+ * wherever its own rendered box happens to physically coincide with the frozen pane's fixed on-screen
+ * position, confirmed via real-Chromium `elementFromPoint` hit-testing (e.g. the `unitCode` column's
+ * own sort-chevron icon, scrolled to land under the frozen pane). A body row's cells previously
+ * escaped this only because `payroll-entry-row.tsx` separately hardcoded its own `z-10` — the
+ * group-header, column-header, and totals-row identity cells had no such override and were
+ * genuinely exposed. Centralizing it here is what makes every layer's identity cell win the tie
+ * unconditionally (10 > the scrolling siblings' implicit 0/`auto`), regardless of column order —
+ * the smallest fix that removes the whole class of "some other column's content ends up here", not
+ * just the one reported instance. */
 export function stickyIdentityCellClassName(columnId: PayrollColumnId, backgroundClassName: string): string {
   const isTrailingEdge = FROZEN_LEFT_COLUMN_IDS[FROZEN_LEFT_COLUMN_IDS.length - 1] === columnId;
-  return cn('sticky', isTrailingEdge && 'border-r border-border', backgroundClassName);
+  return cn('sticky z-10', isTrailingEdge && 'border-r border-border', backgroundClassName);
 }
 
 /** Each frozen-left column's own pixel offset from the scroll container's left edge once stuck —

@@ -211,6 +211,7 @@ export function PayrollEntryGrid({
             {groupSpans.map((span, i) => (
               <div
                 key={i}
+                data-col-id={span.identityColumnId}
                 style={{
                   width: span.width,
                   ...(span.identityColumnId !== undefined && { left: identityOffsets[span.identityColumnId] }),
