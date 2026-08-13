@@ -5399,3 +5399,108 @@ files. No existing report's code was modified.
 remain untouched. **This checkpoint is not authorized for commit** — leave the working tree as-is
 for independent hostile review.
 
+## 47. Addendum — Phase 7 Reports, Variance / Month-on-Month Report: Checkpoint 1B (Frontend,
+## Dual-Cycle UI, Browser Print, and E2E) — IMPLEMENTED, NOT COMMITTED
+
+Frontend-only, per explicit Checkpoint 1B authorization, over the frozen Checkpoint 1A backend §46
+above — no backend, shared-contract, or database change. Starting state verified first: `main ==
+origin/main == 6f8d1f7d73520182921e56b8506ca2391804f39e`, working tree clean.
+
+**The first Reports-module frontend needing two independent Payroll Cycles at once.** Every prior
+report's own frontend (§15.1–§20.9) manages exactly one Cycle, most via the shared
+`useSelectedPayrollCycle` hook and its dual flat/`:cycleId`-nested route pair. Variance cannot reuse
+that pattern — a single path segment cannot name two independent Cycles — so `/reports/variance`
+carries both `currentCycleId`/`comparisonCycleId` in its own query string instead, read directly off
+`useSearchParams()` every render rather than mirrored into `useState`. This is the one design choice
+this checkpoint leaned on hardest: because both ids are read from the same `URLSearchParams` object
+in the same render, there is no code path where one is stale while the other is fresh — "never
+briefly display stale comparison data under the new selection" (the authorizing instruction's own
+§4) falls out of the architecture rather than needing a defensive check.
+
+**Smart default, never a forced pick.** A `useEffect` fills `currentCycleId` via the existing
+`resolveDefaultCycleId` (Draft → newest Released → newest Archived), then, only once Current is
+known and no explicit `comparisonCycleId` is already present, fills the immediately-preceding Cycle
+by index into the already-newest-first Cycle list. When Current is the single oldest Cycle in the
+system, this resolves to nothing — proven by a dedicated one-Cycle-fixture test — rather than ever
+defaulting to comparing a Cycle against itself. An already-explicit `comparisonCycleId` (arbitrary,
+non-adjacent, or otherwise) is never overridden.
+
+**Data layer** (`hooks/use-variance-report.ts`) mirrors every sibling report hook's own convention,
+with one structural difference: `enabled: Boolean(currentCycleId) && Boolean(comparisonCycleId)`
+instead of a single-Cycle `Boolean(cycleId)` gate — proven by 21 direct hook-level tests (zero
+requests with either Cycle empty, exactly one request once both are present, a genuinely second
+request when Comparison changes while Current stays fixed, no duplicate from an unrelated
+re-render). Employee lookup (`variance-report-employee-lookup.tsx`) is a deliberate fork of Employee
+Payroll History's own component, over this report's own `/reports/variance/employees` endpoint —
+matching that component's own doc comment, which already named a third historical-discovery
+consumer as the point to extract a shared base; that extraction stays out of scope here, same as
+Salary Release Report's own precedent of not forcing a premature abstraction.
+
+**Population/Direction presentation** — two independent badge columns
+(`variance-report-labels.ts`): NEW is blue, DEPARTED is gray, CONTINUED is green (a population
+change is never itself "good" or "bad," so neither uses red/amber); INCREASED is green, DECREASED
+is red, UNCHANGED is gray. **One disclosed judgment call**: Direction is rendered as its own table
+column, one field beyond the authorizing instruction's own §9 "should include" list (which does not
+name it explicitly) — given §10's own extensive treatment of Direction as an independent dimension
+and the existing Direction filter, a filtered result with no on-screen field showing what was
+filtered on would be a worse design than the instruction's own minimum. Every missing-side financial
+field renders through the existing shared `formatMoney` (already `—`-for-`null`) or a
+`!== null`-guarded `${value}%` — this page never computes a financial value, only formats what the
+backend already computed, so Infinity/NaN is structurally unreachable, not just avoided by
+convention.
+
+**Second disclosed judgment call**: Clear Filters preserves sort, matching Salary Release
+Report's/Employee Payroll History's own established convention rather than inventing a third
+behavior this project's own siblings hadn't already settled on.
+
+**Print/Export/EPH drill-down** — a fresh print field vocabulary (13 summary cards, 14 table
+columns, `variance-report-print-fields:v1`), current-page-only, zero backend requests from Print
+(proven directly, both in the unit suite and in the E2E spec by counting real network requests
+during the Print flow); export carries both Cycle ids plus every filter/sort, never `page`/
+`pageSize`, CSV/XLSX request-parity proven directly. "View Full History" navigates to Employee
+Payroll History via the exact `location.state.listState` mechanism that page's own list already
+reads on mount — no new Variance-specific detail query, no duplicate correction/history page.
+
+**Tests**: `use-variance-report.test.ts` (21), `variance-report-labels.test.ts` (5),
+`variance-report-print-fields.test.ts` (21), `reports-variance-report-page.test.tsx` (53) — **100
+new frontend tests** (corrected during independent hostile review — the original count of 104/"9
+labels" mismatched the actual 5 tests in `variance-report-labels.test.ts`). Full frontend suite:
+**1002/1002** on three consecutive full-suite runs during review (the previously-reported single
+`payroll-entry-grid.test.tsx` failure did not reproduce; no code linkage exists between the Variance
+diff and that file, and this diff never touches Payroll Entry). `typecheck` (all workspaces), `lint`
+(0 errors, only pre-existing unrelated warnings), `build`, `typecheck:e2e`, `git diff --check` all
+clean.
+
+**E2E** (`tests/e2e/specs/29-variance-report.spec.ts`, new, 10/10 passing against the real backend)
+— a real month-end rollover (Finalize + Archive-and-create-next, the identical real construction
+`19-employee-payroll-history-frontend.spec.ts` already established) produces two genuine Payroll
+Cycles. One comprehensive scenario proves New/Departed/Continued (Increased/Decreased/Unchanged), a
+zero-Comparison-Net row (no Infinity/NaN in real rendered output), a real Site Transfer (the
+employee's Site is patched *before* rollover, so the already-created Comparison-side entry stays
+pinned to the old Site while rollover's own freshly-materialized Current-side entry picks up the
+new one — the same "historical entry never retroactively changes" principle Salary Release Report's
+own spec already proved, applied here across two Cycles instead of one), a real Unit Change, and
+real correction context (approved by a second reviewer session, never the requester). Separate tests
+cover two-sided Site authorization (a Site-A-only user sees a same-Site row in full but never the
+Transfer row, whose Current side sits at Site B — re-verifying at the frontend a rule the backend's
+own Checkpoint 1A test suite already caught a real defect in), export, print, the EPH drill-down,
+the catalogue card plus no-detail-endpoint confirmation, and the permission gate (`reports:view`
+alone admits; `payroll:view` alone — unlike Salary Release Report — is denied, proving Variance
+genuinely has no OR gate). Combined regression run with `17-reports.spec.ts`/
+`19-employee-payroll-history-frontend.spec.ts`/`26-salary-release-report.spec.ts`: **39/39 passing**,
+including this spec running immediately after 19's own rollover of the shared Draft cycle.
+
+**Files changed**: `frontend/src/hooks/use-variance-report.ts` (new) +
+`use-variance-report.test.ts` (new); `frontend/src/components/reports/variance-report-labels.ts`
+(new) + its test; `variance-report-print-fields.ts` (new) + its test;
+`variance-report-print-options-dialog.tsx` (new); `variance-report-employee-lookup.tsx` (new);
+`frontend/src/routes/reports-variance-report-page.tsx` (new) + its test; `frontend/src/App.tsx`
+(additive: one lazy import, one route object); `frontend/src/routes/reports-page.tsx` (additive:
+one catalogue entry); `tests/e2e/specs/29-variance-report.spec.ts` (new). No existing report's own
+file was modified beyond the two purely-additive edits. No backend, shared-contract, or database
+file touched.
+
+**No commit, push, or deployment occurred this session.** Dashboard remains untouched. **This
+checkpoint is not authorized for commit** — leave the working tree as-is for independent hostile
+review.
+

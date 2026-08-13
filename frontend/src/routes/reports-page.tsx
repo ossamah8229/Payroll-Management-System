@@ -94,6 +94,14 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     // actually executes the releases this report reconciles.
     requiredPermission: [PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW],
   },
+  {
+    title: 'Variance / Month-on-Month Report',
+    description: 'Employee-level Net Salary comparison between two payroll cycles — New/Departed/Continued, transfers, and correction context.',
+    to: '/reports/variance',
+    available: true,
+    // reports:view alone (frozen Checkpoint 1A backend decision) — no OR gate, unlike Salary
+    // Release Report's own entry immediately above.
+  },
 ];
 
 export function ReportsPage({ user }: { user: SessionUser }) {

@@ -83,6 +83,9 @@ const ReportsAdvanceRecoveryReportDetailPage = lazy(() =>
 const ReportsSalaryReleaseReportPage = lazy(() =>
   import('@/routes/reports-salary-release-report-page').then((m) => ({ default: m.ReportsSalaryReleaseReportPage })),
 );
+const ReportsVarianceReportPage = lazy(() =>
+  import('@/routes/reports-variance-report-page').then((m) => ({ default: m.ReportsVarianceReportPage })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
@@ -610,6 +613,26 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={[PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]}>
             <ReportsSalaryReleaseReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Variance / Month-on-Month Report (Phase 7 Reports, Checkpoint 1B) — gated on `reports:view`
+  // alone, the same permission Payroll Summary/Project Site Payroll Report/Deduction Report/Overtime
+  // Report/Advance Recovery Report already use (frozen Checkpoint 1A backend decision). The first
+  // cross-cycle report in this module: both Cycle ids live in this one flat route's own query string
+  // (`?currentCycleId=...&comparisonCycleId=...`), never a `:cycleId` path segment — unlike every
+  // single-required-cycle sibling report above, there is no meaningful "canonical, cycle-nested" path
+  // variant to mirror here (a single path segment cannot name two independent cycles), so this report
+  // is intentionally mounted at exactly one path.
+  {
+    path: '/reports/variance',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
+            <ReportsVarianceReportPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>
