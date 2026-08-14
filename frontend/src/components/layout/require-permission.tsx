@@ -14,6 +14,9 @@ export interface RequirePermissionProps {
    * more than one permission at once. Mutually exclusive with `permission` in practice — a route
    * needs one semantics or the other, never both at once. */
   allOf?: PermissionKey[];
+  /** Forwarded verbatim to `AccessDeniedPage` — see its own doc comment. Only the `/` (Dashboard)
+   * route passes this; every other route leaves it at its default. */
+  hideHomeAction?: boolean;
   children: ReactNode;
 }
 
@@ -37,9 +40,9 @@ export interface RequirePermissionProps {
  * `RequireSession`'s job alone, matching this app's existing separation between "are you signed
  * in" and "are you allowed to see this."
  */
-export function RequirePermission({ user, permission, allOf, children }: RequirePermissionProps) {
+export function RequirePermission({ user, permission, allOf, hideHomeAction, children }: RequirePermissionProps) {
   if (!isAuthorizedFor(user, { permission, allOf })) {
-    return <AccessDeniedPage user={user} />;
+    return <AccessDeniedPage user={user} hideHomeAction={hideHomeAction} />;
   }
 
   return <>{children}</>;

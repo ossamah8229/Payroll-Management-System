@@ -53,7 +53,19 @@ export function isNavItemVisible(item: NavItem, user: SessionUser): boolean {
 export const navSections: NavSection[] = [
   {
     label: 'Overview',
-    items: [{ label: 'Dashboard', to: '/', icon: LayoutDashboard }],
+    items: [
+      {
+        label: 'Dashboard',
+        to: '/',
+        icon: LayoutDashboard,
+        // Dashboard Checkpoint 1B — gated `reports:view OR payroll:view` (the same any-of gate as
+        // the route itself, App.tsx), the frozen Checkpoint 1A backend's own outer route gate
+        // (`dashboard.routes.ts`). Widened from "always visible" (Phase 1 placeholder) now that the
+        // page performs a real, permission-gated data fetch — a `statements:view`-only user (e.g.
+        // no reports/payroll permission at all) must not see a Dashboard link that would 403.
+        requiredPermission: ['reports:view', 'payroll:view'],
+      },
+    ],
   },
   {
     label: 'Payroll',

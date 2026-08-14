@@ -118,9 +118,30 @@ function RequireSession({
  */
 const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
+  // Dashboard Checkpoint 1B — gated `reports:view OR payroll:view`, the same any-of gate the
+  // frozen Checkpoint 1A backend route already enforces (`dashboard.routes.ts`) and the sidebar
+  // nav item now mirrors (`nav-config.ts`). Previously ungated (Phase 1 placeholder, no real data
+  // fetch behind it) — now that `/` performs a real permission-gated aggregation request, a session
+  // with neither permission (e.g. `statements:view` alone) must see `AccessDeniedPage`, not a
+  // Dashboard that quietly renders every widget as unavailable.
   {
     path: '/',
-    element: <RequireSession>{(user) => <HomePage user={user} />}</RequireSession>,
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission
+            user={user}
+            permission={[PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]}
+            // The guarded route here IS `/` — AccessDeniedPage's default "Back to Dashboard"
+            // action would just relink to this same denied page for a user who lacks both
+            // permissions (Dashboard Checkpoint 1B UAT remediation, Issue A).
+            hideHomeAction
+          >
+            <HomePage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
   },
   {
     path: '/sites',

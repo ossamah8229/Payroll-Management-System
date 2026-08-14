@@ -34,6 +34,12 @@ function reportsNavItem(): NavItem {
   return item;
 }
 
+function dashboardNavItem(): NavItem {
+  const item = navSections.flatMap((section) => section.items).find((navItem) => navItem.to === '/');
+  if (!item) throw new Error('Dashboard nav item not found in navSections');
+  return item;
+}
+
 describe('isNavItemVisible', () => {
   it('is always visible when no permission is required', () => {
     expect(isNavItemVisible({ label: 'Dashboard', to: '/', icon: navSections[0]!.items[0]!.icon }, fakeUser([]))).toBe(
@@ -131,6 +137,38 @@ describe('isNavItemVisible', () => {
 
     it('is hidden for a user with no permissions at all', () => {
       expect(isNavItemVisible(reportsNavItem(), fakeUser([]))).toBe(false);
+    });
+  });
+
+  // --- Dashboard sidebar entry (Dashboard Checkpoint 1B) ---------------------------------------
+  // Widened from "always visible" (Phase 1 placeholder, no real data fetch behind it) to
+  // reports:view OR payroll:view — the same any-of gate the frozen Checkpoint 1A backend route
+  // itself enforces (dashboard.routes.ts) and App.tsx's own RequirePermission wrapping of `/`
+  // mirrors. Mirrors the Reports sidebar item's own OR-gate regression coverage above.
+
+  describe('the Dashboard sidebar item', () => {
+    it('requires reports:view OR payroll:view', () => {
+      expect(dashboardNavItem().requiredPermission).toEqual(['reports:view', 'payroll:view']);
+    });
+
+    it('is visible for reports:view only', () => {
+      expect(isNavItemVisible(dashboardNavItem(), fakeUser(['reports:view']))).toBe(true);
+    });
+
+    it('is visible for payroll:view only (the Finance case — never reports:view)', () => {
+      expect(isNavItemVisible(dashboardNavItem(), fakeUser(['payroll:view']))).toBe(true);
+    });
+
+    it('is visible when both permissions are held', () => {
+      expect(isNavItemVisible(dashboardNavItem(), fakeUser(['reports:view', 'payroll:view']))).toBe(true);
+    });
+
+    it('is hidden for a statements:view-only user (no reports/payroll permission at all)', () => {
+      expect(isNavItemVisible(dashboardNavItem(), fakeUser(['statements:view']))).toBe(false);
+    });
+
+    it('is hidden for a user with no permissions at all', () => {
+      expect(isNavItemVisible(dashboardNavItem(), fakeUser([]))).toBe(false);
     });
   });
 });

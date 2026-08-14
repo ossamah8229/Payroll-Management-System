@@ -14,8 +14,9 @@ has no entry in `database/README.md`'s §-numbered schema index. For the entitie
 `database/advances.md §15`.
 
 **Status:** **Checkpoint 1A (backend foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.**
-Frontend (Checkpoint 1B) is Not Started and requires its own separate authorization. See
-`docs/PROJECT_PROGRESS.md`'s "Dashboard Checkpoint 1A" entry for the full build record.
+**Checkpoint 1B (frontend, UI, and E2E) — IMPLEMENTED, 2026-08-14, awaiting review, NOT COMMITTED.**
+See `docs/PROJECT_PROGRESS.md`'s "Dashboard Checkpoint 1A" and "Dashboard Checkpoint 1B" entries for
+the full build record of each.
 
 ---
 
@@ -240,3 +241,78 @@ necessary** — every query this checkpoint adds is already covered by an existi
 - `backend/tests/dashboard.test.ts`, `backend/tests/dashboard-performance.test.ts` (new).
 
 No unrelated report, frontend page, or module was touched.
+
+## 15. Frontend (Checkpoint 1B)
+
+Route: `/` (replacing the Phase-1 `HomePage` placeholder). Gate: `reports:view OR payroll:view` —
+identical to §2's own outer backend gate, enforced via `RequirePermission` in `App.tsx` and mirrored
+by the sidebar's "Dashboard" item (`nav-config.ts`), so neither can ever admit a session the other
+would turn away. No `dashboard:view` permission was introduced on either side.
+
+**Data layer** (`frontend/src/hooks/use-dashboard.ts`) is the simplest hook shape in the frontend:
+since `GET /api/v1/dashboard` accepts no request parameters at all (§3), the query key is one fixed
+constant (`['dashboard']`) rather than params-derived — there is structurally only ever one possible
+cache entry for this page, which is what makes "one request, no per-widget fan-out" fall out of the
+architecture rather than needing a runtime check.
+
+**Widget rendering is verbatim, never recomputed.** No `calcNet` import and no arithmetic on any
+money field exists in the frontend Dashboard code — every figure is `formatMoney`/`formatNumber`
+(shared formatters) over the backend's own already-computed value. A cycle-scoped widget's `null` is
+disambiguated using this file's own frozen contract (`cycle === null` → "no cycle exists," a
+non-null `cycle` with a `null` widget → "unauthorized," per this file's top-of-file doc comment and
+§2's independent per-widget gating) — the frontend renders these as two distinct messages ("No
+active cycle" vs. "Unavailable"), never collapsed into one generic string. `totalEmployees` and
+`attention.pendingCorrections`/`.recoveryDue` are independent of `cycle` (§2/§7) and always read as
+"Unavailable" when `null`. `attention.heldEntries` (never `null`, §7) renders a real `0` distinct
+from "Unavailable" whenever the cycle genuinely has no held entries.
+
+**Layout** follows the Dashboard Grid pattern (`docs/design-system.md §2.3`): Current Cycle Status,
+a 4-stat KPI row (Total Employees / Net Payroll / Pending Release / Release Progress — Release
+Progress's own stat card doubles as its compact summary, so there is no second, redundant Release
+Progress section), a `1.4fr/1fr` split (Site Payroll Summary / Deductions This Cycle), and a
+secondary Attention Required section. No trend chart, no print/export (out of frozen V1 scope).
+
+**Deep links** (§16) reuse only pre-existing routes — Employee Registry, Payroll Summary, Salary
+Release Report, Deduction Report, Advance Recovery Report, Corrections — never a new Dashboard
+detail page. Site Payroll Summary rows are informational only (Site name is plain text, never a
+Link) — `ReportsPayrollSummaryPage` has no URL-driven site filter for a row to honor, so implying a
+Site-specific drill-down would be dishonest; the card instead offers one single, honest, card-level
+"View Payroll Summary" action (`data-testid="dashboard-site-summary-view-all"`) to the unfiltered
+report for the resolved cycle. Adding a real per-Site filter to Payroll Summary is out of this
+frontend-only checkpoint's scope.
+
+**Tests**: `use-dashboard.test.ts` (11), `dashboard-labels.test.ts` (13), `home-page.test.tsx` (18),
+6 new cases in the pre-existing `nav-config.test.ts`, `require-permission.test.tsx` (2, new) — 50
+new frontend tests, full suite 1047/1047. E2E: `tests/e2e/specs/30-dashboard.spec.ts` (11 tests,
+real backend, no data mocking) — load, `payroll:view`-only, `reports:view`-only,
+denied-without-either, Site-scoped, Site Summary drill-down honesty, financial reconciliation
+against the live Payroll Summary Report, Attention link destinations, responsive layout, privacy,
+and request discipline (one Dashboard request, zero report-endpoint fan-out).
+
+**Files**: `frontend/src/hooks/use-dashboard.ts` (new); `frontend/src/components/dashboard/
+dashboard-labels.ts` (new); `frontend/src/routes/home-page.tsx` (rewritten); `frontend/src/App.tsx`
+(the `/` route wrapped in `RequirePermission`, additive); `frontend/src/components/layout/
+nav-config.ts` (the Dashboard item's `requiredPermission` added); `tests/e2e/specs/
+30-dashboard.spec.ts` (new). No backend, `shared/src/schemas/`, or Prisma/migration file touched.
+
+### 15.1 Targeted UAT remediation (2026-08-14)
+
+Independent review of the Checkpoint 1B build above found two dishonest/dead-end UX affordances,
+fixed without touching backend, shared schema, widget permissions, the route gate, cycle
+resolution, Site authorization, or the one-request contract:
+
+- **Denied-Dashboard dead end.** `AccessDeniedPage` (`frontend/src/components/layout/
+  access-denied.tsx`) always rendered a "Back to Dashboard" action to `/` — for every other gated
+  route this is a real destination, but for the Dashboard route itself (also `/`) it silently
+  relinked to the same denied screen. Fixed with one new optional prop, `hideHomeAction` (default
+  `false`, every existing caller unchanged), threaded through `RequirePermission`
+  (`require-permission.tsx`) and set only at the Dashboard's own route wiring in `App.tsx`. No new
+  destination was invented and the route's `reports:view OR payroll:view` gate is unchanged.
+- **Dishonest Site Summary drill-down.** Every Site Payroll Summary row linked to the same
+  unfiltered Payroll Summary report regardless of which Site was clicked, implying a Site-specific
+  filter that doesn't exist. Fixed by making the Site name plain text (§15's "Deep links" paragraph
+  above) and adding one honest, always-present card-level "View Payroll Summary" action instead. No
+  new Payroll Summary URL contract or Dashboard-specific detail route was introduced.
+
+Regression coverage: `require-permission.test.tsx` (new), plus additions to `home-page.test.tsx`
+and `tests/e2e/specs/30-dashboard.spec.ts` (see counts above).

@@ -5529,3 +5529,102 @@ file touched.
 checkpoint is not authorized for commit** — leave the working tree as-is for independent hostile
 review.
 
+## 48. Addendum — Dashboard Checkpoint 1B (Frontend, UI, and E2E) — IMPLEMENTED, NOT COMMITTED
+
+Frontend-only, per explicit Checkpoint 1B authorization, over the frozen Checkpoint 1A backend
+(committed as `c30cf8c2f49feaa23fff9ce5225202e05d41cc6a` — Dashboard Checkpoint 1A's own record is
+in `docs/PROJECT_PROGRESS.md`, not this file, since it predates this addendum log catching up).
+Starting state verified first: `main == origin/main == c30cf8c2f49feaa23fff9ce5225202e05d41cc6a`,
+working tree clean.
+
+Replaces the Phase-1 `HomePage` placeholder at `/` with the real Dashboard. Route and sidebar nav
+gate both widened from "always visible" to `reports:view OR payroll:view` — the same any-of gate
+the frozen backend route already enforces — so a `statements:view`-only session now sees
+`AccessDeniedPage` at `/` rather than a Dashboard that would have rendered every widget `null`.
+
+**The data hook is the simplest in this codebase** (`use-dashboard.ts`): `GET /api/v1/dashboard`
+takes no request parameters, so its query key is one fixed constant, never params-derived — "one
+request, no fan-out" falls out of that shape rather than needing a runtime guard. Every widget
+renders the backend's own value verbatim (no `calcNet`, no arithmetic on any money field anywhere in
+the Dashboard frontend). **The one deliberate design decision this checkpoint leaned on**: a
+cycle-scoped widget's `null` is disambiguated via the response's own `cycle` field — "No active
+cycle" when `cycle` itself is `null`, "Unavailable" when a cycle exists but the caller lacks that
+widget's own permission — surfacing the schema's own frozen "a caller can always distinguish these"
+contract as two genuinely different user-facing messages instead of one generic string.
+
+**A real defect found and fixed before sign-off, not by the backend but by the frontend's own E2E
+suite**: `page.goto('/')` used as a same-URL reload of the bare root path (while already on it)
+reliably produces two `/api/v1/dashboard` requests — the first `net::ERR_ABORTED` within ~2ms,
+before it ever reaches the backend. Root-caused via a controlled repro (reproduced identically for
+`/`, never for `/employees`'s own same-URL reload, and never for a *fresh* landing on `/` via login
+or cross-route navigation) to a `vite preview`/Chromium root-path navigation artifact — not a
+`useDashboard` or React Query defect, and not a real backend fan-out (the aborted request never
+leaves the browser's own queue: no doubled audit-log entry, no doubled aggregation query). Every
+E2E request-count assertion now measures a genuine fresh landing, documented directly in the spec's
+`gotoDashboard` helper so a future session doesn't have to re-derive this.
+
+**Tests**: `use-dashboard.test.ts` (11), `dashboard-labels.test.ts` (13), `home-page.test.tsx` (16),
+6 new cases added to the pre-existing `nav-config.test.ts` — 46 new frontend tests. Full frontend
+suite **1043/1043**. `typecheck` (all four workspaces), `lint` (0 errors, only pre-existing unrelated
+warnings), `build`, `git diff --check` all clean.
+
+**E2E** (`tests/e2e/specs/30-dashboard.spec.ts`, new, 10/10 passing against the real backend, no
+`page.route` mocking of core Dashboard data) — initial load with exactly one Dashboard request; a
+`payroll:view`-only user (Finance-shaped: reports-only widgets read Unavailable, payroll-gated ones
+don't); a `reports:view`-only user (the inverse, `totalEmployees` Unavailable); denied without
+either permission, with the sidebar link's own exact-name absence checked (not the substring-matching
+"Back to Dashboard" button `AccessDeniedPage` itself renders — a locator precision fix made during
+this checkpoint's own review, not a product defect); a Site-scoped user whose `siteScope`/Site
+Payroll Summary never include an inaccessible Site; **financial reconciliation** — Dashboard's own
+`netPayroll` compared live against the Payroll Summary Report's `cycleTotals.netSalary` for the
+identical cycle; Attention Required links landing on their correct existing routes; responsive
+layout at 1440/1024/768px with no document horizontal scroll; a privacy sweep; and request discipline
+(one Dashboard request, zero fan-out to any of the five per-widget report endpoints it could have
+independently re-fetched). Combined regression run with `03-navigation.spec.ts`/`17-reports.spec.ts`/
+`26-salary-release-report.spec.ts`/`29-variance-report.spec.ts`: **49/49 passing**.
+
+**Known limitation, disclosed rather than fixed**: `AccessDeniedPage`'s shared "Back to Dashboard"
+button always links to `/`. For the one session shape this checkpoint newly makes possible (neither
+`reports:view` nor `payroll:view` held), that button now leads to a second Access Denied page
+instead of a real destination — not a crash or a loop, but a dead end. `AccessDeniedPage` is a
+shared layout component this checkpoint was instructed not to modify without a genuine regression;
+left for a future session's explicit decision.
+
+**Files changed**: `frontend/src/hooks/use-dashboard.ts` (new) + its test;
+`frontend/src/components/dashboard/dashboard-labels.ts` (new) + its test;
+`frontend/src/routes/home-page.tsx` (rewritten) + its new test; `frontend/src/App.tsx` (`/` route
+wrapped in `RequirePermission`, additive); `frontend/src/components/layout/nav-config.ts` (Dashboard
+item's `requiredPermission` added) + its test; `tests/e2e/specs/30-dashboard.spec.ts` (new). No
+backend, `shared/src/schemas/`, `shared/src/index.ts`, Prisma schema, or migration file touched — no
+Variance, Payroll Entry, or unrelated report file touched.
+
+**No commit, push, or deployment occurred this session.** **This checkpoint is not authorized for
+commit** — leave the working tree as-is for independent hostile review.
+
+## 49. Addendum — Dashboard Checkpoint 1B, Targeted UAT Remediation — IMPLEMENTED, NOT COMMITTED
+
+Same session, narrowly-scoped follow-up authorized specifically to fix two UX defects independent
+review found in §48's build — nothing else touched (no backend/`shared`/route-gate/cycle-resolution/
+Site-authorization/financial-source/one-request-contract change).
+
+**Fixes §48's own disclosed "Known limitation."** `AccessDeniedPage` gained one optional prop,
+`hideHomeAction` (default `false`, every non-Dashboard caller unchanged), threaded through
+`RequirePermission` and set only where `App.tsx` wires the `/` route — a user denied Dashboard access
+now sees Access Denied with no action that relinks to the same denied route.
+
+**Site Payroll Summary drill-down honesty.** Every row previously linked to the same unfiltered
+Payroll Summary report (`ReportsPayrollSummaryPage` has no Site-filter mechanism to land on), which
+implied a Site-specific drill-down that didn't exist. Site name is now plain text, not a `Link`; one
+honest, always-present card-level "View Payroll Summary" action replaces the misleading row-level
+one.
+
+**Tests**: `require-permission.test.tsx` (2, new), `home-page.test.tsx` (+2), a strengthened
+`30-dashboard.spec.ts` denied-state assertion, and one new `30-dashboard.spec.ts` E2E test for the
+Site Summary honesty fix. Full frontend suite **1047/1047**; `typecheck`/`lint`/`build`/
+`typecheck:e2e`/`git diff --check` all clean. `docs/architecture/workflows/dashboard.md` and
+`docs/PROJECT_PROGRESS.md` updated with matching addenda (§15.1 and the new "Dashboard Checkpoint 1B
+— Targeted UAT Remediation" entry respectively) — §48's own record above is left as-is.
+
+**No commit, push, or deployment occurred this session.** Not authorized for commit; no other
+roadmap work started.
+

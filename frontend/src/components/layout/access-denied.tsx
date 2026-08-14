@@ -21,7 +21,16 @@ import { Button } from '@/components/ui/button';
  * their permissions change mid-session (the next data-fetching action against the backend is what
  * would then fail, not this component).
  */
-export function AccessDeniedPage({ user }: { user: SessionUser }) {
+export function AccessDeniedPage({
+  user,
+  hideHomeAction = false,
+}: {
+  user: SessionUser;
+  /** Pass true when the guarded route itself IS `/` — the default "Back to Dashboard" action
+   * would otherwise relink to this same denied page (Dashboard Checkpoint 1B UAT remediation).
+   * Every other caller leaves this at its default, unchanged. */
+  hideHomeAction?: boolean;
+}) {
   return (
     <AppShell user={user} title="Access Denied">
       <Card>
@@ -31,9 +40,11 @@ export function AccessDeniedPage({ user }: { user: SessionUser }) {
           <p className="max-w-[420px] text-xs text-text-muted">
             If you believe this is a mistake, contact a Master User to review your account's permissions.
           </p>
-          <Button asChild size="sm" className="mt-2">
-            <Link to="/">Back to Dashboard</Link>
-          </Button>
+          {!hideHomeAction && (
+            <Button asChild size="sm" className="mt-2">
+              <Link to="/">Back to Dashboard</Link>
+            </Button>
+          )}
         </CardContent>
       </Card>
     </AppShell>

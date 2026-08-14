@@ -165,12 +165,11 @@ Two-tier grid: a `1.4fr / 1fr` two-column split (primary table + stacked seconda
 4-column stat-card row above it. Stat cards are small, flat, color-coded only in the value text
 (not the whole card) — label uppercase/muted, value bold/large, optional muted sub-line.
 
-**Status: promoted from design-only pattern to implemented convention, Dashboard Checkpoint 1A,
-2026-08-13** — the backend foundation (`docs/architecture/workflows/dashboard.md`) now exists behind
-this layout; the frontend consuming it (Checkpoint 1B, driving the primary table from the backend's
-Top-5 Site Payroll Summary and the stat-card row from Total Employees/Net Payroll/Pending
-Release/Deductions) is Not Started. This pattern's own historical provenance (originally a
-design-only reference pattern, predating any backend to back it) is unchanged by this note — only its
+**Status: fully implemented, Dashboard Checkpoint 1A (backend, 2026-08-13) + Checkpoint 1B (frontend,
+2026-08-14)** — `docs/architecture/workflows/dashboard.md` §15. The primary table is driven by the
+backend's Top-5 Site Payroll Summary; the stat-card row by Total Employees/Net Payroll/Pending
+Release/Release Progress. This pattern's own historical provenance (originally a design-only
+reference pattern, predating any backend to back it) is unchanged by this note — only its
 implementation status is.
 
 ### 2.4 Filter Row
