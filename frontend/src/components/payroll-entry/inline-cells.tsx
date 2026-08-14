@@ -14,8 +14,15 @@ export function gridNavProps(row: number, col: string): GridNavProps {
   return { 'data-grid-row': row, 'data-grid-col': col };
 }
 
+// `focus:ring-inset` (Frozen Identity Pane UAT correction, 2026-08-14) — every one of these cells
+// is `w-full` within a column sized to fit its content exactly (`measureColumnWidth`), so there is
+// no spare margin around the input for an ordinary (outward) ring to extend into without escaping
+// the cell's own `overflow-hidden` (`payroll-entry-row.tsx`'s per-cell containment fix) by the
+// ring's own width. Drawing the ring *inside* the border box instead — a normal, common pattern for
+// dense grid/table cell inputs — needs no extra space at all, so it can never do that, without
+// narrowing any column or changing any input's own clickable/typing area.
 const baseInputClassName =
-  'w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-xs text-text outline-none transition-colors placeholder:text-text-faint hover:border-border focus:border-accent-mid focus:ring-1 focus:ring-accent-light disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-transparent';
+  'w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-xs text-text outline-none transition-colors placeholder:text-text-faint hover:border-border focus:border-accent-mid focus:ring-1 focus:ring-inset focus:ring-accent-light disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-transparent';
 
 interface InlineTextCellProps {
   value: string;
