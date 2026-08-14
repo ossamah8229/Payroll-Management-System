@@ -373,6 +373,19 @@ export type {
   VarianceReportUnitRef,
 } from './schemas/variance-report';
 
+export { DASHBOARD_SITE_SUMMARY_TOP_N } from './schemas/dashboard';
+export type {
+  DashboardAttention,
+  DashboardAttentionItem,
+  DashboardCycleRef,
+  DashboardCycleStatus,
+  DashboardDeductionBreakdown,
+  DashboardPendingRelease,
+  DashboardReleaseProgress,
+  DashboardResponse,
+  DashboardSiteSummaryRow,
+} from './schemas/dashboard';
+
 export type { SessionUser } from './types/session-user';
 
 export { decimalString } from './schemas/common';

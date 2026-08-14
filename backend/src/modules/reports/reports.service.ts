@@ -208,7 +208,11 @@ function resolveSiteIdFilter(currentUser: SessionUser, siteIds?: string[]): stri
   return getAccessibleSiteIds(currentUser);
 }
 
-interface PayrollSummaryData {
+/** Exported (Dashboard Checkpoint 1A) so the Dashboard aggregation service can reuse this exact,
+ * already-authoritative query+aggregation for Net Payroll/Pending Release/Release Progress/
+ * Deductions/Site Summary, rather than re-deriving any of Payroll Summary's own figures a second
+ * time (`docs/architecture/workflows/dashboard.md` §"Source-of-truth mapping"). */
+export interface PayrollSummaryData {
   cycle: PayrollSummaryCycleRef;
   siteIdFilter: string[] | null;
   /** Every site row in the complete filtered/accessible scope, sorted deterministically by site
@@ -222,9 +226,10 @@ interface PayrollSummaryData {
  * The one query+aggregation this whole report is built on — called by both the JSON route
  * (`getPayrollSummaryReport`) and both export formats below, so there is exactly one implementation
  * of "what belongs on this report," never a second one for exports (mirrors `bank-sheets.service.ts`'s
- * own `getBankSheet` precedent).
+ * own `getBankSheet` precedent). **Exported (Dashboard Checkpoint 1A)** as this report module's own
+ * reuse seam — see `PayrollSummaryData`'s own doc comment above.
  */
-async function buildPayrollSummaryData(
+export async function buildPayrollSummaryData(
   currentUser: SessionUser,
   params: Pick<GetPayrollSummaryReportParams, 'cycleId' | 'siteIds'>,
 ): Promise<PayrollSummaryData> {

@@ -17,6 +17,31 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-08-13 (latest) — Dashboard Checkpoint 1A (Backend Foundation) — IMPLEMENTED,
+> awaiting review, NOT COMMITTED.** A single aggregation endpoint, `GET /api/v1/dashboard`
+> (`docs/architecture/workflows/dashboard.md`), answering "what does the active/current payroll cycle
+> look like right now, and is there anything I need to pay attention to?" — Total Employees, Net
+> Payroll, Pending Release, Release Progress, Deduction Breakdown, a Top-5 Site Payroll Summary, and
+> Attention Required (Held Entries, Pending Corrections, Recovery Due). Route gate reuses the
+> established any-of mechanism (`reports:view OR payroll:view`, no new permission), but every widget
+> independently re-checks its own permission — a caller passing the outer gate does not automatically
+> see every widget (e.g. Finance, `payroll:view` only, sees Pending Release/Release Progress but not
+> Net Payroll/Deductions/Site Summary). Every cycle-scoped financial figure reuses Payroll Summary's
+> own aggregation (`reports.service.ts`'s `buildPayrollSummaryData`, exported for this reuse) — no
+> new financial or release formula anywhere in this module; numeric identity with the Payroll
+> Summary/Deduction Report/Salary Release Report's own live totals is proven by direct HTTP
+> reconciliation tests, not merely asserted. No caching layer yet (deliberately deferred, frozen
+> decision) and no migration was needed (10,000-employee-scale `EXPLAIN ANALYZE` evidence shows every
+> new query index-backed). Backend-only — this checkpoint explicitly stopped before any frontend
+> Dashboard work, any other report, or any commit/push/deploy. Full record:
+> `docs/architecture/workflows/dashboard.md` and `docs/PROJECT_PROGRESS.md`'s own "Dashboard
+> Checkpoint 1A" §1 entry — not duplicated here in full. **`docs/PROJECT_PROGRESS.md` §1 remains the
+> authoritative chronological record for anything between this entry and the 2026-08-07 one
+> immediately below** (several Reports checkpoints and a Payroll Entry RBAC correction landed in that
+> gap — this file was not updated for each of them individually; see `PROJECT_PROGRESS.md`).
+>
+> ---
+>
 > **Update, 2026-08-07 (latest) — Phase 7 Reports, Overtime Report Checkpoint 1B (Frontend, Browser
 > Print, and E2E) — IMPLEMENTED, awaiting review, NOT COMMITTED.** Built over the now-committed
 > (`862c231`, pushed to `origin/main`) Checkpoint 1A backend — no backend, shared-contract, or

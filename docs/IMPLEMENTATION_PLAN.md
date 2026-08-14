@@ -2224,6 +2224,16 @@ Fines & EOBI Report (multi-select site filter, four panels) — **reusing Statem
 computation/aggregation code rather than a second, independent implementation**; Dashboard (summary
 stats, per-site payroll summary, release progress, deduction breakdown, short-TTL caching).
 
+**Actual outcome, Dashboard, 2026-08-13 (Checkpoint 1A, backend foundation):** built as a single
+aggregation endpoint reusing Payroll Summary's own aggregation (`docs/architecture/workflows/
+dashboard.md`) rather than the Fines & EOBI Report/Statements-ledger-reuse path this entry originally
+sketched (Fines & EOBI Report itself was independently superseded by the later Phase 7 Reports
+catalogue — Deduction Report, Salary Release Report, etc. — see `docs/architecture/workflows/
+reports.md`). **No short-TTL cache was built** — deliberately deferred, frozen decision, see
+`dashboard.md §11`; the "Cache invalidation test" item under Testing Strategy below was therefore not
+applicable to this checkpoint and was not built. Site scoping already excludes departed employees
+from `totalEmployees` (`dateOfLeaving: null`), matching this section's own testing-strategy note.
+
 **Depends on:** Phase 6 (Statements must correctly reflect corrections/balance adjustments, which
 don't exist until Phase 6 is built).
 
