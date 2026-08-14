@@ -2233,6 +2233,11 @@ reports.md`). **No short-TTL cache was built** — deliberately deferred, frozen
 `dashboard.md §11`; the "Cache invalidation test" item under Testing Strategy below was therefore not
 applicable to this checkpoint and was not built. Site scoping already excludes departed employees
 from `totalEmployees` (`dateOfLeaving: null`), matching this section's own testing-strategy note.
+**Update, 2026-08-14 (Checkpoint 1B, frontend/UI/E2E, including the Targeted UAT Remediation of the
+AccessDenied dead-end and Site Summary drill-down honesty):** reviewed, committed, and pushed as
+`5a87d00`. Dashboard is now fully complete (Checkpoints 1A and 1B) and live on `main`, closing Phase
+7D — see `docs/architecture/workflows/dashboard.md` and `docs/PROJECT_PROGRESS.md`'s "Dashboard
+Checkpoint 1B" entries for the full record.
 
 **Depends on:** Phase 6 (Statements must correctly reflect corrections/balance adjustments, which
 don't exist until Phase 6 is built).

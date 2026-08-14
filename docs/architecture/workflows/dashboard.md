@@ -13,10 +13,12 @@ has no entry in `database/README.md`'s §-numbered schema index. For the entitie
 `database/payroll-entry.md §12`, `database/release.md §12b/§12c`, `database/corrections.md §13`, and
 `database/advances.md §15`.
 
-**Status:** **Checkpoint 1A (backend foundation) — IMPLEMENTED, awaiting review, NOT COMMITTED.**
-**Checkpoint 1B (frontend, UI, and E2E) — IMPLEMENTED, 2026-08-14, awaiting review, NOT COMMITTED.**
-See `docs/PROJECT_PROGRESS.md`'s "Dashboard Checkpoint 1A" and "Dashboard Checkpoint 1B" entries for
-the full build record of each.
+**Status:** **Checkpoint 1A (backend foundation) — COMPLETE, reviewed, committed, and pushed.**
+**Checkpoint 1B (frontend, UI, and E2E, including the targeted UAT remediation of the AccessDenied
+dead-end and Site Summary drill-down honesty) — COMPLETE, reviewed, committed, and pushed (`5a87d00`).**
+Dashboard is live on `main`. See `docs/PROJECT_PROGRESS.md`'s "Dashboard Checkpoint 1A", "Dashboard
+Checkpoint 1B", and "Dashboard Checkpoint 1B — Targeted UAT Remediation" entries for the full build
+record of each.
 
 ---
 
