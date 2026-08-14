@@ -11259,6 +11259,77 @@ instruction; no other roadmap work started.
 
 ---
 
+## Payroll Entry Frozen Identity Pane + New Employee Unit Selector — Targeted UAT Correction (2026-08-14)
+
+Two independent, narrowly-scoped UAT findings, unrelated to any roadmap item and started/finished in
+one pass; no report, Dashboard, RBAC, payroll calculation, or database schema touched.
+
+**Part A — frozen-pane bleed (real defect, not the one initially suspected).** The prior z-10
+layering correction (UAT 2026-08-12b, `columns.ts`'s `stickyIdentityCellClassName`) genuinely
+protects every scrolling cell's own background/border/text — proven again here by an exhaustive
+real-Chromium sweep (fine-grained scroll offsets, real hover, real wheel-scroll, 2x DPR, 1280/1024/768
+viewports) that found **no** reproduction of a Units-badge background/border bleed on the stated
+baseline. What that fix cannot reach is a *focus ring*: `box-shadow`/`outline` are pure paint,
+invisible to both `elementFromPoint` hit-testing (Scenario J's own method) and ordinary stacking-order
+comparisons, and can render a few px beyond their own cell's box; since a virtualized row is
+`position: absolute` with no z-index of its own, an escaped ring is simply unclipped paint that can
+land on a neighboring row's identity pane. Root cause confirmed by focusing the Units button while
+scrolled underneath the pane and inspecting real screenshots pixel-by-pixel — not by theorizing about
+the CSS. Fixed per-cell (`payroll-entry-row.tsx`): `overflow-hidden` on every scrolling cell that
+holds a focusable control, `self-stretch` so that cell's own box is the full row height (a cell
+shrunk to content height, the CSS Grid default here, leaves no headroom inside its own box to clip a
+ring into), and `focus:ring-inset` for the dense `w-full` text/number inputs specifically
+(`inline-cells.tsx`), which have no spare margin at all for an outward ring. **A genuine dead end,
+recorded so it isn't retried**: the same `overflow-hidden` on the row's own outer container, instead
+of per-cell, looked simpler and more general but broke `position: sticky` outright — `overflow:
+hidden` makes an element a CSS *scroll container*, and since this row never itself scrolls (only the
+outer `role="table"` container does), it silently became the sticky identity cells' nearest such
+ancestor instead of the real one, turning them into plain statically-positioned cells that scrolled
+away with everything else. Caught immediately by the existing Scenario A–J regression suite (all 7
+failed with the row-level version; none did with the final per-cell one) — full record and the
+general invariant statement in `docs/design-system.md`'s "Frozen identity pane (sticky-left)" entry.
+New Scenario K in `28-payroll-entry-frozen-identity.spec.ts` proves containment geometrically (a
+focused ring's own real computed extent, from `box-shadow`, is fully inside its clipping ancestor's
+box) rather than by screenshot diffing — a same-page, moments-apart screenshot comparison was tried
+first and found to false-positive on ordinary sub-pixel rendering noise, consistent with this suite's
+existing avoidance of snapshot-baseline testing.
+
+**Part B — New Employee modal, Unit code display.** UAT finding: the Unit selector (after picking a
+Project Site) showed only the Unit name; users rely on the Unit/branch code for quick recognition.
+Investigation found `ProjectUnit.code` already returned by the existing `GET /api/v1/sites/:id/units`
+endpoint `SiteUnitSelect` already calls (`use-project-units.ts`'s own `ProjectUnit` interface) — a
+frontend-only, presentation-layer fix, no backend/shared-contract change, no second request. Options
+(and the closed select's own displayed value) now read `Name (CODE)`, falling back to the plain name
+when a unit's own code is null — never a bare `"(null)"`. Follows the Bank select's own pre-existing,
+now-formalized `Name (CODE)` convention (`docs/design-system.md`'s new "'Name (CODE)' select option
+labels" entry) rather than inventing a second one; a native `<option>` can't carry nested markup, so
+there is no muted/secondary color for the code specifically, an accepted tradeoff of using a plain
+`<select>`. `SiteUnitSelect` is the one shared selector both Employee Registry's own create/edit form
+and Payroll Entry's "New Employee" quick action render through (`EmployeeFormModal`) — fixed there,
+once, so the two can never diverge.
+
+**Tests**: 5 new `site-unit-select.test.tsx` unit tests (name+code display, null-code fallback,
+correct code-to-unit-id pairing across several units, Unit cleared on Site change, no duplicate Unit
+request); 1 new E2E test in `24-payroll-entry-quick-add-employee.spec.ts` against real backend data
+(no Unit API mock) proving the option list, the selected value, the Site-change reset, and exactly one
+Unit fetch per Site selection; 1 new Scenario K in `28-payroll-entry-frozen-identity.spec.ts` (above).
+Full frontend suite **1052/1052**; `typecheck`/`lint`/`build`/`typecheck:e2e`/`git diff --check` all
+clean; `28-payroll-entry-frozen-identity.spec.ts` **8/8** and `24-payroll-entry-quick-add-
+employee.spec.ts` **5/5** against a real Chromium/Postgres E2E environment.
+
+**Files changed**: `frontend/src/components/payroll-entry/payroll-entry-row.tsx`,
+`frontend/src/components/payroll-entry/payroll-entry-grid.tsx`,
+`frontend/src/components/payroll-entry/inline-cells.tsx`, `frontend/src/components/ui/site-unit-
+select.tsx` (+ new test), `tests/e2e/specs/28-payroll-entry-frozen-identity.spec.ts`,
+`tests/e2e/specs/24-payroll-entry-quick-add-employee.spec.ts`, `docs/design-system.md`,
+`docs/PROJECT_PROGRESS.md`. No backend, `shared/`, Prisma, payroll-calculation, RBAC, Dashboard,
+Variance, or other Reports file touched — confirmed via `git diff --name-status`.
+
+**No commit, push, or deployment occurred this session.** Stopped deliberately per the authorizing
+instruction; no roadmap work started.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

@@ -256,7 +256,13 @@ export function PayrollEntryGrid({
                       <button
                         type="button"
                         onClick={() => toggleSort(header.column.id as SortableColumnId)}
-                        className="flex w-full items-center gap-1 truncate text-left hover:text-text"
+                        // `outline-none focus-visible:ring-*` — same frozen-pane occlusion fix as the
+                        // Units pill button above (`payroll-entry-row.tsx`): a sortable scrolling
+                        // column's native focus outline is not contained by the identity pane's
+                        // stacking order the way a box-shadow ring is, so any sort button that can
+                        // scroll underneath the frozen pane (`unitCode`/`grossPay`/`netSalary`) needs
+                        // the same shared-ring convention, not just the sort chevron's own z-index.
+                        className="flex w-full items-center gap-1 truncate text-left outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-accent-mid focus-visible:ring-offset-1"
                       >
                         <span className="truncate">{flexRender(header.column.columnDef.header, header.getContext())}</span>
                         {isActive ? (

@@ -475,6 +475,172 @@ test.describe('Payroll Entry — Frozen Employee Identity Pane', () => {
     await expect(page.locator('[data-col-id="unitCode"][role="columnheader"]')).toHaveAttribute('aria-sort', 'ascending');
   });
 
+  /**
+   * Scenario K — the exact production report (UAT 2026-08-14): a scrolling cell's *focus ring* (the
+   * Units badge's `box-shadow`, or a `days`/etc. input's own) bleeding into the frozen identity pane
+   * once that cell has scrolled underneath it.
+   *
+   * This is a fundamentally different failure mode than Scenario J's, and needs a fundamentally
+   * different proof. `elementFromPoint` hit-testing (Scenario J's whole method) can only ever prove
+   * "the topmost *hit-testable* element at this point belongs to the identity pane" — it queries
+   * layout-box topology, never painted pixels. A `box-shadow`/`outline` is pure paint: it is not
+   * itself hit-testable, can render a few px beyond its own element's layout box, and — root cause,
+   * confirmed by tracing this exact defect in real Chromium — a virtualized row is `position:
+   * absolute` with no explicit `z-index` of its own, so it does not establish its own stacking
+   * context; a ring that extends past *this* row's own bounds is no longer compared against *this*
+   * row's own identity cell at all, it is simply unclipped paint sitting on top of whatever is
+   * underneath, including a neighboring row's identity pane. Scenario J's own sweep, however
+   * thorough, structurally cannot see this — it would pass even with the defect present, exactly as
+   * it did during triage.
+   *
+   * The real proof is pixel-level: the frozen pane's own on-screen region must render *identically*
+   * whether or not a scrolled-underneath cell happens to be focused. Any difference at all — a ring,
+   * a stray outline pixel, anything — means scrolled content painted somewhere it must not.
+   */
+  test('Scenario K: focusing a scrolling cell that has scrolled underneath the frozen pane (e.g. the Units badge) never changes a single pixel of the pane itself — proven by screenshot, not hit-testing, since a focus ring is pure paint and invisible to elementFromPoint', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    await apiPost(context, '/api/v1/payroll-cycles', { year: 2902, month: 7 }).catch(() => undefined);
+    const label = `FrozenIdK ${Date.now()}`;
+    const { siteId, unitId } = await createSiteAndUnit(context, label);
+    const employeeName = `E2E FrozenId K Employee ${Date.now()}`;
+    await apiPost(context, '/api/v1/employees', { name: employeeName, designation: 'Guard', siteId, unitId, grossPay: '35000' });
+
+    await page.goto('/payroll-entry');
+    await page.waitForLoadState('networkidle');
+    await filterToSite(page, `E2E ${label}`);
+
+    const grid = page.getByRole('table', { name: 'Payroll Entry grid' });
+    await expect(grid.getByText(employeeName)).toBeVisible({ timeout: 5000 });
+
+    /** Scrolls the grid so `colId`'s own column sits fully underneath the frozen pane, then hands
+     * back the frozen pane's own real, currently-stuck clip region — computed fresh from its own
+     * `employeeCode`/`employeeName` geometry (never a guessed pixel box), the same discipline every
+     * other scenario in this file already follows. */
+    async function scrollColumnUnderneathPane(colId: string) {
+      await grid.evaluate((el) => {
+        el.scrollLeft = 0;
+      });
+      const codeHeaderBox0 = (await page.locator('[data-col-id="employeeCode"][role="columnheader"]').boundingBox())!;
+      const targetHeaderBox0 = (await page.locator(`[data-col-id="${colId}"][role="columnheader"]`).boundingBox())!;
+      const naturalLeft = targetHeaderBox0.x - codeHeaderBox0.x;
+      await scrollGridHorizontally(page, Math.round(naturalLeft));
+
+      const codeHeaderBox = (await page.locator('[data-col-id="employeeCode"][role="columnheader"]').boundingBox())!;
+      const nameHeaderBox = (await page.locator('[data-col-id="employeeName"][role="columnheader"]').boundingBox())!;
+      return { x: codeHeaderBox.x, width: nameHeaderBox.x + nameHeaderBox.width - codeHeaderBox.x };
+    }
+
+    /**
+     * The real, geometric proof that a focused control's ring/outline can never reach the frozen
+     * pane: not a screenshot. This codebase has no prior use of whole-image screenshot comparison
+     * (byte-exact or snapshot-baseline) anywhere in this suite, deliberately — two screenshots of the
+     * *same*, unchanged page taken moments apart are not reliably byte-identical (sub-pixel font-
+     * hinting/anti-aliasing noise), which a byte-diff check was confirmed, while writing this
+     * scenario, to false-positive on. `elementFromPoint` hit-testing (Scenario J's method) has the
+     * opposite problem — structurally blind to `box-shadow`/`outline`, which are pure paint with no
+     * hit-testable geometry of their own (see the `units` cell's own comment in
+     * `payroll-entry-row.tsx` for why that matters here specifically).
+     *
+     * The fix this scenario proves is a *containment* fix (`overflow-hidden` on each scrolling cell
+     * that holds a focusable control) — so the direct, deterministic proof is containment itself:
+     * compute the focused ring's own real outer extent from its actual computed `box-shadow` (never
+     * a hardcoded Tailwind class assumption — `ring-2`/`ring-offset-1` are read back from the
+     * browser's own resolved style, so this stays correct even if those utilities change), and
+     * assert that extent is fully inside the nearest ancestor whose own computed `overflow` clips it.
+     * If it is, the ring cannot physically paint outside that box — regardless of z-index, regardless
+     * of which row is virtualized where, regardless of anti-aliasing.
+     */
+    async function assertFocusRingIsContainedByAnAncestorClip(controlSelector: string, colId: string) {
+      const paneClipXRange = await scrollColumnUnderneathPane(colId);
+      const control = grid.locator(controlSelector).first();
+      const controlBox = (await control.boundingBox())!;
+      expect(
+        controlBox.x >= paneClipXRange.x && controlBox.x + controlBox.width <= paneClipXRange.x + paneClipXRange.width,
+        `${controlSelector}: expected this control to have scrolled fully underneath the frozen pane (pane x-range [${paneClipXRange.x}, ${paneClipXRange.x + paneClipXRange.width}], control x-range [${controlBox.x}, ${controlBox.x + controlBox.width}]) — test setup itself is wrong if not.`,
+      ).toBe(true);
+
+      await control.focus();
+      await page.waitForTimeout(150);
+
+      const result = await control.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        // Every comma-separated box-shadow layer's own `blur-radius spread-radius` (the 3rd/4th
+        // length in `offsetX offsetY blur spread color`, in whatever order the UA serializes it) —
+        // the maximum of (blur + spread) across all layers is exactly how far this element's own
+        // painted shadow can extend beyond its border box, in any direction.
+        const lengths = (s: string) => (s.match(/-?[\d.]+px/g) ?? []).map((v) => parseFloat(v));
+        let maxExtent = 0;
+        if (cs.boxShadow && cs.boxShadow !== 'none') {
+          for (const layer of cs.boxShadow.split(/,(?![^(]*\))/)) {
+            // An `inset` shadow is drawn *inside* the border box — e.g. `focus:ring-inset` (this
+            // codebase's own dense-grid-cell convention, `inline-cells.tsx`) — and can never extend
+            // beyond it regardless of its own offset/blur/spread, unlike an ordinary outward shadow.
+            if (/\binset\b/.test(layer)) continue;
+            const nums = lengths(layer);
+            // offsetX, offsetY, blur, spread — a layer may omit blur/spread (defaults 0).
+            const [offsetX = 0, offsetY = 0, blur = 0, spread = 0] = nums;
+            const extent = Math.max(Math.abs(offsetX), Math.abs(offsetY)) + blur + spread;
+            maxExtent = Math.max(maxExtent, extent);
+          }
+        }
+        // Tailwind's `outline-none` utility is a *transparent* 2px outline (`outline: 2px solid
+        // transparent`), not `outline-style: none` — its width/offset are real but it paints nothing
+        // visible, so it must not count as "escaping" paint. Only a non-transparent outline color
+        // (an actual visible outline, e.g. a future control that never adopted this codebase's
+        // shared ring convention) contributes to the extent.
+        const outlineColorCompact = cs.outlineColor.replace(/\s/g, '');
+        const outlineIsVisible =
+          cs.outlineStyle !== 'none' && outlineColorCompact !== 'transparent' && outlineColorCompact !== 'rgba(0,0,0,0)';
+        const outlineWidth = outlineIsVisible ? parseFloat(cs.outlineWidth) + Math.max(0, parseFloat(cs.outlineOffset)) : 0;
+        const extent = Math.max(maxExtent, outlineWidth);
+
+        const elRect = el.getBoundingClientRect();
+        const ringBox = {
+          top: elRect.top - extent,
+          bottom: elRect.bottom + extent,
+          left: elRect.left - extent,
+          right: elRect.right + extent,
+        };
+
+        // Walk up to find the nearest ancestor whose own computed `overflow` would clip this
+        // element's paint (matches any axis set to `hidden`/`clip`/`scroll`/`auto` — not `visible`).
+        let node: HTMLElement | null = el.parentElement;
+        while (node) {
+          const nodeStyle = getComputedStyle(node);
+          if (nodeStyle.overflow !== 'visible' || nodeStyle.overflowX !== 'visible' || nodeStyle.overflowY !== 'visible') {
+            const clipRect = node.getBoundingClientRect();
+            return { extent, ringBox, clipperFound: true, clipRect, clipperTag: node.tagName, clipperColId: node.getAttribute('data-col-id') };
+          }
+          node = node.parentElement;
+        }
+        return { extent, ringBox, clipperFound: false, clipRect: null, clipperTag: null, clipperColId: null };
+      });
+
+      expect(result.clipperFound, `${controlSelector}: no ancestor clips this control's paint at all — a ring/outline here can escape without bound.`).toBe(true);
+      const { ringBox, clipRect } = result;
+      expect(
+        clipRect &&
+          ringBox.top >= clipRect.top - 0.5 &&
+          ringBox.bottom <= clipRect.bottom + 0.5 &&
+          ringBox.left >= clipRect.left - 0.5 &&
+          ringBox.right <= clipRect.right + 0.5,
+        `${controlSelector} (colId="${colId}", clipped by <${result.clipperTag} data-col-id="${result.clipperColId}">): the focused ring's own extent ${JSON.stringify(ringBox)} is not fully contained by its clipping ancestor's box ${JSON.stringify(clipRect)} — it can paint outside its own row, including into the frozen identity pane.`,
+      ).toBe(true);
+
+      await page.keyboard.press('Escape'); // drop focus before the next control is checked
+    }
+
+    // The Units badge — the exact control the production report named.
+    await assertFocusRingIsContainedByAnAncestorClip('[data-col-id="units"] button', 'units');
+    // Every other kind of focusable scrolling control this grid has — proves the fix is general
+    // (each cell's own `overflow-hidden`, `payroll-entry-row.tsx`), not a one-off patch on the Units
+    // button alone: a plain text/number input, and a `ToggleSwitch`.
+    await assertFocusRingIsContainedByAnAncestorClip('[data-col-id="days"] input', 'days');
+    await assertFocusRingIsContainedByAnAncestorClip('[data-col-id="eobiApplicable"] button', 'eobiApplicable');
+  });
+
   /** Responsive/viewport coverage — a narrower, tablet-like viewport (UAT acceptance criteria's own
    * "narrower desktop/tablet-like viewport" requirement). At this width the grid's overall client
    * area is much smaller relative to its ~2,300px+ content, but the frozen identity pane must still

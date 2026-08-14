@@ -283,11 +283,37 @@ function PayrollEntryRowImpl({
     // page is the only way to change it.
     grossPay: <ReadOnlyCell colId="grossPay" align="right">{formatMoney(entry.grossPay)}</ReadOnlyCell>,
     units: (
-      <div role="cell" data-col-id="units" className="flex items-center justify-center">
+      // Frozen Identity Pane UAT correction (2026-08-14) — this is the exact control the reported
+      // Units-badge bleed came from.
+      //
+      // Root cause: `columns.ts`'s `z-10` sticky treatment (2026-08-12b) genuinely wins the
+      // stacking-order comparison for every scrolling cell's own background/border/text — real-
+      // Chromium `elementFromPoint` hit-testing confirms this holds at every scroll offset. What it
+      // cannot reach is a *focus ring*: this button previously relied on the browser's native
+      // `:focus-visible` outline (every other interactive control in this codebase — `Button`,
+      // `ToggleSwitch`, `inline-cells.tsx`'s inputs — already suppresses that for a `box-shadow` ring
+      // instead), and `outline`/`box-shadow` are pure paint, invisible to both hit-testing *and*
+      // normal stacking-order comparisons — they can render a couple px beyond their own element's
+      // layout box regardless of that element's z-index. Since this row is `position: absolute` with
+      // no explicit z-index of its own (virtualization, `payroll-entry-grid.tsx`), it does not form
+      // its own stacking context, so a ring that escapes this cell's box is simply unclipped paint
+      // sitting on top of whatever is underneath — including a neighboring row's identity pane —
+      // rather than something the z-10 tie-break (which only ever compares siblings *within* one row)
+      // has any say over.
+      //
+      // `outline-none` + the shared ring convention closes the "native outline" half of this; this
+      // cell's own `overflow-hidden` closes the rest, by clipping the ring itself to this cell's own
+      // box so it can never render outside the row it belongs to in the first place — deliberately
+      // scoped to this one cell, not the row (tried and reverted; see the row's own `className`
+      // comment for why `overflow-hidden` on the row itself breaks `position: sticky`). Verified by
+      // real pixel sampling (`elementFromPoint` hit-testing cannot see this class of bug at all — it
+      // never queries painted pixels, only layout-box topology) in `28-payroll-entry-frozen-
+      // identity.spec.ts`'s Scenario K.
+      <div role="cell" data-col-id="units" className="flex items-center justify-center self-stretch overflow-hidden">
         <button
           type="button"
           onClick={() => setIsSplitOpen(true)}
-          className="rounded border border-border bg-surface px-2 py-1 text-[10.5px] font-medium text-text transition-colors hover:border-accent-mid hover:text-accent-mid"
+          className="rounded border border-border bg-surface px-2 py-1 text-[10.5px] font-medium text-text outline-none transition-colors hover:border-accent-mid hover:text-accent-mid focus-visible:ring-2 focus-visible:ring-accent-mid focus-visible:ring-offset-1"
           aria-label={`Split by ${unitLabel} — ${entry.employee.name} — currently ${unitCount} ${
             unitCount === 1 ? unitLabel : pluralize(unitLabel)
           }`}
@@ -298,7 +324,16 @@ function PayrollEntryRowImpl({
     ),
 
     days: (
-      <div role="cell" data-col-id="days">
+      // Focused-control containment (Frozen Identity Pane UAT correction, 2026-08-14) — same
+      // mechanism as `units`'s own comment above: `overflow-hidden` clips this input's own focus
+      // ring to this cell's box so it can never bleed into a neighboring row's identity pane. Also
+      // needs `self-stretch` (every cell below shares this) — without it, this cell's own box
+      // shrinks to its content's height (the input's, ~26px) and is centered within the 40px row by
+      // the parent grid's `items-center` instead, leaving no room *inside this cell's own box* for
+      // the ring to be clipped into; `self-stretch` (+ `flex items-center`, replacing that same
+      // centering locally) makes the cell itself the full `ROW_HEIGHT` tall, with real headroom
+      // `overflow-hidden` can actually use.
+      <div role="cell" data-col-id="days" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveLine.days}
           onChange={(v) => editor.setWorkLineField('days', v)}
@@ -310,7 +345,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     otHours: (
-      <div role="cell" data-col-id="otHours">
+      <div role="cell" data-col-id="otHours" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveLine.otHours}
           onChange={(v) => editor.setWorkLineField('otHours', v)}
@@ -322,7 +357,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     otRate: (
-      <div role="cell" data-col-id="otRate">
+      <div role="cell" data-col-id="otRate" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveLine.otRate ?? ''}
           onChange={(v) => editor.setWorkLineField('otRate', v || null)}
@@ -335,7 +370,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     cycleDays: (
-      <div role="cell" data-col-id="cycleDays">
+      <div role="cell" data-col-id="cycleDays" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={cycleDaysInputValue}
           onChange={(v) => editor.setWorkLineField('cycleDays', v)}
@@ -347,7 +382,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     leaveDays: (
-      <div role="cell" data-col-id="leaveDays">
+      <div role="cell" data-col-id="leaveDays" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.leaveDays}
           onChange={(v) => editor.setEntryField('leaveDays', v)}
@@ -359,7 +394,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     leaveRate: (
-      <div role="cell" data-col-id="leaveRate">
+      <div role="cell" data-col-id="leaveRate" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.leaveRate ?? ''}
           onChange={(v) => editor.setEntryField('leaveRate', v || null)}
@@ -372,7 +407,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     allowance: (
-      <div role="cell" data-col-id="allowance">
+      <div role="cell" data-col-id="allowance" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.allowance}
           onChange={(v) => editor.setEntryField('allowance', v)}
@@ -385,7 +420,7 @@ function PayrollEntryRowImpl({
     ),
 
     eobiAmount: (
-      <div role="cell" data-col-id="eobiAmount">
+      <div role="cell" data-col-id="eobiAmount" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.eobiAmount}
           onChange={(v) => editor.setEntryField('eobiAmount', v)}
@@ -397,7 +432,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     eobiApplicable: (
-      <div role="cell" data-col-id="eobiApplicable" className="flex justify-center">
+      <div role="cell" data-col-id="eobiApplicable" className="flex items-center justify-center self-stretch overflow-hidden">
         <ToggleSwitch
           checked={effectiveEntry.eobiApplicable}
           onCheckedChange={(v) => editor.setEntryField('eobiApplicable', v)}
@@ -409,7 +444,7 @@ function PayrollEntryRowImpl({
     ),
 
     advanceDeduction: (
-      <div role="cell" data-col-id="advanceDeduction" className="flex flex-col justify-center">
+      <div role="cell" data-col-id="advanceDeduction" className="flex flex-col justify-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.advanceDeduction}
           onChange={(v) => editor.setEntryField('advanceDeduction', v)}
@@ -432,7 +467,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     eidAdvanceDeduction: (
-      <div role="cell" data-col-id="eidAdvanceDeduction" className="flex flex-col justify-center">
+      <div role="cell" data-col-id="eidAdvanceDeduction" className="flex flex-col justify-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.eidAdvanceDeduction}
           onChange={(v) => editor.setEntryField('eidAdvanceDeduction', v)}
@@ -447,7 +482,7 @@ function PayrollEntryRowImpl({
       </div>
     ),
     fine: (
-      <div role="cell" data-col-id="fine">
+      <div role="cell" data-col-id="fine" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell
           value={effectiveEntry.fine}
           onChange={(v) => editor.setEntryField('fine', v)}
@@ -461,7 +496,7 @@ function PayrollEntryRowImpl({
     ),
 
     hold: (
-      <div role="cell" data-col-id="hold" className="flex justify-center">
+      <div role="cell" data-col-id="hold" className="flex items-center justify-center self-stretch overflow-hidden">
         <ToggleSwitch
           checked={effectiveEntry.hold}
           onCheckedChange={(v) => editor.setEntryField('hold', v)}
@@ -473,7 +508,7 @@ function PayrollEntryRowImpl({
     ),
 
     remarks: (
-      <div role="cell" data-col-id="remarks">
+      <div role="cell" data-col-id="remarks" className="flex items-center self-stretch overflow-hidden">
         <InlineTextCell
           value={effectiveEntry.remarks ?? ''}
           onChange={(v) => editor.setEntryField('remarks', v || null)}
@@ -543,6 +578,19 @@ function PayrollEntryRowImpl({
         // `flex` (not `grid`) at this outer level (UAT 2026-08-12 row-action correction) — the row's
         // data-cell grid and its trailing `⋯` action are two flex siblings below, not grid tracks,
         // so the action can never become a `gridTemplateColumns` track/column.
+        //
+        // Deliberately NOT `overflow-hidden` here (tried and reverted during the 2026-08-14 Frozen
+        // Identity Pane UAT correction) — per the CSS Overflow spec, `overflow: hidden` establishes a
+        // *scroll container* (it just happens to be one a user can't scroll by gesture), and
+        // `employeeCode`/`employeeName`'s `position: sticky` (`columns.ts`'s `stickyIdentityCellClassName`)
+        // sticks relative to its nearest such ancestor. Adding it here would make *this row* — which
+        // never itself scrolls; only the outer `role="table"` container does — that nearest ancestor
+        // instead of the real scroll container, silently turning the sticky cells into plain
+        // statically-positioned ones that scroll away with everything else. Confirmed by a real-
+        // Chromium regression during this same fix: with it in place, the identity cells vanished
+        // entirely at any non-trivial scroll offset instead of staying pinned. The per-cell
+        // `overflow-hidden` on individual *scrolling* cells below (never on this row, never on the
+        // identity cells themselves) is the safe version of the same idea — see `units`'s own comment.
         'flex border-b border-border text-xs',
         // Independent-review remediation (M4) — `twMerge` resolves a `bg-*` conflict by keeping only
         // the *last* class in this list, so a naive `bg-danger-light/40` here previously dropped

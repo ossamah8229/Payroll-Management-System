@@ -219,6 +219,102 @@ test.describe('Payroll Entry — New Employee quick action', () => {
     });
   });
 
+  /**
+   * UAT correction (2026-08-14) — the Unit selector in this same modal showed only the Unit name;
+   * users rely on the Unit/branch code for quick recognition, especially with several similarly-
+   * named units under one site. `SiteUnitSelect` (`frontend/src/components/ui/site-unit-select.tsx`)
+   * is the one shared selector both this quick action and Employee Registry's own create/edit form
+   * render through — fixed there, once. Real backend data throughout (a real `ProjectUnit.code`
+   * from a real create call, a real Project Site selection triggering a real Unit fetch) — the Unit
+   * API is never mocked for this flow, per this correction's own scope.
+   */
+  test('New Employee modal — selecting a Project Site loads Units labeled "Name (CODE)", the selected value shows the same, and the correct code stays paired with its own unit through a Site change', async ({
+    authenticatedPage: page,
+  }) => {
+    const ctx = page.context();
+    await ensureCycleExists(ctx);
+    const label = `E2E UnitCode ${Date.now()}`;
+    const siteOne = await apiPost<{ site: { id: string } }>(ctx, '/api/v1/sites', { name: `${label} One` });
+    const siteTwo = await apiPost<{ site: { id: string } }>(ctx, '/api/v1/sites', { name: `${label} Two` });
+    const unitA = await apiPost<{ unit: { id: string } }>(ctx, `/api/v1/sites/${siteOne.site.id}/units`, {
+      name: 'General Administration',
+      code: 'GA-01',
+    });
+    const unitB = await apiPost<{ unit: { id: string } }>(ctx, `/api/v1/sites/${siteOne.site.id}/units`, {
+      name: 'Cleaning Department',
+      code: 'CD-01',
+    });
+    // No code at all — a genuinely nullable field; must fall back to the plain name, never "(null)".
+    const unitNoCode = await apiPost<{ unit: { id: string } }>(ctx, `/api/v1/sites/${siteOne.site.id}/units`, {
+      name: 'Unlabeled Unit',
+    });
+    const unitOtherSite = await apiPost<{ unit: { id: string } }>(ctx, `/api/v1/sites/${siteTwo.site.id}/units`, {
+      name: 'Other Site Branch',
+      code: 'OS-01',
+    });
+
+    await page.goto('/payroll-entry');
+    await page.waitForLoadState('networkidle');
+
+    const unitRequests: string[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'GET' && /\/api\/v1\/sites\/.+\/units$/.test(req.url())) {
+        unitRequests.push(req.url());
+      }
+    });
+
+    await page.getByRole('button', { name: 'New Employee' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    // Before a site is picked, the Unit selector is disabled and empty — no premature/unscoped fetch.
+    await expect(page.locator('#site-unit-select-unit')).toBeDisabled();
+    expect(unitRequests).toHaveLength(0);
+
+    await page.selectOption('#site-unit-select-site', siteOne.site.id);
+    await expect(page.locator('#site-unit-select-unit')).toBeEnabled();
+
+    const unitSelect = page.locator('#site-unit-select-unit');
+    await expect(unitSelect.locator('option', { hasText: 'General Administration (GA-01)' })).toHaveCount(1);
+    await expect(unitSelect.locator('option', { hasText: 'Cleaning Department (CD-01)' })).toHaveCount(1);
+    await expect(unitSelect.locator('option', { hasText: 'Unlabeled Unit' })).toHaveCount(1);
+    // Never a bare "(null)"/"(undefined)" artifact for the no-code unit.
+    await expect(unitSelect.locator('option', { hasText: '(null)' })).toHaveCount(0);
+
+    // Exactly one Unit fetch for this one Site selection — the code came from that same response,
+    // never a second, code-specific request.
+    expect(unitRequests).toHaveLength(1);
+
+    // Selecting Unit A shows "Name (CODE)" as the closed select's own displayed value too, and it's
+    // genuinely paired with Unit A's own id (not a name-based guess) — select Unit B instead and
+    // confirm the value/id move together.
+    await page.selectOption('#site-unit-select-unit', unitA.unit.id);
+    await expect(unitSelect).toHaveValue(unitA.unit.id);
+    expect(await unitSelect.evaluate((el: HTMLSelectElement) => el.selectedOptions[0]!.textContent)).toBe(
+      'General Administration (GA-01)',
+    );
+
+    await page.selectOption('#site-unit-select-unit', unitB.unit.id);
+    await expect(unitSelect).toHaveValue(unitB.unit.id);
+    expect(await unitSelect.evaluate((el: HTMLSelectElement) => el.selectedOptions[0]!.textContent)).toBe(
+      'Cleaning Department (CD-01)',
+    );
+
+    // Changing the Project Site clears the now-incompatible Unit selection and loads the new site's
+    // own units (a second, genuinely necessary fetch — not a duplicate of the first).
+    await page.selectOption('#site-unit-select-site', siteTwo.site.id);
+    await expect(unitSelect).toHaveValue('');
+    await expect(unitSelect.locator('option', { hasText: 'Other Site Branch (OS-01)' })).toHaveCount(1);
+    await expect(unitSelect.locator('option', { hasText: 'General Administration' })).toHaveCount(0);
+    expect(unitRequests).toHaveLength(2);
+
+    await page.selectOption('#site-unit-select-unit', unitOtherSite.unit.id);
+    await expect(unitSelect).toHaveValue(unitOtherSite.unit.id);
+
+    await page.keyboard.press('Escape');
+    void unitNoCode;
+  });
+
   test('employees:create permission behavior is preserved — hidden on both pages alike when absent', async ({
     browser,
   }) => {

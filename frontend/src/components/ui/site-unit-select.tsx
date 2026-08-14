@@ -81,9 +81,18 @@ export function SiteUnitSelect({
           <option value="" disabled>
             {siteId ? `Select a ${unitLabel.toLowerCase()}` : 'Select a site first'}
           </option>
+          {/* Unit Name (CODE) — UAT correction, 2026-08-14: users rely on the unit/branch code for
+              quick recognition, especially with several similarly-named units under one site. `code`
+              already comes back on every `ProjectUnit` this `useProjectUnits` query already loads
+              (`use-project-units.ts`) — no second request, no frontend-side lookup table, never
+              typed by the user. Native `<option>` text can't carry its own muted/secondary styling
+              (no nested markup), so this follows the same plain `Name (CODE)` convention the Bank
+              select already established (`employee-form-modal.tsx`'s `{bank.name} ({bank.code})`)
+              rather than inventing a different one just for this selector; the *selected* value shown
+              in the closed select is this same option text, so it reads identically there too. */}
           {(units.data ?? []).map((unit) => (
             <option key={unit.id} value={unit.id}>
-              {unit.name}
+              {unit.code ? `${unit.name} (${unit.code})` : unit.name}
             </option>
           ))}
         </select>
