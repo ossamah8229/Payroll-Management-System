@@ -1,7 +1,7 @@
 import type { PDFOptions } from 'puppeteer';
 import { closeBrowser, discardBrowser, getBrowser } from './browser';
 import { logger } from '../logger';
-import { env } from '../../config/env';
+import { env, usePdfTestWorker } from '../../config/env';
 import { normalizeError } from './normalize-error';
 import { closeTestWorkerBrowser, discardTestWorkerBrowser, renderViaTestWorker } from './worker/pdf-worker-client';
 
@@ -58,22 +58,34 @@ async function withStage<T>(stage: RenderStage, fn: () => Promise<T>): Promise<T
  * failure is never retried again — it propagates to the caller exactly as before, so a genuinely
  * broken configuration still surfaces as a real error rather than being silently masked.
  *
- * **Phase 7H — test-only worker delegation**: in `NODE_ENV=test`, the actual Puppeteer work below
- * (`renderOnce`) is never invoked in-process. Jest's `--experimental-vm-modules` mode disposes each
- * test *file's* own VM realm independently, and this module's dynamic `import('puppeteer')`
- * (`browser.ts`'s own documented ESM-interop workaround) is a genuine, sometimes slow, native
- * Node operation — under real concurrent load, proven by direct reproduction (see
- * `docs/architecture/testing.md`'s "Backend PDF test architecture" section) to sometimes resolve
- * *after* Jest has already torn down the realm that started it, which Jest's own module registry
- * then rejects with `"Test environment has been torn down"` — a Jest/VM-lifecycle race, not an
- * application defect (confirmed: the identical render always succeeds outside Jest). Delegating to
- * `pdf-worker-client.ts`, a persistent child process untouched by any Jest VM realm, eliminates the
- * race entirely while still exercising this exact `renderOnce`/`browser.ts` code — the worker
- * imports and calls them directly, so production behavior and output are unchanged either way.
+ * **Phase 7H — test-only worker delegation**: when `usePdfTestWorker` (`config/env.ts`) is true,
+ * the actual Puppeteer work below (`renderOnce`) is never invoked in-process. Jest's
+ * `--experimental-vm-modules` mode disposes each test *file's* own VM realm independently, and this
+ * module's dynamic `import('puppeteer')` (`browser.ts`'s own documented ESM-interop workaround) is
+ * a genuine, sometimes slow, native Node operation — under real concurrent load, proven by direct
+ * reproduction (see `docs/architecture/testing.md`'s "Backend PDF test architecture" section) to
+ * sometimes resolve *after* Jest has already torn down the realm that started it, which Jest's own
+ * module registry then rejects with `"Test environment has been torn down"` — a Jest/VM-lifecycle
+ * race, not an application defect (confirmed: the identical render always succeeds outside Jest).
+ * Delegating to `pdf-worker-client.ts`, a persistent child process untouched by any Jest VM realm,
+ * eliminates the race entirely while still exercising this exact `renderOnce`/`browser.ts` code —
+ * the worker imports and calls them directly, so production behavior and output are unchanged
+ * either way.
+ *
+ * **`usePdfTestWorker`, not bare `NODE_ENV=test`** (Phase 3A CI-hardening fix): the E2E harness
+ * also runs the real *compiled* backend with `NODE_ENV=test` (needed for `auth.routes.ts`'s
+ * relaxed login rate limit), but that build's `dist/` tree never contains
+ * `pdf-worker.entry.ts` — only Jest's `ts-jest`/`tsx` toolchain can resolve the worker's
+ * source-only entry point. Gating on bare `NODE_ENV=test` made that real, non-Jest server try to
+ * spawn a file that doesn't exist on every PDF request, burning three sequential 30s worker-ready
+ * timeouts (~90s) before failing — confirmed by direct reproduction against the real E2E stack.
+ * `usePdfTestWorker` requires an explicit `PDF_TEST_WORKER=1` in addition to `NODE_ENV=test`,
+ * which only backend Jest's own `tests/env.setup.ts` sets, so the E2E backend (and any real
+ * deployment) always uses the real in-process renderer.
  */
 export async function renderHtmlToPdf(html: string, options: RenderPdfOptions = {}): Promise<Buffer> {
-  const attempt = env.NODE_ENV === 'test' ? renderViaTestWorker : renderOnce;
-  const discard = env.NODE_ENV === 'test' ? discardTestWorkerBrowser : discardBrowserSafe;
+  const attempt = usePdfTestWorker ? renderViaTestWorker : renderOnce;
+  const discard = usePdfTestWorker ? discardTestWorkerBrowser : discardBrowserSafe;
   return renderWithOneRetry(html, options, attempt, discard);
 }
 
@@ -124,7 +136,7 @@ function discardBrowserSafe(): Promise<void> {
  * `browser.ts`'s `closeBrowser()` directly; it recycles whichever one is actually rendering.
  */
 export async function closePdfRenderer(): Promise<void> {
-  if (env.NODE_ENV === 'test') {
+  if (usePdfTestWorker) {
     await closeTestWorkerBrowser();
     return;
   }

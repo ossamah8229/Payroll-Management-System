@@ -119,7 +119,8 @@ Puppeteer browser via `browser.ts`'s singleton, subject to the race above.
 **New architecture**: a persistent PDF test worker, `backend/src/lib/pdf/worker/`
 (`pdf-worker.entry.ts` the child process itself, `pdf-worker-client.ts` the parent-side API,
 `protocol.ts` the newline-delimited-JSON wire format). `render-pdf.ts`'s `renderHtmlToPdf()`
-delegates to it whenever `NODE_ENV=test` — every Jest run, local and CI — and is unchanged for
+delegates to it whenever `usePdfTestWorker` (`config/env.ts`) is true — see "NODE_ENV=test does not
+imply the PDF test worker" below for exactly when that is — and is unchanged for
 `development`/`production`; the worker itself imports and calls the exact same
 `renderOnce()`/`browser.ts` code, not a reimplementation, so production rendering output is
 identical either way.
@@ -168,6 +169,50 @@ via the repetition above — **substantially improved for this specific failure 
 *separate* off-by-one query-count flake (next section) is unchanged and still open; KI-10 in
 `docs/release/KNOWN_ISSUES_v1.0.md` is updated to distinguish the two rather than treating them as
 one issue with one status.
+
+### NODE_ENV=test does not imply the PDF test worker (Phase 3A CI-hardening fix)
+
+**Confirmed root cause of a Phase 3 E2E CI failure**, distinct from the Jest-VM-teardown race
+above. Wiring the Playwright suite into CI (`.github/workflows/ci.yml`'s `e2e` job) surfaced a
+second, unrelated defect in the same delegation decision: `renderHtmlToPdf()` originally gated the
+test-worker delegation on bare `NODE_ENV=test`, on the assumption that any `NODE_ENV=test` process
+*is* a Jest test file. That assumption is false for this project's own E2E harness —
+`tests/e2e/setup/e2e-environment.ts` deliberately starts the real *compiled* backend
+(`node dist/server.js`) with `NODE_ENV=test`, needed only so `auth.routes.ts`'s login rate limiter
+relaxes from 10 to 1000 attempts (`isTest ? 1000 : 10` — the E2E suite performs many real logins
+from one IP). That real server's `dist/` build never contains the worker's own source-only entry
+point (`pdf-worker-client.ts`'s `WORKER_ENTRY`, resolved as `pdf-worker.entry.ts` — `tsc` only ever
+emits `.js`), so every PDF request in the compiled E2E backend tried to spawn a file that doesn't
+exist, got `ERR_MODULE_NOT_FOUND`, and `renderWithOneRetry`'s own attempt→discard→retry sequence
+burned three independent 30-second worker-ready timeouts (confirmed by direct reproduction: ~90s
+before a 500 response) — comfortably past `15-statements.spec.ts`'s 60-second
+`page.waitForEvent('download')` wait, and the only E2E spec in the whole suite that exercises real
+PDF rendering (every other download spec covers xlsx/csv, which never touch this code path).
+
+**Fix**: `config/env.ts` adds a dedicated `PDF_TEST_WORKER` env var (schema-validated, defaults to
+`'0'`) and exports `usePdfTestWorker = isTest && env.PDF_TEST_WORKER === '1'` — both conditions
+required, so neither signal alone can select the worker. `backend/tests/env.setup.ts` (Jest's own
+`setupFiles`, applied to every backend test file automatically) sets `PDF_TEST_WORKER=1`; nothing
+else in the codebase ever sets it, so:
+
+| Runtime | `NODE_ENV` | `PDF_TEST_WORKER` | Renderer used |
+|---|---|---|---|
+| Backend Jest | `test` | `1` (`tests/env.setup.ts`) | Jest-only test worker |
+| E2E harness (real compiled backend) | `test` | unset | Real in-process Puppeteer renderer |
+| Production / any real deployment | `production` | unset | Real in-process Puppeteer renderer |
+| Misconfigured production-like runtime | `production`/`development` | `1` (accidental) | Real in-process Puppeteer renderer — the `isTest &&` half of `usePdfTestWorker` ignores `PDF_TEST_WORKER` outside `NODE_ENV=test`, so this can never accidentally select the worker |
+
+`backend/tests/pdf-worker-mode-selection.test.ts` proves all four rows directly — both
+`usePdfTestWorker`'s own value (reloading `config/env.ts` fresh per case via `jest.isolateModules`)
+and `renderHtmlToPdf()`'s actual routing (mocking the worker client and `browser.ts` to observe
+which one a render call reaches, never launching real Chrome).
+
+**Verified**: the full backend Jest suite (1830/1831 — the one unrelated failure is
+`overtime-report-performance.test.ts`'s already-self-documented, Postgres-planner-dependent
+EXPLAIN-plan assertion, not an auth/PDF issue) on a fresh database; `15-statements.spec.ts` three
+consecutive times against the real E2E stack (11/11 each run, Export PDF in 4-5s, zero worker
+crash/pid files, zero orphaned processes after teardown — confirming the compiled E2E backend never
+attempts to resolve `pdf-worker.entry.ts` at all).
 
 ## Why Puppeteer *and* Playwright both exist in this repository
 
@@ -242,6 +287,44 @@ npm run test:backend              # requires a provisioned payroll_dev — see a
 npm run test:frontend             # no database needed
 npm run test:e2e                  # provisions and tears down its own database — see above
 ```
+
+## Continuous integration (Test Reliability Remediation Phase 3)
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`, as three
+independent jobs on `ubuntu-latest`. Any job failing (a test, typecheck, lint, build, migration, or
+seed step) fails the whole workflow — nothing is retried away or suppressed.
+
+| Job | Runs | Database | Notes |
+|---|---|---|---|
+| `backend` | Prisma generate/migrate/seed, backend typecheck, backend lint, canonical backend Jest (`npm run test --workspace backend`, the Phase 2 `NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072'` heap setting lives once in `backend/package.json`'s own `test` script), backend build | A `postgres:16-alpine` service container, fresh per run | Puppeteer's Chrome is installed via `npx puppeteer browsers install chrome` (`working-directory: backend`, so `.puppeteerrc.cjs` resolves) before the PDF-rendering tests run |
+| `frontend` | Frontend typecheck, frontend lint, canonical frontend Vitest (`npm run test --workspace frontend`, non-watch `vitest run`), frontend build | None — jsdom/Node only, no network | Needs `shared/dist` built first, same as any other `@payroll/shared` consumer |
+| `e2e` | E2E spec typecheck, canonical Playwright suite (`npm run test:e2e`) | `tests/e2e/setup/e2e-environment.ts`'s own disposable embedded-postgres cluster (port `55432`), provisioned and torn down entirely inside Playwright's `globalSetup`/`globalTeardown` — no CI service container | Runs only after `backend` and `frontend` both pass (`needs:`), so a broken branch fails fast before paying for the E2E stack's own build/start cost. Installs Chromium via `npx playwright install --with-deps chromium` (`--with-deps` adds the OS libraries a bare runner lacks) and, separately, Puppeteer's Chrome (`working-directory: backend`) — the real backend the harness starts renders real payslip/statement PDFs at runtime (specs 13, 15, 16) |
+
+**Database lifecycle**: the `backend` job's Postgres is a GitHub Actions service container — created
+fresh for that job's runner and discarded when the job ends, never shared across jobs or runs. The
+`e2e` job has no service container at all; `tests/e2e/setup/e2e-environment.ts` (unchanged by this
+work — see "Database provisioning per suite" above) provisions its own embedded PostgreSQL cluster,
+builds and starts the real backend/frontend, waits on `/health` and the frontend root before handing
+control to Playwright, and tears everything down in `globalTeardown` regardless of outcome. Neither
+path can ever reach a developer's local `payroll_dev`.
+
+**Readiness checks**: the `e2e` job has no explicit wait step in the workflow itself —
+`e2e-environment.ts`'s `waitForUrl()` polls the backend's `/health` endpoint and the frontend root
+(30s timeout each, checking the spawned process hasn't already exited) before `startEnvironment()`
+returns, and Playwright's `globalSetup` blocks the whole test run until that promise resolves. The
+`backend` job's Postgres service container has its own `pg_isready`-based health check
+(`options:` block) that GitHub Actions waits on before any step runs.
+
+**Artifacts**: on `e2e` job failure only, the Playwright HTML report (`playwright-report/`) and
+per-test traces/screenshots/videos (`test-results/`) are uploaded as workflow artifacts (7-day
+retention) — both are already gitignored, generated fresh per run. Backend/frontend step output
+(Jest/Vitest/tsc/eslint) streams directly to the job log; no separate artifact step was added for
+those.
+
+**Concurrency**: a `concurrency` group keyed on `github.ref` cancels a now-superseded run on the
+same branch/PR when a newer push arrives, purely to avoid paying for a stale E2E run — GitHub
+Actions never lets two jobs share the same runner VM, so there is no actual port/database collision
+risk between separate workflow runs to begin with.
 
 ## Current verified counts
 

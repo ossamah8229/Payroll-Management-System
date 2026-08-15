@@ -8,6 +8,14 @@ import { z } from 'zod';
  */
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Selects the Jest-only PDF test worker (`lib/pdf/worker/`) instead of the real in-process
+  // renderer — deliberately a *separate* signal from NODE_ENV=test. The E2E harness also runs the
+  // real compiled backend with NODE_ENV=test (needed for auth.routes.ts's relaxed login rate
+  // limit), but its dist/ build never contains the worker's own source-only entry point, so that
+  // real server must always use the real renderer. Only backend Jest (`tests/env.setup.ts`) sets
+  // this to '1'; every other runtime — including a misconfigured production deploy that somehow
+  // has it set — defaults it out via `usePdfTestWorker`'s own NODE_ENV=test requirement below.
+  PDF_TEST_WORKER: z.enum(['0', '1']).default('0'),
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 characters'),
@@ -77,3 +85,8 @@ export const env = loadEnv();
 
 export const isProduction = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';
+// Both conditions required, on purpose: NODE_ENV=test alone (the E2E harness's real compiled
+// backend) must never select the Jest-only worker, and PDF_TEST_WORKER=1 alone (e.g. an
+// accidental leftover in a production-like environment) must never do so either — only Jest's own
+// `tests/env.setup.ts` sets both.
+export const usePdfTestWorker = isTest && env.PDF_TEST_WORKER === '1';

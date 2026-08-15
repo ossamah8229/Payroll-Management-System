@@ -4,6 +4,11 @@
 // actual environment variables — these are fallbacks, not fixed values.
 
 process.env.NODE_ENV ??= 'test';
+// Backend Jest's own canonical PDF strategy — real Puppeteer rendering delegated to the shared,
+// persistent test worker (`lib/pdf/worker/`), never NODE_ENV=test alone (that would also make the
+// E2E harness's real compiled backend, which needs NODE_ENV=test for a relaxed login rate limit,
+// try to use it — see `config/env.ts`'s `usePdfTestWorker` and `render-pdf.ts`'s own doc comment).
+process.env.PDF_TEST_WORKER ??= '1';
 process.env.DATABASE_URL ??=
   'postgresql://payroll:payroll_dev_password@localhost:5432/payroll_dev?schema=public';
 process.env.SESSION_SECRET ??= 'test-only-session-secret-not-for-production-use';
