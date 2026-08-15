@@ -280,6 +280,21 @@ test.describe('Corrections workflow', () => {
     await page.getByRole('button', { name: 'Release', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Release Unit' }).click();
     await expect(page.getByText('Released', { exact: true })).toBeVisible();
+
+    // Finalize requires every PayrollEntry in the WHOLE cycle to be released or held, not just this
+    // scenario's own target site's Unit above — and this suite's specs deliberately share the one
+    // system-wide Draft cycle (`tests/e2e/README.md`), so other specs' own entries at other sites
+    // are genuinely, legitimately present here too (06-ui-regression.spec.ts's sticky-header test,
+    // for one, creates 40 unrelated employees purely to overflow the grid — not test contamination
+    // to clean up, just another spec's own real fixture data in the one shared roster). Resolving
+    // every other site via the same `/units/release-all` endpoint (Phase 7F)
+    // `27-payroll-entry-employee-row-actions.spec.ts`'s own Scenario D already uses for exactly this
+    // reason makes this scenario's own Finalize deterministic regardless of what else has
+    // accumulated in the shared roster by the time it runs — never a fixed assumption that this
+    // scenario's target site is the only one present. Idempotent for the target Unit itself
+    // (already released, immediately above) — `releaseAllEligible`'s own `unitsAlreadyReleased`
+    // count, `payroll-release.service.ts`.
+    await apiPost(context, `/api/v1/payroll-cycles/${draft.id}/units/release-all`, {});
     await page.getByRole('button', { name: 'Finalize Cycle' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Finalize Cycle' }).click();
     await expect(statusBadge(page, '· Released')).toBeVisible();
@@ -313,11 +328,33 @@ test.describe('Corrections workflow', () => {
     await page.goto(`/payroll-cycles/${newDraft.id}/release`);
     await page.locator('#salary-release-site').selectOption({ label: target.siteName });
     await page.getByRole('button', { name: 'Release', exact: true }).click();
+    // This release is the real Finalize + Materialization operation Scenario 4 is proving out: it's
+    // the exact moment `releaseProjectUnit` consumes the ACTIVE reservation inside its own
+    // transaction, flipping the Materialization ACTIVE -> CONSUMED and creating the
+    // BalanceAdjustmentSettlement row (payroll-release.service.ts calling
+    // `consumeMaterializationsForReleasedEntries`, corrections.materialization.service.ts).
+    // Registering the wait before the confirm click (so the request can't complete before the
+    // listener is armed) and awaiting the real POST response — not just the "Released" badge's own
+    // eventual re-render — proves the new Draft cycle's settlement is genuinely committed
+    // server-side before anything downstream reads it back, instead of trusting a bare
+    // `toBeVisible()` to out-poll however long that commit actually takes.
+    const releaseUnitResponse = page.waitForResponse(
+      (res) => /\/payroll-cycles\/[^/]+\/units\/[^/]+\/release$/.test(res.url()) && res.request().method() === 'POST',
+    );
     await page.getByRole('dialog').getByRole('button', { name: 'Release Unit' }).click();
-    await expect(page.getByText('Released', { exact: true })).toBeVisible();
+    await releaseUnitResponse;
+    // Exact-match, `<span>`-scoped: the release table's own "Released" column header is a `<th>`
+    // that also matches plain `getByText('Released', { exact: true })`, and — once every Unit at
+    // this site is released — `SiteReleaseStatusBadge`'s "Site: Released" summary badge is a second
+    // `<span>` that a substring-based filter (this file's own `statusBadge` helper) would also
+    // match. The regex anchors to the Unit row's own badge exactly, excluding both — a strict-mode
+    // ambiguity that only surfaces reliably now that the wait above lands after all three render.
+    await expect(page.locator('span').filter({ hasText: /^Released$/ })).toBeVisible();
 
     // Back on the same BalanceAdjustment detail page: SETTLED, no more Record Settlement action,
-    // the reservation realized as a genuine settlement row.
+    // the reservation realized as a genuine settlement row. The release POST above already proves
+    // the settlement committed server-side, so this fresh navigation's own GET reads real state,
+    // never a page.goto() racing an as-yet-unresolved release.
     await page.goto(balanceAdjustmentUrl);
     await expect(page.getByText('SETTLED', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Record Settlement' })).toHaveCount(0);

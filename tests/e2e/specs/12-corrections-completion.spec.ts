@@ -4,10 +4,17 @@ import { apiGet } from '../helpers/api';
 /**
  * Corrections Workflow Redesign / RBAC completion checkpoint — the new frontend surfaces this
  * checkpoint added, driven through the real UI against the real backend/database:
- *   1. Payroll Entry's per-row Released badge + Create Correction / View Correction History
- *      actions (payroll-entry-row.tsx) — the entry point the previous checkpoint's own review
- *      found missing (a single page-wide toolbar button, no per-row indication of which rows it
- *      even applied to).
+ *   1. Payroll Entry's Released badge, and the correction workflow reachable from it — originally a
+ *      per-row Create Correction / View Correction History action (payroll-entry-row.tsx), but that
+ *      row-level control was deliberately removed in `9183dd1` ("refactor(payroll-entry): remove
+ *      redundant Status actions and unused correction-history modal"): Create Correction was fully
+ *      redundant with the page-level "Request Correction" toolbar button (its own Employee field
+ *      can already search and target any released entry), and View Correction History had no exact
+ *      substitute for a `payroll:entry`-only, non-approver caller — the closest alternative,
+ *      Corrections' "My Requests" tab, is scoped to that user's own submitted requests, not every
+ *      request against a given entry — so it was removed with the row wiring rather than kept as
+ *      dead code. This file's own scenarios below now exercise the current, page-level workflow
+ *      instead of the removed row action.
  *   2. The reusable EmployeeLookup combobox (Advances' Record Advance modal).
  *   3. Standard print support (PrintButton/PrintContextHeader, AppShell's print: utilities).
  *   4. Downloadable import templates (Employee Registry). Payroll Entry's own equivalent test was
@@ -27,20 +34,63 @@ interface EntryRow {
   released: boolean;
 }
 
+/**
+ * Checks every RELEASED/ARCHIVED cycle, not just the first one found — a cycle can legitimately
+ * finalize with zero `released: true` entries at all (every entry resolved via `RECOVERY_DUE`/
+ * `NO_PAY_DUE` instead, `payroll-processing.service.ts`'s own finalize precondition only requires
+ * released-or-held-or-resolved, never "at least one genuinely released entry"). Concretely: a
+ * rolled-over PayrollEntry starts each new cycle with fresh, unset attendance (`days: 0`), so an
+ * employee whose entry was released in an earlier cycle can easily net negative — RECOVERY_DUE, not
+ * released — in the very next one if nothing sets its days again first (`02-payroll-lifecycle.
+ * spec.ts`'s own entry explicitly sets a full cycle's days before releasing for exactly this
+ * reason). Since `listPayrollCycles` orders newest-first, picking only the first RELEASED/ARCHIVED
+ * cycle risks landing on exactly such a cycle and wrongly concluding no released entry exists
+ * anywhere — the same robust, already-established pattern `07-corrections.spec.ts`'s own
+ * `findCorrectableEntry` uses (loop every candidate cycle, not just the newest) fixes that here too.
+ */
 async function findReleasedEntry(context: import('@playwright/test').BrowserContext) {
   const cycles = await apiGet<{ cycles: { id: string; status: string }[] }>(context, '/api/v1/payroll-cycles');
-  const usable = cycles.body.cycles?.find((c) => c.status === 'RELEASED' || c.status === 'ARCHIVED');
-  if (!usable) return null;
+  const candidates = cycles.body.cycles?.filter((c) => c.status === 'RELEASED' || c.status === 'ARCHIVED') ?? [];
 
-  const entries = await apiGet<{ entries: EntryRow[] }>(context, `/api/v1/payroll-cycles/${usable.id}/entries`);
-  const released = entries.body.entries?.find((e) => e.released);
-  if (!released) return null;
+  for (const cycle of candidates) {
+    const entries = await apiGet<{ entries: EntryRow[] }>(
+      context,
+      `/api/v1/payroll-cycles/${cycle.id}/entries?pageSize=200`,
+    );
+    const released = entries.body.entries?.find((e) => e.released);
+    if (released) return { cycleId: cycle.id, entry: released };
+  }
 
-  return { cycleId: usable.id, entry: released };
+  return null;
 }
 
-test.describe('Payroll Entry — per-row Released actions', () => {
-  test('a released row shows a Released badge and offers Create Correction / View Correction History from its own row', async ({
+/**
+ * The Payroll Entry grid virtualizes its rows (`@tanstack/react-virtual`, `payroll-entry-grid.tsx`)
+ * — only the rows near the current scroll position (plus a small overscan) ever mount to the DOM.
+ * `findReleasedEntry()` picks the first released entry the raw API returns, with no regard for
+ * where that entry happens to land in the grid's own row order; across a full suite run the same
+ * shared cycle accumulates entries from many earlier specs, so that row is not guaranteed to
+ * already be among the handful the virtualizer has mounted on initial render. Same real scroll
+ * container and technique `27-payroll-entry-employee-row-actions.spec.ts`'s own Scenario E already
+ * established (`el.scrollTop`, the `role="table"` element itself) — scrolled one viewport at a time
+ * until the target locator actually mounts, rather than assuming a fixed offset or disabling
+ * virtualization.
+ */
+async function revealGridRow(page: import('@playwright/test').Page, locator: import('@playwright/test').Locator) {
+  const grid = page.getByRole('table', { name: 'Payroll Entry grid' });
+  for (let i = 0; i < 60; i++) {
+    if (await locator.isVisible()) return;
+    const reachedBottom = await grid.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1);
+    if (reachedBottom) break;
+    await grid.evaluate((el) => {
+      el.scrollTop += el.clientHeight;
+    });
+  }
+  await expect(locator).toBeVisible({ timeout: 5000 });
+}
+
+test.describe('Payroll Entry — released entries and the page-level correction workflow', () => {
+  test('a released entry shows a Released badge in the grid, and its correction workflow is reached through the page-level Request Correction toolbar action', async ({
     authenticatedPage: page,
   }) => {
     const context = page.context();
@@ -51,50 +101,53 @@ test.describe('Payroll Entry — per-row Released actions', () => {
     await page.goto(`/payroll-cycles/${target.cycleId}/payroll-entry`);
     await expect(page.getByRole('table', { name: 'Payroll Entry grid' })).toBeVisible();
 
-    const actionsButton = page.getByRole('button', {
-      name: `Released payroll actions for ${target.entry.employee.name}`,
-    });
-    await expect(actionsButton).toBeVisible();
+    // Released status recognized correctly in the grid itself. `findReleasedEntry()` picks the
+    // first released entry the raw API returns, with no regard for where that entry lands in the
+    // grid's own row order, so — same reasoning as `revealGridRow`'s own doc comment — it is not
+    // guaranteed to already be mounted by the virtualizer on initial render.
+    const targetRow = page.locator('div[role="row"]').filter({ hasText: target.entry.employee.name });
+    const releasedBadge = targetRow.getByText('Released', { exact: true });
+    await revealGridRow(page, releasedBadge);
+    await expect(releasedBadge).toBeVisible();
 
-    // The Released badge sits next to the actions button, in the same cell.
+    // The row-level "…" actions button (Create Correction / View Correction History) was
+    // deliberately removed from the Status cell (`9183dd1`) — this row now offers no
+    // correction-specific control of its own at all, only the unrelated Employee actions menu
+    // (Edit Employee / Mark as Left, gated on entirely different permissions).
     await expect(
-      page
-        .locator('div[role="row"]')
-        .filter({ has: actionsButton })
-        .getByText('Released', { exact: true }),
-    ).toBeVisible();
+      page.getByRole('button', { name: `Released payroll actions for ${target.entry.employee.name}` }),
+    ).toHaveCount(0);
 
-    await actionsButton.click();
-    await expect(page.getByRole('menuitem', { name: 'View Correction History' })).toBeVisible();
-    // "Create Correction" is permission-gated (payroll:entry) — Master Admin holds it, so it must
-    // also be present.
-    await expect(page.getByRole('menuitem', { name: 'Create Correction' })).toBeVisible();
-
-    // View Correction History opens without erroring, whether or not this entry has any requests
-    // on file yet.
-    await page.getByRole('menuitem', { name: 'View Correction History' }).click();
-    const historyDialog = page.getByRole('dialog');
-    await expect(historyDialog.getByText(`Correction History — ${target.entry.employee.name}`)).toBeVisible();
-    // Two "Close" buttons exist on any Modal — the header's own icon-only X (sr-only text
-    // "Close") and the footer's own visible "Close" button — scoped to the footer's own visible
-    // one specifically, never an ambiguous match across both.
-    await historyDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
-
-    // Create Correction opens the request modal with the employee already selected and locked —
-    // no separate search/select step needed, since it was opened contextually from this exact row.
-    await actionsButton.click();
-    await page.getByRole('menuitem', { name: 'Create Correction' }).click();
+    // Create Correction is reached exclusively through the page-level "Request Correction" toolbar
+    // button now — its own EmployeeLookup can search and target this exact released entry by name,
+    // proving the correction workflow is available and lands on the correct employee/payroll
+    // context without any row-level entry point (same search technique
+    // `07-corrections.spec.ts`'s own `pickEmployeeInLookup` helper already established).
+    await page.getByRole('button', { name: 'Request Correction' }).click();
     const requestModal = page.getByRole('dialog').filter({ hasText: 'Request Correction' });
     await expect(requestModal).toBeVisible();
-    // A pre-selected, locked EmployeeLookup renders the "selected employee" chip (not the search
-    // input — #correction-entry only exists before a value is chosen), with no Clear button, since
-    // `disabled` is what actually locks the selection.
+
+    const input = requestModal.locator('#correction-entry');
+    await input.fill(target.entry.employee.name);
+    const option = requestModal.getByRole('option', { name: new RegExp(target.entry.employee.name) });
+    await expect(option.first()).toBeVisible({ timeout: 5000 });
+    await option.first().click();
+
+    // Selecting collapses the search input into a read-only "selected employee" chip — the correct
+    // employee/payroll context is locked in for this request. Unlike the old row-opened flow
+    // (`initialEntryId`, unused from this toolbar entry point), the field is not `disabled` here, so
+    // Clear stays available — this is the toolbar's own ordinary selection, not a pre-locked one.
     await expect(requestModal.getByText(target.entry.employee.name, { exact: false })).toBeVisible();
     await expect(requestModal.locator('#correction-entry')).toHaveCount(0);
-    await expect(requestModal.getByRole('button', { name: 'Clear selected employee' })).toHaveCount(0);
+    await expect(requestModal.getByRole('button', { name: 'Clear selected employee' })).toBeVisible();
+
+    // No submission here — the full submit/approve/reject lifecycle already has deep coverage in
+    // `07-corrections.spec.ts`'s own Scenarios 1/1B/2/3; this scenario's job is only proving the
+    // current entry point is reachable and correctly scoped.
+    await page.getByRole('button', { name: 'Cancel' }).click();
   });
 
-  test('an unreleased row shows no Released badge and no per-row correction actions', async ({
+  test('an unreleased entry shows no Released badge, and is excluded as a correction target', async ({
     authenticatedPage: page,
   }) => {
     const context = page.context();
@@ -110,9 +163,37 @@ test.describe('Payroll Entry — per-row Released actions', () => {
 
     await page.goto(`/payroll-cycles/${draft.id}/payroll-entry`);
     await expect(page.getByRole('table', { name: 'Payroll Entry grid' })).toBeVisible();
+
+    const targetRow = page.locator('div[role="row"]').filter({ hasText: unreleased.employee.name });
+    await revealGridRow(page, targetRow);
+    await expect(targetRow.getByText('Released', { exact: true })).toHaveCount(0);
+
+    // The toolbar button itself only renders when the *viewed* cycle has at least one released
+    // entry (`hasReleasedEntries`, `payroll-entry-page.tsx`) — if this Draft cycle has none at all,
+    // there is no Request Correction workflow to exclude this employee from in the first place.
+    const hasReleasedEntries = entries.body.entries?.some((e) => e.released) ?? false;
+    if (!hasReleasedEntries) {
+      await expect(page.getByRole('button', { name: 'Request Correction' })).toHaveCount(0);
+      return;
+    }
+
+    // Otherwise, this employee's only entry here is unreleased — the modal's own EmployeeLookup is
+    // restricted to entries.map(entry => entry.employee.id) (released entries only,
+    // request-correction-modal.tsx), so searching for them either finds nothing or explicitly
+    // explains the exclusion (Issue 7, Presentation & Workflow Stabilization Checkpoint) — never a
+    // selectable option.
+    await page.getByRole('button', { name: 'Request Correction' }).click();
+    const requestModal = page.getByRole('dialog').filter({ hasText: 'Request Correction' });
+    await requestModal.locator('#correction-entry').fill(unreleased.employee.name);
     await expect(
-      page.getByRole('button', { name: `Released payroll actions for ${unreleased.employee.name}` }),
+      requestModal.getByRole('option', { name: new RegExp(unreleased.employee.name) }),
     ).toHaveCount(0);
+    await expect(
+      requestModal
+        .getByText(/found, but none have a released Payroll Entry/i)
+        .or(requestModal.getByText(/No employees match/i)),
+    ).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Cancel' }).click();
   });
 });
 
