@@ -11330,6 +11330,99 @@ instruction; no roadmap work started.
 
 ---
 
+## Payroll Entry Frozen Identity Pane — Vertical-Edge-Coverage Correction (2026-08-15)
+
+A third, targeted UAT correction to the same frozen identity pane (2026-08-12/12b/14 above) after a
+user report that the Units-pill/input border sliver was still visible in real use following both prior
+fixes. Unrelated to any roadmap item; no report, Dashboard, RBAC, payroll calculation, database
+schema, Employee Registry business logic, row-action, or Unit-code-display file touched.
+
+**Root cause (a genuinely third failure mode, not a recurrence of either prior one).** The z-10
+layering fix (2026-08-12b) and the focus-ring containment fix (2026-08-14) both protect this pane
+against *scrolling content painting over it* — a stacking-order problem and a paint-escaping-its-own-
+box problem, respectively. Neither addresses a structural gap in the frozen cell's own geometry:
+`employeeCode`/`employeeName` (`ReadOnlyCell`, `inline-cells.tsx`) size to their own content height
+(~24px) and are vertically centered *within* the row by the row's own `items-center` — same as every
+ordinary, non-identity `ReadOnlyCell`. A bordered scrolling control in the same row (the Units pill,
+any numeric input) is taller (`self-stretch`, the 2026-08-14 fix itself, ~26px including its own 1px
+top+bottom border), centered on the same row midpoint. Both centered on the same point, but the frozen
+cell is shorter — so at the row's own top and bottom ~1px band, the frozen pane has *no painted box at
+all*. This is not a stacking-order tie (`z-10` only resolves a tie where both boxes overlap) and not a
+focus-ring escape (`overflow-hidden`/`ring-inset` contain paint that would otherwise extend past a
+box, not a control's own always-rendered static border). Confirmed live in real Chrome before any code
+change: `getBoundingClientRect()` on the unfocused Units button showed `top: 507.5, bottom: 533.5`
+against the frozen `employeeName` cell's own `top: 508.5, bottom: 532.5` — a real, systemic 1px-per-
+edge gap, reproduced identically across every bordered scrolling column (Units, Days, OT Hours, Fine,
+EOBI Amount, Advance/Eid Advance Deduction), with no focus or hover involved at any point.
+
+**Why Scenarios J and K didn't catch it.** Scenario J's `elementFromPoint` sweep samples each row only
+at its own vertical *center* — the one point guaranteed to sit inside both boxes regardless of this
+gap. Scenario K's ring-containment proof only exercises a *focused* control's computed `box-shadow`
+extent against its own clipping ancestor — it never compares that ancestor's box against the frozen
+pane's own (shorter) box, and the defect here is present with no focus at all.
+
+**Fixed**: `ReadOnlyCell` (`inline-cells.tsx`) gained a `fullHeight` prop — `self-stretch` (this cell
+is always a grid/flex item in every caller) makes the cell's own box the full row height instead of
+its own content height; `flex items-center` re-centers its content inside that taller box; when
+`truncate` is also set, a `min-w-0` inner wrapper span keeps ellipsis truncation working (verified
+live before landing: a flex item's default `min-width: auto` silently defeats `text-overflow:
+ellipsis` on a long name without it — a well-known flex/truncate pitfall, not theorized about but
+reproduced and fixed in the browser first). Applied only to `employeeCode`/`employeeName` in the body
+row (`payroll-entry-row.tsx`) and to the totals row's own identity cells (`payroll-entry-totals-row.
+tsx`) — the only two layers whose own container sets `items-center`. Deliberately **not** folded into
+the shared `stickyIdentityCellClassName` (`columns.ts`) itself: that helper is also used by the
+group-header and column-header rows, which already get full-height coverage for free from their own
+containers' default `align-items: stretch` (verified live — neither overrides to `items-center`), and
+forcing `flex`/`self-stretch` onto them too would risk the identical flex-vs-`truncate` pitfall for
+zero benefit. (A different session's parallel attempt at this same fix, mid-way through this pass,
+briefly did fold it into the shared helper and was reverted back to this per-call-site approach after
+confirming header/group-header needed no change — see "A note on concurrent editing" below.)
+
+**Verified**: 6 focused frontend test files (`master-data-boundary`, `payroll-entry-row`,
+`payroll-entry-alignment`, `payroll-entry-grid`, `payroll-entry-row-actions`, `site-unit-select`)
+**64/64**. New Scenario L in `28-payroll-entry-frozen-identity.spec.ts` — real, measured
+`getBoundingClientRect()` geometry (`frozenTop <= controlTop && frozenBottom >= controlBottom`, top
+*and* bottom edge, never only the center), across a 40-employee virtualized dataset, at the grid's top,
+after scrolling to the bottom (forcing row recycling), and back to the top again, with zero focus/hover
+anywhere in the test. Full `28-payroll-entry-frozen-identity.spec.ts` (all 9 scenarios, including
+Scenarios A–K unchanged) run **3× clean** (9/9 each run). `23-scroll-header-integrity.spec.ts`,
+`24-payroll-entry-quick-add-employee.spec.ts`, `27-payroll-entry-employee-row-actions.spec.ts` — 21/21.
+Manually verified in real Chrome against a live dev server + real (non-ephemeral) Postgres both before
+the fix (reproducing the sliver — zoomed screenshot showed a faint rounded-rectangle border peeking
+above/below the frozen name, matching the report exactly) and after (same zoom, clean; 112/112
+programmatic coverage checks across 7 columns × 16 rows; focus-ring containment re-verified still
+intact). Responsive: 1440×900, 1024×800, 768×1024 all clean — coverage invariant holds, no
+document-level horizontal overflow, no double scrollbar, AppShell/sidebar unaffected.
+
+**A note on concurrent editing.** Mid-session, a separate Claude session/subagent operating in this
+same (non-worktree-isolated) working directory made unauthorized edits to `columns.ts` and this
+session's own `payroll-entry-totals-row.tsx` edit, and separately introduced a stray `*/` inside a
+`/** */` doc comment in the E2E spec that broke the TypeScript parse. Both were caught (via `git diff`
+review before trusting any file's state) and reverted/fixed before proceeding; final state was
+re-verified end to end after. Recorded here only because it's an unusual provenance detail for this
+one pass, not because it changes the fix's own design.
+
+**Files changed**: `frontend/src/components/payroll-entry/inline-cells.tsx`,
+`frontend/src/components/payroll-entry/payroll-entry-row.tsx`,
+`frontend/src/components/payroll-entry/payroll-entry-totals-row.tsx`,
+`tests/e2e/specs/28-payroll-entry-frozen-identity.spec.ts`, `docs/design-system.md`,
+`docs/PROJECT_PROGRESS.md`. `columns.ts` deliberately untouched (see root-cause note above). No
+backend, `shared/`, Prisma, payroll-calculation, RBAC, Dashboard, Reports, Variance, or Employee
+Registry business-logic file touched — confirmed via `git diff --name-status`.
+
+**Temporary Draft cycle (from the prior, investigation-only pass)**: an August 2026 Draft cycle
+(id `ce68e268-9ec6-4a1c-894e-cbc8e359313a`) was created in the local `payroll_manual` database to
+reproduce the bug live. Not cleaned up this pass — by the time cleanup was considered, the same
+database had accumulated employee rows this session did not create ("Sweep Row 00"–"Sweep Row 15"+),
+consistent with the concurrent session noted above actively using this same cycle for its own
+verification. Deleting it now carries a real risk of destroying another session's in-progress work, so
+per instruction it was left untouched and is reported here instead.
+
+**No commit, push, or deployment occurred this session.** Stopped deliberately per the authorizing
+instruction; no other roadmap work started.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

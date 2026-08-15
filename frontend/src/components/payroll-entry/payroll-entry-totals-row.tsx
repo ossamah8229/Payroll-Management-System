@@ -78,6 +78,21 @@ export function PayrollEntryTotalsRow({
     if (FROZEN_LEFT_COLUMN_IDS.includes(columnId as PayrollColumnId)) {
       return cn(
         base,
+        // `flex items-center self-stretch` (vertical-coverage correction, UAT 2026-08-15) — this
+        // row sets `items-center` on its own outer grid container (below), which centers each cell
+        // at its own content height by default; without this override, this cell's frozen paint
+        // would not cover the row's full vertical band, the same structural gap `ReadOnlyCell`'s
+        // own `fullHeight` doc comment describes for the body row. No visible symptom here today
+        // (every totals-row cell shares this same `py-2`-driven content height, so there's currently
+        // nothing taller to leave uncovered), but the invariant — the frozen pane occludes the whole
+        // row, not just its own content band — must hold at every layer, not only where a bordered
+        // pill happens to expose it first. Scoped to this row's own `cellClassName` rather than
+        // folded into `stickyIdentityCellClassName` itself (`columns.ts`) — that helper is also
+        // shared by the group-header/column-header rows, which already get full-height coverage for
+        // free from their own containers' default `align-items: stretch` and were deliberately left
+        // untouched; forcing `flex` on them too would risk the same "flex parent breaks a raw text
+        // child's `truncate`" pitfall this row avoids by never using it on a truncating cell.
+        'flex items-center self-stretch',
         stickyIdentityCellClassName(columnId as PayrollColumnId, 'bg-surface'),
         columnId === 'employeeName' && 'text-text',
       );

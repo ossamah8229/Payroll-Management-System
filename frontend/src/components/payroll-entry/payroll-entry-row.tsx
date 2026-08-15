@@ -226,10 +226,16 @@ function PayrollEntryRowImpl({
     // siblings `z-10` itself lives in `stickyIdentityCellClassName` (`columns.ts`), not duplicated
     // here (layering correction, UAT 2026-08-12b) — every layer that renders these two columns needs
     // the exact same protection, not just this one.
+    // `fullHeight` (vertical-coverage correction, UAT 2026-08-15) — this cell's own content-height
+    // box (~24px) previously left this row's `items-center` centering it with an ~8px gap above and
+    // below; a scrolling cell in this same row that's taller than that (any bordered pill/input,
+    // `self-stretch` per the 2026-08-14 fix, ~26px) had nothing frozen covering that gap once
+    // scrolled underneath, regardless of `z-10` — see `ReadOnlyCell`'s own `fullHeight` doc comment.
     employeeCode: (
       <ReadOnlyCell
         colId="employeeCode"
         truncate={false}
+        fullHeight
         className={stickyIdentityCellClassName('employeeCode', rowBackgroundClassName)}
         style={{ left: identityOffsets.employeeCode }}
       >
@@ -240,6 +246,7 @@ function PayrollEntryRowImpl({
       <ReadOnlyCell
         colId="employeeName"
         muted={false}
+        fullHeight
         className={stickyIdentityCellClassName('employeeName', rowBackgroundClassName)}
         style={{ left: identityOffsets.employeeName }}
       >

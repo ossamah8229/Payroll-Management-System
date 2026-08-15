@@ -641,6 +641,158 @@ test.describe('Payroll Entry — Frozen Employee Identity Pane', () => {
     await assertFocusRingIsContainedByAnAncestorClip('[data-col-id="eobiApplicable"] button', 'eobiApplicable');
   });
 
+  /**
+   * Scenario L — the vertical-edge bleed that escaped Scenarios J and K (UAT 2026-08-15).
+   *
+   * Both prior fixes proved horizontal / paint-order containment: Scenario J's `elementFromPoint`
+   * sweep samples each row at its own vertical *center* only, and Scenario K's ring-containment proof
+   * only exercises a *focused* control. Neither can see this failure mode, because it needs neither
+   * focus nor a center-y sample to reproduce: `employeeCode`/`employeeName` (`ReadOnlyCell`, no
+   * `fullHeight`) sized to their own content height (~24px) and were vertically centered *within* the
+   * row by the row's own `items-center` — while a bordered scrolling control in the same row
+   * (`self-stretch`, the 2026-08-14 fix) is taller (~26px, its own 1px top+bottom border), centered on
+   * the same row midpoint. Both centered on the same point but one shorter than the other leaves an
+   * ~1px sliver at the row's own top and bottom edges where the frozen pane has no painted box at all
+   * — not something `z-10` can win, since z-index only resolves a tie where both boxes overlap in the
+   * first place. Fixed by giving `employeeCode`/`employeeName` (and the totals row's own identity
+   * cells) `ReadOnlyCell`'s new `fullHeight` prop: `self-stretch` so the cell's own box is the row's
+   * full height, `flex items-center` so its content stays visually centered inside that taller box.
+   *
+   * This proof is purely geometric — `getBoundingClientRect()` on real, currently-stuck elements in a
+   * real Chromium instance — checking the exact invariant the fix must uphold for every row, at both
+   * the top and bottom edge, never only the center: **`frozenTop <= controlTop` AND
+   * `frozenBottom >= controlBottom`**. No focus, no hover, anywhere in this test — the defect this
+   * proves against was a static, always-present sliver. Uses the same 40-employee virtualized dataset
+   * as Scenario E/F so the invariant is checked across freshly-mounted, scrolled-past, and recycled
+   * rows alike, not just whichever single row a smaller fixture would happen to mount once.
+   */
+  test('Scenario L: the frozen identity pane fully covers every scrolling cell it sits above — top edge and bottom edge, every row, no focus/hover involved, surviving virtualization recycling', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    await apiPost(context, '/api/v1/payroll-cycles', { year: 2902, month: 8 }).catch(() => undefined);
+    const label = `FrozenIdL ${Date.now()}`;
+    const { siteId, unitId } = await createSiteAndUnit(context, label);
+
+    const employeeNames = Array.from({ length: 40 }, (_, i) => `E2E FrozenId L ${label} ${i}`);
+    await Promise.all(
+      employeeNames.map((name) =>
+        apiPost(context, '/api/v1/employees', { name, designation: 'Guard', siteId, unitId, grossPay: '30000' }),
+      ),
+    );
+
+    await page.goto('/payroll-entry');
+    await page.waitForLoadState('networkidle');
+    await filterToSite(page, `E2E ${label}`);
+
+    const grid = page.getByRole('table', { name: 'Payroll Entry grid' });
+    await expect(grid.getByText(employeeNames[0]!)).toBeVisible({ timeout: 5000 });
+
+    /** For every currently-mounted body row, asserts the frozen `employeeName` cell's own painted
+     * box fully covers `colId`'s own scrolling control — both edges, never just the center — via
+     * real, current `getBoundingClientRect()` geometry (never CSS/class inspection, never
+     * `elementFromPoint`, which Scenario J's own doc comment already established is blind to this
+     * failure mode for a different reason: here the boxes usually don't even overlap enough at the
+     * edge for a hit-test at that exact pixel to be a meaningful proof either way). Requires at
+     * least one row actually checked, so a selector/setup mistake fails loudly instead of silently
+     * passing on zero matches. */
+    async function assertFrozenPaneCoversControlEveryRow(colId: string, controlTag: 'button' | 'input') {
+      // `[data-col-id="employeeName"][role="cell"]` matches every *virtualized body row* plus the
+      // totals row's own "N employees" cell (same convention Scenario G/H/I's own
+      // `identityCells.first()`/`.last()` already relies on) — the totals row has no per-column
+      // control of its own, so it's excluded here before comparing counts against `controls` below.
+      const allNameCells = await grid.locator('[data-col-id="employeeName"][role="cell"]').all();
+      const nameCells = allNameCells.slice(0, -1);
+      const controls = await grid.locator(`[data-col-id="${colId}"] ${controlTag}`).all();
+      expect(nameCells.length, `Scenario L setup: no mounted employeeName body-row cells found for colId="${colId}"`).toBeGreaterThan(0);
+      expect(controls.length, `Scenario L setup: no mounted ${controlTag} controls found for colId="${colId}"`).toBe(nameCells.length);
+
+      for (let i = 0; i < nameCells.length; i++) {
+        const nameBox = (await nameCells[i]!.boundingBox())!;
+        const controlBox = (await controls[i]!.boundingBox())!;
+        expect(
+          nameBox.y <= controlBox.y + 0.5,
+          `${colId} row ${i}: frozen employeeName top (${nameBox.y}) does not cover the scrolling control's own top (${controlBox.y}) — a top-edge sliver is visible.`,
+        ).toBe(true);
+        expect(
+          nameBox.y + nameBox.height >= controlBox.y + controlBox.height - 0.5,
+          `${colId} row ${i}: frozen employeeName bottom (${nameBox.y + nameBox.height}) does not cover the scrolling control's own bottom (${controlBox.y + controlBox.height}) — a bottom-edge sliver is visible.`,
+        ).toBe(true);
+      }
+    }
+
+    async function scrollColumnUnderneathPane(colId: string) {
+      await grid.evaluate((el) => {
+        el.scrollLeft = 0;
+      });
+      const codeHeaderBox0 = (await page.locator('[data-col-id="employeeCode"][role="columnheader"]').boundingBox())!;
+      const targetHeaderBox0 = (await page.locator(`[data-col-id="${colId}"][role="columnheader"]`).boundingBox())!;
+      await scrollGridHorizontally(page, Math.round(targetHeaderBox0.x - codeHeaderBox0.x));
+    }
+
+    // Top of the grid (vertical scroll 0) — the first virtualized mount, no recycling yet.
+    await scrollColumnUnderneathPane('units');
+    await assertFrozenPaneCoversControlEveryRow('units', 'button');
+    await scrollColumnUnderneathPane('days');
+    await assertFrozenPaneCoversControlEveryRow('days', 'input');
+    await scrollColumnUnderneathPane('fine');
+    await assertFrozenPaneCoversControlEveryRow('fine', 'input');
+
+    // Scroll vertically to the bottom — forces the virtualizer to unmount the top rows and mount a
+    // fresh set at the bottom (row recycling), proving the fix isn't specific to whichever DOM nodes
+    // happened to mount first.
+    await grid.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await page.waitForTimeout(150);
+    await expect(grid.getByText(employeeNames[employeeNames.length - 1]!)).toBeVisible({ timeout: 5000 });
+    await scrollColumnUnderneathPane('units');
+    await assertFrozenPaneCoversControlEveryRow('units', 'button');
+    await scrollColumnUnderneathPane('eobiAmount');
+    await assertFrozenPaneCoversControlEveryRow('eobiAmount', 'input');
+
+    // Back to the top — the recycled-back-again row set must still hold the invariant.
+    await grid.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await page.waitForTimeout(150);
+    await expect(grid.getByText(employeeNames[0]!)).toBeVisible({ timeout: 5000 });
+    await scrollColumnUnderneathPane('otHours');
+    await assertFrozenPaneCoversControlEveryRow('otHours', 'input');
+
+    // The totals row's own identity cell must also occupy its full row height (Part 7 of this UAT
+    // correction — consistency across every layer, not a body-row-only hack), even though it has no
+    // bordered control of its own to visibly bleed today: checked directly against the totals row's
+    // own container height, the same invariant applied at the one remaining layer. `closest()` via
+    // `evaluate` (rather than a second Playwright locator with a `has:` filter, which resolved
+    // ambiguously against every `[role="row"]` on the page and timed out) — the totals row is this
+    // cell's own unique DOM ancestor, so this is both simpler and unambiguous.
+    //
+    // Compared against the row's own *content* box, not its outer border box: the totals row itself
+    // carries a real, always-opaque `border-t-2` (`payroll-entry-totals-row.tsx`) that is part of the
+    // row's own static decoration, not scrolling content a frozen cell could ever need to occlude —
+    // `self-stretch` correctly fills the flex container's content box (inside the border), so the
+    // border width must be subtracted from the row's own box before comparing, or this assertion
+    // would fail on the border itself rather than on any real coverage gap.
+    const totalsNameCell = grid.locator('[data-col-id="employeeName"][role="cell"]').last();
+    const totalsGeometry = await totalsNameCell.evaluate((cell) => {
+      const cellRect = cell.getBoundingClientRect();
+      const row = cell.closest('[role="row"]')!;
+      const rowRect = row.getBoundingClientRect();
+      const rowStyle = getComputedStyle(row);
+      const borderTop = parseFloat(rowStyle.borderTopWidth) || 0;
+      const borderBottom = parseFloat(rowStyle.borderBottomWidth) || 0;
+      return {
+        cellTop: cellRect.top,
+        cellBottom: cellRect.bottom,
+        rowContentTop: rowRect.top + borderTop,
+        rowContentBottom: rowRect.bottom - borderBottom,
+      };
+    });
+    expect(Math.round(totalsGeometry.cellTop)).toBe(Math.round(totalsGeometry.rowContentTop));
+    expect(Math.round(totalsGeometry.cellBottom)).toBe(Math.round(totalsGeometry.rowContentBottom));
+  });
+
   /** Responsive/viewport coverage — a narrower, tablet-like viewport (UAT acceptance criteria's own
    * "narrower desktop/tablet-like viewport" requirement). At this width the grid's overall client
    * area is much smaller relative to its ~2,300px+ content, but the frozen identity pane must still

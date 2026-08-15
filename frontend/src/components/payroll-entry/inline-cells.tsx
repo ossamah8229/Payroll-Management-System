@@ -154,6 +154,7 @@ export function ReadOnlyCell({
   align = 'left',
   muted = true,
   truncate = true,
+  fullHeight = false,
   className,
   style,
 }: {
@@ -172,6 +173,35 @@ export function ReadOnlyCell({
    * `white-space: nowrap` instead and rely on the grid's own horizontal scroll if content is ever
    * wider than its column (2026-07-12 fix: `truncate` was silently clipping Employee Code). */
   truncate?: boolean;
+  /** Frozen-pane vertical-coverage correction (UAT 2026-08-15) — `employeeCode`/`employeeName` are
+   * the only callers that pass this. Without it, this cell sizes to its own content height (~24px)
+   * and is vertically centered *within* the row by the row's own `items-center`, same as every
+   * ordinary (non-identity) `ReadOnlyCell`. That is fine for a plain read-only cell, but the sticky
+   * identity cell must occlude the *entire* row height, not just its own content band: a scrolling
+   * cell elsewhere in the same row can legitimately be taller (e.g. the Units pill/an input's own
+   * 1px border pushes it to ~26px, `self-stretch` on those cells per the 2026-08-14 fix), and once
+   * that taller cell scrolls underneath this one, its top/bottom edge — outside this cell's own
+   * shorter content band — has nothing frozen painted over it at all, regardless of the shared
+   * `z-10` (`stickyIdentityCellClassName`): z-index only wins a tie where both boxes overlap, and
+   * here they structurally don't.
+   *
+   * `self-stretch` (this cell is a grid/flex item in every one of its callers — the body row's own
+   * per-column grid, the totals row's grid) makes this cell's own box the full row height instead, so
+   * its frozen paint genuinely covers the whole band a scrolling neighbor could ever occupy. `flex
+   * items-center` re-centers the content inside that taller box (plain block content would otherwise
+   * sit at the top, not the row's true vertical center) — but once this box is `display: flex`, a
+   * `truncate` class applied directly to it silently stops ellipsizing (a flex item's default
+   * `min-width: auto` won't shrink below its own unwrapped text width, so overflowing text just
+   * overflows the box instead — confirmed live, a known flexbox pitfall). So `fullHeight` moves
+   * truncation to an inner `<span>` with its own `min-w-0` instead, which shrinks correctly.
+   * Deliberately opt-in and self-contained here, not folded into `stickyIdentityCellClassName`
+   * (`columns.ts`) — that helper is also shared by the group-header/column-header rows, which
+   * already get full-height coverage for free from their own containers' default `align-items:
+   * stretch` and render raw text directly (no inner truncating span of their own to protect); forcing
+   * `flex` on them there too would risk the same truncate-breaks-in-flex pitfall for no benefit. Every
+   * *other* `ReadOnlyCell` caller (designation, site, unitCode, bankId, ..., netSalary) has no taller
+   * neighbor to occlude and stays exactly as it rendered before this correction. */
+  fullHeight?: boolean;
   /** Frozen Employee Identity Pane (UAT 2026-08-12) — lets `employeeCode`/`employeeName` layer the
    * shared `stickyIdentityCellClassName` (`columns.ts`) on top of this cell's own base styling,
    * exactly the way the sticky-right actions cell already layers its own treatment on top of its
@@ -188,14 +218,27 @@ export function ReadOnlyCell({
       style={style}
       className={cn(
         'px-1.5 py-1 text-xs',
-        truncate ? 'truncate' : 'overflow-visible whitespace-nowrap',
+        fullHeight
+          ? cn('flex items-center self-stretch', truncate ? 'overflow-hidden' : 'overflow-visible')
+          : truncate
+            ? 'truncate'
+            : 'overflow-visible whitespace-nowrap',
         muted ? 'text-text-muted' : 'text-text',
         align === 'right' && 'text-right tabular-nums',
         align === 'center' && 'text-center',
         className,
       )}
     >
-      {children}
+      {fullHeight ? (
+        // `min-w-0` is the fix for a well-known flex gotcha, verified live before landing this: a
+        // flex item's default `min-width: auto` refuses to shrink below its own content width, so
+        // without this, a long name's `truncate`'d span would silently overflow this cell's box
+        // instead of ellipsizing (confirmed via a real long-name stress test in Chrome — the parent
+        // div's own `overflow-hidden`/`truncate` alone had no visible effect until this was added).
+        <span className={cn('min-w-0', truncate ? 'truncate' : 'whitespace-nowrap')}>{children}</span>
+      ) : (
+        children
+      )}
     </div>
   );
 }
