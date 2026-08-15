@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
+    "test": "NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072' jest --runInBand",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate",
     "prisma:seed": "tsx prisma/seed.ts"

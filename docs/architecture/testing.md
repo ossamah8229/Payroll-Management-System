@@ -215,6 +215,19 @@ against (a real incident from Post-Phase-5 Stabilization Checkpoint 3 — leftov
 fixture data broke unrelated backend tests until it was found and removed by hand). The E2E harness
 avoids this entire class of problem by never reusing a database across runs in the first place.
 
+## Backend Jest heap
+
+`npm run test --workspace backend` (`backend/package.json`'s own `test` script) sets
+`NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072'` — the `--max-old-space-size`
+half exists because the full `--runInBand` run, taken together, accumulates enough live data from
+this suite's several 10k–30k-row performance/boundary fixtures (each cleaned up by its own
+`afterAll`, but the run is one long-lived process the whole way through) to reach V8's ~2.2GB default
+old-space ceiling and crash with `FATAL ERROR: Reached heap limit … JavaScript heap out of memory` —
+reproduced deterministically, always partway through the run (suite ~62/93 on the measured host), never
+in an individual file run alone. 3072MB was the smallest round increase that let a real, reproduced-clean
+run complete all 93/93 suites. This is scoped to the `test` script only — `dev`/`start`/`build` and the
+runtime server are untouched, so production memory behavior does not change.
+
 ## Running everything, in the order a fresh clone should
 
 ```bash
