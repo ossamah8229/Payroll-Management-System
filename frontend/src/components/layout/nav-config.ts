@@ -71,6 +71,14 @@ export const navSections: NavSection[] = [
     label: 'Payroll',
     items: [
       { label: 'Payroll Entry', to: '/payroll-entry', icon: ClipboardList, requiredPermission: 'payroll:entry' },
+      {
+        label: 'Advances',
+        to: '/advances',
+        icon: HandCoins,
+        // Phase 4 Checkpoint 5 — Payroll Staff (site-scoped) and Master Admin only; Finance holds
+        // no Advances permission (approved architecture decision, unchanged).
+        requiredPermission: 'advances:manage',
+      },
       { label: 'Salary Release', to: '/release', icon: Banknote, requiredPermission: 'payroll:view' },
       { label: 'Bank Sheet', to: '/bank-sheet', icon: Landmark, requiredPermission: 'bank-sheets:view' },
       {
@@ -80,24 +88,6 @@ export const navSections: NavSection[] = [
         // Reuses bank-sheets:view (approved architecture decision, Phase 4 Checkpoint 4) — Finance
         // and Master User already see both documents; Payroll Staff sees neither.
         requiredPermission: 'bank-sheets:view',
-      },
-      {
-        label: 'Advances',
-        to: '/advances',
-        icon: HandCoins,
-        // Phase 4 Checkpoint 5 — Payroll Staff (site-scoped) and Master Admin only; Finance holds
-        // no Advances permission (approved architecture decision, unchanged).
-        requiredPermission: 'advances:manage',
-      },
-      {
-        label: 'Payslips',
-        to: '/payslips',
-        icon: FileText,
-        // Phase 4 Checkpoint 6.1 — a dedicated permission, not a reuse of payroll:entry/
-        // payroll:view/bank-sheets:view (approved architecture decision): an individual Payslip
-        // is a materially more sensitive per-person disclosure than any aggregate sheet those
-        // permissions gate. Granted to Master Admin, Payroll Staff, and Finance alike.
-        requiredPermission: 'payslips:view',
       },
       {
         label: 'Corrections',
@@ -113,6 +103,16 @@ export const navSections: NavSection[] = [
         // corrections:approve. The page itself still branches its own in-page UI (Review Queue tab
         // hidden without corrections:approve) rather than relying on nav visibility alone.
         requiredPermission: ['payroll:entry', 'corrections:approve'],
+      },
+      {
+        label: 'Payslips',
+        to: '/payslips',
+        icon: FileText,
+        // Phase 4 Checkpoint 6.1 — a dedicated permission, not a reuse of payroll:entry/
+        // payroll:view/bank-sheets:view (approved architecture decision): an individual Payslip
+        // is a materially more sensitive per-person disclosure than any aggregate sheet those
+        // permissions gate. Granted to Master Admin, Payroll Staff, and Finance alike.
+        requiredPermission: 'payslips:view',
       },
       {
         label: 'Statements',

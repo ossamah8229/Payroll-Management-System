@@ -172,3 +172,57 @@ describe('isNavItemVisible', () => {
     });
   });
 });
+
+// --- Payroll section order (production RBAC remediation task) -----------------------------------
+// Pins the requested nav order and confirms it carries no permission-gate side effects: every
+// item keeps the exact requiredPermission it had before the reorder, and Statements — the most
+// sensitive item in the section (Phase 7A Checkpoint 2) — stays last.
+
+describe('the Payroll section', () => {
+  function payrollSection() {
+    const section = navSections.find((s) => s.label === 'Payroll');
+    if (!section) throw new Error('Payroll section not found in navSections');
+    return section;
+  }
+
+  it('lists items in the required order', () => {
+    expect(payrollSection().items.map((item) => item.label)).toEqual([
+      'Payroll Entry',
+      'Advances',
+      'Salary Release',
+      'Bank Sheet',
+      'Cash Receiving',
+      'Corrections',
+      'Payslips',
+      'Statements',
+    ]);
+  });
+
+  it('keeps Statements last', () => {
+    const items = payrollSection().items;
+    expect(items[items.length - 1]!.label).toBe('Statements');
+  });
+
+  it('preserves every item\'s existing permission gate', () => {
+    const gates = Object.fromEntries(payrollSection().items.map((item) => [item.label, item.requiredPermission]));
+    expect(gates).toEqual({
+      'Payroll Entry': 'payroll:entry',
+      Advances: 'advances:manage',
+      'Salary Release': 'payroll:view',
+      'Bank Sheet': 'bank-sheets:view',
+      'Cash Receiving': 'bank-sheets:view',
+      Corrections: ['payroll:entry', 'corrections:approve'],
+      Payslips: 'payslips:view',
+      Statements: 'statements:view',
+    });
+  });
+
+  it('hides Statements from an unauthorized user while other Payroll items they hold permission for remain visible', () => {
+    const unauthorized = fakeUser(['payroll:entry']);
+    const visibility = Object.fromEntries(
+      payrollSection().items.map((item) => [item.label, isNavItemVisible(item, unauthorized)]),
+    );
+    expect(visibility['Statements']).toBe(false);
+    expect(visibility['Payroll Entry']).toBe(true);
+  });
+});
