@@ -5,8 +5,16 @@ on:
   push:
     branches: [main]
 
+# Two runs of this workflow never share a runner (each job gets its own fresh GitHub-hosted VM),
+# so there is no actual port/DB collision risk between them. This only cancels a now-superseded
+# run on the same branch/PR to avoid wasting the E2E job's own disposable-stack startup cost.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-check:
+  backend:
+    name: Backend
     runs-on: ubuntu-latest
 
     services:
@@ -54,11 +62,13 @@ jobs:
       - name: Prisma generate
         run: npm run prisma:generate
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Typecheck (shared + backend)
+        run: |
+          npm run typecheck --workspace shared
+          npm run typecheck --workspace backend
 
-      - name: Lint
-        run: npm run lint
+      - name: Lint (backend)
+        run: npm run lint --workspace backend
 
       - name: Prisma migrate deploy
         run: npm run prisma:migrate --workspace backend -- deploy
@@ -81,11 +91,123 @@ jobs:
         working-directory: backend
         run: npx puppeteer browsers install chrome
 
+      # Canonical Phase 2 script — NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072'
+      # lives once, in backend/package.json's own `test` script, not duplicated here.
       - name: Run backend tests
         run: npm run test --workspace backend
 
       - name: Build backend
         run: npm run build:backend
 
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      # frontend depends on the @payroll/shared workspace package (types + runtime) — needs
+      # shared/dist built before frontend typecheck/build can resolve it, same as the backend job.
+      - name: Build shared package
+        run: npm run build:shared
+
+      - name: Typecheck (frontend)
+        run: npm run typecheck --workspace frontend
+
+      - name: Lint (frontend)
+        run: npm run lint --workspace frontend
+
+      - name: Run frontend tests
+        run: npm run test --workspace frontend
+
       - name: Build frontend
         run: npm run build:frontend
+
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    # Fail fast: don't pay for the E2E stack's own build/start/teardown cost if a plain unit-test
+    # regression already broke the branch.
+    needs: [backend, frontend]
+
+    # No services block: tests/e2e/setup/e2e-environment.ts provisions its own disposable
+    # PostgreSQL cluster via the embedded-postgres npm package (own data dir, port 55432, own
+    # payroll_e2e database/credentials) — see tests/e2e/README.md. It also builds and starts the
+    # real backend (port 4100) and real production frontend build (port 4200) itself as part of
+    # Playwright's globalSetup, and tears all three down in globalTeardown regardless of outcome.
+    env:
+      # Only consumed by the standalone "Prisma generate" step below — schema.prisma's
+      # `datasource db { url = env("DATABASE_URL") }` requires the variable to resolve even though
+      # `generate` never opens a connection. Matches tests/e2e/setup/config.ts's own DATABASE_URL
+      # exactly; e2e-environment.ts always sets this same value itself for every step that actually
+      # touches the database, so this job-level value is never read by anything that connects.
+      DATABASE_URL: postgresql://payroll_e2e:payroll_e2e_password@localhost:55432/payroll_e2e?schema=public
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build shared package
+        run: npm run build:shared
+
+      # tests/e2e/helpers/create-scoped-user.ts imports PrismaClient directly (see that file's own
+      # header comment) — same ordering requirement as the backend job's "Prisma generate" step.
+      - name: Prisma generate
+        run: npm run prisma:generate
+
+      - name: Typecheck (E2E specs)
+        run: npm run typecheck:e2e
+
+      # --with-deps installs the OS-level shared libraries a bare ubuntu-latest runner doesn't
+      # ship (nss, atk, etc.) alongside the Chromium binary itself — the documented Playwright CI
+      # invocation of the repo's own `npx playwright install chromium` (tests/e2e/README.md).
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # The real backend the E2E harness starts (tests/e2e/setup/e2e-environment.ts) uses Puppeteer
+      # at runtime for payslip/statement PDF rendering — specs 13, 15, and 16 exercise those routes
+      # against the real stack, so this job needs the same browsers-install step as the backend job.
+      - name: Install Puppeteer Chrome
+        working-directory: backend
+        run: npx puppeteer browsers install chrome
+
+      # tests/e2e/setup/e2e-environment.ts provisions its own disposable Postgres, migrates, seeds,
+      # builds+starts the real backend and frontend, waits on readiness, runs the suite, and tears
+      # everything down in globalTeardown — no separate lifecycle steps needed here.
+      # playwright.config.ts's own `retries: process.env.CI ? 1 : 0` applies only under GitHub
+      # Actions' default CI=true env var; this is the harness's own pre-existing, documented
+      # infra-startup allowance (tests/e2e/README.md's "CI notes"), not something added by this
+      # workflow, and it never retries away a genuine assertion failure.
+      - name: Run Playwright E2E suite
+        run: npm run test:e2e
+
+      - name: Upload Playwright HTML report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Upload Playwright traces/screenshots/videos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 7

@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react';
-import { createBrowserRouter, Navigate, RouterProvider, type RouteObject } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider, useLocation, type RouteObject } from 'react-router-dom';
 import { PERMISSIONS } from '@payroll/shared';
 import { useSession } from '@/hooks/use-session';
 import { RouteLoadingFallback } from '@/components/layout/route-loading-fallback';
@@ -88,20 +88,56 @@ const ReportsVarianceReportPage = lazy(() =>
 );
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
- * loading state (the session fetch) is unrelated to a lazy route's own code-loading state (handled
- * by the `<Suspense>` boundary in `App`, below) but reuses the identical fallback for visual
- * consistency — a user should never be able to tell which kind of "loading" they're seeing. */
+ * loading state (the session fetch) is unrelated to a lazy route's own code-loading state, but
+ * reuses the identical fallback for visual consistency — a user should never be able to tell which
+ * kind of "loading" they're seeing.
+ *
+ * The inner `<Suspense>` around `children(sessionUser)` — every route's own lazy page — is required
+ * in addition to the one `App` already wraps `<RouterProvider>` in, not redundant with it: a single
+ * Suspense boundary shared by the whole router left browser Back/Forward (`popstate`, unlike a
+ * `<Link>` click) unable to ever commit a re-render, even though `router.subscribe()` proved React
+ * Router's own location/match state always updated correctly — confirmed by minimal reproduction
+ * (a bare `RouterProvider` with no surrounding providers navigates POP correctly) and by giving just
+ * the *current* route its own nested boundary before pressing Back, which fixed it regardless of
+ * which page that was or whether the destination was lazy at all. Every route using `RequireSession`
+ * gets this boundary "for free" here rather than needing it repeated at all ~30 call sites in the
+ * `routes` array below.
+ *
+ * The boundary is keyed on `location.pathname` with any leading `/payroll-cycles/:cycleId` segment
+ * stripped — not `location.key`, and not React Router's own per-`RouteObject` match id. Every
+ * cycle-aware page in the `routes` array below (see that array's own doc comment) is mounted at
+ * *two* separate `RouteObject`s — a flat path and the canonical `/payroll-cycles/:cycleId/...`
+ * path — both rendering the exact same page component; a match id (or `location.key`, which is
+ * unique per history entry) differs across that flat/nested pair and across every `:cycleId` value,
+ * so keying on either one forces a remount on every Cycle-selector change, silently discarding that
+ * report's own local filter state (e.g. Advance Recovery Report's Site filter) even when the page
+ * identity hasn't changed — stripping the cycle-id segment first collapses the flat URL and every
+ * `:cycleId` value of its nested twin to the identical key, so only a genuine page change (a
+ * different pathname once that one prefix is normalized away, e.g. Reports catalogue ->
+ * Deduction Report) still forces the fresh mount Back/Forward needs. Route params elsewhere in the
+ * URL (`:advanceId`, `:entryId`, ...) are deliberately left in the key as-is — those pages have no
+ * established local-state-survives-a-param-change contract the way the Historical Payroll Cycle
+ * Selector convention gives every `:cycleId` route, so a changed id there still remounts, same as
+ * before. */
+const CYCLE_CONTEXT_PREFIX = /^\/payroll-cycles\/[^/]+/;
+
 function RequireSession({
   children,
 }: {
   children: (user: NonNullable<ReturnType<typeof useSession>['data']>) => ReactNode;
 }) {
   const { data: sessionUser, isLoading } = useSession();
+  const location = useLocation();
+  const routeKey = location.pathname.replace(CYCLE_CONTEXT_PREFIX, '');
 
   if (isLoading) return <RouteLoadingFallback />;
   if (!sessionUser) return <Navigate to="/login" replace />;
 
-  return <>{children(sessionUser)}</>;
+  return (
+    <Suspense key={routeKey} fallback={<RouteLoadingFallback />}>
+      {children(sessionUser)}
+    </Suspense>
+  );
 }
 
 /**

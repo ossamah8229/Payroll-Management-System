@@ -105,7 +105,14 @@ test.describe('Reports — Payroll Summary', () => {
     await expect(page.getByRole('link', { name: 'Reports' })).toBeVisible();
     await page.getByRole('link', { name: 'Reports' }).click();
     await expect(page).toHaveURL(/\/reports$/);
-    await expect(page.getByText('Payroll Summary')).toBeVisible();
+    // `exact: true` — the Dashboard's own "Site Payroll Summary" heading and its "...see full
+    // Payroll Summary" link both superstring-match a bare `getByText('Payroll Summary')`, and
+    // Playwright fails a strict-mode violation immediately rather than retrying it out, so a loose
+    // locator here can lose the race against the ~100ms client-side route swap and never get the
+    // chance to wait for it. The catalogue card's own title `<span>` (`reports-page.tsx`) is the
+    // only element whose own text is exactly "Payroll Summary" — unambiguous against the old page,
+    // and lets the assertion retry normally until the new page mounts.
+    await expect(page.getByText('Payroll Summary', { exact: true })).toBeVisible();
 
     await page.getByRole('link', { name: /Payroll Summary/ }).click();
     await expect(page).toHaveURL(/\/reports\/payroll-summary$|\/payroll-cycles\/.+\/reports\/payroll-summary$/);

@@ -397,6 +397,57 @@ test.describe('Advance Recovery Report — Browser Back/Forward across Cycle sel
   });
 });
 
+test.describe('Advance Recovery Report — Site filter survives a Cycle change', () => {
+  test('selecting a Site, then changing Cycle to a different Cycle, keeps the Site filter selected and the roster scoped to it (router-remount regression)', async ({
+    authenticatedPage: page,
+  }) => {
+    const context = page.context();
+    const label = `arr-cyc-${Date.now()}`;
+    const cycleA = await getCurrentDraftCycle(context);
+    const { employeeId } = await createSiteWithEmployee(context, label);
+    const siteName = `E2E Site ${label}`;
+    await createLoanInstallment(context, employeeId, cycleA, '5000', '1000');
+
+    // A second, genuinely distinct Cycle (any status) — reused from an earlier spec file's own
+    // rollover (19/24/27/29) when running the full suite; minted here via the same real
+    // Finalize + Archive-and-create-next rollover those files already use if none exists yet, so
+    // this regression is provable standalone too, not only as part of a full-suite run.
+    const existing = await apiGet<{ cycles: CycleRow[] }>(context, '/api/v1/payroll-cycles');
+    let cycleB = existing.body.cycles.find((c) => c.id !== cycleA.id);
+    if (!cycleB) {
+      try {
+        await apiPost(context, `/api/v1/payroll-cycles/${cycleA.id}/units/release-all`, {});
+        await apiPost(context, `/api/v1/payroll-cycles/${cycleA.id}/finalize`, {});
+        const rolled = await apiPost<{ newCycle: CycleRow }>(
+          context,
+          `/api/v1/payroll-cycles/${cycleA.id}/archive-and-create-next`,
+          {},
+        );
+        cycleB = rolled.newCycle;
+      } catch {
+        cycleB = undefined;
+      }
+    }
+    test.skip(!cycleB, 'A second, genuinely distinct Payroll Cycle could not be obtained in this run');
+    if (!cycleB) return;
+
+    await page.goto(`/payroll-cycles/${cycleA.id}/reports/advance-recovery`);
+    await openSiteFilterAndSelect(page, siteName);
+    const onScreenTable = page.getByTestId('on-screen-table');
+    await expect(onScreenTable.locator('tbody tr')).toHaveCount(1);
+    await expect(page.locator('#arr-site-filter')).toHaveText(siteName);
+
+    // The regression: changing only the Cycle (same report, same route pattern, only :cycleId
+    // differs) must never remount the page and silently drop the Site filter back to "All Sites."
+    await page.locator('#arr-cycle').selectOption(cycleB.id);
+    await expect(page).toHaveURL(new RegExp(`/payroll-cycles/${cycleB.id}/reports/advance-recovery$`));
+
+    await expect(page.locator('#arr-site-filter')).toHaveText(siteName);
+    await expect(onScreenTable.locator('tbody tr')).toHaveCount(1);
+    await expect(onScreenTable.getByText(`E2E Employee ${label}`)).toBeVisible();
+  });
+});
+
 test.describe('Advance Recovery Report — Detail page', () => {
   test('Advance Summary, Recovery History, and a separate Schedule / Deferral History via a real defer', async ({
     authenticatedPage: page,
@@ -427,7 +478,12 @@ test.describe('Advance Recovery Report — Detail page', () => {
     await expect(page).toHaveURL(new RegExp(`/reports/advance-recovery/${advance.id}$`));
 
     // --- Advance Summary: current, live figures, clearly labeled ---------------------------
-    await expect(page.getByText(employeeName)).toBeVisible();
+    // Scoped to the Detail page's own `<CardTitle>` (an `<h3>`, `reports-advance-recovery-report-
+    // detail-page.tsx`) — a bare `getByText(employeeName)` also matches the prior List page's
+    // on-screen/print-only duplicate table rows for this same employee, and since Playwright fails
+    // a strict-mode violation immediately rather than retrying it out, that ambiguity can win the
+    // race against the client-side route swap before this page's own heading ever gets checked.
+    await expect(page.getByRole('heading', { name: employeeName })).toBeVisible();
     await expect(page.getByText(/current, live figures/i)).toBeVisible();
     await expect(page.getByText('Advance', { exact: true }).first()).toBeVisible();
 
