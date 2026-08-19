@@ -127,6 +127,12 @@ describe('Phase 7 Reports — Project Site Payroll Report Checkpoint 1A — perf
     }
     targetCycleId = cycleIds[cycleIds.length - 1]!; // the most recently seeded cycle — no special treatment, any of the 3 would do
 
+    // Deterministic planner statistics after this fixture's bulk `createMany` burst (same
+    // precedent as `advance-recovery-report-performance.test.ts`/`overtime-report-performance
+    // .test.ts`) — every table this suite's own EXPLAIN blocks, list queries, and the totals
+    // computation's own `count`/`findMany` calls query.
+    await prisma.$executeRawUnsafe('ANALYZE "Employee", "PayrollEntry", "PayrollEntryWorkLine"');
+
     const totalEntries = await prisma.payrollEntry.count();
     // eslint-disable-next-line no-console
     console.log(`[perf] seeded ${EMPLOYEE_COUNT} employees, ${CYCLE_COUNT} cycles, ${totalEntries} total PayrollEntry rows`);
@@ -146,12 +152,11 @@ describe('Phase 7 Reports — Project Site Payroll Report Checkpoint 1A — perf
     expect(res.body.rows).toHaveLength(25);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + one site (${EMPLOYEES_PER_SITE} of ${EMPLOYEE_COUNT * CYCLE_COUNT} matching), page of 25: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
-    // Faithful to the service's own actual default query shape (`buildOrderBy('employeeName', 'asc')`
-    // — an ORDER BY through the `employee` relation, not a bare `PayrollEntry` column), not a
-    // simplified stand-in — the whole point of this evidence is measuring what the report really
-    // does, not a proxy for it.
+    // Captured before the timing assertion below (not after) so a threshold failure still leaves
+    // the query plan on record — the whole reason this evidence exists. Faithful to the service's
+    // own actual default query shape (`buildOrderBy('employeeName', 'asc')` — an ORDER BY through
+    // the `employee` relation, not a bare `PayrollEntry` column), not a simplified stand-in.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -173,6 +178,8 @@ describe('Phase 7 Reports — Project Site Payroll Report Checkpoint 1A — perf
     // regression: still no `Seq Scan`, still 12ms end to end. Documented honestly rather than
     // asserting the composite index specifically, which this evidence does not actually show.
     expect(planText).toMatch(/Index (Scan|Only Scan) using "PayrollEntry_/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('list query (one cycle, all accessible sites — the full cycle) still uses an index', async () => {
@@ -183,8 +190,9 @@ describe('Phase 7 Reports — Project Site Payroll Report Checkpoint 1A — perf
     expect(res.body.total).toBe(EMPLOYEE_COUNT);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle only (all ${EMPLOYEE_COUNT} of that cycle), page of 25: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -198,6 +206,8 @@ describe('Phase 7 Reports — Project Site Payroll Report Checkpoint 1A — perf
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle-only list query, real ORDER BY employee.name):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('unit-filtered query (join through PayrollEntryWorkLine, already bounded by cycle+site) stays fast', async () => {

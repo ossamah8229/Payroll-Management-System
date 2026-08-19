@@ -541,32 +541,6 @@ describe('Phase 6 Checkpoint 3 — Correction request/approval/rejection workflo
         approveAdaptive(admin, requestB.body.correctionRequest.id),
       ]);
 
-      // DIAGNOSTIC (temporary — not part of the permanent regression test): captures exactly what
-      // each concurrent response carried, so a CI failure here identifies the actual error code
-      // instead of only the status code. Does not alter, broaden, or replace either assertion below.
-      // eslint-disable-next-line no-console
-      console.log(
-        '[diag corrections] resA',
-        JSON.stringify({
-          requestId: requestA.body.correctionRequest.id,
-          proposedNewValue: '32000',
-          status: resA.status,
-          errorCode: resA.body?.error?.code ?? null,
-          errorMessage: resA.body?.error?.message ?? null,
-        }),
-      );
-      // eslint-disable-next-line no-console
-      console.log(
-        '[diag corrections] resB',
-        JSON.stringify({
-          requestId: requestB.body.correctionRequest.id,
-          proposedNewValue: '34000',
-          status: resB.status,
-          errorCode: resB.body?.error?.code ?? null,
-          errorMessage: resB.body?.error?.message ?? null,
-        }),
-      );
-
       expect(resA.status).toBe(200);
       expect(resB.status).toBe(200);
 

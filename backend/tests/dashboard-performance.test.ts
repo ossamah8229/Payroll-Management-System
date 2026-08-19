@@ -174,6 +174,11 @@ describe('Dashboard Checkpoint 1A — performance validation (no schema change)'
       })),
     });
 
+    // Deterministic planner statistics after this fixture's bulk `createMany` burst (same
+    // precedent as `advance-recovery-report-performance.test.ts`/`overtime-report-performance
+    // .test.ts`) — every table this suite's own EXPLAIN blocks and full-request assertions query.
+    await prisma.$executeRawUnsafe('ANALYZE "Employee", "PayrollEntry", "PayrollEntryWorkLine", "CorrectionRequest", "Advance"');
+
     // eslint-disable-next-line no-console
     console.log(
       `[perf] seeded ${EMPLOYEE_COUNT} employees, 1 cycle, ${entryRows.length} PayrollEntry rows, ${correctionRows.length} pending CorrectionRequests, ${advanceRows.length} ACTIVE Advances`,

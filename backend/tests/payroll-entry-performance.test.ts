@@ -87,6 +87,13 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
       await prisma.employee.createMany({ data: batch });
     }
 
+    // Deterministic planner statistics for `Employee` before the bootstrap request below — same
+    // precedent as `advance-recovery-report-performance.test.ts`/`overtime-report-performance
+    // .test.ts`, timed to run *before* `bootstrapStart` so it never counts toward `bootstrapMs`.
+    // `PayrollEntry`/`PayrollEntryWorkLine` don't exist yet at this point — the bootstrap request
+    // itself is what creates them — so those two are ANALYZEd separately below, once seeded.
+    await prisma.$executeRawUnsafe('ANALYZE "Employee"');
+
     const bootstrapStart = Date.now();
     const cycleRes = await admin.agent
       .post('/api/v1/payroll-cycles')
@@ -98,6 +105,13 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
       throw new Error(`Cycle bootstrap failed: ${cycleRes.status} ${JSON.stringify(cycleRes.body)}`);
     }
     cycleId = cycleRes.body.cycle.id as string;
+
+    // Deterministic planner statistics for the 10,000 `PayrollEntry`/`PayrollEntryWorkLine` rows
+    // the bootstrap request above just created in one burst — run only after `bootstrapMs` is
+    // already captured, so it never counts toward that measurement, but before any of this file's
+    // own list-query/EXPLAIN assertions (all of which run in later `it` blocks, after `beforeAll`
+    // returns).
+    await prisma.$executeRawUnsafe('ANALYZE "PayrollEntry", "PayrollEntryWorkLine"');
 
     // eslint-disable-next-line no-console
     console.log(`[perf] cycle bootstrap for ${EMPLOYEE_COUNT} employees: ${bootstrapMs}ms`);
@@ -145,8 +159,9 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
     expect(res.body.total).toBe(EMPLOYEE_COUNT);
     // eslint-disable-next-line no-console
     console.log(`[perf] single page (${FRONTEND_PAGE_SIZE} rows) HTTP round trip: ${ms}ms`);
-    expect(ms).toBeLessThan(2_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves both query
+    // plans on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN ANALYZE SELECT * FROM "PayrollEntry" WHERE "cycleId" = $1::uuid ORDER BY "sortOrder" ASC LIMIT ${FRONTEND_PAGE_SIZE}`,
       cycleId,
@@ -165,6 +180,8 @@ describe('Phase 3 Checkpoint 6 — 10,000-employee performance/concurrency valid
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (site-filtered list query):\n${filteredPlanText}`);
     expect(filteredPlanText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(2_000);
   });
 
   it('measures the current sequential page-to-completion fetch against a parallelized alternative', async () => {

@@ -125,6 +125,11 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     }
     targetCycleId = cycleIds[cycleIds.length - 1]!;
 
+    // Deterministic planner statistics after this fixture's bulk `createMany` burst (same
+    // precedent as `advance-recovery-report-performance.test.ts`/`overtime-report-performance
+    // .test.ts`) — every table this suite's own EXPLAIN blocks and list-query assertions query.
+    await prisma.$executeRawUnsafe('ANALYZE "Employee", "PayrollEntry", "PayrollEntryWorkLine"');
+
     const totalEntries = await prisma.payrollEntry.count();
     // eslint-disable-next-line no-console
     console.log(`[perf] seeded ${EMPLOYEE_COUNT} employees, ${CYCLE_COUNT} cycles, ${totalEntries} total PayrollEntry rows`);
@@ -143,8 +148,9 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     expect(res.body.total).toBe(EMPLOYEE_COUNT);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle only (all ${EMPLOYEE_COUNT} matching), page of 25: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -158,6 +164,8 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle-only list query, real ORDER BY employee.name):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('list query (one cycle, one site) uses an index', async () => {
@@ -168,8 +176,9 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     expect(res.body.total).toBe(EMPLOYEES_PER_SITE);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + one site (${EMPLOYEES_PER_SITE} of ${EMPLOYEE_COUNT} matching), page of 25: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -189,6 +198,8 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     // both are legitimate non-sequential access methods; the regex accepts either rather than
     // asserting one specific scan sub-type the evidence doesn't consistently show.
     expect(planText).toMatch(/(Index Scan|Index Only Scan|Bitmap Index Scan).*"PayrollEntry_/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('hasFine=true (a ~10% selectivity predicate on a plain stored column) stays fast', async () => {
@@ -199,8 +210,9 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     expect(res.body.total).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + hasFine=true (${res.body.total} of ${EMPLOYEE_COUNT} matching): ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -213,6 +225,8 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle + fine>0 filter):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('hasAdvanceDeduction=true stays fast', async () => {
@@ -245,8 +259,9 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     expect(res.body.total).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + hasEobi=true (${res.body.total} of ${EMPLOYEE_COUNT} matching): ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -259,6 +274,8 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle + effective-EOBI filter):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('sorting by a plain stored monetary column (advanceDeduction) uses database-level ORDER BY and stays fast', async () => {
@@ -269,8 +286,9 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     expect(res.body.rows).toHaveLength(25);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle, sortBy=advanceDeduction desc: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -283,6 +301,8 @@ describe('Phase 7 Reports — Deduction Report Checkpoint 1A — performance val
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle-scoped sort by advanceDeduction):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('unit-filtered query (join through PayrollEntryWorkLine, already bounded by cycle+site) stays fast', async () => {

@@ -181,6 +181,12 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     }
     targetCycleId = cycleIds[cycleIds.length - 1]!;
 
+    // Deterministic planner statistics after this fixture's bulk `createMany` burst (same
+    // precedent as `advance-recovery-report-performance.test.ts`/`overtime-report-performance
+    // .test.ts`) — including `Correction`, which the Has Correction filter/batched lookup queries
+    // directly (`prisma.correction.groupBy`), not just fixture noise.
+    await prisma.$executeRawUnsafe('ANALYZE "Employee", "PayrollEntry", "PayrollEntryWorkLine", "Correction"');
+
     const totalEntries = await prisma.payrollEntry.count();
     // eslint-disable-next-line no-console
     console.log(`[perf] seeded ${EMPLOYEE_COUNT} employees, ${CYCLE_COUNT} cycles, ${totalEntries} total PayrollEntry rows`);
@@ -199,8 +205,9 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     expect(res.body.total).toBe(EMPLOYEE_COUNT);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle only (all ${EMPLOYEE_COUNT} matching), page of 25: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -214,6 +221,8 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle-only list query, real ORDER BY employee.name):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('2. list query (one cycle, one site) uses an index', async () => {
@@ -224,8 +233,9 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     expect(res.body.total).toBe(EMPLOYEES_PER_SITE);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + one site (${EMPLOYEES_PER_SITE} of ${EMPLOYEE_COUNT} matching), page of 25: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -245,6 +255,8 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     // index covering (cycleId, siteId) at this data volume — every sibling report's own evidence
     // shows this varies by fixture distribution, never a missing-index defect.
     expect(planText).toMatch(/(Index Scan|Index Only Scan|Bitmap Index Scan).*"PayrollEntry_/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('3. list query (one cycle, one site, one unit — join through PayrollEntryWorkLine) stays fast', async () => {
@@ -268,8 +280,9 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     expect(res.body.total).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + rowStatus=RELEASED (${res.body.total} of ${EMPLOYEE_COUNT} matching): ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -282,6 +295,8 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle + released=true filter):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('5. HELD row-status filter (~10% selectivity) stays fast', async () => {
@@ -303,8 +318,9 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     expect(res.body.total).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + rowStatus=PENDING (${res.body.total} of ${EMPLOYEE_COUNT} matching): ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -317,6 +333,8 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle + PENDING filter):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('7. sorting by releasedAt (the one genuine DB-native, non-stored-elsewhere sort field) uses database-level ORDER BY and stays fast', async () => {
@@ -327,8 +345,9 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     expect(res.body.rows).toHaveLength(25);
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle, sortBy=releasedAt desc: ${ms}ms`);
-    expect(ms).toBeLessThan(3_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -341,6 +360,8 @@ describe('Phase 7 Reports — Salary Release Report Checkpoint 1A — performanc
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle-scoped sort by releasedAt):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(3_000);
   });
 
   it('8a. totals computation (bounded calcNet/sumMoney pass over every matching row) completes within a generous bound for a full-cycle result, well under the 20,000-row ceiling', async () => {

@@ -194,6 +194,12 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
       await prisma.correction.createMany({ data: correctionRows.slice(start, start + CHUNK) });
     }
 
+    // Deterministic planner statistics after this fixture's bulk `createMany` burst (same
+    // precedent as `advance-recovery-report-performance.test.ts`/`overtime-report-performance
+    // .test.ts`) — including `Correction`, which `hasCorrection` filtering queries directly
+    // (`prisma.correction.groupBy`), not just fixture noise.
+    await prisma.$executeRawUnsafe('ANALYZE "Employee", "PayrollEntry", "PayrollEntryWorkLine", "Correction"');
+
     const comparisonTotal = await prisma.payrollEntry.count({ where: { cycleId: comparisonCycleId } });
     const currentTotal = await prisma.payrollEntry.count({ where: { cycleId: currentCycleId } });
     // eslint-disable-next-line no-console
@@ -220,8 +226,9 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     expect(res.body.total).toBe(CONTINUED_COUNT + NEW_ONLY_COUNT + DEPARTED_ONLY_COUNT);
     // eslint-disable-next-line no-console
     console.log(`[perf] broad two-cycle comparison (${res.body.total} matching): ${ms}ms`);
-    expect(ms).toBeLessThan(15_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -232,6 +239,8 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (one side's own bounded per-cycle fetch):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(15_000);
   });
 
   it('2. two-cycle + Site filter — matches on either side, underlying authorization fetch stays index-backed', async () => {
@@ -242,8 +251,9 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     expect(res.body.total).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`[perf] two-cycle + Site filter (${res.body.total} matching): ${ms}ms`);
-    expect(ms).toBeLessThan(15_000);
 
+    // Captured before the timing assertion below so a threshold failure still leaves the query
+    // plan on record.
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
        SELECT pe.* FROM "PayrollEntry" pe
@@ -255,6 +265,8 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle+site-filtered per-side fetch):\n${planText}`);
     expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+
+    expect(ms).toBeLessThan(15_000);
   });
 
   it('3. two-cycle + Unit filter (single-Site-scoped) stays fast', async () => {
