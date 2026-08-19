@@ -17,6 +17,34 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
+> **Update, 2026-08-19 (latest) — Backend/CI Reliability Checkpoint: known-green baseline,
+> GitHub Actions performance-test investigation, and Plan-Shape Hardening — COMMITTED
+> (`bbf54b3daad75f0642956b4994d375412379749a`), PUSHED to `origin/main`.** Not a roadmap-phase
+> checkpoint — this is a separate reliability-tracking sequence ("Reliability Phase 4"/"Reliability
+> Phase 5" below), unrelated to `docs/IMPLEMENTATION_PLAN.md`'s own Phase 4/Phase 5. A clean local
+> baseline (backend 94/94 suites/1831/1831 tests, frontend 1056/1056, E2E 195/187/0/8) surfaced,
+> under real GitHub Actions conditions, stale-planner-statistics and brittle exact-plan-shape
+> ("not Seq Scan") test assertions that a local run never reproduced. Advance Recovery's fixture
+> statistics were hardened with an explicit `ANALYZE` (`7734bb6`); a full audit then removed
+> categorical scan-shape assertions from six performance suites wherever fixture selectivity made a
+> sequential scan a legitimate, fast, cost-based choice, replacing them with structural index
+> verification (`expectIndexColumns`, `backend/tests/helpers.ts`, reads Postgres catalog metadata
+> directly) plus the pre-existing, unchanged wall-clock timing bounds. No threshold raised, no
+> fixture shrunk, no retry/sleep/skip added, no planner setting touched, no production code changed.
+> **Authoritative runtime gate: GitHub Actions Run #86 (run ID `32244434825`) — Backend SUCCESS
+> (94/94 suites, 1831/1831 tests), Frontend SUCCESS, E2E SUCCESS (confirmed actually executed),
+> overall workflow SUCCESS.** Two items explicitly remain open, not fixed here: the
+> `Jest did not exit...` open-handle warning (`sessionPool`/`connect-pg-simple` lifecycle,
+> Reliability Checkpoint 2, not started) and historical `statements.test.ts`/
+> `corrections-service.test.ts` intermittent anomalies (recorded, not proven permanently resolved by
+> one green run). A Node 20.20.2-vs-Puppeteer's-declared->=22.12.0 engine mismatch and 10
+> pre-existing `no-console` lint warnings are recorded as non-blocking maintenance debt. Reliability
+> Phase 5 has not begun and remains blocked pending separate authorization. Full record:
+> `docs/PROJECT_PROGRESS.md`'s own "Backend/CI Reliability Checkpoint" entry — not duplicated here
+> in full.
+>
+> ---
+>
 > **Update, 2026-08-13 (latest) — Dashboard Checkpoint 1A (Backend Foundation) — IMPLEMENTED,
 > awaiting review, NOT COMMITTED.** A single aggregation endpoint, `GET /api/v1/dashboard`
 > (`docs/architecture/workflows/dashboard.md`), answering "what does the active/current payroll cycle

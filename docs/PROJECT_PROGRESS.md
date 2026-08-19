@@ -11423,6 +11423,129 @@ instruction; no other roadmap work started.
 
 ---
 
+## Backend/CI Reliability Checkpoint — Known-Green Baseline, GitHub Actions Investigation, and Plan-Shape Hardening (2026-08-19)
+
+**Naming note:** the "Phase 4"/"Phase 5" labels in this entry belong to a separate, narrower
+checkpoint sequence for backend test/CI reliability specifically — they are unrelated to, and do not
+renumber, `docs/IMPLEMENTATION_PLAN.md`'s own Phase 4 (Release, Payment Artifacts, and Advances,
+closed 2026-07-13) or Phase 5 (Cycle Finalization, Archiving, and Backups). Do not conflate the two.
+
+### Reliability Phase 4 — known-green baseline
+
+Before any CI-specific investigation began, a clean local reliability baseline was established
+against disposable databases only (production untouched):
+
+- Backend: **94/94 suites, 1831/1831 tests** passing.
+- Frontend: **1056/1056 tests** passing.
+- E2E: **195 total / 187 passed / 0 failed / 8 legitimate conditional skips**.
+- `typecheck`/`lint`/`build` green across `shared`/`backend`/`frontend`, subject only to
+  already-known, previously-documented warnings.
+
+### GitHub Actions investigation
+
+Running the same suite through GitHub Actions (not just locally) exposed performance-test
+instability the local baseline had not reproduced:
+
+- Advance Recovery Report's own performance fixture (`advance-recovery-report-performance.test.ts`)
+  was found to hit a genuinely pathological planner choice under CI conditions — stale
+  post-bulk-`createMany` planner statistics drove a nested-loop plan that pushed two queries past
+  their guardrail (5.4s/10.6s observed). Fixed with an explicit `ANALYZE` immediately after seeding
+  (commit `7734bb6`), matching steady-state production statistics.
+- Subsequent CI runs then exposed a second, related but distinct problem: several *other*
+  performance suites carried **categorical exact-plan-shape assertions** (`expect(planText).not
+  .toMatch(/Seq Scan/)`, and in a few cases a paired "must be an Index Scan") that assumed
+  PostgreSQL would always choose an index scan, regardless of the seeded fixture's own row
+  selectivity. GitHub Actions Run #85 (commit `4d083da`, after `ANALYZE` hardening was extended to
+  six more suites) failed exactly this way: `payroll-entry-performance.test.ts` (fixture selects
+  100% of the table — a single seeded cycle) and `overtime-report-performance.test.ts`
+  (cycle+site selects ~3.3% of the table) both failed a "not Seq Scan" assertion against a plan that
+  was fast (7.05ms / 12.53ms) and cost-rational, not pathological.
+- A full audit of the backend performance-test suite classified every exact-plan-shape assertion
+  into three kinds: (a) a deterministic schema/index invariant (does the intended index exist?);
+  (b) a realistic timing/performance invariant (does the query stay within a generous wall-clock
+  bound?); (c) a nondeterministic PostgreSQL planner choice (which physical scan method the
+  cost-based optimizer happens to pick for a given fixture's row distribution) — the thing the
+  brittle assertions were actually testing, and the wrong invariant to pin down.
+- Invalid categorical scan-ban/scan-require assertions were removed wherever fixture selectivity
+  legitimately allows PostgreSQL to choose a sequential scan (`payroll-entry-performance.test.ts`,
+  `overtime-report-performance.test.ts`, `deduction-report-performance.test.ts`,
+  `salary-release-report-performance.test.ts`, `project-site-payroll-report-performance.test.ts`,
+  `variance-report-performance.test.ts`). Structural index verification was introduced in their
+  place via a new `expectIndexColumns(table, indexName, expectedColumns)` helper
+  (`backend/tests/helpers.ts`), which reads Postgres catalog metadata (`pg_index`/`pg_class`/
+  `pg_attribute`) rather than parsing `EXPLAIN` output, so it can't be satisfied by an accidental
+  plan choice and can't be defeated by a legitimate one either.
+- Explicitly **not** done, at any point: timing thresholds were not increased; fixture volumes were
+  not reduced; no retries/sleeps/skips were added anywhere; no PostgreSQL planner settings
+  (`enable_seqscan`, cost parameters, parallelism) were manipulated; no production behavior was
+  weakened to make CI green; `advance-recovery-report-performance.test.ts` and
+  `dashboard-performance.test.ts` were left untouched (their own plan assertions protect genuinely
+  selective, single-row-class lookups — a different, still-valid invariant).
+
+### Plan-Shape Hardening — commit and runtime gate
+
+Final commit: **`bbf54b3daad75f0642956b4994d375412379749a`** — "test: decouple index checks from
+planner choices." Test-only change: `backend/tests/helpers.ts` (new `expectIndexColumns` helper)
+plus the six performance suites named above. No production `src/` file, Prisma schema/migration,
+dependency/lockfile, or CI workflow file touched.
+
+Authoritative GitHub Actions runtime gate for this commit:
+
+- Run **#86**, run ID **32244434825**, head SHA `bbf54b3d...`.
+- Backend: **SUCCESS** — **94/94 suites passed, 1831/1831 tests passed**, 0 snapshots, ~692.5s
+  runtime. All backend suites passed, including every modified performance suite and
+  Advance Recovery (left untouched, remained green). The visible `prisma:error` stderr output in
+  this run is expected, deliberate negative-path/invariant test output (malformed UUID handling,
+  uniqueness violations, invalid enum input, FK enforcement, AuditLog append-only UPDATE/DELETE
+  rejection) — not a new failure.
+- Frontend: **SUCCESS**.
+- E2E: **SUCCESS**, confirmed actually executed (not skipped — real ~6-7 minute job runtime).
+- Overall workflow: **SUCCESS**.
+
+This demonstrates the intended model end to end: (1) fixture statistics are prepared
+deterministically (Checkpoint 1's `ANALYZE` hardening); (2) required indexes are verified
+structurally (`expectIndexColumns`, independent of any specific plan); (3) realistic
+timing/performance bounds remain enforced (unchanged thresholds); (4) PostgreSQL remains free to
+select whichever cost-based execution plan it judges cheapest for the actual row distribution.
+
+**Plan-Shape Hardening Runtime Gate: GREEN.**
+
+### Remaining reliability work (explicitly not resolved by the above)
+
+1. **Jest open-handle/session lifecycle issue — Reliability Checkpoint 2, not started.** Run #86
+   still prints `Jest did not exit one second after the test run has completed.` The suspected area
+   is the `sessionPool`/`connect-pg-simple` lifecycle; not investigated or fixed in this checkpoint.
+2. **Historical Statements/Corrections intermittent anomalies — separately recorded, not proven
+   permanently resolved.** Earlier CI activity produced intermittent anomalies in
+   `statements.test.ts`/`corrections-service.test.ts`. Run #86 (and other recent runs) were green,
+   but one clean run does not retroactively prove those historical intermittent anomalies
+   permanently eliminated — they remain a distinct, separately-tracked watch item.
+3. **Node/Puppeteer engine mismatch — maintenance debt, non-blocking.** Run #86's CI installs Node
+   **20.20.2**, while the installed `puppeteer`/`puppeteer-core`/`@puppeteer/browsers` packages
+   (25.3.0/25.3.0/3.0.6) declare an engine requirement of Node **>=22.12.0**. This did not prevent
+   Run #86 from passing and is not part of this checkpoint's scope, but should be picked up as
+   future CI/dependency maintenance work.
+4. **Existing lint warnings — non-blocking maintenance debt.** Backend lint is 0 errors, 10
+   pre-existing `no-console` warnings confined to two standalone maintenance scripts.
+
+### Reliability phase status
+
+- **Reliability Phase 4 is not yet fully complete** — Reliability Checkpoint 2 (the open-handle/
+  session-lifecycle investigation above) remains outstanding.
+- **Reliability Phase 5 has NOT begun** and remains blocked pending separate authorization after the
+  remaining reliability checkpoint(s) above are closed.
+
+### Production safety record
+
+Throughout the known-green baseline, GitHub Actions investigation, and Plan-Shape Hardening work:
+production database was not mutated; no production migration was executed; no production seed was
+executed; no production configuration was changed; no production deployment was performed. All
+verification ran against disposable/CI-ephemeral Postgres instances only. This entry does not claim
+the currently-deployed production commit has been independently re-verified — no such evidence was
+gathered as part of this work.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
