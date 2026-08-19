@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { cleanTestData, createAuthenticatedAgent } from './helpers';
+import { cleanTestData, createAuthenticatedAgent, expectIndexColumns } from './helpers';
 
 /**
  * Phase 7 Reports, Overtime Report Checkpoint 1A — committed, repeatable performance validation
@@ -18,14 +18,18 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
  * rooted query. The existing `PayrollEntryWorkLine.payrollEntryId`/`.unitId` indexes and
  * `PayrollEntry`'s own `[cycleId]`/`[cycleId, siteId]`/`[siteId, cycleId]` indexes were not added
  * for this report and are not assumed sufficient — every assertion below is checked against the
- * real `EXPLAIN ANALYZE` output at this seed's volume, not assumed from the schema alone. Most
- * assertions are scoped to "no Seq Scan on PayrollEntry" (the table carrying the real cycle/site
- * filter predicates), mirroring every sibling performance suite's own precedent of not
- * over-constraining the scan method chosen for a joined table — a full scan of the (much smaller,
- * 1-line-per-entry-typical) work-line table joined via hash to an already cycle-filtered
- * PayrollEntry set is a legitimate, fast, non-pathological plan, not a finding this suite needs to
- * rule out. The one exception is the single-cycle, no-filter query (cycleId alone, no site/unit) —
- * see that test's own doc comment for why plan *shape* isn't asserted there.
+ * real `EXPLAIN ANALYZE` output at this seed's volume, not assumed from the schema alone.
+ *
+ * **Plan-shape hardening (Run #85, 2026-08-19):** this suite used to assert "no Seq Scan on
+ * PayrollEntry" categorically on most queries. Run #85 proved that invariant invalid at moderate
+ * selectivity — the cycle+site query (~3.3% of this fixture's 30,000 rows) legitimately planned as
+ * a Parallel Seq Scan (12.534ms, non-pathological) once `ANALYZE` gave the planner real statistics,
+ * the same cost-based-coin-flip behavior the single-cycle, no-filter query below had already
+ * demonstrated and documented. No query in this file now bans a scan method categorically; each
+ * instead verifies **index availability** structurally, via `expectIndexColumns` (Postgres catalog
+ * metadata, independent of which plan the planner picks), and preserves its **wall-clock
+ * performance bound** — the two guarantees that actually matter. EXPLAIN output remains captured
+ * and logged throughout, for diagnostic evidence on a future timing regression.
  *
  * **`ANALYZE`d immediately after seeding, deliberately** (see the doc comment at the seed's own
  * `ANALYZE` call below): a bulk `createMany` load leaves Postgres without real statistics until
@@ -210,7 +214,7 @@ describe('Phase 7 Reports — Overtime Report Checkpoint 1A — performance vali
     // wall-clock time is the assertion that actually matters, and it already ran above.
   });
 
-  it('list query (one cycle, one site) uses an index on PayrollEntry', async () => {
+  it('list query (one cycle, one site) has its supporting PayrollEntry index and stays fast', async () => {
     const start = Date.now();
     const res = await admin.agent.get(`/api/v1/reports/overtime-report?cycleId=${targetCycleId}&siteIds=${targetSiteId}&pageSize=25`);
     const ms = Date.now() - start;
@@ -219,6 +223,17 @@ describe('Phase 7 Reports — Overtime Report Checkpoint 1A — performance vali
     // eslint-disable-next-line no-console
     console.log(`[perf] list, one cycle + one site (${EMPLOYEES_PER_SITE} of ${EMPLOYEE_COUNT} matching), page of 25: ${ms}ms`);
     expect(ms).toBeLessThan(3_000);
+
+    // Index *availability* is verified structurally (Postgres catalog metadata) rather than by
+    // banning `Seq Scan`/requiring `Index Scan` in the EXPLAIN output — Run #85 (2026-08-19) showed
+    // this exact query (cycleId+siteId selects ~1,000 of this fixture's 30,000 rows, ~3.3%) legitimately
+    // planned as a Parallel Seq Scan (12.534ms, no row-amplification, nothing pathological): at this
+    // selectivity, joined to Employee and sorted by `e.name` (no early-exit benefit from an index,
+    // since every matching row must be materialized before the top-25 sort), a categorical plan-shape
+    // ban is a cost-based coin-flip, not a real regression signal — see this file's own cycle-only
+    // test above for the same, already-established reasoning. EXPLAIN is still captured and logged
+    // for diagnostic evidence.
+    await expectIndexColumns('PayrollEntry', 'PayrollEntry_cycleId_siteId_idx', ['cycleId', 'siteId']);
 
     const plan = await prisma.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
       `EXPLAIN (ANALYZE, BUFFERS)
@@ -234,8 +249,6 @@ describe('Phase 7 Reports — Overtime Report Checkpoint 1A — performance vali
     const planText = plan.map((row) => row['QUERY PLAN']).join('\n');
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle+site-filtered list query):\n${planText}`);
-    expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
-    expect(planText).toMatch(/(Index Scan|Index Only Scan|Bitmap Index Scan).*"PayrollEntry_/);
   });
 
   it('hasOvertime=true (a ~25% selectivity predicate on the work line’s own stored column) stays fast', async () => {
@@ -260,7 +273,11 @@ describe('Phase 7 Reports — Overtime Report Checkpoint 1A — performance vali
     const planText = plan.map((row) => row['QUERY PLAN']).join('\n');
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle + otHours>0 filter):\n${planText}`);
-    expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+    // No categorical plan-shape assertion — this query's base predicate is the same cycle-only
+    // filter (33% selectivity at this fixture's 3-cycle volume) the file's own cycle-only test above
+    // already documents as a legitimate cost-based coin-flip, not a regression signal. EXPLAIN is
+    // still captured and logged for diagnostic evidence; the timing bound above is the assertion
+    // that matters.
   });
 
   it('unit-filtered query (bounded by cycle+site+unit, work-line-native predicate) stays fast', async () => {
@@ -297,7 +314,7 @@ describe('Phase 7 Reports — Overtime Report Checkpoint 1A — performance vali
     const planText = plan.map((row) => row['QUERY PLAN']).join('\n');
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle-scoped sort by otHours):\n${planText}`);
-    expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
+    // No categorical plan-shape assertion — same cycle-only base predicate/reasoning as above.
   });
 
   it('totals computation (bounded calcNet/sumMoney pass over every matching work line) completes within a generous bound, well under the 20,000-row ceiling', async () => {

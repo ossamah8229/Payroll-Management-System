@@ -222,6 +222,31 @@ export function assertNoSensitiveKeys(value: unknown, extraForbiddenKeys: string
   }
 }
 
+/**
+ * Verifies index `indexName` on `table` exists with exactly `expectedColumns`, in that order —
+ * read from Postgres catalog metadata (`pg_index`/`pg_class`/`pg_attribute`), not from a query
+ * plan. Performance suites use this to assert index *availability* deterministically, independent
+ * of whichever physical plan the cost-based planner picks for a given fixture's row distribution
+ * (a categorical "not Seq Scan"/"must Index Scan" assertion on `EXPLAIN` output is a coin-flip at
+ * moderate selectivity — Run #85's `payroll-entry-performance.test.ts`/`overtime-report-performance
+ * .test.ts` failures — while index *existence* with the intended leading columns is what the
+ * application actually depends on, and never legitimately varies run to run). Column-level catalog
+ * inspection rather than parsing `pg_indexes.indexdef` text, so this doesn't couple to
+ * Postgres-version-specific index-definition formatting.
+ */
+export async function expectIndexColumns(table: string, indexName: string, expectedColumns: string[]): Promise<void> {
+  const rows = await prisma.$queryRaw<{ attname: string }[]>`
+    SELECT a.attname
+    FROM pg_index i
+    JOIN pg_class t ON t.oid = i.indrelid
+    JOIN pg_class ix ON ix.oid = i.indexrelid
+    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+    WHERE t.relname = ${table} AND ix.relname = ${indexName}
+    ORDER BY array_position(i.indkey, a.attnum)
+  `;
+  expect(rows.map((row) => row.attname)).toEqual(expectedColumns);
+}
+
 /** Extracts a named cookie's value from a supertest response's Set-Cookie header. */
 export function extractCookie(res: SuperTestResponse, name: string): string | undefined {
   const setCookie = res.headers['set-cookie'];

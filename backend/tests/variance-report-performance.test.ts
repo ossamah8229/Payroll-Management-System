@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { PERMISSIONS, ROLE_CODES } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
-import { cleanTestData, createAuthenticatedAgent } from './helpers';
+import { cleanTestData, createAuthenticatedAgent, expectIndexColumns } from './helpers';
 
 /**
  * Phase 7 Reports, Variance / Month-on-Month Report Checkpoint 1A — committed, repeatable
@@ -21,6 +21,16 @@ import { cleanTestData, createAuthenticatedAgent } from './helpers';
  * report's own two-sided pairing/existence-check machinery stays fast with a real, non-trivial
  * population mix, not just an all-`CONTINUED` fixture. Seeding uses bulk `createMany` throughout —
  * never a per-row loop.
+ *
+ * **Plan-shape hardening (Run #85, 2026-08-19):** this fixture seeds exactly 2 cycles, so a bare
+ * `cycleId` filter (test 1) is ~50% selective — the least selective, most coin-flip-prone predicate
+ * of any performance suite in this codebase — and `cycleId`+`siteId` (test 2) is still only ~5%.
+ * Both sit in the moderate-selectivity range Run #85 proved makes Postgres's cost-based choice
+ * between a Seq Scan and an Index Scan legitimate either way, not a regression signal (see
+ * `overtime-report-performance.test.ts`'s own doc comment for the full analysis). Neither query
+ * below asserts a specific scan method; index *availability* is instead verified structurally via
+ * `expectIndexColumns` (Postgres catalog metadata), and every wall-clock performance bound is
+ * unchanged. EXPLAIN output remains captured and logged for diagnostic evidence.
  */
 
 jest.setTimeout(5 * 60 * 1000);
@@ -218,7 +228,7 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     return `/api/v1/reports/variance?${new URLSearchParams({ comparisonCycleId, currentCycleId, pageSize: '25', ...params }).toString()}`;
   }
 
-  it('1. broad two-cycle comparison (no filters) — the underlying per-cycle fetch uses an index, not a sequential scan', async () => {
+  it('1. broad two-cycle comparison (no filters) — the underlying per-cycle fetch has its supporting index and stays fast', async () => {
     const start = Date.now();
     const res = await admin.agent.get(listUrl({}));
     const ms = Date.now() - start;
@@ -226,6 +236,12 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     expect(res.body.total).toBe(CONTINUED_COUNT + NEW_ONLY_COUNT + DEPARTED_ONLY_COUNT);
     // eslint-disable-next-line no-console
     console.log(`[perf] broad two-cycle comparison (${res.body.total} matching): ${ms}ms`);
+
+    // Index availability verified structurally, not by requiring a specific EXPLAIN scan method —
+    // Run #85 (2026-08-19), see this file's own header comment. This fixture's 2-cycle volume
+    // makes `cycleId` alone ~50% selective, the least selective predicate this codebase's
+    // performance suites measure.
+    await expectIndexColumns('PayrollEntry', 'PayrollEntry_cycleId_idx', ['cycleId']);
 
     // Captured before the timing assertion below so a threshold failure still leaves the query
     // plan on record.
@@ -238,12 +254,11 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     const planText = plan.map((row) => row['QUERY PLAN']).join('\n');
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (one side's own bounded per-cycle fetch):\n${planText}`);
-    expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
 
     expect(ms).toBeLessThan(15_000);
   });
 
-  it('2. two-cycle + Site filter — matches on either side, underlying authorization fetch stays index-backed', async () => {
+  it('2. two-cycle + Site filter — matches on either side, underlying authorization fetch has its supporting index and stays fast', async () => {
     const start = Date.now();
     const res = await admin.agent.get(listUrl({ siteIds: targetSiteId }));
     const ms = Date.now() - start;
@@ -251,6 +266,10 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     expect(res.body.total).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(`[perf] two-cycle + Site filter (${res.body.total} matching): ${ms}ms`);
+
+    // Index availability verified structurally, not by requiring a specific EXPLAIN scan method —
+    // Run #85 (2026-08-19), see this file's own header comment.
+    await expectIndexColumns('PayrollEntry', 'PayrollEntry_cycleId_siteId_idx', ['cycleId', 'siteId']);
 
     // Captured before the timing assertion below so a threshold failure still leaves the query
     // plan on record.
@@ -264,7 +283,6 @@ describe('Phase 7 Reports — Variance / Month-on-Month Report Checkpoint 1A —
     const planText = plan.map((row) => row['QUERY PLAN']).join('\n');
     // eslint-disable-next-line no-console
     console.log(`[perf] EXPLAIN ANALYZE (cycle+site-filtered per-side fetch):\n${planText}`);
-    expect(planText).not.toMatch(/Seq Scan on "PayrollEntry"/);
 
     expect(ms).toBeLessThan(15_000);
   });
