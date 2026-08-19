@@ -2188,22 +2188,50 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
       await getStatement(admin, employee.id); // warm up
 
       let queryCount = 0;
+      // DIAGNOSTIC (temporary — not part of the permanent regression test): the counting `listener`
+      // below is unchanged from the original assertion logic. This second, attribution-only listener
+      // is added purely to identify which leg (json/csv/xlsx) each query event fires during, and to
+      // capture its normalized SQL text — answering "what is query #22" without altering what is
+      // asserted. Both listeners are attached to the same global, non-removable `prisma` event
+      // emitter (`$off` does not exist on PrismaClient), so `diagLeg` attribution below is
+      // best-effort: it tags every query observed while a given leg's `await` is in flight, which
+      // is exactly the same window the existing counter already trusts.
+      let diagLeg = 'unattributed';
+      let diagSeq = 0;
+      const diagLog: { seq: number; leg: string; query: string }[] = [];
       const listener = () => {
         queryCount += 1;
       };
+      const diagListener = (event: { query: string }) => {
+        diagSeq += 1;
+        diagLog.push({ seq: diagSeq, leg: diagLeg, query: event.query });
+      };
       prisma.$on('query', listener);
+      prisma.$on('query', diagListener);
 
+      diagLeg = 'json';
       queryCount = 0;
       await getStatement(admin, employee.id);
       const jsonQueries = queryCount;
 
+      diagLeg = 'csv';
       queryCount = 0;
       const csvRes = await getStatementCsv(admin, employee.id);
       const csvQueries = queryCount;
 
+      diagLeg = 'xlsx';
       queryCount = 0;
       const xlsxRes = await getStatementXlsx(admin, employee.id);
       const xlsxQueries = queryCount;
+      diagLeg = 'unattributed';
+
+      // eslint-disable-next-line no-console
+      console.log(
+        '[diag statements] counts',
+        JSON.stringify({ jsonQueries, csvQueries, xlsxQueries }),
+      );
+      // eslint-disable-next-line no-console
+      console.log('[diag statements] queryLog', JSON.stringify(diagLog));
 
       expect(csvRes.status).toBe(200);
       expect(xlsxRes.status).toBe(200);
