@@ -181,6 +181,14 @@ describe('Phase 7 Reports — Advance Recovery Report Checkpoint 1A — performa
       },
     });
 
+    // ANALYZE-d immediately after seeding, deliberately (mirroring `overtime-report-performance
+    // .test.ts`'s own precedent) — a bulk `createMany` load leaves Postgres without real statistics
+    // until autovacuum catches up, which a real production table already has by the time anyone
+    // queries it. Without this, the planner guesses cardinality from defaults instead of real
+    // statistics, which was confirmed (by direct, repeated measurement) to produce a pathological
+    // plan under full-suite conditions.
+    await prisma.$executeRawUnsafe('ANALYZE "Advance", "PayrollEntry", "Employee"');
+
     const totalAdvances = await prisma.advance.count();
     // eslint-disable-next-line no-console
     console.log(`[perf] seeded ${EMPLOYEE_COUNT} employees, ${totalAdvances} total Advance rows, ${entryRowsA.length + 1} recovery PayrollEntry rows`);
