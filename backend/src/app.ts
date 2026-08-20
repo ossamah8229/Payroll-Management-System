@@ -51,8 +51,32 @@ const PgSession = connectPgSimple(session);
  * `connect-pg-simple` speaks directly to Postgres via `pg`; Prisma manages its own pool
  * internally and the two are intentionally not shared, since they have different lifecycle and
  * pooling needs.
+ *
+ * Reliability Checkpoint 2 — `connect-pg-simple` is handed this pool but never owns it (it only
+ * ever queries/prunes through it, never closes it — see its own source), so *this module* is the
+ * pool's sole owner: it alone decides when the pool is created (lazily, on first `createApp()`
+ * call — never at import time, so importing `app.ts` without ever building an app, e.g. from test
+ * infra, opens no socket) and when it's torn down (`closeSessionPool`, called once from
+ * production shutdown in `server.ts` and once per test file from `tests/setup.ts`). Mirrors the
+ * lazy-singleton/idempotent-close shape already used for the shared Puppeteer browser
+ * (`lib/pdf/browser.ts`'s `getBrowser`/`closeBrowser`).
  */
-const sessionPool = new Pool({ connectionString: env.DATABASE_URL });
+let sessionPool: Pool | null = null;
+
+export function getSessionPool(): Pool {
+  if (!sessionPool) {
+    sessionPool = new Pool({ connectionString: env.DATABASE_URL });
+  }
+  return sessionPool;
+}
+
+/** Idempotent — a second call (or a call when no pool was ever created) is a safe no-op. */
+export async function closeSessionPool(): Promise<void> {
+  if (!sessionPool) return;
+  const pool = sessionPool;
+  sessionPool = null;
+  await pool.end();
+}
 
 export function createApp(): Express {
   const app = express();
@@ -93,7 +117,7 @@ export function createApp(): Express {
   app.use(
     session({
       store: new PgSession({
-        pool: sessionPool,
+        pool: getSessionPool(),
         tableName: 'session',
         // Explicit creation is disabled in production — the table is created via a documented
         // migration step (see backend/README.md), not implicitly at runtime, so a first request
