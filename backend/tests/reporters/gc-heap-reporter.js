@@ -4,6 +4,7 @@
 // --runInBand — before the next suite's environment is set up. Forces GC and logs a separately
 // labeled reading so it can be compared against the natural --logHeapUsage numbers for the same
 // suite without altering what --logHeapUsage itself reports. Delete once the diagnostic is done.
+/* global global, console, process, module */
 class GcHeapReporter {
   onTestResult(test, testResult) {
     const suite = testResult.testFilePath;
