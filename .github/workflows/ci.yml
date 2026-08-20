@@ -93,8 +93,12 @@ jobs:
 
       # Canonical Phase 2 script — NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072'
       # lives once, in backend/package.json's own `test` script, not duplicated here.
+      #
+      # Reliability Checkpoint 2B diagnostic pass 1 — TEMPORARY: the trailing `-- --logHeapUsage`
+      # forwards one extra Jest CLI flag through npm to the existing `test` script unchanged, to
+      # capture per-suite heap usage for the OOM investigation. Remove once the diagnostic is done.
       - name: Run backend tests
-        run: npm run test --workspace backend
+        run: npm run test --workspace backend -- --logHeapUsage
 
       - name: Build backend
         run: npm run build:backend
