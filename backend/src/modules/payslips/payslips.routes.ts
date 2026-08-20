@@ -281,15 +281,31 @@ payslipsRouter.post('/batch', requirePermission(PERMISSIONS.PAYSLIPS_VIEW), asyn
 
     const archive = archiver('zip', { zlib: { level: 6 } });
     let cancelled = false;
-    let completed = false;
+    // Set once the archive's own readable side has finished producing every ZIP byte
+    // (`archive.on('end')` below) — gates the `res.on('close')` handler the same way `completed`
+    // used to, just keyed off archive completion instead of response completion (see the ordering
+    // fix note above `donePromise` for why).
+    let archiveEnded = false;
 
+    // Checkpoint — Payslips Batch Audit Ordering fix: previously `donePromise` resolved on
+    // `res.on('finish')`, which (via `archive.pipe(res)`'s default `end: true`) fired as soon as
+    // the archive finished streaming, auto-ending the response *before* `recordAuditLog()` below
+    // ever ran. That let a client observe a complete, successful response (and a test/consumer
+    // immediately query AuditLog) before the `payslip.batch_exported` row was committed — a race
+    // that small/fast batches reliably lost (run #89's `payslips.test.ts` failures). `res` is now
+    // piped with `end: false`, and this promise resolves on the archive's own `'end'` event (all
+    // ZIP bytes produced — a standard, destination-agnostic Node Readable signal, not tied to `res`
+    // at all) instead of `res`'s `'finish'`. `res.end()` itself is now called explicitly, once,
+    // after `recordAuditLog()` resolves (see below) — so `res`'s `'finish'` genuinely cannot fire
+    // until the audit row is already committed. `res.on('close')` (real client disconnect) and
+    // `archive.on('error')` are otherwise unchanged from before.
     const donePromise = new Promise<void>((resolve) => {
-      res.on('finish', () => {
-        completed = true;
+      archive.on('end', () => {
+        archiveEnded = true;
         resolve();
       });
       res.on('close', () => {
-        if (!completed) {
+        if (!archiveEnded) {
           cancelled = true;
         }
         resolve();
@@ -304,7 +320,9 @@ payslipsRouter.post('/batch', requirePermission(PERMISSIONS.PAYSLIPS_VIEW), asyn
       logger.warn({ err, cycleId }, 'Archiver warning during batch Payslip ZIP');
     });
 
-    archive.pipe(res);
+    // `end: false` — do not let the pipe auto-end `res` when the archive finishes; `res.end()` is
+    // called explicitly below, after the audit write, so response completion can never precede it.
+    archive.pipe(res, { end: false });
 
     const usedNames = new Set<string>();
     const successes: Payslip[] = [payslips[0]!];
@@ -347,12 +365,14 @@ payslipsRouter.post('/batch', requirePermission(PERMISSIONS.PAYSLIPS_VIEW), asyn
       archive.append(summaryLines.join('\n'), { name: '_summary.txt' });
     }
 
+    // Only the successful path still needs `finalize()` — a mid-loop disconnect already means
+    // there's no point encoding/streaming further ZIP data; `donePromise` still resolves via the
+    // `res.on('close')` branch above either way, since `archive.finalize()` was never called and
+    // `archive`'s `'end'` will therefore never fire on its own.
     if (!cancelled) {
       archive.finalize().catch((err: unknown) => {
         logger.error({ err, cycleId }, 'Archiver finalize() error during batch Payslip ZIP');
       });
-    } else if (!res.writableEnded) {
-      res.end();
     }
 
     await donePromise;
@@ -381,6 +401,15 @@ payslipsRouter.post('/batch', requirePermission(PERMISSIONS.PAYSLIPS_VIEW), asyn
       ipAddress: req.ip ?? null,
       userAgent: req.get('user-agent') ?? null,
     });
+
+    // The ordering fix itself: `res` was piped with `end: false`, so nothing has ended the
+    // response yet — `res.end()` (and therefore `res`'s own `'finish'`) only happens here, after
+    // `recordAuditLog()` above has already resolved. A client cannot observe this response as
+    // complete before the `payslip.batch_exported` row is committed. Guarded because a genuine
+    // disconnect (`cancelled`) may have already destroyed/ended the connection server-side.
+    if (!res.writableEnded && !res.destroyed) {
+      res.end();
+    }
   } catch (error) {
     next(error);
   }
