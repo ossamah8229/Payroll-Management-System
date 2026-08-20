@@ -52,16 +52,33 @@ const PgSession = connectPgSimple(session);
  * internally and the two are intentionally not shared, since they have different lifecycle and
  * pooling needs.
  *
- * Reliability Checkpoint 2 — `connect-pg-simple` is handed this pool but never owns it (it only
- * ever queries/prunes through it, never closes it — see its own source), so *this module* is the
+ * Reliability Checkpoint 2 — `connect-pg-simple` is handed this pool but never owns it (`#ownsPg`
+ * in its own source is only true when *it* constructs the pool itself from a connection string,
+ * which never applies here since we always pass an existing `pool`), so *this module* is the
  * pool's sole owner: it alone decides when the pool is created (lazily, on first `createApp()`
  * call — never at import time, so importing `app.ts` without ever building an app, e.g. from test
  * infra, opens no socket) and when it's torn down (`closeSessionPool`, called once from
  * production shutdown in `server.ts` and once per test file from `tests/setup.ts`). Mirrors the
  * lazy-singleton/idempotent-close shape already used for the shared Puppeteer browser
  * (`lib/pdf/browser.ts`'s `getBrowser`/`closeBrowser`).
+ *
+ * Checkpoint 2A — the `PGStore` handed to `session()` below is *also* application-owned and lazily
+ * singleton, for the same reason as the pool: each `PGStore` schedules its own self-rescheduling
+ * prune timer (`#initPruneTimer`/`#pruneSessions` in connect-pg-simple's source) the first time a
+ * request actually touches the session store, and that timer keeps rescheduling itself until
+ * `store.close()` is called on that *exact instance* — it is not tied to the pool at all. Since
+ * `pool` is an externally-supplied option, `PGStore.close()` only clears its own prune timer; it
+ * never touches the pool (that's still this module's job below). A naive `new PgSession(...)`
+ * inside `createApp()` would mint a fresh, independently-timered store on every call — and this
+ * module's disposer only ever sees the pool, never any of those store instances — so any store
+ * that had already served a request would keep re-arming its timer forever, including past the
+ * point where `closeSessionPool()` ends the pool: the timer fires, queries an already-ended pool,
+ * and errors (exactly the `"Cannot use a pool after calling end on the pool"` failure surfaced by
+ * CI run #88). Reusing one store, closed alongside its pool, keeps the two resources' lifecycles
+ * aligned no matter how many times `createApp()` is called against the same module registry.
  */
 let sessionPool: Pool | null = null;
+let sessionStore: InstanceType<typeof PgSession> | null = null;
 
 export function getSessionPool(): Pool {
   if (!sessionPool) {
@@ -70,11 +87,36 @@ export function getSessionPool(): Pool {
   return sessionPool;
 }
 
-/** Idempotent — a second call (or a call when no pool was ever created) is a safe no-op. */
+export function getSessionStore(): InstanceType<typeof PgSession> {
+  if (!sessionStore) {
+    sessionStore = new PgSession({
+      pool: getSessionPool(),
+      tableName: 'session',
+      // Explicit creation is disabled in production — the table is created via a documented
+      // migration step (see backend/README.md), not implicitly at runtime, so a first request
+      // in production can never race a table-creation attempt.
+      createTableIfMissing: !isProduction,
+    });
+  }
+  return sessionStore;
+}
+
+/**
+ * Idempotent — a second call (or a call when no pool was ever created) is a safe no-op.
+ *
+ * Disposal order matters: `store.close()` synchronously clears the store's prune timer (and marks
+ * it `closed`, so an in-flight prune can't re-arm it) *before* the pool underneath it is ended, so
+ * there is never a window where a still-scheduled prune can fire against an already-ended pool.
+ */
 export async function closeSessionPool(): Promise<void> {
   if (!sessionPool) return;
   const pool = sessionPool;
+  const store = sessionStore;
   sessionPool = null;
+  sessionStore = null;
+  if (store) {
+    await store.close();
+  }
   await pool.end();
 }
 
@@ -116,14 +158,7 @@ export function createApp(): Express {
 
   app.use(
     session({
-      store: new PgSession({
-        pool: getSessionPool(),
-        tableName: 'session',
-        // Explicit creation is disabled in production — the table is created via a documented
-        // migration step (see backend/README.md), not implicitly at runtime, so a first request
-        // in production can never race a table-creation attempt.
-        createTableIfMissing: !isProduction,
-      }),
+      store: getSessionStore(),
       name: 'connect.sid',
       secret: env.SESSION_SECRET,
       resave: false,
