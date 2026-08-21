@@ -93,8 +93,31 @@ jobs:
 
       # Canonical Phase 2 script — NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072'
       # lives once, in backend/package.json's own `test` script, not duplicated here.
-      - name: Run backend tests
-        run: npm run test --workspace backend
+      #
+      # Reliability Checkpoint 2 — six sequential, process-isolated shards instead of one
+      # `--runInBand` process for the whole suite. A single long-lived Jest process retains heap
+      # across every completed suite; splitting the run into six fresh processes resets that
+      # baseline periodically instead of letting it accumulate across the entire suite. Six
+      # explicit steps rather than a shell loop: GitHub Actions' default step-failure behavior
+      # already fails the job immediately on any shard's non-zero exit and skips the rest, with no
+      # extra control flow to get wrong.
+      - name: Run backend tests (shard 1/6)
+        run: npm run test --workspace backend -- --shard=1/6
+
+      - name: Run backend tests (shard 2/6)
+        run: npm run test --workspace backend -- --shard=2/6
+
+      - name: Run backend tests (shard 3/6)
+        run: npm run test --workspace backend -- --shard=3/6
+
+      - name: Run backend tests (shard 4/6)
+        run: npm run test --workspace backend -- --shard=4/6
+
+      - name: Run backend tests (shard 5/6)
+        run: npm run test --workspace backend -- --shard=5/6
+
+      - name: Run backend tests (shard 6/6)
+        run: npm run test --workspace backend -- --shard=6/6
 
       - name: Build backend
         run: npm run build:backend

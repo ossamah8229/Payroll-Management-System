@@ -11,21 +11,32 @@
  * ever imported — the socket path is read once at module load) so this file's worker is never the
  * same process every other real-PDF suite shares in a full run; this file specifically needs to
  * kill its own worker without disrupting anyone else's.
+ *
+ * Reliability Checkpoint 2D-C — `tests/setup.ts` (Jest `setupFilesAfterEnv`, loaded into this same
+ * module registry ahead of this file's own body) statically imports `../src/app`, whose route
+ * graph transitively imports `pdf-worker-client.ts` before the env var below is ever set. A plain
+ * `require()` at that point — even one written after the assignment, as this file previously did —
+ * would just return that already-cached instance, bound to the *default* socket rather than this
+ * file's dedicated one, which is exactly the scenario this file's crash/SIGKILL tests must not
+ * risk. `jest.isolateModules` forces a genuinely fresh evaluation that reads the env var set
+ * immediately below, mirroring the established pattern in `pdf-worker-mode-selection.test.ts` /
+ * `storage-provider-selection.test.ts`.
  */
 import * as fs from 'node:fs';
 import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const SOCKET_PATH = `/tmp/payroll-pdf-test-worker-infra-${process.pid}.sock`;
+const DEFAULT_SOCKET_PATH = path.join(os.tmpdir(), 'payroll-pdf-test-worker.sock');
 process.env.PDF_TEST_WORKER_SOCKET = SOCKET_PATH;
 
-// A plain `require()` here, not a top-level `import` — the compiler hoists `import`s ahead of
-// other top-level statements, which would run this module's own top-level
-// `PDF_TEST_WORKER_SOCKET` read (in pdf-worker-client.ts) *before* the assignment above. A
-// `require()` call executes exactly where it's written, with no such ambiguity.
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- see above
-const workerClient = require('../src/lib/pdf/worker/pdf-worker-client') as typeof import('../src/lib/pdf/worker/pdf-worker-client');
+let workerClient!: typeof import('../src/lib/pdf/worker/pdf-worker-client');
+jest.isolateModules(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- see file header
+  workerClient = require('../src/lib/pdf/worker/pdf-worker-client') as typeof import('../src/lib/pdf/worker/pdf-worker-client');
+});
 const { discardTestWorkerBrowser, renderViaTestWorker, shutdownTestWorker, __TEST_ONLY__ } = workerClient;
 
 jest.setTimeout(45000);
@@ -77,6 +88,15 @@ describe('PDF test worker infrastructure (Phase 7H)', () => {
 
   it('records exit code/signal when the worker crashes, and self-heals on the next render', async () => {
     await renderViaTestWorker('<html></html>', {}); // ensure a worker is actually running
+
+    // Ownership guards (Reliability Checkpoint 2D-C) — this test kills a process by pid; before
+    // doing so, prove that pid can only belong to *this file's* dedicated worker, never the
+    // shared/default one every other real-PDF suite in the run uses.
+    expect(__TEST_ONLY__.SOCKET_PATH).toBe(SOCKET_PATH);
+    expect(__TEST_ONLY__.SOCKET_PATH).not.toBe(DEFAULT_SOCKET_PATH);
+    expect(__TEST_ONLY__.PID_PATH).toBe(`${SOCKET_PATH}.pid`); // pid path derives from this socket
+    expect(fs.existsSync(SOCKET_PATH)).toBe(true); // this file's own worker is actually listening
+
     const pid = readWorkerPid();
     expect(pid).toBeDefined();
 

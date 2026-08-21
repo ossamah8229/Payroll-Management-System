@@ -300,7 +300,8 @@ export async function shutdownTestWorker(): Promise<void> {
   });
 }
 
-// Test-only export — `pdf-worker-infrastructure.test.ts` needs these real paths to assert against
-// the worker directly (e.g. confirming no process remains after shutdown, or reading back a
-// recorded crash).
-export const __TEST_ONLY__ = { SOCKET_PATH, PID_PATH, CRASH_PATH };
+// Test-only export — `pdf-worker-infrastructure.test.ts`/`pdf-worker-timeout.test.ts` need these
+// real values to assert against the worker directly (e.g. confirming no process remains after
+// shutdown, reading back a recorded crash, or proving this module instance actually resolved a
+// given test file's own dedicated socket/timeout rather than a stale cached one).
+export const __TEST_ONLY__ = { SOCKET_PATH, PID_PATH, CRASH_PATH, REQUEST_TIMEOUT_MS };
