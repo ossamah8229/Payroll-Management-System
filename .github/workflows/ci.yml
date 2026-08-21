@@ -91,22 +91,33 @@ jobs:
         working-directory: backend
         run: npx puppeteer browsers install chrome
 
-      # Canonical Phase 2 script — NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072'
-      # lives once, in backend/package.json's own `test` script, not duplicated here.
-      #
-      # Reliability Checkpoint 2B diagnostic pass 2 — TEMPORARY: bypasses the npm script (whose own
-      # inline NODE_OPTIONS assignment would shadow a step-level env override) to add --expose-gc
-      # and the gc-heap-reporter, forcing GC once per completed suite so the natural --logHeapUsage
-      # reading can be compared against a forced-GC reading for the same suite. --runInBand and the
-      # 3072 MB ceiling are carried over unchanged from the npm script. Revert to the plain
-      # `npm run test --workspace backend -- --logHeapUsage` invocation once the diagnostic is done.
-      - name: Run backend tests
-        working-directory: backend
-        run: |
-          NODE_OPTIONS='--experimental-vm-modules --max-old-space-size=3072 --expose-gc' \
-          npx jest --runInBand --logHeapUsage \
-          --reporters=default \
-          --reporters=./tests/reporters/gc-heap-reporter.js
+      # Reliability Checkpoint 2C — sequential process-isolated shards. A single --runInBand Jest
+      # process accumulates ~30 MB of retained heap per completed suite (Checkpoint 2B). Six fresh
+      # processes, one per shard, reset that baseline every ~16 suites instead of letting it
+      # accumulate across all 95 — see the Checkpoint 2C design report for the shard-count
+      # derivation and per-shard composition. Six explicit steps rather than a shell loop:
+      # GitHub Actions' default step-failure behavior already fails the job immediately on any
+      # shard's non-zero exit and skips the rest, with no extra control flow to get wrong.
+      # --logHeapUsage stays for this first proving run only, to confirm each shard's own heap
+      # trajectory directly; Checkpoint 2B Pass 2's --expose-gc and forced-GC reporter were
+      # diagnostic-only and are removed with this change.
+      - name: Run backend tests (shard 1/6)
+        run: npm run test --workspace backend -- --shard=1/6 --logHeapUsage
+
+      - name: Run backend tests (shard 2/6)
+        run: npm run test --workspace backend -- --shard=2/6 --logHeapUsage
+
+      - name: Run backend tests (shard 3/6)
+        run: npm run test --workspace backend -- --shard=3/6 --logHeapUsage
+
+      - name: Run backend tests (shard 4/6)
+        run: npm run test --workspace backend -- --shard=4/6 --logHeapUsage
+
+      - name: Run backend tests (shard 5/6)
+        run: npm run test --workspace backend -- --shard=5/6 --logHeapUsage
+
+      - name: Run backend tests (shard 6/6)
+        run: npm run test --workspace backend -- --shard=6/6 --logHeapUsage
 
       - name: Build backend
         run: npm run build:backend
