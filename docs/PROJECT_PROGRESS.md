@@ -11546,6 +11546,165 @@ gathered as part of this work.
 
 ---
 
+## Backend/CI Reliability Checkpoint 2 — Session/Pool Lifecycle, Permanent Six-Shard Sharding, PDF-Worker Test Isolation, and Payslips Batch-Audit Ordering Fix (2026-08-21)
+
+**Naming note:** as with the entry above, the "Reliability Phase 4"/"Checkpoint 2" labels here belong
+to the separate, narrower backend test/CI reliability sequence — unrelated to, and not renumbering,
+`docs/IMPLEMENTATION_PLAN.md`'s own Phase 4/Phase 5. This entry closes out the "Reliability
+Checkpoint 2, not started" item left open by the previous entry above, and additionally records a
+distinct, later-discovered defect (Payslips batch-export audit ordering) found only after Checkpoint
+2 landed on `main`.
+
+### Checkpoint 2A — session store / pool lifecycle
+
+Root cause of the `Jest did not exit...` open-handle warning (and of CI run #88's
+`"Cannot use a pool after calling end on the pool"` failure): `connect-pg-simple`'s `PGStore`
+schedules its own self-rescheduling prune timer the first time a request touches it, independently
+of the `pg.Pool` it's handed — and since `backend/src/app.ts`'s `createApp()` previously constructed
+a fresh `PgSession` on every call, any store that had already served a request kept re-arming its
+timer forever, including past the point where `closeSessionPool()` ended the underlying pool.
+
+Fixed (`5b6b9b8`, "fix: dispose session store before pool teardown") by making the session store a
+lazy singleton (`getSessionStore()`), mirroring the pool's own existing lazy-singleton shape, and
+disposing it in the correct order: `closeSessionPool()` now calls `store.close()` (which
+synchronously clears the prune timer) *before* `pool.end()`, so there is never a window where a
+still-scheduled prune can fire against an already-ended pool. The demonstrated
+post-test prune-against-ended-pool defect was eliminated by this fix.
+
+### Interim finding — monolithic Jest process still reproduced heap OOM
+
+After Checkpoint 2A, the single `--runInBand` Backend Jest process (all suites in one long-lived
+process) independently reproduced a heap-exhaustion failure — a separate problem from the open-handle
+issue: a single Jest process retains heap across every completed suite for the life of the run, and
+the full 94-suite/1831-test backend population pushed it toward the existing 3072 MB
+(`--max-old-space-size`) ceiling. This was diagnosed (not permanently fixed) via a temporary
+heap-instrumentation branch/PR (`diagnostic/jest-heap-pass-1`, PR #8 — see "Clean up diagnostic
+GitHub work" below); diagnostic sharding under that instrumentation showed a maximum observed
+per-shard heap of approximately **1,458 MB**, against the previous monolithic run's near-ceiling
+trajectory.
+
+### Checkpoint 2C — permanent six-shard sharding
+
+Fixed (`f08d78c`, "ci: shard backend tests for memory isolation") by splitting the single Backend
+test step in `.github/workflows/ci.yml` into six sequential, process-isolated steps
+(`--shard=1/6` through `--shard=6/6`), each its own fresh Jest process — resetting the accumulated
+heap baseline between shards instead of letting it grow across the entire suite. `--runInBand` is
+retained *within* each shard (unchanged), and the existing 3072 MB `--max-old-space-size` ceiling is
+unchanged; only the process-splitting is new. Six explicit steps rather than a shell loop, so GitHub
+Actions' own default step-failure behavior fails the job and skips the rest on any shard's non-zero
+exit, with no extra control flow to get wrong.
+
+### PDF-worker test isolation fix
+
+A related but independent defect surfaced in the same investigation: `pdf-worker-timeout.test.ts`
+and `pdf-worker-infrastructure.test.ts` set dedicated `PDF_TEST_WORKER_SOCKET`/
+`PDF_TEST_WORKER_REQUEST_TIMEOUT_MS` env vars and then `require()`'d `pdf-worker-client.ts` — but
+`tests/setup.ts` (Jest `setupFilesAfterEnv`, loaded ahead of any test file's own body) transitively
+imports that same client module via `../src/app` first, so the plain `require()` returned an
+already-cached instance bound to the *default* socket/timeout rather than the test's own dedicated
+ones, risking these tests silently talking to a real shared worker instead of the intended
+unresponsive mock.
+
+Fixed (`69f66e9`, "fix: isolate PDF worker test configuration") with `jest.isolateModules(() => {
+require(...) })` to force a genuinely fresh module evaluation that reads the test-local env vars,
+plus explicit ownership assertions (`__TEST_ONLY__.SOCKET_PATH`/`REQUEST_TIMEOUT_MS`) proving the
+resolved client is bound to the test's own socket/timeout, not the shared default — mirroring the
+established pattern already used in `pdf-worker-mode-selection.test.ts`/
+`storage-provider-selection.test.ts`.
+
+### Checkpoint 2 runtime gate — merged via PR #9
+
+`5b6b9b8` → `f08d78c` → `69f66e9` were carried on branch `reliability/checkpoint-2-final` (PR #9)
+and merged to `main` as merge commit **`c1b77083ee8657abf0351946bab03b35d8692839`**. Authoritative
+runtime gate: **Run #95** — Backend SUCCESS (all six shards SUCCESS), Frontend SUCCESS, E2E SUCCESS
+(confirmed actually executed), overall workflow SUCCESS, validating the permanent clean reliability
+baseline (session/pool lifecycle fix + six-shard sharding + PDF-worker isolation) together for the
+first time.
+
+### Payslips batch-export audit-ordering fix (separately discovered, not part of Checkpoint 2)
+
+The push-to-`main` run immediately following the PR #9 merge (**Run #96**, same commit
+`c1b7708`) failed independently of Checkpoint 2's own scope: `FAIL tests/payslips.test.ts` in shard
+1/6 (1 of 359 tests in that shard), unrelated to session/pool lifecycle, sharding, or the PDF worker.
+
+Root cause: in `backend/src/modules/payslips/payslips.routes.ts`'s batch ZIP export endpoint, the
+response-completion promise resolved on `res.on('finish')`, which — via `archive.pipe(res)`'s
+default `end: true` — fired as soon as the ZIP archive finished streaming, auto-ending the response
+*before* `recordAuditLog()` for `payslip.batch_exported` ever ran. A client (or a test) could
+observe a complete, successful response before the audit row was committed — a race that small/fast
+batches could lose.
+
+Fixed (`8d83e274b3fcbb177fa259ec97d421d05d1cfa6d`, "fix: order payslip batch audit before response
+completion") by piping the archive with `archive.pipe(res, { end: false })` and resolving the
+completion promise on the archive's own `'end'` event (all ZIP bytes produced — a destination-
+agnostic Node Readable signal) instead of `res`'s `'finish'`. `res.end()` is now called explicitly,
+once, only after `await recordAuditLog(...)` resolves, so the response cannot complete before the
+audit row is committed. Streaming behavior itself (the ZIP is still piped/streamed to the client, not
+buffered) is unchanged.
+
+Carried on branch `fix/payslip-batch-audit-ordering` (PR #10), containing exactly this one commit and
+one changed file. Authoritative runtime gate: **Run #97** (run ID `32460347248`, head SHA
+`8d83e274b3fcbb177fa259ec97d421d05d1cfa6d`) — Backend SUCCESS (all six shards SUCCESS, including
+shard 1/6's `PASS tests/payslips.test.ts`), Frontend SUCCESS, E2E SUCCESS (195 tests: 186 passed, 1
+flaky-then-passed-on-retry in an unrelated spec, 8 skipped — see "Remaining reliability work" below),
+overall workflow SUCCESS.
+
+Merged to `main` as merge commit **`aec372eda89e87894b199ef601446cba708e2bc0`**. Post-merge
+confirmation: **Run #98** (run ID `32465566202`, head SHA `aec372e...`) — Backend SUCCESS (all six
+shards SUCCESS), Frontend SUCCESS, E2E SUCCESS (195 tests: 187 passed, 0 flaky, 8 skipped, confirmed
+actually executed), overall workflow SUCCESS.
+
+### Clean up diagnostic GitHub work
+
+- **PR #8** (`diagnostic: capture backend Jest heap usage`, branch `diagnostic/jest-heap-pass-1`) —
+  confirmed never merged, closed as superseded by the permanent Checkpoint 2C six-shard remediation
+  now on `main`. Its remote branch was deleted after confirming no other open PR referenced it and
+  that its tip commit is not an ancestor of `main`.
+- Remote branches `reliability/checkpoint-2-final` (PR #9) and `fix/payslip-batch-audit-ordering`
+  (PR #10) were deleted after confirming both PRs were merged into `main`.
+- The local-only safety branch `backup/bfd96aa-payslips-fix` (preserving the pre-rebase original
+  Payslips commit, `bfd96aa`) was deleted after confirming its diff was byte-identical to the merged
+  `8d83e27` (the only difference being the rebase parent, `5b6b9b8` → `c1b7708`, i.e. onto the
+  post-Checkpoint-2 `main`) and that `8d83e27` is a confirmed ancestor of `main`.
+
+### Remaining reliability work (updated)
+
+1. **Jest open-handle/session-lifecycle issue — RESOLVED, Checkpoint 2A above.**
+2. **Historical Statements/Corrections intermittent anomalies — still separately recorded, not
+   proven permanently resolved.** Unchanged from the previous entry above; not investigated in this
+   checkpoint.
+3. **Node/Puppeteer engine mismatch — still present, non-blocking maintenance debt.** CI still
+   installs Node **20.20.2** while `puppeteer`/`puppeteer-core` still declare `engines` requiring
+   Node **>=22.12.0**. Unchanged from the previous entry; still did not prevent Run #97/#98 from
+   passing.
+4. **Existing lint warnings — still present, non-blocking maintenance debt.** Backend lint remains 0
+   errors, 10 pre-existing `no-console` warnings confined to the same two standalone maintenance
+   scripts as before.
+5. **New — Run #97 Playwright flaky retry, `08-role-administration.spec.ts:227`.** First attempt
+   failed (`expect(afterRemoval.status()).toBe(403)` received `200`); the retry passed, and E2E
+   concluded SUCCESS per Playwright's flaky-not-failed accounting. Confirmed unrelated to the
+   Payslips diff (which touches only `payslips.routes.ts`). Run #98 (post-merge, same suite) did not
+   reproduce it (187 passed, 0 flaky). Recorded as a future reliability investigation item, not
+   fixed here — do not treat as resolved by the clean Run #98 alone.
+
+### Reliability phase status
+
+- **Reliability Phase 4 is now COMPLETE.** Checkpoint 2 (session/pool lifecycle, permanent six-shard
+  sharding, PDF-worker test isolation) and the separately-discovered Payslips batch-audit ordering
+  fix are both merged to `main` and independently confirmed by a clean post-merge runtime gate
+  (Run #98: Backend six shards SUCCESS, Frontend SUCCESS, E2E SUCCESS, overall SUCCESS).
+- **Reliability Phase 5 has NOT begun** and remains blocked pending separate authorization.
+
+### Production safety record
+
+Throughout Checkpoint 2A/2C, the PDF-worker test isolation fix, the Payslips batch-audit ordering
+fix, and this cleanup/documentation pass: no production database migration was executed, no
+production seed was executed, and no production deployment was performed. All verification ran
+against GitHub Actions' own disposable/CI-ephemeral Postgres instances. This entry does not claim the
+currently-deployed production commit has been independently re-verified.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -11924,7 +12083,29 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated (latest) — Variance / Month-on-Month Report, Checkpoint 1B (Frontend, Dual-Cycle UI,
+**Updated 2026-08-21 (latest) — Reliability Phase 4: COMPLETE.** Backend/CI Reliability Checkpoint 2
+(session/pool lifecycle fix `5b6b9b8`, permanent six-shard sharding `f08d78c`, PDF-worker test
+isolation fix `69f66e9` — merged via PR #9, merge commit `c1b77083ee8657abf0351946bab03b35d8692839`,
+runtime gate Run #95 all-green) and the separately-discovered Payslips batch-export audit-ordering
+fix (`8d83e274b3fcbb177fa259ec97d421d05d1cfa6d` — merged via PR #10, merge commit
+`aec372eda89e87894b199ef601446cba708e2bc0`, runtime gate Run #97 all-green, post-merge Run #98
+all-green) are both on `main`. Full record: this file's own "Backend/CI Reliability Checkpoint 2 —
+Session/Pool Lifecycle, Permanent Six-Shard Sharding, PDF-Worker Test Isolation, and Payslips
+Batch-Audit Ordering Fix (2026-08-21)" §1 entry (immediately above §2). Diagnostic PR #8 closed
+unmerged (superseded); diagnostic, reliability, and Payslips-fix branches cleaned up; the
+pre-rebase Payslips safety branch deleted after confirming patch equivalence with the merged commit.
+**Reliability Phase 5 has NOT begun and remains blocked pending separate authorization.** Remaining,
+separately-tracked, non-blocking items (not fixed by this checkpoint): historical
+Statements/Corrections intermittent anomalies; the Node 20.20.2-vs-Puppeteer->=22.12.0 engine
+mismatch; 10 pre-existing `no-console` lint warnings; a Run #97 Playwright flaky retry in
+`08-role-administration.spec.ts:227` (passed on retry, did not reproduce in Run #98). **Do not begin
+Reliability Phase 5, or any other reliability checkpoint, without separate explicit authorization.**
+This does not change the status of the roadmap-phase work below (Variance/Dashboard etc.) — see that
+entry for the actual next roadmap-phase action, which this reliability work does not supersede in
+scope, only in recency for reliability-tracking purposes.
+
+**Updated 2026-08-11 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Variance / Month-on-Month Report, Checkpoint 1B (Frontend, Dual-Cycle UI,
 Browser Print, and E2E): IMPLEMENTED, awaiting review — NOT committed, NOT pushed, NOT deployed,
 per explicit instruction to stop after implementation/verification for independent hostile review.**
 Full record: `docs/architecture/workflows/reports.md §21.10` and this session's own completion
