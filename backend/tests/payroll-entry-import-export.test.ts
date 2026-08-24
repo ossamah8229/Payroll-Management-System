@@ -250,8 +250,12 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
   it('a single-unit employee export is unaffected: Days is that one line\'s own value, Unit Working Days Breakdown is blank', async () => {
     const admin = await masterAdminAgent('export-single-unit-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Export Single Unit');
-    const employee = await makeEmployee(site.id, unit.id, 'Single Unit Employee', { cnic: '1112223330001' });
+    // Cycle before Employee, deliberately — creating a cycle bootstraps entries for every
+    // already-existing Employee, which would otherwise pre-empt the explicit `createEntry` call
+    // below with a 409 (the same fixture-ordering gotcha this file's own pre-existing tests
+    // already document).
     const cycle = await makeDraftCycle(admin, 7);
+    const employee = await makeEmployee(site.id, unit.id, 'Single Unit Employee', { cnic: '1112223330001' });
     await createEntry(admin, cycle.id, employee.id, '30');
 
     const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
@@ -269,8 +273,9 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     const admin = await masterAdminAgent('export-two-unit-admin@test.local');
     const { site, unit: unitA } = await makeSiteWithUnit('Test Site Export Two Unit A');
     const unitB = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export Two Unit B Unit', code: 'U-2' } });
-    const employee = await makeEmployee(site.id, unitA.id, 'Two Unit Employee', { cnic: '1112223330002' });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
     const cycle = await makeDraftCycle(admin, 8);
+    const employee = await makeEmployee(site.id, unitA.id, 'Two Unit Employee', { cnic: '1112223330002' });
     const entry = await createEntry(admin, cycle.id, employee.id, '10');
     await addWorkLine(admin, entry, unitB.id, '10');
 
@@ -293,8 +298,9 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     const { site, unit: unitA } = await makeSiteWithUnit('Test Site Export Three Unit A');
     const unitB = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export Three Unit B Unit', code: 'U-2' } });
     const unitC = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export Three Unit C Unit', code: 'U-3' } });
-    const employee = await makeEmployee(site.id, unitA.id, 'Three Unit Employee', { cnic: '1112223330003' });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
     const cycle = await makeDraftCycle(admin, 9);
+    const employee = await makeEmployee(site.id, unitA.id, 'Three Unit Employee', { cnic: '1112223330003' });
     let entry = await createEntry(admin, cycle.id, employee.id, '7');
     entry = await addWorkLine(admin, entry, unitB.id, '8');
     await addWorkLine(admin, entry, unitC.id, '5');
@@ -318,6 +324,8 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     const admin = await masterAdminAgent('export-banking-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Export Banking');
     const bank = await prisma.bank.create({ data: { code: 'TESTBANK', name: 'Test Reconciliation Bank' } });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
+    const cycle = await makeDraftCycle(admin, 10);
     const employee = await prisma.employee.create({
       data: {
         name: 'Banking Fields Employee',
@@ -332,7 +340,6 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
         iban: 'PK36SCBL0000001123456789',
       },
     });
-    const cycle = await makeDraftCycle(admin, 10);
     await createEntry(admin, cycle.id, employee.id, '30');
 
     const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
@@ -377,14 +384,20 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
         grossPay: '30000',
         cnic: '1112223330005',
         bankId: bankOriginal.id,
+        // Required alongside a real bankId (`employees.service.ts`'s `applyBankingInvariant`) — the
+        // later PATCH below only touches `bankId`, and that invariant is checked against the
+        // *merged* effective state, so a null Account Number here would make that PATCH itself
+        // fail with 400 rather than exercising the live-overlay behavior this test targets.
+        accountNumber: '1234567890',
       },
     });
     await createEntry(admin, cycle.id, employee.id, '30');
 
-    await admin.agent
+    const patchEmployee = await admin.agent
       .patch(`/api/v1/employees/${employee.id}`)
       .set('x-csrf-token', admin.csrfToken)
       .send({ bankId: bankCorrected.id });
+    expect(patchEmployee.status).toBe(200);
 
     const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
     expect(exportRes.status).toBe(200);
@@ -400,8 +413,9 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
   it('exports Remarks — a genuine grid business column previously never exported', async () => {
     const admin = await masterAdminAgent('export-remarks-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Export Remarks');
-    const employee = await makeEmployee(site.id, unit.id, 'Remarks Employee', { cnic: '1112223330006' });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
     const cycle = await makeDraftCycle(admin, 12);
+    const employee = await makeEmployee(site.id, unit.id, 'Remarks Employee', { cnic: '1112223330006' });
     const entry = await createEntry(admin, cycle.id, employee.id, '30');
     await admin.agent
       .patch(`/api/v1/payroll-entries/${entry.id}`)
@@ -420,8 +434,9 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     const admin = await masterAdminAgent('export-xlsx-parity-admin@test.local');
     const { site, unit: unitA } = await makeSiteWithUnit('Test Site Export XLSX Parity A');
     const unitB = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export XLSX Parity B Unit', code: 'U-2' } });
-    const employee = await makeEmployee(site.id, unitA.id, 'XLSX Parity Employee', { cnic: '1112223330007' });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
     const cycle = await makeDraftCycle(admin, 13);
+    const employee = await makeEmployee(site.id, unitA.id, 'XLSX Parity Employee', { cnic: '1112223330007' });
     const entry = await createEntry(admin, cycle.id, employee.id, '12');
     await addWorkLine(admin, entry, unitB.id, '8');
 
