@@ -291,6 +291,21 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     expect(breakdown).toContain('10');
     expect(breakdown).toContain(unitA.name);
     expect(breakdown).toContain(unitB.name);
+
+    // XLSX carries the same corrected total for a multi-unit entry, not just CSV.
+    const xlsxRes = await admin.agent
+      .get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=xlsx`)
+      .buffer(true)
+      .parse((res, callback) => {
+        res.setEncoding('binary');
+        let data = '';
+        res.on('data', (chunk: string) => {
+          data += chunk;
+        });
+        res.on('end', () => callback(null, Buffer.from(data, 'binary')));
+      });
+    expect(xlsxRes.status).toBe(200);
+    expect(xlsxRes.headers['content-type']).toContain('spreadsheetml');
   });
 
   it('an unequal three-unit split (7 + 8 + 5 = 20) preserves the true total and every unit\'s own days in the breakdown', async () => {
@@ -428,36 +443,5 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     const cols = header!.split(',');
     const cells = dataLine!.split(',');
     expect(cells[cols.indexOf('Remarks')]).toBe('Reconciliation note for Finance');
-  });
-
-  it('XLSX export carries the same corrected Days total and appended columns as CSV', async () => {
-    const admin = await masterAdminAgent('export-xlsx-parity-admin@test.local');
-    const { site, unit: unitA } = await makeSiteWithUnit('Test Site Export XLSX Parity A');
-    const unitB = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export XLSX Parity B Unit', code: 'U-2' } });
-    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
-    const cycle = await makeDraftCycle(admin, 13);
-    const employee = await makeEmployee(site.id, unitA.id, 'XLSX Parity Employee', { cnic: '1112223330007' });
-    const entry = await createEntry(admin, cycle.id, employee.id, '12');
-    await addWorkLine(admin, entry, unitB.id, '8');
-
-    const csvRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
-    expect(csvRes.status).toBe(200);
-    const [header, dataLine] = csvRes.text.trim().split('\n');
-    const cols = header!.split(',');
-    expect(dataLine!.split(',')[cols.indexOf('Days')]).toBe('20');
-
-    const xlsxRes = await admin.agent
-      .get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=xlsx`)
-      .buffer(true)
-      .parse((res, callback) => {
-        res.setEncoding('binary');
-        let data = '';
-        res.on('data', (chunk: string) => {
-          data += chunk;
-        });
-        res.on('end', () => callback(null, Buffer.from(data, 'binary')));
-      });
-    expect(xlsxRes.status).toBe(200);
-    expect(xlsxRes.headers['content-type']).toContain('spreadsheetml');
   });
 });
