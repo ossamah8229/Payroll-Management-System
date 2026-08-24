@@ -12341,6 +12341,36 @@ altered.**
 
 ---
 
+## v1.0.0 RELEASED — Tag Created, GitHub Release Published (2026-08-24, later same day)
+
+The production cutover entry directly above was reviewed and approved GREEN; release explicitly
+authorized.
+
+**Tag**: annotated tag **`v1.0.0`** created pointing exactly at
+**`5e097ef470956ade8b022072fbdf16949539777c`** — the PR #14 merge commit that passed the post-merge CI
+gate and was deployed/validated in production — deliberately **not** the later documentation-only
+commit `0c95698`, which records the cutover evidence but changes no application code. Pre-creation
+check confirmed `v1.0.0` did not already exist locally or remotely, and `v1.0.0-rc1`/`backend-live-v1`
+remained untouched throughout. Tag verified to resolve exactly to the intended commit before and after
+push (`git push origin v1.0.0`, only this one ref pushed, no force-push).
+
+**GitHub Release**: published from `v1.0.0`, titled "Payroll Management System v1.0.0",
+`isDraft: false`, `isPrerelease: false`, confirmed via the GitHub API as the repository's `latest`
+release. Body covers production status (Node 24.19.0; `payroll.brooms.com.pk` /
+`payroll-api.brooms.com.pk`), the full validation checklist, the Payroll Entry Working-Days
+aggregation/export correction summary, the multi-unit validation note (0 multi-unit employees among
+production's 1,198 entries — validated via the isolated release-candidate UAT instead of production
+data), and the known-deferred-items list (`otHours` multi-unit aggregation, Corrections concurrency
+flake, Employee Payroll History flake, Statements flake, Reliability Phase 5, existing lint/Fast-Refresh
+warnings, dependency/security audit debt) — explicitly framed as non-blocking, with v1.0.0 explicitly
+**not** claimed bug-free. Published `2026-08-24T17:44:54Z`.
+
+**Final classification: v1.0.0 RELEASED — production baseline established for August 30 payroll
+operation.** Per explicit instruction: no v1.0.1 work, no Reliability Phase 5 resumption, no
+warning/dependency fixes, no further changes to the `v1.0.0` tag. STOP.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -12719,7 +12749,21 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-24, later same day (latest) — v1.0.0 PRODUCTION CUTOVER COMPLETE: PR #14 merged,
+**Updated 2026-08-24, later same day (latest) — v1.0.0 RELEASED.** Tag `v1.0.0` created pointing at
+`5e097ef470956ade8b022072fbdf16949539777c` (the PR #14 merge commit — not the later docs-only
+`0c95698`); GitHub Release published (not prerelease, confirmed `latest`). Full record: this file's own
+"v1.0.0 RELEASED — Tag Created, GitHub Release Published" entry (immediately above §2) and
+`docs/SESSION_HANDOFF.md` §54. **Next action: none — this was the terminal step of the v1.0.0 release
+process. Explicitly do not begin v1.0.1 work, do not resume Reliability Phase 5, do not fix existing
+lint/dependency warnings, and do not change the `v1.0.0` tag, until separately authorized.** The next
+real development session should start by reading this file's §2–§5 for the still-open deferred items
+(`otHours` multi-unit aggregation, Corrections concurrency flake, Employee Payroll History flake,
+Statements flake, Reliability Phase 5) before picking up any new work.
+
+---
+
+**Updated 2026-08-24, later same day (superseded by the entry above for status purposes) — v1.0.0
+PRODUCTION CUTOVER COMPLETE: PR #14 merged,
 post-merge `main` CI green, Render deployed, production smoke GREEN — awaiting explicit approval of the
 `v1.0.0` tag itself.** PR #14 merged via a normal merge commit
 (`5e097ef470956ade8b022072fbdf16949539777c`, parents `44c1dbe1` + `0fd7d05`); `main == origin/main ==

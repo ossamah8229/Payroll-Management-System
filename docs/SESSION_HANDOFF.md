@@ -5966,3 +5966,34 @@ fabricating production test data or claiming unavailable log access.
 this report before tagging. Do not resume Reliability Phase 5 or begin any other roadmap work until the
 tag decision is made.
 
+---
+
+## 54. Addendum, 2026-08-24 (later same day) — v1.0.0 RELEASED: tag created, GitHub Release published
+
+Cutover report (§53 above) was reviewed and approved GREEN; release explicitly authorized.
+
+**Tag**: annotated tag **`v1.0.0`** created pointing exactly at
+**`5e097ef470956ade8b022072fbdf16949539777c`** (the PR #14 merge commit — the application commit that
+passed the post-merge CI gate and was deployed/validated in production), not at the later
+documentation-only commit `0c95698` (which records the cutover evidence but changes no application
+code). Verified before push: `v1.0.0` did not already exist locally or remotely; `v1.0.0-rc1` and
+`backend-live-v1` untouched throughout. Tag resolves correctly (`git rev-parse v1.0.0^{commit}` =
+`5e097ef470956ade8b022072fbdf16949539777c`); pushed with `git push origin v1.0.0` (only this one tag
+pushed, no force-push, no other refs touched).
+
+**GitHub Release**: published from the `v1.0.0` tag, title "Payroll Management System v1.0.0",
+`isDraft: false`, `isPrerelease: false`, confirmed as the repository's `latest` release via the GitHub
+API. Release body records production status (Node 24.19.0, `payroll.brooms.com.pk` /
+`payroll-api.brooms.com.pk`), the full validation checklist from §53, the Payroll Entry Working-Days
+correction summary, the multi-unit validation note (0 multi-unit employees in production's 1,198
+entries — validated via the isolated release-candidate UAT instead), and the known-deferred-items list
+(`otHours` multi-unit aggregation, Corrections concurrency flake, Employee Payroll History flake,
+Statements flake, Reliability Phase 5, existing lint/Fast-Refresh warnings, dependency/security audit
+debt) — explicitly not claimed as release blockers, and v1.0.0 explicitly not claimed bug-free.
+
+**Release date**: 2026-08-24 (published `2026-08-24T17:44:54Z`).
+
+**Final classification: v1.0.0 RELEASED — production baseline established for August 30 payroll
+operation.** Per explicit instruction: do not begin v1.0.1 work, do not resume Reliability Phase 5, do
+not fix warnings/dependencies, do not change the `v1.0.0` tag after publication. STOP.
+
