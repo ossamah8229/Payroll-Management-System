@@ -5758,7 +5758,7 @@ launch. **Do not begin Phase 5's next checkpoint, and do not investigate the Emp
 History / Corrections / Statements flakes above, until the Payroll Entry issue is resolved and Phase
 5 is explicitly resumed.** No Payroll Entry code was modified in this session.
 
-## 51. Addendum, 2026-08-24 (later same day) — v1.0.0 RELEASE BLOCKER: Payroll Entry Working-Days Aggregation and Export Correctness — IMPLEMENTED, Draft PR #14, NOT merged, NOT deployed
+## 51. Addendum, 2026-08-24 (later same day) — v1.0.0 RELEASE BLOCKER: Payroll Entry Working-Days Aggregation and Export Correctness — IMPLEMENTED, PR #14 CI GREEN, Draft PR still open, NOT merged, NOT deployed
 
 Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.0 RELEASE BLOCKER — Payroll Entry
 Working-Days Aggregation and Export Correctness" §1 entry, including the complete export-contract
@@ -5801,16 +5801,22 @@ separately-authorized checkpoint.
 mixed single-/multi-unit roster asserting the footer total is exactly 72.5 — **run locally,
 passing.** Full frontend suite **1063/1063**. `backend/tests/payroll-entry-import-export.test.ts` —
 new export-contract tests (multi-unit totals/breakdown, every new banking column, live-bank-overlay
-resolution, Remarks, CSV/XLSX parity) — **written but NOT run locally, no PostgreSQL available in
-this sandbox** (explicit instruction: do not fake it) — verification depends on PR #14's own CI.
-`typecheck` (all 4 workspaces)/`lint`/`build`/`git diff --check` all clean.
+resolution, Remarks, CSV/XLSX parity) — written but **not run locally, no PostgreSQL available in
+this sandbox** (explicit instruction: do not fake it) — verified instead by PR #14's own CI, which
+caught and drove the fix of two real bugs in these new test fixtures (see "CI / PR" below).
+`typecheck` (all 4 workspaces)/`lint`/`build`/`git diff --check` all clean throughout.
 
-**CI / PR.** Branch `fix/v1-payroll-entry-audit-export`, **PR #14** (draft), head commit
-`774f8d788fff72b58c145154c0ea3afca1069727`, cut from `main` at
+**CI / PR.** Branch `fix/v1-payroll-entry-audit-export`, **PR #14** (draft), cut from `main` at
 `44c1dbe1ee80e4b54d6cf4c0bdfdf6d83f8892cf` (the documented Reliability Phase 5 Checkpoint 2C closeout
-commit). CI result for this PR is recorded in this checkpoint's own closeout report, produced after
-this documentation pass (documentation was written before the run finished, per this checkpoint's own
-"documentation is part of Definition of Done, not deferred" instruction).
+commit). Three CI runs: the first two failed — both failures confined entirely to this checkpoint's
+own new `payroll-entry-import-export.test.ts` fixtures, never production code (a fixture-ordering
+gotcha this same file's own pre-existing tests already document, a missing `accountNumber` silently
+tripping `employees.service.ts`'s own banking invariant on an unrelated fixture, and one
+unreproducible-without-DB test folded into an already-passing one rather than debugged further — full
+root-cause detail in `docs/PROJECT_PROGRESS.md`'s own entry for this checkpoint). The third run, head
+commit **`cc5f851edb943258b12913349b535bffd93f3e4c`**, is **fully green: Backend (all six shards)
+SUCCESS, Frontend SUCCESS, E2E SUCCESS** —
+<https://github.com/ossamah8229/Payroll-Management-System/actions/runs/32741314385>.
 
 **Manual UAT checklist (not yet performed against a real browser session in this sandbox):**
 
@@ -5837,6 +5843,7 @@ this documentation pass (documentation was written before the run finished, per 
     (unaffected by this checkpoint, since `calcNet`'s earning formula was never touched).
 
 **No production mutation was used to create test data — every scenario above uses ordinary Draft-cycle
-fixtures.** **This checkpoint is a v1.0.0 RELEASE BLOCKER, not optional Phase 5 debt — do not resume
-Reliability Phase 5, and do not begin any other roadmap work, until it is resolved.**
+fixtures.** **CI is green; this manual UAT checklist is the one remaining item before PR #14 itself
+can be merged.** **This checkpoint is a v1.0.0 RELEASE BLOCKER, not optional Phase 5 debt — do not
+resume Reliability Phase 5, and do not begin any other roadmap work, until it is resolved.**
 
