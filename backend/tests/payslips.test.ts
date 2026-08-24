@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import type { Prisma } from '@prisma/client';
 import { PERMISSIONS, ROLE_CODES, MAX_BATCH_PAYSLIPS_PER_REQUEST, calcNet } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
@@ -892,6 +893,65 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     // suite that installs a listener, and it reads the count immediately after each call.
     prisma.$on('query', listener);
 
+    // --- Reliability Phase 5 Checkpoint 2B: temporary SQL-level diagnostic instrumentation ------
+    // Purely additive/observational: a *second*, independent `$on('query', ...)` listener that
+    // never touches `queryCount` above, so the original counting mechanism and every assertion
+    // below is byte-for-byte unchanged — this diagnostic run still genuinely PASSes or FAILs under
+    // the existing contract. Captures enough per query event to tell a genuine application SQL
+    // statement apart from Prisma relation-loading, transaction/connection-lifecycle SQL, or an
+    // event straggling across a measurement-window boundary, without ever logging employee names,
+    // salaries, CNICs, session IDs, or other fixture content: `event.query` is Prisma's own
+    // *parameterized* SQL text (literal values live only in `event.params`, which is reduced here
+    // to a redacted count, never printed). Delete this whole block, and the dump call below, once
+    // Checkpoint 2B's permanent assertion lands.
+    type DiagWindow = 'warmup-1' | 'warmup-2' | 'warmup-3' | 'small' | 'large';
+    let diagWindow: DiagWindow = 'warmup-1';
+    let diagSeq = 0;
+    const diagStartNs = process.hrtime.bigint();
+    interface DiagEvent {
+      seq: number;
+      window: DiagWindow;
+      atMs: number;
+      durationMs: number;
+      operation: string;
+      table: string;
+      paramCount: number;
+      query: string;
+    }
+    const diagLog: DiagEvent[] = [];
+    function classifyDiagQuery(sql: string): { operation: string; table: string } {
+      const trimmed = sql.trim();
+      const operation = (trimmed.match(/^[A-Za-z]+/)?.[0] ?? 'UNKNOWN').toUpperCase();
+      if (operation === 'BEGIN' || operation === 'COMMIT' || operation === 'ROLLBACK') {
+        return { operation, table: '(transaction)' };
+      }
+      if (operation === 'SET') return { operation, table: '(session)' };
+      if (operation === 'DEALLOCATE') return { operation, table: '(prepared-statement)' };
+      const tableMatch = trimmed.match(/(?:FROM|INTO|UPDATE|TABLE)\s+"[^"]+"\."([^"]+)"/i);
+      return { operation, table: tableMatch?.[1] ?? '(unknown)' };
+    }
+    const diagListener = (event: Prisma.QueryEvent) => {
+      const { operation, table } = classifyDiagQuery(event.query);
+      let paramCount = -1;
+      try {
+        paramCount = (JSON.parse(event.params) as unknown[]).length;
+      } catch {
+        paramCount = -1;
+      }
+      diagLog.push({
+        seq: diagSeq++,
+        window: diagWindow,
+        atMs: Number(process.hrtime.bigint() - diagStartNs) / 1e6,
+        durationMs: event.duration,
+        operation,
+        table,
+        paramCount,
+        query: event.query,
+      });
+    };
+    prisma.$on('query', diagListener);
+    // --- end diagnostic listener setup -----------------------------------------------------------
+
     // Warm the connection/prepared-statement cache with a throwaway call of *each* batch shape
     // before measuring, not just one generic call — under real contention (confirmed via the
     // Pre-Deployment Reliability Checkpoint's own full-suite reproduction: an intermittent 8-vs-7
@@ -900,23 +960,38 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     // paying its own one-off setup cost — invisible until the large-batch measurement, since the
     // small one had already been warmed. Warming both shapes up front removes that asymmetry
     // without weakening the equality assertion below at all.
+    diagWindow = 'warmup-1';
     await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: [employees[0]!.id] });
+    diagWindow = 'warmup-2';
     await getPayslipsBulk(sessionUser, cycle.id, {
       employeeIds: [employees[0]!.id, employees[1]!.id],
     });
+    diagWindow = 'warmup-3';
     await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: employees.map((e) => e.id) });
 
     queryCount = 0;
+    diagWindow = 'small';
     const small = await getPayslipsBulk(sessionUser, cycle.id, {
       employeeIds: [employees[0]!.id, employees[1]!.id],
     });
     const smallBatchQueries = queryCount;
 
     queryCount = 0;
+    diagWindow = 'large';
     const large = await getPayslipsBulk(sessionUser, cycle.id, {
       employeeIds: employees.map((e) => e.id),
     });
     const largeBatchQueries = queryCount;
+
+    // --- Reliability Phase 5 Checkpoint 2B: dump diagnostics before any assertion can throw, so --
+    // the data is captured on both PASS and FAIL. Prefixed `[N1-DIAG]` for easy CI-log grepping —
+    // one JSON object per line, plus a one-line summary. No fixture content beyond redacted SQL
+    // shape/param counts is ever printed (see the block above).
+    console.error(`[N1-DIAG] summary small=${smallBatchQueries} large=${largeBatchQueries}`);
+    for (const event of diagLog) {
+      console.error(`[N1-DIAG] ${JSON.stringify(event)}`);
+    }
+    // --- end diagnostic dump ----------------------------------------------------------------------
 
     expect(small).toHaveLength(2);
     expect(large).toHaveLength(10);
