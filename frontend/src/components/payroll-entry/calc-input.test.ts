@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { PayrollEntry } from '@/hooks/use-payroll-entries';
+import type { PayrollEntry, PayrollEntryWorkLine } from '@/hooks/use-payroll-entries';
 import { computeServerSnapshot } from './calc-input';
+import { LiveTotalsStore } from './live-totals-store';
 
 /**
  * Post-Checkpoint-1A UAT Stabilization — regression coverage for the reported EOBI totals defect:
@@ -94,6 +95,7 @@ function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
     ],
     calc: {
       workLines: [{ sortOrder: 0, dailyRate: '1000', effectiveOtRate: '0', earnedAmount: '30000', otEarned: '0' }],
+      totalWorkingDays: '30',
       effectiveLeaveRate: '0',
       earnedAmount: '30000',
       otEarned: '0',
@@ -123,5 +125,86 @@ describe('computeServerSnapshot — EOBI effective-deduction rule (Post-Checkpoi
   it('a disabled row with a non-default amount still reports zero, not the stored amount', () => {
     const entry = makeEntry({ eobiAmount: '550', eobiApplicable: false });
     expect(computeServerSnapshot(entry).eobiAmount).toBe(0);
+  });
+});
+
+/**
+ * v1.0.0 release blocker — Payroll Entry Working-Days Aggregation and Export Correctness. Reported
+ * defect: a split-unit employee (e.g. 10 days at Unit A + 10 days at Unit B) showed only 10 Working
+ * Days in the Payroll Entry grid's parent row, and the sticky totals row footer undercounted the
+ * same way — both derived from the primary work line only, ignoring every other line.
+ * `computeServerSnapshot` is what seeds `LiveTotalsStore` for every row, including rows the
+ * virtualizer has never mounted (`live-totals-store.ts`'s own doc comment), so its `days` field is
+ * exactly the footer's per-row contribution.
+ */
+function makeWorkLine(overrides: Partial<PayrollEntryWorkLine> & { id: string }): PayrollEntryWorkLine {
+  return {
+    payrollEntryId: 'entry-multi',
+    siteId: 'site-1',
+    unitId: 'unit-1',
+    unit: { id: 'unit-1', siteId: 'site-1', name: 'Main Branch', code: 'BR-01', isActive: true, createdAt: '', updatedAt: '' },
+    days: '0',
+    otHours: '0',
+    otRate: null,
+    cycleDays: 30,
+    sortOrder: 0,
+    createdAt: '',
+    updatedAt: '',
+    ...overrides,
+  };
+}
+
+describe('computeServerSnapshot — employee aggregate Working Days (v1.0.0 Working-Days Aggregation)', () => {
+  it('a single-unit employee is unchanged: days is that one line\'s own value', () => {
+    const entry = makeEntry();
+    expect(computeServerSnapshot(entry).days).toBe(30);
+  });
+
+  it('a two-unit split employee reports the sum, 10 + 10 = 20, not the primary line\'s own 10', () => {
+    const entry = makeEntry({
+      id: 'entry-multi',
+      workLines: [
+        makeWorkLine({ id: 'line-a', unitId: 'unit-a', unit: { id: 'unit-a', siteId: 'site-1', name: 'Unit A', code: 'UA', isActive: true, createdAt: '', updatedAt: '' }, days: '10', sortOrder: 0 }),
+        makeWorkLine({ id: 'line-b', unitId: 'unit-b', unit: { id: 'unit-b', siteId: 'site-1', name: 'Unit B', code: 'UB', isActive: true, createdAt: '', updatedAt: '' }, days: '10', sortOrder: 1 }),
+      ],
+    });
+    expect(computeServerSnapshot(entry).days).toBe(20);
+  });
+
+  it('an unequal split preserves the true total: 7 + 13 = 20', () => {
+    const entry = makeEntry({
+      id: 'entry-multi',
+      workLines: [
+        makeWorkLine({ id: 'line-a', unitId: 'unit-a', days: '7', sortOrder: 0 }),
+        makeWorkLine({ id: 'line-b', unitId: 'unit-b', days: '13', sortOrder: 1 }),
+      ],
+    });
+    expect(computeServerSnapshot(entry).days).toBe(20);
+  });
+
+  it('a mixed roster footer total is the mathematical sum of every work line\'s own days, across single- and multi-unit employees alike', () => {
+    const store = new LiveTotalsStore();
+    const singleUnit = makeEntry({ id: 'entry-1' }); // 30 days, one line
+    const splitTwo = makeEntry({
+      id: 'entry-2',
+      workLines: [
+        makeWorkLine({ id: 'line-2a', unitId: 'unit-a', days: '10', sortOrder: 0 }),
+        makeWorkLine({ id: 'line-2b', unitId: 'unit-b', days: '10', sortOrder: 1 }),
+      ],
+    });
+    const splitThree = makeEntry({
+      id: 'entry-3',
+      workLines: [
+        makeWorkLine({ id: 'line-3a', unitId: 'unit-a', days: '5', sortOrder: 0 }),
+        makeWorkLine({ id: 'line-3b', unitId: 'unit-b', days: '8', sortOrder: 1 }),
+        makeWorkLine({ id: 'line-3c', unitId: 'unit-c', days: '9.5', sortOrder: 2 }),
+      ],
+    });
+    store.setBase(
+      [singleUnit, splitTwo, splitThree].map((entry) => ({ id: entry.id, snapshot: computeServerSnapshot(entry) })),
+    );
+    // 30 (single) + 20 (10+10) + 22.5 (5+8+9.5) = 72.5 — never 30+10+5=45, the old primary-line-only sum.
+    expect(store.getTotals().days).toBe(72.5);
+    expect(store.rowCount).toBe(3);
   });
 });

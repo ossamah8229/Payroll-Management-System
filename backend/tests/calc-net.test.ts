@@ -138,6 +138,7 @@ describe('calcNet — multi-line entries (Split by Unit)', () => {
     expect(twoLine.earnedAmount).toBe('31538.46'); // 20000.00 + 11538.46 (full-precision sum, then rounded)
     expect(twoLine.otEarned).toBe('688.46'); // 400.00 + 288.46
     expect(twoLine.workLines).toHaveLength(2);
+    expect(twoLine.totalWorkingDays).toBe('15'); // 10 + 5, never just the primary line's own 10
   });
 
   it('reduces to the exact same result as a single-line entry when there is only one line', () => {
@@ -156,6 +157,10 @@ describe('calcNet — multi-line entries (Split by Unit)', () => {
     expect(singleLine.leaveEarned).toBe('1677.42'); // dailyRate (primary line basis) * 1 leave day
     expect(singleLine.totalEarning).toBe('40709.68'); // 36903.23 + 629.03 + 1500.00 allowance + 1677.42
     expect(singleLine.netSalary).toBe('40309.68'); // 40709.68 - 400.00 EOBI
+    // A single-line entry's aggregate is byte-identical to that one line's own `days` — a sum of
+    // one term (v1.0.0 Working-Days Aggregation checkpoint) — no forced trailing zeros ("22", not
+    // "22.00"), so the grid's parent row is genuinely unchanged in appearance for this common case.
+    expect(singleLine.totalWorkingDays).toBe('22');
   });
 
   it('uses the lowest-sortOrder line as the primary line for the leave-rate basis, regardless of array order', () => {
@@ -174,6 +179,84 @@ describe('calcNet — multi-line entries (Split by Unit)', () => {
     );
     // effectiveLeaveRate should derive from cycleDays=30 (sortOrder 0), i.e. 1000, not 1500 (cycleDays=20).
     expect(result.leaveEarned).toBe('1000.00');
+  });
+});
+
+/**
+ * v1.0.0 release blocker — Payroll Entry Working-Days Aggregation and Export Correctness.
+ * `totalWorkingDays` is the single canonical "employee aggregate Working Days" figure (docs/
+ * architecture/database/payroll-entry.md §12a) every display of Working Days (grid parent row,
+ * sticky totals row, CSV/XLSX export) now reads — never re-derived independently in any of those
+ * three places. These are the exact scenarios the checkpoint's own acceptance criteria specify.
+ */
+describe('calcNet — totalWorkingDays (v1.0.0 Working-Days Aggregation)', () => {
+  it('a single-unit employee is unaffected: totalWorkingDays equals the one line\'s own days', () => {
+    const result = calcNet(baseEntry({ workLines: [{ sortOrder: 0, days: '20', otHours: '0', otRate: null, cycleDays: 30 }] }));
+    expect(result.totalWorkingDays).toBe('20');
+  });
+
+  it('two equal-split units: 10 + 10 = 20, never just the primary line\'s own 10', () => {
+    const result = calcNet(
+      baseEntry({
+        workLines: [
+          { sortOrder: 0, days: '10', otHours: '0', otRate: null, cycleDays: 30 },
+          { sortOrder: 1, days: '10', otHours: '0', otRate: null, cycleDays: 30 },
+        ],
+      }),
+    );
+    expect(result.totalWorkingDays).toBe('20');
+  });
+
+  it('an unequal split preserves the true total: 7 + 13 = 20', () => {
+    const result = calcNet(
+      baseEntry({
+        workLines: [
+          { sortOrder: 0, days: '7', otHours: '0', otRate: null, cycleDays: 30 },
+          { sortOrder: 1, days: '13', otHours: '0', otRate: null, cycleDays: 31 },
+        ],
+      }),
+    );
+    expect(result.totalWorkingDays).toBe('20');
+  });
+
+  it('sums across more than two lines — not a two-line special case', () => {
+    const result = calcNet(
+      baseEntry({
+        workLines: [
+          { sortOrder: 0, days: '5', otHours: '0', otRate: null, cycleDays: 30 },
+          { sortOrder: 1, days: '8', otHours: '0', otRate: null, cycleDays: 30 },
+          { sortOrder: 2, days: '9.5', otHours: '0', otRate: null, cycleDays: 30 },
+        ],
+      }),
+    );
+    expect(result.totalWorkingDays).toBe('22.5');
+  });
+
+  it('financial-regression proof: aggregating totalWorkingDays does not change earnedAmount/otEarned/netSalary — these were already correctly summed per-line, and this checkpoint touches no financial formula', () => {
+    const before = {
+      // Every field calcNet computed before `totalWorkingDays` existed, for the exact same input —
+      // proves this checkpoint is additive-only to CalcNetResult, never a formula change.
+      earnedAmount: '31538.46',
+      otEarned: '688.46',
+      totalEarning: '32226.92',
+      totalDeduction: '400.00',
+      netSalary: '31826.92',
+    };
+    const result = calcNet(
+      baseEntry({
+        grossPay: '60000',
+        workLines: [
+          { sortOrder: 0, days: '10', otHours: '2', otRate: '200', cycleDays: 30 },
+          { sortOrder: 1, days: '5', otHours: '1', otRate: null, cycleDays: 26 },
+        ],
+      }),
+    );
+    expect(result.earnedAmount).toBe(before.earnedAmount);
+    expect(result.otEarned).toBe(before.otEarned);
+    expect(result.totalEarning).toBe(before.totalEarning);
+    expect(result.totalDeduction).toBe(before.totalDeduction);
+    expect(result.netSalary).toBe(before.netSalary);
+    expect(result.totalWorkingDays).toBe('15');
   });
 });
 

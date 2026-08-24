@@ -304,6 +304,7 @@ describe('Payroll Entry page — Employee Row Actions (UAT 2026-08-11)', () => {
       ],
       calc: {
         workLines: [{ sortOrder: 0, dailyRate: '1500', effectiveOtRate: '0', earnedAmount: '45000', otEarned: '0' }],
+        totalWorkingDays: '30',
         effectiveLeaveRate: '0',
         earnedAmount: '45000',
         otEarned: '0',
@@ -426,5 +427,156 @@ describe('Payroll Entry page — Employee Row Actions (UAT 2026-08-11)', () => {
     renderPageForUser(neitherUser);
 
     expect(screen.queryByRole('button', { name: /Employee actions for/ })).toBeNull();
+  });
+});
+
+/**
+ * v1.0.0 Payroll Entry release-blocker UAT correction — the split/export banner above the grid
+ * previously (incorrectly) told Finance that "CSV/Excel export only covers each employee's
+ * primary line." That was true before this checkpoint's export fix, but is no longer true: the
+ * export now carries every work line's Working Days via the "Unit Working Days Breakdown" column
+ * (`payroll-entry-import-export.service.ts`). This suite locks in the corrected wording so a
+ * future regression can't silently reintroduce the false "only covers primary line" claim.
+ */
+describe('Payroll Entry page — split/export banner wording (v1.0.0 UAT correction)', () => {
+  afterEach(() => {
+    cleanup();
+    mockUsePayrollEntriesReturn.entries = [];
+  });
+
+  function makeEntry(id: string, workLineCount: 1 | 2): PayrollEntry {
+    const baseWorkLine = {
+      id: `line-${id}-1`,
+      payrollEntryId: `entry-${id}`,
+      siteId: 'site-1',
+      unitId: 'unit-1',
+      unit: { id: 'unit-1', siteId: 'site-1', name: 'Main Branch', code: 'BR-01', isActive: true, createdAt: '', updatedAt: '' },
+      days: '15',
+      otHours: '0',
+      otRate: null,
+      cycleDays: 30,
+      sortOrder: 0,
+      createdAt: '',
+      updatedAt: '',
+    };
+    const workLines =
+      workLineCount === 1
+        ? [baseWorkLine]
+        : [
+            baseWorkLine,
+            {
+              ...baseWorkLine,
+              id: `line-${id}-2`,
+              unitId: 'unit-2',
+              unit: { id: 'unit-2', siteId: 'site-1', name: 'Second Branch', code: 'BR-02', isActive: true, createdAt: '', updatedAt: '' },
+              sortOrder: 1,
+            },
+          ];
+
+    return {
+      id: `entry-${id}`,
+      cycleId: testCycle.id,
+      employeeId: `employee-${id}`,
+      employee: {
+        id: `employee-${id}`,
+        employeeCode: id,
+        cnic: null,
+        name: `Banner Test Employee ${id}`,
+        fatherName: null,
+        religion: null,
+        dateOfBirth: null,
+        mobileNumber: null,
+        designation: 'Site Engineer',
+        siteId: 'site-1',
+        site: { id: 'site-1', name: 'Test Site', address: null, unitLabel: 'Branch', isActive: true, createdAt: '', updatedAt: '' },
+        unitId: 'unit-1',
+        unit: { id: 'unit-1', siteId: 'site-1', name: 'Main Branch', code: null, isActive: true, createdAt: '', updatedAt: '' },
+        dateOfJoining: null,
+        dateOfLeaving: null,
+        payType: 'DAILY_WAGE',
+        grossPay: '30000',
+        bankId: null,
+        bank: null,
+        branchCode: null,
+        accountNumber: null,
+        iban: null,
+        defaultEobiAmount: '400',
+        defaultEobiApplicable: true,
+        createdAt: '',
+        updatedAt: '',
+      },
+      siteId: 'site-1',
+      site: { id: 'site-1', name: 'Test Site', address: null, unitLabel: 'Branch', isActive: true, createdAt: '', updatedAt: '' },
+      designation: 'Site Engineer',
+      bankId: null,
+      branchCode: null,
+      accountNumber: null,
+      iban: null,
+      grossPay: '30000',
+      allowance: '0',
+      leaveDays: '0',
+      leaveRate: null,
+      eobiAmount: '400',
+      eobiApplicable: true,
+      advanceDeduction: '0',
+      advanceId: null,
+      advance: null,
+      eidAdvanceDeduction: '0',
+      eidAdvanceId: null,
+      eidAdvance: null,
+      fine: '0',
+      hold: false,
+      released: false,
+      payoutOutcome: null,
+      releaseBlockReasons: [],
+      releasedAt: null,
+      releasedBy: null,
+      lateReason: null,
+      remarks: null,
+      sortOrder: 0,
+      version: 1,
+      createdAt: '',
+      updatedAt: '',
+      workLines,
+      calc: {
+        workLines: workLines.map((line, index) => ({
+          sortOrder: index,
+          dailyRate: '1000',
+          effectiveOtRate: '0',
+          earnedAmount: '15000',
+          otEarned: '0',
+        })),
+        totalWorkingDays: workLineCount === 1 ? '15' : '30',
+        effectiveLeaveRate: '0',
+        earnedAmount: '30000',
+        otEarned: '0',
+        leaveEarned: '0',
+        correctionBalancePayable: '0',
+        totalEarning: '30000',
+        eobiDeduction: '400',
+        correctionBalanceRecovery: '0',
+        totalDeduction: '400',
+        netSalary: '29600',
+      },
+    };
+  }
+
+  it('does not claim the export only covers the primary line, and states the breakdown is included', () => {
+    mockUsePayrollEntriesReturn.entries = [makeEntry('single', 1), makeEntry('split', 2)];
+    renderPage();
+
+    const banner = screen.getByText(/attendance\s+split across more than one location this cycle/i);
+    expect(banner.textContent).toMatch(/1 employee has attendance/i);
+    expect(banner.textContent).not.toMatch(/only covers/i);
+    expect(banner.textContent).not.toMatch(/only.*primary line/i);
+    expect(banner.textContent).toMatch(/CSV\/Excel exports include the complete per-location Working Days\s+breakdown/i);
+    expect(banner.textContent).toMatch(/Split\s+action/i);
+  });
+
+  it('renders no banner when no entry in the current filter has more than one work line', () => {
+    mockUsePayrollEntriesReturn.entries = [makeEntry('single-a', 1), makeEntry('single-b', 1)];
+    renderPage();
+
+    expect(screen.queryByText(/attendance split across more than one location/i)).toBeNull();
   });
 });

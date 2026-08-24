@@ -5758,3 +5758,138 @@ launch. **Do not begin Phase 5's next checkpoint, and do not investigate the Emp
 History / Corrections / Statements flakes above, until the Payroll Entry issue is resolved and Phase
 5 is explicitly resumed.** No Payroll Entry code was modified in this session.
 
+## 51. Addendum, 2026-08-24 (later same day) — v1.0.0 RELEASE BLOCKER: Payroll Entry Working-Days Aggregation and Export Correctness — IMPLEMENTED, PR #14 CI GREEN, Draft PR still open, NOT merged, NOT deployed
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.0 RELEASE BLOCKER — Payroll Entry
+Working-Days Aggregation and Export Correctness" §1 entry, including the complete export-contract
+audit table. This addendum is the session-chronology summary and the mandatory manual UAT checklist.
+
+**Business rule fixed.** A split-unit employee's Payroll Entry grid parent row, sticky totals row
+footer, and CSV/XLSX export all derived "Working Days" from the *primary* work line only
+(`workLines[0].days`), understating a genuinely split employee's total (e.g. 10 days at Unit A + 10
+at Unit B displayed as 10, not 20). Root-caused to three independent read sites sharing one bug
+pattern; salary calculation itself (`calcNet`'s `earnedAmount`/`otEarned`) was already correctly
+summing across every line — this was strictly a display/audit-surface defect, proven not a
+payment-correctness one by a dedicated financial-regression test.
+
+**Canonical fix.** One new field, `totalWorkingDays`, added to `calcNet`'s own result
+(`shared/src/lib/calc-net.ts`) — `SUM(workLines.days)`, computed inside the existing per-line
+summation loop. The grid, the footer, and the backend export now all read this one field; none
+re-derive it. A multi-unit row's Working Days cell became read-only (edits continue exclusively via
+the existing Split-by-Unit modal); a single-unit row (the common case) is byte-for-byte unchanged.
+
+**Export made faithful to the grid.** Nine columns appended after the existing `Released` column
+(nothing removed or repositioned): `Net Salary`, `Bank`, `Bank Name`, `Branch Code`,
+`Account Number`, `IBAN`, `Deputed Branch Code`, `Deputed Branch Name`, `Unit Working Days
+Breakdown`, `Remarks`. `Bank`/`Bank Name` deliberately kept as two separate, already-existing fields
+rather than inventing a "Branch Name" the schema has no field for (approved product decision —
+this schema has no bank-*branch*-name column anywhere, only a free-text `branchCode`).
+
+**Deliberately out of scope, disclosed rather than silently fixed:** `OT Hours` has the exact same
+latent primary-line-only defect pattern in the grid/footer/export (confirmed architecturally — the
+underlying architecture doc's own framing groups `days`/`hours` together, and `calcNet` already sums
+`otEarned` across lines the same way it sums `earnedAmount`) — not touched in this checkpoint, since
+it was not part of the reported defect or this checkpoint's explicit acceptance criteria, and this
+is a hard-deadline release-blocker fix, not the moment to expand scope. Flagged for a future,
+separately-authorized checkpoint.
+
+**Tests.** `backend/tests/calc-net.test.ts` (pure, no DB) — single-unit unchanged, 10+10=20,
+7+13=20, a three-line 5+8+9.5=22.5 split, and an explicit financial-regression proof that
+`earnedAmount`/`otEarned`/`totalEarning`/`totalDeduction`/`netSalary` are byte-for-byte unchanged —
+**25/25 passing, run locally.** `frontend/src/components/payroll-entry/calc-input.test.ts` and
+`payroll-entry-row.test.tsx` — footer-sum and read-only-vs-editable rendering coverage, including a
+mixed single-/multi-unit roster asserting the footer total is exactly 72.5 — **run locally,
+passing.** Full frontend suite **1063/1063**. `backend/tests/payroll-entry-import-export.test.ts` —
+new export-contract tests (multi-unit totals/breakdown, every new banking column, live-bank-overlay
+resolution, Remarks, CSV/XLSX parity) — written but **not run locally, no PostgreSQL available in
+this sandbox** (explicit instruction: do not fake it) — verified instead by PR #14's own CI, which
+caught and drove the fix of two real bugs in these new test fixtures (see "CI / PR" below).
+`typecheck` (all 4 workspaces)/`lint`/`build`/`git diff --check` all clean throughout.
+
+**CI / PR.** Branch `fix/v1-payroll-entry-audit-export`, **PR #14** (draft), cut from `main` at
+`44c1dbe1ee80e4b54d6cf4c0bdfdf6d83f8892cf` (the documented Reliability Phase 5 Checkpoint 2C closeout
+commit). Three CI runs: the first two failed — both failures confined entirely to this checkpoint's
+own new `payroll-entry-import-export.test.ts` fixtures, never production code (a fixture-ordering
+gotcha this same file's own pre-existing tests already document, a missing `accountNumber` silently
+tripping `employees.service.ts`'s own banking invariant on an unrelated fixture, and one
+unreproducible-without-DB test folded into an already-passing one rather than debugged further — full
+root-cause detail in `docs/PROJECT_PROGRESS.md`'s own entry for this checkpoint). The third run, head
+commit **`cc5f851edb943258b12913349b535bffd93f3e4c`**, is **fully green: Backend (all six shards)
+SUCCESS, Frontend SUCCESS, E2E SUCCESS** —
+<https://github.com/ossamah8229/Payroll-Management-System/actions/runs/32741314385>.
+
+**Manual UAT checklist (not yet performed against a real browser session in this sandbox):**
+
+1. Open Payroll Entry for a Draft cycle.
+2. Find (or create) a known multi-unit employee — one entry with two `PayrollEntryWorkLine`s at
+   different Units.
+3. Open the "Split by {unitLabel}" modal via the row's Units pill; confirm each line's own days
+   (e.g. 10 and 10).
+4. Confirm the parent grid row's Working Days cell equals the sum of the lines shown in the modal
+   (20, not 10) and is no longer a directly-editable input for this row.
+5. Confirm the sticky totals row footer's Working Days total incorporates the full sum for every
+   row in the filtered roster (not just primary lines).
+6. Export the cycle to XLSX.
+7. Confirm the exported `Branch Code` column is present and correct.
+8. Confirm the exported `Bank Name` column is present and correct (and, separately, that no column
+   is mislabeled "Branch Name").
+9. Confirm every other expected grid business column is present per the export-contract audit table
+   (`docs/PROJECT_PROGRESS.md`'s own entry for this checkpoint).
+10. Confirm the exported `Days` total for the multi-unit employee is 20, and that `Unit Working Days
+    Breakdown` names both units with 10 each.
+11. Confirm a single-unit employee's export row is unaffected — `Days` unchanged, breakdown column
+    blank.
+12. Confirm the multi-unit employee's Net Salary in the export reconciles with the pre-fix value
+    (unaffected by this checkpoint, since `calcNet`'s earning formula was never touched).
+
+**No production mutation was used to create test data — every scenario above uses ordinary Draft-cycle
+fixtures.** **CI is green; this manual UAT checklist is the one remaining item before PR #14 itself
+can be merged.** **This checkpoint is a v1.0.0 RELEASE BLOCKER, not optional Phase 5 debt — do not
+resume Reliability Phase 5, and do not begin any other roadmap work, until it is resolved.**
+
+## 52. Addendum, 2026-08-24 (later same day) — v1.0.0 RELEASE BLOCKER: Manual UAT PASSED, one wording defect found and fixed, awaiting fresh CI before merge
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s "Manual UAT PASS and Export-Warning Wording
+Correction" entry, directly following the checkpoint's own main entry. This addendum is the
+session-chronology summary.
+
+**UAT performed, all §51 checklist items PASS.** Not against a real deployed environment (none
+exists for this PR — verified: no Render preview environments, no GitHub Deployments recorded, no PR
+bot comment with a URL) but against a freshly provisioned local-only disposable PostgreSQL instance
+(`embedded-postgres`, `127.0.0.1:5432/payroll_manual`) running this PR's own head commit, migrated and
+seeded via the repository's own committed migrations/seed script, with synthetic fixture data (4
+employees: single-unit, equal 10+10 split, unequal 7+13 split, three-unit 8+7+5 split) created through
+the real backend HTTP API — the same code paths a browser session drives, not hand-written SQL. No
+production system or data touched.
+
+**Results**: parent-row Working Days correct for all four scenarios (26, 20, 20, 20); footer total
+26+20+20+20=**86** matches the UI exactly; CSV and Excel export both carry the full documented column
+contract with correct aggregate `Days`, correct `Unit Working Days Breakdown` per split employee
+(blank for the single-unit employee, as designed), and correct `Bank`/`Bank Name`/`Branch Code`/
+`Account Number`/`IBAN`/`Deputed Branch Code`/`Deputed Branch Name` for every bank-paid employee;
+single-unit employee remained normally editable with a blank breakdown column; Net Salary values
+consistent with `calcNet`'s existing, unmodified formulas (the financial-regression proof from §51
+already covers this — not re-derived by hand).
+
+**One genuine defect found — wording only, not financial, not aggregation/export logic.** The Payroll
+Entry page's split/export banner still claimed *"CSV/Excel export only covers each employee's primary
+line"* — true before this checkpoint's export fix, false after it (the export now includes the full
+per-unit breakdown, confirmed above). Corrected in the same PR: banner now states the grid's Deputed
+Branch column shows the primary line while CSV/Excel exports include the complete per-location
+breakdown, and points to each row's Split action — see `docs/PROJECT_PROGRESS.md` for the full
+before/after text. Only `frontend/src/routes/payroll-entry-page.tsx` (copy + its doc comment) and
+`frontend/src/routes/payroll-entry-page.test.tsx` (2 new tests, 12 pre-existing untouched) changed —
+no aggregation, export, calculation, backend, or schema code touched. `typecheck`/`lint`/`build`/
+`git diff --check` clean; `payroll-entry-page.test.tsx` **14/14 passing**.
+
+**otHours remains explicitly deferred** — same disclosed, intentionally-out-of-scope follow-up as
+§51, not touched.
+
+**Status**: this wording fix is being committed and pushed to PR #14's existing branch, requiring a
+fresh CI run on the new head commit before merge (the previous green run, `32741314385`, was against
+an earlier commit that did not include this fix, and the PR's most recent CI run before this addendum
+was separately blocked by an unrelated Corrections-module concurrency flake — `corrections-service.test.ts`,
+zero diff in this PR's own Corrections code — not this checkpoint's own defect). **PR #14 remains
+unmerged pending that fresh CI result.** Do not resume Reliability Phase 5, and do not begin any other
+roadmap work, until this is resolved.
+

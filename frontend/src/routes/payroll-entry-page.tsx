@@ -278,10 +278,14 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
   const correctableEntries = useMemo(() => filteredEntries.filter((entry) => entry.released), [filteredEntries]);
   const hasReleasedEntries = correctableEntries.length > 0;
 
-  // Communicates Option C's approved limitation (Phase 3 Checkpoint 5): the flat export format
-  // represents only an entry's primary work line, so a currently-filtered split employee's
-  // additional lines aren't in the file — surfaced as UI copy rather than a format change,
-  // per the approved architecture.
+  // Surfaces, as UI copy, how a currently-filtered split employee's attendance is represented
+  // across the grid and the flat export formats. **Updated for the v1.0.0 Payroll Entry release
+  // blocker fix** (Working-Days aggregation + export correctness): CSV/Excel now carry every
+  // work line's Working Days via the "Unit Working Days Breakdown" column, not only the primary
+  // line — the flat-file *shape* still has one row per entry (so "Deputed Branch" on that row is
+  // still just the primary line), but the full split is no longer lost from the export itself.
+  // This banner previously (incorrectly, pre-fix) told Finance the export only covered the
+  // primary line at all — see this checkpoint's UAT notes in docs/PROJECT_PROGRESS.md.
   const splitEntryCount = useMemo(
     () => filteredEntries.filter((entry) => entry.workLines.length > 1).length,
     [filteredEntries],
@@ -396,9 +400,9 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
               {splitEntryCount > 0 && (
                 <p className="text-xs text-text-muted print:hidden">
                   {splitEntryCount} employee{splitEntryCount === 1 ? '' : 's'} {splitEntryCount === 1 ? 'has' : 'have'} attendance
-                  split across more than one location this cycle — CSV/Excel export only covers each
-                  employee's primary line. Review or edit the full split directly in the grid via each row's Split
-                  action.
+                  split across more than one location this cycle. The grid's Deputed Branch column shows each
+                  employee's primary line; CSV/Excel exports include the complete per-location Working Days
+                  breakdown. Review or edit the full split directly in the grid via each row's Split action.
                 </p>
               )}
               {!isArchived && cycle && (

@@ -103,6 +103,7 @@ function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
     ],
     calc: {
       workLines: [{ sortOrder: 0, dailyRate: '1000', effectiveOtRate: '0', earnedAmount: '30000', otEarned: '0' }],
+      totalWorkingDays: '30',
       effectiveLeaveRate: '0',
       earnedAmount: '30000',
       otEarned: '0',
@@ -214,5 +215,120 @@ describe('PayrollEntryRow — conflict-status background stays fully opaque (Pos
       expect(cell.className).not.toMatch(/\bbg-surface-2\b/);
       expect(cell.className).not.toMatch(/\bbg-[a-z-]+\/\d+\b/);
     }
+  });
+});
+
+/**
+ * v1.0.0 release blocker — Payroll Entry Working-Days Aggregation and Export Correctness. The
+ * parent row's Working Days cell cannot simultaneously *display* an employee's aggregate across
+ * several work lines and be *directly editable* as a single primary-line input — typing over a
+ * displayed "20" (a sum of two lines) would silently overwrite only the primary line, corrupting
+ * the real total invisibly. A single-unit employee is unaffected (the aggregate and the primary
+ * line's own value are identical), so this only changes rendering for a genuine split employee,
+ * whose individual lines remain editable exclusively via the existing "Split by {unitLabel}" modal.
+ */
+describe('PayrollEntryRow — employee aggregate Working Days display (v1.0.0 Working-Days Aggregation)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.resetModules();
+    vi.doUnmock('@/hooks/use-payroll-entry-editor');
+  });
+
+  function makeWorkLine(id: string, unitId: string, unitName: string, unitCode: string, days: string, sortOrder: number) {
+    return {
+      id,
+      payrollEntryId: 'entry-1',
+      siteId: 'site-1',
+      unitId,
+      unit: { id: unitId, siteId: 'site-1', name: unitName, code: unitCode, isActive: true, createdAt: '', updatedAt: '' },
+      days,
+      otHours: '0',
+      otRate: null,
+      cycleDays: 30,
+      sortOrder,
+      createdAt: '',
+      updatedAt: '',
+    };
+  }
+
+  async function renderRowWithWorkLines(workLines: PayrollEntry['workLines'], totalWorkingDays: string) {
+    const base = makeEntry();
+    const entry = makeEntry({ workLines, calc: { ...base.calc, totalWorkingDays } });
+    vi.doMock('@/hooks/use-payroll-entry-editor', () => ({
+      usePayrollEntryEditor: () => ({
+        editable: true,
+        effectiveEntry: entry,
+        effectiveLine: entry.workLines[0],
+        effectiveLines: entry.workLines,
+        cycleDaysInputValue: String(entry.workLines[0]!.cycleDays),
+        calc: entry.calc,
+        status: 'idle' as const,
+        errorMessage: undefined,
+        hasUnsavedChanges: false,
+        setEntryField: vi.fn(),
+        setWorkLineField: vi.fn(),
+        setLineField: vi.fn(),
+        addLine: vi.fn(),
+        deleteLine: vi.fn(),
+        retryNow: vi.fn(),
+        reload: vi.fn(),
+      }),
+    }));
+
+    const { PayrollEntryRow } = await import('./payroll-entry-row');
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={entry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it('a single-unit employee is unchanged: Working Days stays a directly-editable input showing that one line\'s own value', async () => {
+    await renderRowWithWorkLines(makeEntry().workLines, '30');
+
+    const input = screen.getByLabelText('Working days for Conflict Test Employee') as HTMLInputElement;
+    expect(input.value).toBe('30');
+    expect(input.disabled).toBe(false);
+  });
+
+  it('a two-unit split employee (10 + 10) shows the read-only aggregate 20, never the primary line\'s own 10, with no directly-editable Working Days input', async () => {
+    await renderRowWithWorkLines(
+      [makeWorkLine('line-a', 'unit-a', 'Unit A', 'UA', '10', 0), makeWorkLine('line-b', 'unit-b', 'Unit B', 'UB', '10', 1)],
+      '20',
+    );
+
+    expect(screen.queryByLabelText('Working days for Conflict Test Employee')).toBeNull();
+    const daysCell = document.querySelector('[data-col-id="days"]') as HTMLElement;
+    expect(daysCell.textContent).toBe('20');
+  });
+
+  it('an unequal three-unit split (5 + 8 + 9.5) shows the read-only aggregate 22.5 — not a two-line special case', async () => {
+    await renderRowWithWorkLines(
+      [
+        makeWorkLine('line-a', 'unit-a', 'Unit A', 'UA', '5', 0),
+        makeWorkLine('line-b', 'unit-b', 'Unit B', 'UB', '8', 1),
+        makeWorkLine('line-c', 'unit-c', 'Unit C', 'UC', '9.5', 2),
+      ],
+      '22.5',
+    );
+
+    const daysCell = document.querySelector('[data-col-id="days"]') as HTMLElement;
+    expect(daysCell.textContent).toBe('22.5');
   });
 });

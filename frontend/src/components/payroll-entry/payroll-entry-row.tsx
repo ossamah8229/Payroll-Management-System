@@ -99,7 +99,12 @@ function PayrollEntryRowImpl({
   useEffect(() => {
     liveTotalsStore.set(entry.id, {
       grossPay: toNumberOrNull(effectiveEntry.grossPay),
-      days: toNumberOrNull(effectiveLine.days),
+      // Aggregate Working Days (v1.0.0 audit-correctness fix) — `calc` already recomputes
+      // `calcNet` over *every* work line's own live draft (`usePayrollEntryEditor`'s
+      // `buildCalcInput(entry, entryDraft, lineDrafts)`), so this stays correct whether the
+      // in-progress edit is this row's own primary-line input or a non-primary line edited via the
+      // Split by {unitLabel} modal — never just this row's own primary line.
+      days: toNumberOrNull(calc.totalWorkingDays),
       otHours: toNumberOrNull(effectiveLine.otHours),
       otRate: toNumberOrNull(effectiveLine.otRate),
       cycleDays: effectiveLine.cycleDays ?? null,
@@ -131,10 +136,10 @@ function PayrollEntryRowImpl({
     effectiveEntry.advanceDeduction,
     effectiveEntry.eidAdvanceDeduction,
     effectiveEntry.fine,
-    effectiveLine.days,
     effectiveLine.otHours,
     effectiveLine.otRate,
     effectiveLine.cycleDays,
+    calc.totalWorkingDays,
     calc.netSalary,
   ]);
 
@@ -330,27 +335,39 @@ function PayrollEntryRowImpl({
       </div>
     ),
 
-    days: (
-      // Focused-control containment (Frozen Identity Pane UAT correction, 2026-08-14) — same
-      // mechanism as `units`'s own comment above: `overflow-hidden` clips this input's own focus
-      // ring to this cell's box so it can never bleed into a neighboring row's identity pane. Also
-      // needs `self-stretch` (every cell below shares this) — without it, this cell's own box
-      // shrinks to its content's height (the input's, ~26px) and is centered within the 40px row by
-      // the parent grid's `items-center` instead, leaving no room *inside this cell's own box* for
-      // the ring to be clipped into; `self-stretch` (+ `flex items-center`, replacing that same
-      // centering locally) makes the cell itself the full `ROW_HEIGHT` tall, with real headroom
-      // `overflow-hidden` can actually use.
-      <div role="cell" data-col-id="days" className="flex items-center self-stretch overflow-hidden">
-        <InlineNumberCell
-          value={effectiveLine.days}
-          onChange={(v) => editor.setWorkLineField('days', v)}
-          disabled={disabled}
-          invalid={!isValidDecimalDraft(effectiveLine.days, false)}
-          nav={nav('days')}
-          ariaLabel={`Working days for ${entry.employee.name}`}
-        />
-      </div>
-    ),
+    // v1.0.0 audit-correctness fix: for a split (multi-unit) employee, this cell is the employee
+    // aggregate Working Days — the sum of every work line's own days (`calc.totalWorkingDays`),
+    // never just the primary line's. That aggregate cannot also be *this* cell's own directly-typed
+    // input without letting an edit here silently rewrite only the primary line while the visible
+    // number is a sum of several — a real data-entry hazard — so a split employee's individual
+    // lines stay editable exclusively through the existing "Split by {unitLabel}" modal (`units`
+    // cell above), the same modal that already owns adding/removing lines. A single-line employee
+    // is unaffected either way: the aggregate and the primary line's own value are identical, so
+    // this remains the exact same directly-editable input as before this fix.
+    days:
+      unitCount > 1 ? (
+        <ReadOnlyCell colId="days" align="right">{calc.totalWorkingDays}</ReadOnlyCell>
+      ) : (
+        // Focused-control containment (Frozen Identity Pane UAT correction, 2026-08-14) — same
+        // mechanism as `units`'s own comment above: `overflow-hidden` clips this input's own focus
+        // ring to this cell's box so it can never bleed into a neighboring row's identity pane. Also
+        // needs `self-stretch` (every cell below shares this) — without it, this cell's own box
+        // shrinks to its content's height (the input's, ~26px) and is centered within the 40px row by
+        // the parent grid's `items-center` instead, leaving no room *inside this cell's own box* for
+        // the ring to be clipped into; `self-stretch` (+ `flex items-center`, replacing that same
+        // centering locally) makes the cell itself the full `ROW_HEIGHT` tall, with real headroom
+        // `overflow-hidden` can actually use.
+        <div role="cell" data-col-id="days" className="flex items-center self-stretch overflow-hidden">
+          <InlineNumberCell
+            value={effectiveLine.days}
+            onChange={(v) => editor.setWorkLineField('days', v)}
+            disabled={disabled}
+            invalid={!isValidDecimalDraft(effectiveLine.days, false)}
+            nav={nav('days')}
+            ariaLabel={`Working days for ${entry.employee.name}`}
+          />
+        </div>
+      ),
     otHours: (
       <div role="cell" data-col-id="otHours" className="flex items-center self-stretch overflow-hidden">
         <InlineNumberCell

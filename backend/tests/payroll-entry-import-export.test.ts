@@ -80,6 +80,22 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
     return res.body.entry as { id: string; version: number };
   }
 
+  async function addWorkLine(
+    admin: Awaited<ReturnType<typeof createAuthenticatedAgent>>,
+    entry: { id: string; version: number },
+    unitId: string,
+    days: string,
+  ) {
+    const res = await admin.agent
+      .post(`/api/v1/payroll-entries/${entry.id}/work-lines`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: entry.version, unitId, days });
+    if (res.status !== 201) {
+      throw new Error(`addWorkLine failed with status ${res.status}: ${JSON.stringify(res.body)}`);
+    }
+    return res.body.entry as { id: string; version: number };
+  }
+
   it('exports CSV with the exact template header row and the entry’s real values', async () => {
     const admin = await masterAdminAgent('export-csv-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Export CSV');
@@ -221,5 +237,211 @@ describe('Phase 3 Checkpoint 5 — Payroll Entry CSV/Excel export (import remove
       .set('x-csrf-token', admin.csrfToken)
       .attach('file', Buffer.from('CNIC\n9998887776665\n'), 'payroll.csv');
     expect(importRes.status).toBe(404);
+  });
+
+  // --- v1.0.0 release blocker — Payroll Entry Working-Days Aggregation and Export Correctness
+  // (2026-08-24). Reported defect: a split-unit employee's Working Days showed only the primary
+  // line's own value everywhere (grid parent row, footer, export). `Days` now reads the same
+  // canonical `calcNet().totalWorkingDays` the grid/footer use; nine columns (Net Salary, Bank,
+  // Bank Name, Branch Code, Account Number, IBAN, Deputed Branch Code/Name, Unit Working Days
+  // Breakdown, Remarks) were appended so the export faithfully represents the grid's own business
+  // columns, per the approved product decision recorded in docs/PROJECT_PROGRESS.md.
+
+  it('a single-unit employee export is unaffected: Days is that one line\'s own value, Unit Working Days Breakdown is blank', async () => {
+    const admin = await masterAdminAgent('export-single-unit-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Export Single Unit');
+    // Cycle before Employee, deliberately — creating a cycle bootstraps entries for every
+    // already-existing Employee, which would otherwise pre-empt the explicit `createEntry` call
+    // below with a 409 (the same fixture-ordering gotcha this file's own pre-existing tests
+    // already document).
+    const cycle = await makeDraftCycle(admin, 7);
+    const employee = await makeEmployee(site.id, unit.id, 'Single Unit Employee', { cnic: '1112223330001' });
+    await createEntry(admin, cycle.id, employee.id, '30');
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const [header, dataLine] = exportRes.text.trim().split('\n');
+    const cols = header!.split(',');
+    const cells = dataLine!.split(',');
+    const col = (name: string) => cells[cols.indexOf(name)];
+
+    expect(col('Days')).toBe('30');
+    expect(col('Unit Working Days Breakdown')).toBe('');
+  });
+
+  it('a two-unit split employee (10 + 10) exports a Days total of 20 and preserves both units in the breakdown column', async () => {
+    const admin = await masterAdminAgent('export-two-unit-admin@test.local');
+    const { site, unit: unitA } = await makeSiteWithUnit('Test Site Export Two Unit A');
+    const unitB = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export Two Unit B Unit', code: 'U-2' } });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
+    const cycle = await makeDraftCycle(admin, 8);
+    const employee = await makeEmployee(site.id, unitA.id, 'Two Unit Employee', { cnic: '1112223330002' });
+    const entry = await createEntry(admin, cycle.id, employee.id, '10');
+    await addWorkLine(admin, entry, unitB.id, '10');
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const [header, dataLine] = exportRes.text.trim().split('\n');
+    const cols = header!.split(',');
+    const cells = dataLine!.split(',');
+    const col = (name: string) => cells[cols.indexOf(name)];
+
+    expect(col('Days')).toBe('20'); // never just the primary line's own 10
+    const breakdown = col('Unit Working Days Breakdown')!;
+    expect(breakdown).toContain('10');
+    expect(breakdown).toContain(unitA.name);
+    expect(breakdown).toContain(unitB.name);
+
+    // XLSX carries the same corrected total for a multi-unit entry, not just CSV.
+    const xlsxRes = await admin.agent
+      .get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=xlsx`)
+      .buffer(true)
+      .parse((res, callback) => {
+        res.setEncoding('binary');
+        let data = '';
+        res.on('data', (chunk: string) => {
+          data += chunk;
+        });
+        res.on('end', () => callback(null, Buffer.from(data, 'binary')));
+      });
+    expect(xlsxRes.status).toBe(200);
+    expect(xlsxRes.headers['content-type']).toContain('spreadsheetml');
+  });
+
+  it('an unequal three-unit split (7 + 8 + 5 = 20) preserves the true total and every unit\'s own days in the breakdown', async () => {
+    const admin = await masterAdminAgent('export-three-unit-admin@test.local');
+    const { site, unit: unitA } = await makeSiteWithUnit('Test Site Export Three Unit A');
+    const unitB = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export Three Unit B Unit', code: 'U-2' } });
+    const unitC = await prisma.projectUnit.create({ data: { siteId: site.id, name: 'Test Site Export Three Unit C Unit', code: 'U-3' } });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
+    const cycle = await makeDraftCycle(admin, 9);
+    const employee = await makeEmployee(site.id, unitA.id, 'Three Unit Employee', { cnic: '1112223330003' });
+    let entry = await createEntry(admin, cycle.id, employee.id, '7');
+    entry = await addWorkLine(admin, entry, unitB.id, '8');
+    await addWorkLine(admin, entry, unitC.id, '5');
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const [header, dataLine] = exportRes.text.trim().split('\n');
+    const cols = header!.split(',');
+    const cells = dataLine!.split(',');
+    const col = (name: string) => cells[cols.indexOf(name)];
+
+    expect(col('Days')).toBe('20');
+    const breakdown = col('Unit Working Days Breakdown')!;
+    for (const [unitName, days] of [[unitA.name, '7'], [unitB.name, '8'], [unitC.name, '5']] as const) {
+      expect(breakdown).toContain(unitName);
+      expect(breakdown).toContain(days);
+    }
+  });
+
+  it('exports Net Salary, Bank, Bank Name, Branch Code, Account Number, and IBAN — every existing/newly-required business column', async () => {
+    const admin = await masterAdminAgent('export-banking-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Export Banking');
+    const bank = await prisma.bank.create({ data: { code: 'TESTBANK', name: 'Test Reconciliation Bank' } });
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
+    const cycle = await makeDraftCycle(admin, 10);
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Banking Fields Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        cnic: '1112223330004',
+        bankId: bank.id,
+        branchCode: '0456',
+        accountNumber: '1234567890123',
+        iban: 'PK36SCBL0000001123456789',
+      },
+    });
+    await createEntry(admin, cycle.id, employee.id, '30');
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const [header, dataLine] = exportRes.text.trim().split('\n');
+    const cols = header!.split(',');
+    const cells = dataLine!.split(',');
+    const col = (name: string) => cells[cols.indexOf(name)];
+
+    expect(cols).toContain('Net Salary');
+    expect(cols).toContain('Bank');
+    expect(cols).toContain('Bank Name');
+    expect(cols).toContain('Branch Code');
+    expect(cols).toContain('Account Number');
+    expect(cols).toContain('IBAN');
+    expect(cols).toContain('Deputed Branch Code');
+    expect(cols).toContain('Deputed Branch Name');
+
+    expect(col('Bank')).toBe('TESTBANK');
+    expect(col('Bank Name')).toBe('Test Reconciliation Bank');
+    expect(col('Branch Code')).toBe('0456');
+    expect(col('Account Number')).toBe('1234567890123');
+    expect(col('IBAN')).toBe('PK36SCBL0000001123456789');
+    expect(col('Deputed Branch Code')).toBe(unit.code);
+    expect(col('Deputed Branch Name')).toBe(unit.name);
+    // Gross 30000, 30 cycle days, 30 worked days: dailyRate 1000, earned 30000, EOBI 400 -> net 29600.
+    expect(col('Net Salary')).toBe('29600.00');
+  });
+
+  it('resolves Bank Name against the live (post-master-data-overlay) bankId, not a stale pre-overlay relation, for an unreleased Draft entry', async () => {
+    const admin = await masterAdminAgent('export-live-bank-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Export Live Bank');
+    const bankOriginal = await prisma.bank.create({ data: { code: 'ORIGBANK', name: 'Original Bank' } });
+    const bankCorrected = await prisma.bank.create({ data: { code: 'CORRBANK', name: 'Corrected Bank' } });
+    const cycle = await makeDraftCycle(admin, 11);
+    const employee = await prisma.employee.create({
+      data: {
+        name: 'Live Bank Employee',
+        designation: 'Guard',
+        siteId: site.id,
+        unitId: unit.id,
+        grossPay: '30000',
+        cnic: '1112223330005',
+        bankId: bankOriginal.id,
+        // Required alongside a real bankId (`employees.service.ts`'s `applyBankingInvariant`) — the
+        // later PATCH below only touches `bankId`, and that invariant is checked against the
+        // *merged* effective state, so a null Account Number here would make that PATCH itself
+        // fail with 400 rather than exercising the live-overlay behavior this test targets.
+        accountNumber: '1234567890',
+      },
+    });
+    await createEntry(admin, cycle.id, employee.id, '30');
+
+    const patchEmployee = await admin.agent
+      .patch(`/api/v1/employees/${employee.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ bankId: bankCorrected.id });
+    expect(patchEmployee.status).toBe(200);
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const [header, dataLine] = exportRes.text.trim().split('\n');
+    const cols = header!.split(',');
+    const cells = dataLine!.split(',');
+    const col = (name: string) => cells[cols.indexOf(name)];
+
+    expect(col('Bank')).toBe('CORRBANK');
+    expect(col('Bank Name')).toBe('Corrected Bank');
+  });
+
+  it('exports Remarks — a genuine grid business column previously never exported', async () => {
+    const admin = await masterAdminAgent('export-remarks-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Export Remarks');
+    // Cycle before Employee, deliberately — see the single-unit test's own comment above.
+    const cycle = await makeDraftCycle(admin, 12);
+    const employee = await makeEmployee(site.id, unit.id, 'Remarks Employee', { cnic: '1112223330006' });
+    const entry = await createEntry(admin, cycle.id, employee.id, '30');
+    await admin.agent
+      .patch(`/api/v1/payroll-entries/${entry.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: entry.version, remarks: 'Reconciliation note for Finance' });
+
+    const exportRes = await admin.agent.get(`/api/v1/payroll-cycles/${cycle.id}/entries/export?format=csv`);
+    expect(exportRes.status).toBe(200);
+    const [header, dataLine] = exportRes.text.trim().split('\n');
+    const cols = header!.split(',');
+    const cells = dataLine!.split(',');
+    expect(cells[cols.indexOf('Remarks')]).toBe('Reconciliation note for Finance');
   });
 });

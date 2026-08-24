@@ -202,7 +202,11 @@ function extractColumnValue(columnId: string, entry: PayrollEntry, bankCodeById:
     case 'grossPay':
       return entry.grossPay;
     case 'days':
-      return primaryLine?.days ?? '';
+      // Employee aggregate Working Days (v1.0.0 Payroll Entry audit-correctness fix) — the sum of
+      // every work line's `days`, via the canonical shared `calcNet` computation, never just the
+      // primary line's own value. For a single-line entry this is byte-identical to
+      // `primaryLine.days` (a sum of one term), so this branch is unchanged for the common case.
+      return calcNet(buildCalcInput(entry)).totalWorkingDays;
     case 'otHours':
       return primaryLine?.otHours ?? '';
     case 'otRate':
