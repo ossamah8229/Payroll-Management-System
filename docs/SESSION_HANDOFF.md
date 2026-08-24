@@ -5707,3 +5707,54 @@ Site Summary honesty fix. Full frontend suite **1047/1047**; `typecheck`/`lint`/
 **No commit, push, or deployment occurred this session.** Not authorized for commit; no other
 roadmap work started.
 
+## 50. Addendum, 2026-08-24 — Reliability Phase 5: Node 24 Runtime Contract (Checkpoints 1A/1B) merged; Payslips N+1 Guard (Checkpoint 2B diagnostic → 2C permanent) merged; Phase 5 PAUSED for a higher-priority v1.0.0 Payroll Entry issue
+
+Closes out Reliability Phase 5 Checkpoint 2C, pauses the phase. Full technical record:
+`docs/PROJECT_PROGRESS.md`'s own "Reliability Phase 5 — Node 24 Runtime Contract (Checkpoints
+1A/1B) and Payslips N+1 Guard (Checkpoint 2B/2C)" §1 entry — this addendum is the session-chronology
+summary, not a duplicate of that record.
+
+**Node 24 runtime contract (Checkpoints 1A/1B).** CI/dev/Render moved off Node 20 (EOL
+2026-04-30, and silently failing Puppeteer 25.x's `>=22.12.0` engine requirement) to Node 24.19.0
+across `.github/workflows/ci.yml`, `package.json` `engines.node`, `.nvmrc`, and `render.yaml`'s
+`NODE_VERSION` (Render env var, since `rootDir`-scoped services can't see root-level version files).
+No dependency/lockfile/application-code change. Merged via PR #11 as `ecf186d`, all-green.
+
+**Payslips N+1 guard.** The historical `payslips.test.ts` aggregate query-count flake (intermittent
+9-vs-8, and on an earlier occasion 8-vs-7 — `docs/release/KNOWN_ISSUES_v1.0.md` KI-10) came from a
+bare total-count equality assertion that couldn't tell a real regression apart from one harmless
+statement landing in only one measured window. Checkpoint 2B (branch
+`reliability/checkpoint-2b-n1-diagnostic`, PR #12) added purely observational per-query
+instrumentation without touching the existing assertion; five independent same-SHA CI runs all
+showed an identical steady-state of 8 application queries in a fixed shape, but never reproduced the
+historical extra statement — that exact query remains unidentified, and Checkpoint 2C's design does
+not depend on it being found. Checkpoint 2C (branch `reliability/checkpoint-2c-payslips-n1-guard`,
+PR #13, `f77af3e`) replaced the aggregate count with an exact per-table/per-operation
+application-query fingerprint comparison between a 2-employee and 10-employee call; every captured
+query is classified as `application`, `lifecycle` (connection/session bookkeeping, excluded from the
+comparison), or `unknown` — an `unknown` query fails the test outright instead of being silently
+absorbed. No tolerance, retry, sleep, or skip; test-only change, no production code touched.
+`payslips.test.ts` passed all 6 CI attempts during development, plus 3 clean full-gate observations
+at `f77af3e` (Backend all 6 shards / Frontend / E2E all SUCCESS), including PR #13's own pre-merge
+gate.
+
+**Merge and cleanup.** PR #13 merged to `main` as merge commit
+`ed95d6f02cae4ce5b0755f2998006b4f0a805e01`; the merge-triggered post-merge CI run on `main`
+(Backend/Frontend/E2E) was all-green. PR #12 was confirmed never merged (its head is not an ancestor
+of `main`) and its diff confirmed to contain only temporary, self-described diagnostic
+instrumentation (no unique permanent code) before being closed as superseded and its remote branch
+deleted; the PR itself remains visible on GitHub as closed, and its diagnostic findings are preserved
+in `docs/PROJECT_PROGRESS.md`.
+
+**Unrelated, still-open, separately-tracked flakes** observed during Checkpoint 2's reruns and
+explicitly out of this checkpoint's scope: `employee-payroll-history.test.ts` query-count assertions,
+`corrections-service.test.ts` concurrent approval behavior, `statements.test.ts` query-count
+assertions. None were investigated or touched here.
+
+**Reliability Phase 5 Checkpoint 2C: COMPLETE.** Reliability Phase 5 overall is **PAUSED** —not
+closed out, not continuing to Checkpoint 3 or any further checkpoint — because a higher-priority
+v1.0.0 Payroll Entry correctness issue has been identified ahead of the **August 30, 2026** payroll
+launch. **Do not begin Phase 5's next checkpoint, and do not investigate the Employee Payroll
+History / Corrections / Statements flakes above, until the Payroll Entry issue is resolved and Phase
+5 is explicitly resumed.** No Payroll Entry code was modified in this session.
+

@@ -11705,6 +11705,122 @@ currently-deployed production commit has been independently re-verified.
 
 ---
 
+## Reliability Phase 5 — Node 24 Runtime Contract (Checkpoints 1A/1B) and Payslips N+1 Guard (Checkpoint 2B/2C) (2026-08-22 to 2026-08-24)
+
+**Naming note:** these "Reliability Phase 5" checkpoint numbers are this reliability-tracking
+sequence's own, independent of `docs/IMPLEMENTATION_PLAN.md`'s roadmap phases and independent of the
+unrelated "Checkpoint 2C" (six-shard sharding) inside the "Backend/CI Reliability Checkpoint 2" entry
+above, which belongs to the earlier Reliability Phase 4.
+
+### Checkpoint 1A/1B — Node 24 CI/dev/production runtime contract
+
+Node 20 reached end-of-life (security support ended 2026-04-30), and Puppeteer 25.x's `engines`
+requirement (`>=22.12.0`) had been failing silently (warning only, not enforced) under the
+CI-pinned Node 20.20.2. Checkpoint 1A (`9f11ced`) moved CI/dev to Node 24 (current Active LTS, EOL
+2028-04-30 — chosen over the Puppeteer-minimum Node 22, already in reduced Maintenance LTS, and over
+Node 26, not yet LTS): `.github/workflows/ci.yml` in all three jobs, `package.json`
+`engines.node`, and a new `.nvmrc`. Checkpoint 1B (`d6eb83c`) tightened the major-only `24` contract
+to the specific validated patch `24.19.0` and closed a Render production-alignment gap: root-level
+`package.json`/`.nvmrc` are not visible to either Render service (both set `rootDir` to a
+subdirectory with no Node-version file of its own), so `NODE_VERSION: "24.19.0"` was added directly
+to both services' `envVars` in `render.yaml` — Render's own highest-precedence, service-scoped
+mechanism. No dependency versions changed, no lockfile churn, no application code touched, no
+shard/heap/threshold changes in either checkpoint.
+
+Carried on branch `reliability/checkpoint-1a-node24-ci` (PR #11), merged to `main` as merge commit
+**`ecf186d8c8edda94be5b95ca2b6a92c569563e0c`**. Runtime gate: Run at head SHA `d6eb83c` (databaseId
+`32568657424`) — Backend/Frontend/E2E all SUCCESS. Post-merge Run (databaseId not recorded
+separately; `ecf186d`'s own merge-triggered run) — Backend/Frontend/E2E all SUCCESS.
+
+### Checkpoint 2 — Payslips aggregate N+1 query-count flake
+
+**Historical problem.** `payslips.test.ts`'s bulk-assembly N+1 guard asserted a bare aggregate query
+**count** equality between a 2-employee and a 10-employee call (`expect(largeBatchQueries).toBe(
+smallBatchQueries)`). This had intermittently failed under full-suite load with mismatches of **9
+vs 8** and, on an earlier occasion, **8 vs 7** — see `docs/release/KNOWN_ISSUES_v1.0.md` KI-10's own
+query-count-flake bullet (tracked there separately from that same file's now-resolved
+Puppeteer-timeout portion). Because the assertion only compared a total, it could not distinguish a
+real N+1 regression from a single harmless connection/session statement landing in only one of the
+two measured windows — a false failure indistinguishable from a true one under that design.
+
+**Checkpoint 2B — diagnostic instrumentation (branch `reliability/checkpoint-2b-n1-diagnostic`,
+PR #12, never merged).** Added a second, purely observational `$on('query', ...)` listener
+alongside the original counting listener — the original assertion stayed byte-for-byte unchanged, so
+the diagnostic run still genuinely passed or failed under the pre-existing contract while also
+dumping a redacted, per-query classification (operation, resolved table, parameter count — never
+literal parameter values or fixture content) for every captured event. Five independent CI
+observations at the same head SHA, all byte-identical: a steady-state of **8 application queries**
+in a fixed per-table/operation shape, for both the small and large batch. The historical extra
+statement (the 9th query in the 9-vs-8 mismatch, or the earlier 8-vs-7 mismatch) was **not
+reproduced or identified** by this diagnostic instrumentation — Checkpoint 2C's design deliberately
+does not depend on ever pinning that exact statement down.
+
+**Checkpoint 2C — permanent structural guard (branch `reliability/checkpoint-2c-payslips-n1-guard`,
+PR #13, `f77af3e`).** Replaces the old aggregate-count equality with an exact per-table,
+per-operation application-query **fingerprint** comparison between the two batch sizes
+(`Record<"OPERATION table", count>`, e.g. `{"SELECT PayrollEntry": 1, ...}`) — a real N+1 makes one
+specific table's count scale with `employeeIds.length`, which breaks fingerprint equality, while
+legitimate `WHERE id IN (...)` batching keeps every table's count fixed at 1 regardless of how many
+IDs are in that one query's own parameter list. Every captured query is classified into exactly one
+of three buckets, never silently dropped: `application` (a SELECT/INSERT/UPDATE/DELETE against a
+resolvable `"schema"."Table"` — the only kind compared), `lifecycle` (BEGIN/COMMIT/ROLLBACK/
+SAVEPOINT/RELEASE/SET/DEALLOCATE/DISCARD/RESET/SHOW/LISTEN/UNLISTEN/PREPARE — connection-pool/engine
+bookkeeping, deliberately excluded from the comparison), and `unknown` — which **fails the test
+outright** (`expect(unknownQueries).toEqual([])`, with the offending SQL attached) rather than being
+silently absorbed into either other bucket, so a future unrecognized query type can never quietly
+pass unexamined. A generous non-tight `<=20` total-query bound is retained as defense-in-depth, not
+the primary protection. No tolerance, retry, sleep, or skip anywhere in the guard. Test-only change:
+`backend/tests/payslips.test.ts` only — **no production/application source, schema, dependency, or
+CI file touched**.
+
+`payslips.test.ts` passed in all 6 CI attempts against this branch during development. The final
+commit `f77af3e` was independently confirmed by **3 complete, clean full-gate observations** (Backend
+all 6 shards SUCCESS, Frontend SUCCESS, E2E SUCCESS) at the same SHA, including PR #13's own
+pre-merge gate (run ID `32703459677`). Merged to `main` as merge commit
+**`ed95d6f02cae4ce5b0755f2998006b4f0a805e01`**. Post-merge confirmation: run ID `32713739555` at head
+SHA `ed95d6f` — Backend/Frontend/E2E all SUCCESS.
+
+**Unrelated intermittent failures observed during the same reruns, explicitly out of this
+checkpoint's scope** (not investigated or touched here, remain separate open backlog items):
+`employee-payroll-history.test.ts` query-count assertions, `corrections-service.test.ts` concurrent
+approval behavior, `statements.test.ts` query-count assertions. None of these three files appear in
+either PR #12's or PR #13's diff.
+
+### Clean up diagnostic GitHub work
+
+- **PR #12** (`diag: Payslips N+1 SQL-level diagnostic (Checkpoint 2B)`, branch
+  `reliability/checkpoint-2b-n1-diagnostic`) — confirmed never merged (its head `2602c78c` is not an
+  ancestor of `main`), closed as superseded by the permanent Checkpoint 2C structural guard now on
+  `main`. Its diff was reviewed and confirmed to contain only temporary, self-described diagnostic
+  logging (a second listener + a dump call explicitly commented for deletion once the permanent
+  assertion landed) — no unique permanent code was left behind. Remote branch deleted after
+  confirming this. The diagnostic findings themselves (steady-state 8-vs-8, fixed application-query
+  shape) are preserved above, and the PR itself remains visible on GitHub as closed (not deleted).
+
+### Reliability phase status
+
+- **Reliability Phase 5 Checkpoint 1A/1B (Node 24 runtime contract): COMPLETE**, merged and
+  post-merge-verified green.
+- **Reliability Phase 5 Checkpoint 2C (Payslips permanent structural N+1 guard): COMPLETE**, merged
+  and post-merge-verified green.
+- **Reliability Phase 5 overall is PAUSED**, not closed out and not continuing to its next
+  checkpoint, because a higher-priority v1.0.0 Payroll Entry correctness issue has been identified
+  ahead of the August 30, 2026 payroll launch. The three unrelated intermittent failures noted above
+  (Employee Payroll History, Corrections concurrent approval, Statements query-count) remain open,
+  separately-tracked backlog items — **not investigated as part of pausing Phase 5**, and explicitly
+  not to be picked up before the Payroll Entry issue is resolved.
+
+### Production safety record
+
+Throughout Checkpoints 1A/1B/2B/2C and this documentation pass: no production database migration was
+executed, no production seed was executed, and no production deployment was performed (Checkpoint
+1B's `render.yaml` `NODE_VERSION` addition takes effect only on Render's own next deploy of that
+service, not as part of this work). All verification ran against GitHub Actions' own
+disposable/CI-ephemeral Postgres instances. This entry does not claim the currently-deployed
+production commit has been independently re-verified.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -12083,7 +12199,31 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-21 (latest) — Reliability Phase 4: COMPLETE.** Backend/CI Reliability Checkpoint 2
+**Updated 2026-08-24 (latest) — Reliability Phase 5 Checkpoints 1A/1B (Node 24 runtime contract) and
+Checkpoint 2C (Payslips permanent structural N+1 guard): COMPLETE and merged to `main`. Reliability
+Phase 5 overall is PAUSED (not closed out, not continuing to its next checkpoint).** Node 24.19.0 is
+now the pinned CI/dev/Render runtime contract (PR #11, merge commit
+`ecf186d8c8edda94be5b95ca2b6a92c569563e0c`, all-green). The historical Payslips aggregate
+query-count flake (9-vs-8, earlier 8-vs-7 — KI-10) has been replaced with a permanent per-table/
+per-operation structural fingerprint guard that fails on any unclassifiable SQL rather than
+tolerating it; the diagnostic instrumentation that informed its design (Checkpoint 2B, PR #12, 5
+same-SHA CI observations confirming a steady-state of 8 application queries) was never merged and PR
+#12 was closed as superseded (branch deleted). The permanent guard (PR #13, `f77af3e`, merge commit
+`ed95d6f02cae4ce5b0755f2998006b4f0a805e01`) passed all 6 CI attempts during development plus 3 clean
+full-gate observations at the same SHA, including a post-merge run on `main` (Backend/Frontend/E2E
+all SUCCESS). No production code changed by either checkpoint. Full record: this file's own
+"Reliability Phase 5 — Node 24 Runtime Contract (Checkpoints 1A/1B) and Payslips N+1 Guard
+(Checkpoint 2B/2C)" §1 entry (immediately above §2). **Reliability Phase 5 is PAUSED because a
+higher-priority v1.0.0 Payroll Entry correctness issue has been identified ahead of the August 30,
+2026 payroll launch — do not begin Phase 5's next checkpoint, and do not investigate the
+Employee Payroll History / Corrections / Statements intermittent failures noted in that entry, until
+the Payroll Entry issue is resolved and Phase 5 is explicitly resumed.** This does not change the
+status of the roadmap-phase work below (Variance/Dashboard etc.) — see that entry for the actual
+next roadmap-phase action, which this reliability work does not supersede in scope, only in recency
+for reliability-tracking purposes.
+
+**Updated 2026-08-21 (superseded by the entry above for status purposes, kept for its own still-
+useful record) — Reliability Phase 4: COMPLETE.** Backend/CI Reliability Checkpoint 2
 (session/pool lifecycle fix `5b6b9b8`, permanent six-shard sharding `f08d78c`, PDF-worker test
 isolation fix `69f66e9` — merged via PR #9, merge commit `c1b77083ee8657abf0351946bab03b35d8692839`,
 runtime gate Run #95 all-green) and the separately-discovered Payslips batch-export audit-ordering
@@ -12091,18 +12231,14 @@ fix (`8d83e274b3fcbb177fa259ec97d421d05d1cfa6d` — merged via PR #10, merge com
 `aec372eda89e87894b199ef601446cba708e2bc0`, runtime gate Run #97 all-green, post-merge Run #98
 all-green) are both on `main`. Full record: this file's own "Backend/CI Reliability Checkpoint 2 —
 Session/Pool Lifecycle, Permanent Six-Shard Sharding, PDF-Worker Test Isolation, and Payslips
-Batch-Audit Ordering Fix (2026-08-21)" §1 entry (immediately above §2). Diagnostic PR #8 closed
+Batch-Audit Ordering Fix (2026-08-21)" §1 entry. Diagnostic PR #8 closed
 unmerged (superseded); diagnostic, reliability, and Payslips-fix branches cleaned up; the
 pre-rebase Payslips safety branch deleted after confirming patch equivalence with the merged commit.
-**Reliability Phase 5 has NOT begun and remains blocked pending separate authorization.** Remaining,
-separately-tracked, non-blocking items (not fixed by this checkpoint): historical
+Remaining, separately-tracked, non-blocking items (not fixed by this checkpoint): historical
 Statements/Corrections intermittent anomalies; the Node 20.20.2-vs-Puppeteer->=22.12.0 engine
-mismatch; 10 pre-existing `no-console` lint warnings; a Run #97 Playwright flaky retry in
-`08-role-administration.spec.ts:227` (passed on retry, did not reproduce in Run #98). **Do not begin
-Reliability Phase 5, or any other reliability checkpoint, without separate explicit authorization.**
-This does not change the status of the roadmap-phase work below (Variance/Dashboard etc.) — see that
-entry for the actual next roadmap-phase action, which this reliability work does not supersede in
-scope, only in recency for reliability-tracking purposes.
+mismatch (now resolved by Reliability Phase 5 Checkpoint 1A/1B above); 10 pre-existing `no-console`
+lint warnings; a Run #97 Playwright flaky retry in `08-role-administration.spec.ts:227` (passed on
+retry, did not reproduce in Run #98).
 
 **Updated 2026-08-11 (superseded by the entry above for status purposes, kept for its own still-
 useful record) — Variance / Month-on-Month Report, Checkpoint 1B (Frontend, Dual-Cycle UI,
