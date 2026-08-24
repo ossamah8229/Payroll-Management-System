@@ -12083,6 +12083,136 @@ optional Phase 5 reliability debt** — do not deprioritize behind Reliability P
 
 ---
 
+## v1.0.0 RELEASE BLOCKER — Manual UAT PASS and Export-Warning Wording Correction (2026-08-24, later same day)
+
+Continuation of the entry directly above. Manual UAT (the one item that entry's own "Release
+classification" left outstanding) was performed this session, and one genuine — but non-financial,
+wording-only — defect was found and fixed as a result.
+
+### UAT environment
+
+Real production/staging environment did not exist for this PR (no Render preview environments
+configured, no recorded GitHub Deployments, no PR bot comment with a URL — confirmed by direct
+inspection before proceeding). UAT was instead performed against a **freshly provisioned, local-only,
+disposable PostgreSQL instance** (`embedded-postgres` npm package, `127.0.0.1:5432/payroll_manual`,
+matching `backend/.env` — the same no-Docker pattern this project has used before, per
+`docs/architecture/testing.md`), running this PR's exact head commit
+(`295756c2f33660c789cabd92c4d618ed0b7af30b` at the time UAT was performed), migrated via the
+repository's own committed migrations, seeded via the repository's own `prisma/seed.ts`, with a
+synthetic UAT fixture (1 site, 3 units, 4 employees, 1 Draft cycle) created through the **real backend
+HTTP API** (login, site/unit/employee/cycle/work-line endpoints) rather than hand-written SQL — the
+same code paths a real user's browser session drives. No production system or production data was
+read, written, or connected to at any point.
+
+### UAT evidence (grid/split aggregation)
+
+| Employee | Scenario | Work lines | Parent Working Days | Expected |
+|---|---|---|---|---|
+| UAT Ordinary SingleUnit | single-unit sanity | Branch A: 26 | 26 | 26 — PASS |
+| UAT TwoUnit EqualSplit | equal split | Branch A: 10, Branch B: 10 | 20 | 10+10=20 — PASS |
+| UAT TwoUnit UnequalSplit | unequal split | Branch A: 7, Branch B: 13 | 20 | 7+13=20 — PASS |
+| UAT ThreeUnit Split | three-unit split | Branch A: 8, Branch B: 7, Branch C: 5 | 20 | 8+7+5=20 — PASS |
+
+**Footer Working Days total**: 26 + 20 + 20 + 20 = **86**, matching the displayed sticky-totals-row
+figure exactly — PASS. Confirms the footer sums every row's full aggregate (`totalWorkingDays`), not
+just primary lines, across a mixed single-/multi-unit roster.
+
+### UAT evidence (export)
+
+Both **CSV and Excel (XLSX)** export passed, each carrying the full documented column contract (see
+the "Export contract audit" table in the entry directly above) with no existing column removed or
+reordered — only the nine documented columns appended after `Released`.
+
+| Employee | Exported Days | Unit Working Days Breakdown |
+|---|---|---|
+| UAT Ordinary SingleUnit | 26 | *(blank — single-line entry, by design)* |
+| UAT TwoUnit EqualSplit | 20 | `Branch A (UA): 10; Branch B (UB): 10` |
+| UAT TwoUnit UnequalSplit | 20 | `Branch A (UA): 7; Branch B (UB): 13` |
+| UAT ThreeUnit Split | 20 | `Branch A (UA): 8; Branch B (UB): 7; Branch C (UC): 5` |
+
+Exported `Days` equals the UI aggregate exactly in every case; every unit the employee actually worked
+appears in the breakdown with the correct unit code, unit name, and per-unit days; the breakdown
+mathematically sums to the aggregate `Days` value in every split case — PASS. `Bank`, `Bank Name`,
+`Branch Code`, `Account Number`, `IBAN`, `Deputed Branch Code`, and `Deputed Branch Name` are all
+present and reconcile against the UI/fixture data for every bank-paid employee — PASS.
+
+### Financial regression
+
+Not re-derived by hand this pass — already proven byte-for-byte unchanged by
+`backend/tests/calc-net.test.ts`'s dedicated financial-regression assertion (`earnedAmount`/
+`otEarned`/`totalEarning`/`totalDeduction`/`netSalary` identical before/after `totalWorkingDays` was
+added — see the entry directly above). UAT confirmed the exported `Net Salary` for each synthetic
+employee matched the value `calcNet` produced from their own grossPay/work-line inputs, consistent
+with that existing automated proof — no unexpected financial drift observed. **Working Days
+presentation changed; payroll money did not.**
+
+### Single-unit regression
+
+UAT Ordinary SingleUnit (Branch A: 26) confirmed: Working Days cell remained the ordinary,
+directly-editable single-line input (not forced read-only); export was a normal single row with the
+breakdown column blank; financial values normal — PASS, no regression for the common (non-split) case.
+
+### Defect found during UAT — obsolete export-warning wording (fixed this session)
+
+The Payroll Entry page's split/export banner (`frontend/src/routes/payroll-entry-page.tsx`, directly
+above the grid) still read: *"...CSV/Excel export only covers each employee's primary line."* That
+was accurate **before** this checkpoint's export fix, but became false the moment the fix shipped —
+the export now carries every work line's Working Days via the `Unit Working Days Breakdown` column
+(confirmed by the export evidence above). Leaving the old wording in place would have told Finance
+users that split attendance is silently lost from every CSV/Excel export, when it is not.
+
+**Fix — wording only, no logic touched.** Classified as a genuine but non-blocking, non-financial
+UI-copy defect; corrected in this same PR rather than filed as a separate follow-up, since it directly
+concerns the same release-blocking feature and the fix is a single paragraph of copy.
+
+- Before: *"{n} employee(s) {has/have} attendance split across more than one location this cycle —
+  CSV/Excel export only covers each employee's primary line. Review or edit the full split directly
+  in the grid via each row's Split action."*
+- After: *"{n} employee(s) {has/have} attendance split across more than one location this cycle. The
+  grid's Deputed Branch column shows each employee's primary line; CSV/Excel exports include the
+  complete per-location Working Days breakdown. Review or edit the full split directly in the grid via
+  each row's Split action."*
+
+The dynamic employee count (`splitEntryCount`) and pluralization logic were preserved unchanged — only
+the sentence describing export coverage changed. The banner's existing "location" wording (not a
+site-specific `unitLabel` like "Branch") was deliberately left as-is: this banner can summarize
+entries spanning multiple currently-filtered Project Sites at once, each with its own independent
+`unitLabel`, and no single dynamic label is already wired at this page-level scope (per-row copy, e.g.
+each row's own "Split by {unitLabel}" action, already is dynamic and was untouched). A stale doc
+comment directly above the same `splitEntryCount` computation, describing the same obsolete
+"primary-line-only" export limitation, was corrected alongside it for consistency.
+
+**Files changed (this finalization commit):**
+- `frontend/src/routes/payroll-entry-page.tsx` — banner copy + its doc comment corrected; no
+  aggregation, export, calculation, or backend logic touched.
+- `frontend/src/routes/payroll-entry-page.test.tsx` — new `describe` block ("split/export banner
+  wording") with two tests: the corrected banner text renders and no longer contains "only covers" /
+  "only ... primary line"; the banner is absent entirely when no filtered entry has more than one work
+  line. No pre-existing test rewritten.
+
+**Verification**: `typecheck` (shared + frontend) clean; `lint` (frontend) 0 errors, only pre-existing
+unrelated warnings; full `payroll-entry-page.test.tsx` suite **14/14 passing** (12 pre-existing + 2
+new); `build` (shared → frontend) clean; `git diff --check` clean.
+
+### otHours — explicitly still deferred, not touched this pass
+
+Confirmed unchanged from the entry directly above: `otHours` has the same latent primary-line-only
+display pattern as `days` did, and remains an intentionally separate, not-yet-authorized follow-up —
+not investigated, not fixed, not scoped into this UAT pass.
+
+### Release classification (supersedes the entry directly above)
+
+**GREEN — Payroll Entry Working-Days aggregation, footer audit total, and export contract fully
+validated for v1.0.0 by both automated CI and manual UAT against representative synthetic multi-unit
+data**, including the equal-split, unequal-split, and three-unit cases, plus the single-unit regression
+check and financial-regression proof. The one defect UAT surfaced (obsolete export-warning wording)
+has been corrected in this same PR. **PR #14 is merge-ready pending a fresh CI run on the finalization
+commit that includes this wording fix** — see `docs/SESSION_HANDOFF.md`'s own addendum for the exact
+new head SHA and that run's result. **Still NOT merged, NOT deployed**, per explicit instruction to
+stop before merge for final approval.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

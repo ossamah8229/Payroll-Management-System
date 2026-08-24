@@ -5847,3 +5847,49 @@ fixtures.** **CI is green; this manual UAT checklist is the one remaining item b
 can be merged.** **This checkpoint is a v1.0.0 RELEASE BLOCKER, not optional Phase 5 debt — do not
 resume Reliability Phase 5, and do not begin any other roadmap work, until it is resolved.**
 
+## 52. Addendum, 2026-08-24 (later same day) — v1.0.0 RELEASE BLOCKER: Manual UAT PASSED, one wording defect found and fixed, awaiting fresh CI before merge
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s "Manual UAT PASS and Export-Warning Wording
+Correction" entry, directly following the checkpoint's own main entry. This addendum is the
+session-chronology summary.
+
+**UAT performed, all §51 checklist items PASS.** Not against a real deployed environment (none
+exists for this PR — verified: no Render preview environments, no GitHub Deployments recorded, no PR
+bot comment with a URL) but against a freshly provisioned local-only disposable PostgreSQL instance
+(`embedded-postgres`, `127.0.0.1:5432/payroll_manual`) running this PR's own head commit, migrated and
+seeded via the repository's own committed migrations/seed script, with synthetic fixture data (4
+employees: single-unit, equal 10+10 split, unequal 7+13 split, three-unit 8+7+5 split) created through
+the real backend HTTP API — the same code paths a browser session drives, not hand-written SQL. No
+production system or data touched.
+
+**Results**: parent-row Working Days correct for all four scenarios (26, 20, 20, 20); footer total
+26+20+20+20=**86** matches the UI exactly; CSV and Excel export both carry the full documented column
+contract with correct aggregate `Days`, correct `Unit Working Days Breakdown` per split employee
+(blank for the single-unit employee, as designed), and correct `Bank`/`Bank Name`/`Branch Code`/
+`Account Number`/`IBAN`/`Deputed Branch Code`/`Deputed Branch Name` for every bank-paid employee;
+single-unit employee remained normally editable with a blank breakdown column; Net Salary values
+consistent with `calcNet`'s existing, unmodified formulas (the financial-regression proof from §51
+already covers this — not re-derived by hand).
+
+**One genuine defect found — wording only, not financial, not aggregation/export logic.** The Payroll
+Entry page's split/export banner still claimed *"CSV/Excel export only covers each employee's primary
+line"* — true before this checkpoint's export fix, false after it (the export now includes the full
+per-unit breakdown, confirmed above). Corrected in the same PR: banner now states the grid's Deputed
+Branch column shows the primary line while CSV/Excel exports include the complete per-location
+breakdown, and points to each row's Split action — see `docs/PROJECT_PROGRESS.md` for the full
+before/after text. Only `frontend/src/routes/payroll-entry-page.tsx` (copy + its doc comment) and
+`frontend/src/routes/payroll-entry-page.test.tsx` (2 new tests, 12 pre-existing untouched) changed —
+no aggregation, export, calculation, backend, or schema code touched. `typecheck`/`lint`/`build`/
+`git diff --check` clean; `payroll-entry-page.test.tsx` **14/14 passing**.
+
+**otHours remains explicitly deferred** — same disclosed, intentionally-out-of-scope follow-up as
+§51, not touched.
+
+**Status**: this wording fix is being committed and pushed to PR #14's existing branch, requiring a
+fresh CI run on the new head commit before merge (the previous green run, `32741314385`, was against
+an earlier commit that did not include this fix, and the PR's most recent CI run before this addendum
+was separately blocked by an unrelated Corrections-module concurrency flake — `corrections-service.test.ts`,
+zero diff in this PR's own Corrections code — not this checkpoint's own defect). **PR #14 remains
+unmerged pending that fresh CI result.** Do not resume Reliability Phase 5, and do not begin any other
+roadmap work, until this is resolved.
+
