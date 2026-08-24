@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import type { Prisma } from '@prisma/client';
 import { PERMISSIONS, ROLE_CODES, MAX_BATCH_PAYSLIPS_PER_REQUEST, calcNet } from '@payroll/shared';
 import { createApp } from '../src/app';
 import { prisma } from '../src/lib/prisma';
@@ -868,7 +869,7 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
   // Phase 4 Checkpoint 6.3.1 — Bulk Payslip assembly
   // ================================================================================================
 
-  it('issues a constant number of queries regardless of batch size (no N+1)', async () => {
+  it('issues the same application-table query multiset regardless of batch size (no N+1)', async () => {
     const admin = await masterAdminAgent('ps-bulk-n1-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site PS Bulk N1');
     const cycle = await makeDraftCycle(admin, 1);
@@ -884,53 +885,157 @@ describe('Phase 4 Checkpoint 6.1 — Payslips backend foundation', () => {
     const sessionUser = await loadSessionUser(admin.userId);
     if (!sessionUser) throw new Error('expected a loadable session user');
 
-    let queryCount = 0;
-    const listener = () => {
-      queryCount += 1;
+    // --- Reliability Phase 5 Checkpoint 2C — structural (not aggregate-count) N+1 guard ---------
+    // Checkpoint 2's investigation (docs/release/KNOWN_ISSUES_v1.0.md KI-10) found this test's
+    // previous `expect(largeBatchQueries).toBe(smallBatchQueries)` — a bare aggregate query COUNT
+    // — too strict: it could fail on a harmless, non-application connection/session statement
+    // landing in only one of the two measured windows, indistinguishable from a real regression.
+    // Checkpoint 2B confirmed (5 independent CI observations, byte-identical each time) that the
+    // real per-request cost is 8 application queries in a fixed shape; it did not reproduce the
+    // historical mismatch, so that exact extra statement remains unproven — this guard does not
+    // depend on ever identifying it.
+    //
+    // Every captured `query` event is classified into exactly one of three buckets — never
+    // silently dropped:
+    //   - 'application': a SELECT/INSERT/UPDATE/DELETE against a resolvable "schema"."Table" —
+    //     the only kind the comparison below looks at.
+    //   - 'lifecycle': a recognized connection/transaction/session/prepared-statement statement
+    //     (BEGIN/COMMIT/ROLLBACK/SAVEPOINT/RELEASE/SET/DEALLOCATE/DISCARD/RESET/SHOW/LISTEN/
+    //     UNLISTEN/PREPARE) — deliberately excluded from the comparison, since this is
+    //     connection-pool/engine bookkeeping, not application data access.
+    //   - 'unknown': anything neither of the above can confidently classify — this *fails* the
+    //     test (via the `unknownQueries` assertion below), with the offending SQL attached,
+    //     rather than being silently absorbed into either bucket. A future query type this
+    //     classifier doesn't recognize can never quietly pass unexamined.
+    type QueryWindow = 'small' | 'large';
+    type QueryKind = 'application' | 'lifecycle' | 'unknown';
+    interface ClassifiedQuery {
+      window: QueryWindow;
+      kind: QueryKind;
+      operation: string;
+      target: string;
+      query: string;
+    }
+
+    const LIFECYCLE_OPERATIONS = new Set([
+      'BEGIN',
+      'COMMIT',
+      'ROLLBACK',
+      'SAVEPOINT',
+      'RELEASE',
+      'SET',
+      'DEALLOCATE',
+      'DISCARD',
+      'RESET',
+      'SHOW',
+      'LISTEN',
+      'UNLISTEN',
+      'PREPARE',
+    ]);
+    const APPLICATION_OPERATIONS = new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
+
+    function classifyQuery(sql: string): { kind: QueryKind; operation: string; target: string } {
+      const trimmed = sql.trim();
+      const operation = (trimmed.match(/^[A-Za-z]+/)?.[0] ?? '').toUpperCase();
+
+      if (LIFECYCLE_OPERATIONS.has(operation)) {
+        return { kind: 'lifecycle', operation, target: '(connection/session)' };
+      }
+      if (APPLICATION_OPERATIONS.has(operation)) {
+        const tableMatch = trimmed.match(/(?:FROM|INTO|UPDATE|TABLE)\s+"[^"]+"\."([A-Za-z0-9_]+)"/i);
+        if (tableMatch) {
+          return { kind: 'application', operation, target: tableMatch[1]! };
+        }
+      }
+      // Neither a recognized lifecycle statement nor an application statement whose target table
+      // could be confidently resolved — 'unknown', so the assertion below fails loudly instead of
+      // this query silently vanishing from the comparison.
+      return { kind: 'unknown', operation: operation || '(unrecognized)', target: '(unresolved)' };
+    }
+
+    let currentWindow: QueryWindow | null = null;
+    const captured: ClassifiedQuery[] = [];
+    const queryListener = (event: Prisma.QueryEvent) => {
+      // Outside a measured window (fixture setup / warm-up below) — not measured, same as the
+      // previous version's `queryCount = 0` reset immediately before each measured call.
+      if (!currentWindow) return;
+      const { kind, operation, target } = classifyQuery(event.query);
+      captured.push({ window: currentWindow, kind, operation, target, query: event.query });
     };
     // Prisma's typed client exposes no $off() — acceptable here since this is the only test in the
-    // suite that installs a listener, and it reads the count immediately after each call.
-    prisma.$on('query', listener);
+    // suite that installs a listener, and `currentWindow` gates everything outside the two
+    // measured calls below.
+    prisma.$on('query', queryListener);
+    // --- end structural N+1 guard setup ------------------------------------------------------------
 
     // Warm the connection/prepared-statement cache with a throwaway call of *each* batch shape
-    // before measuring, not just one generic call — under real contention (confirmed via the
-    // Pre-Deployment Reliability Checkpoint's own full-suite reproduction: an intermittent 8-vs-7
-    // mismatch here) a connection-pool acquisition/reconnect can land between the two measured
-    // calls, so warming only the small shape left the first *large*-shaped call still occasionally
-    // paying its own one-off setup cost — invisible until the large-batch measurement, since the
-    // small one had already been warmed. Warming both shapes up front removes that asymmetry
-    // without weakening the equality assertion below at all.
+    // before measuring, not just one generic call — under real contention (Checkpoint 2's own
+    // KI-10 investigation: an intermittent aggregate-count mismatch here, e.g. 8-vs-7/9-vs-8) a
+    // connection-pool acquisition/reconnect can land between the two measured calls, so warming
+    // only the small shape left the first *large*-shaped call still occasionally paying its own
+    // one-off setup cost — invisible until the large-batch measurement, since the small one had
+    // already been warmed. Warming both shapes up front removes that asymmetry; `currentWindow`
+    // stays `null` throughout warm-up, so none of it is measured either way.
     await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: [employees[0]!.id] });
     await getPayslipsBulk(sessionUser, cycle.id, {
       employeeIds: [employees[0]!.id, employees[1]!.id],
     });
     await getPayslipsBulk(sessionUser, cycle.id, { employeeIds: employees.map((e) => e.id) });
 
-    queryCount = 0;
+    currentWindow = 'small';
     const small = await getPayslipsBulk(sessionUser, cycle.id, {
       employeeIds: [employees[0]!.id, employees[1]!.id],
     });
-    const smallBatchQueries = queryCount;
+    currentWindow = null;
 
-    queryCount = 0;
+    currentWindow = 'large';
     const large = await getPayslipsBulk(sessionUser, cycle.id, {
       employeeIds: employees.map((e) => e.id),
     });
-    const largeBatchQueries = queryCount;
+    currentWindow = null;
 
     expect(small).toHaveLength(2);
     expect(large).toHaveLength(10);
-    expect(smallBatchQueries).toBeGreaterThan(0);
-    // The fixed cost (cycle lookup + one findMany + one CompanySettings read) must not grow with
-    // row count — a real N+1 would make the 10-employee call issue roughly 5x as many queries as
-    // the 2-employee call; this asserts they are exactly equal instead.
-    expect(largeBatchQueries).toBe(smallBatchQueries);
-    // A generous, non-tight upper bound — Prisma's query engine can split one logical `findMany`
-    // with several relational `include`s into more than one SQL statement; what matters is that
-    // this fixed cost never scales with row count, which the equality assertion above already
-    // proves. 20 is comfortably above the actual observed cost (~8) while still ruling out any
-    // per-row query.
-    expect(largeBatchQueries).toBeLessThanOrEqual(20);
+
+    // Any query the classifier couldn't confidently place in either bucket fails the test
+    // outright, with the offending SQL attached, instead of silently vanishing from the
+    // comparison below (Checkpoint 2C §4).
+    const unknownQueries = captured.filter((event) => event.kind === 'unknown');
+    expect(unknownQueries).toEqual([]);
+
+    function fingerprint(window: QueryWindow): Record<string, number> {
+      const counts: Record<string, number> = {};
+      for (const event of captured) {
+        if (event.window !== window || event.kind !== 'application') continue;
+        const key = `${event.operation} ${event.target}`;
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      return counts;
+    }
+
+    const smallFingerprint = fingerprint('small');
+    const largeFingerprint = fingerprint('large');
+
+    // Sanity: the listener/classifier actually saw real application queries — an empty
+    // fingerprint on both sides would otherwise trivially satisfy the equality check below.
+    expect(Object.keys(smallFingerprint).length).toBeGreaterThan(0);
+
+    // The core structural invariant (Checkpoint 2C §3/§5): the exact per-table, per-operation
+    // *count* of application queries must be identical between the 2-employee and 10-employee
+    // calls — not merely their aggregate total. A real N+1 (`for each employee:
+    // prisma.someModel.find...`) makes one specific table's count scale with
+    // `employeeIds.length` (2 here, 10 there), which breaks this equality; legitimate batching
+    // (`WHERE id IN (...)`) keeps every table's count fixed at 1 regardless of how many IDs are
+    // in that one query's own parameter list — this fingerprint is built from event *counts*, not
+    // parameter counts, so it cannot be fooled by a wider `IN` list. No tolerance: this is exact
+    // object equality, and it is the assertion that supersedes the old aggregate-count check.
+    expect(largeFingerprint).toEqual(smallFingerprint);
+
+    // A generous, non-tight upper bound on total queries (application + lifecycle) in the large
+    // call — retained as defense-in-depth, not the primary protection (the exact fingerprint
+    // equality above is); 20 is comfortably above the ~8 application queries actually observed.
+    const largeTotalQueries = captured.filter((event) => event.window === 'large').length;
+    expect(largeTotalQueries).toBeLessThanOrEqual(20);
   });
 
   it('individual getPayslip() and bulk getPayslipsBulk() produce identical Payslip DTOs for the same employee', async () => {
