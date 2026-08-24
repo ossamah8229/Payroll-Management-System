@@ -5893,3 +5893,76 @@ zero diff in this PR's own Corrections code — not this checkpoint's own defect
 unmerged pending that fresh CI result.** Do not resume Reliability Phase 5, and do not begin any other
 roadmap work, until this is resolved.
 
+---
+
+## 53. Addendum, 2026-08-24 (later same day) — v1.0.0 PRODUCTION CUTOVER: PR #14 MERGED, post-merge `main` CI GREEN, Render deployed, production smoke GREEN — STOPPED before `v1.0.0` tag, awaiting approval
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.0 PRODUCTION CUTOVER — PR #14 Merged,
+Post-Merge CI, Render Deployment, Production Smoke" entry, directly following §52's referenced UAT
+entry. This addendum is the session-chronology summary; do not duplicate the full detail here.
+
+**Pre-merge integrity check passed**: PR #14 head `0fd7d05de680972906ae8cb2a547e294feb8e6ae` matched
+candidate CI run `32748059529` exactly (Backend 6/6 shards, Frontend, E2E all PASS); `origin/main`
+(`44c1dbe1`) was the exact merge-base (0 behind / 5 ahead, `mergeStateStatus: CLEAN`); working tree
+clean.
+
+**Merged**: normal merge commit (no squash/rebase/`--admin`/force-push), **SHA
+`5e097ef470956ade8b022072fbdf16949539777c`**, 2026-08-24T16:34:48Z. `main == origin/main ==
+5e097ef...` confirmed. Feature branch `fix/v1-payroll-entry-audit-export` retained.
+
+**Post-merge `main` CI**: push-triggered run `32751649963`, head exactly the merge SHA,
+`conclusion: success` — Backend all six shards PASS, Frontend PASS, **E2E genuinely executed and
+PASSED (187 tests)**, not a reuse of the PR candidate run.
+
+**Render deployment — verified functionally, not via build logs.** No Render API token/CLI available
+this session (disclosed gap — Node version, `EBADENGINE`, Prisma generate/`migrate deploy` output not
+directly inspected). Discovered the actual production domains are **`payroll.brooms.com.pk`**
+(frontend) / **`payroll-api.brooms.com.pk`** (backend) — not the `*.onrender.com` URLs this file
+previously recorded, which remain valid underlying Render URLs but aren't what the user actually uses.
+`/health` returned `{"status":"ok"}`/200 across four checks over ~1 minute (no crash loop); frontend
+confirmed serving a genuinely new build (`index-D8KpctNH.js`/`index-pX5FHF6J.css` — differs from every
+previously recorded bundle hash in this file); authenticated app shell and frontend↔backend
+communication confirmed live via the user's own already-authenticated session on the production domain
+(Dashboard, Payroll Entry, Payslips, Reports all loaded real data against the new deploy).
+
+**Production Payroll Entry smoke (Step 5)**: only Draft cycle is **August 2026**
+(`235770e4-c444-4adf-8e5b-c2da0ff02f35`), 1,198 entries, queried directly via the authenticated
+entries API — **100% have exactly one work line; no multi-unit/split employee exists in current
+production data.** Per explicit instruction not to fabricate one, the split-modal/aggregation-parity
+checks were **not performed against production** — disclosed gap, not silently skipped. §51/§52's
+completed local synthetic UAT remains the authoritative multi-unit functional evidence. Real production
+data (Murad Khan, Sadaan Suhail, Shazia Suhail, etc.) loaded correctly, "All changes saved"; nothing
+was mutated (all checks read-only `GET`).
+
+**Production export smoke (Step 6)**: exported both CSV and XLSX from the same cycle via the UI's
+Export buttons (both `GET .../entries/export?format=...`, both HTTP 200, read-only). Both carry the
+full 30-column contract, identical order in both formats, including `Working Days` (as `Days`), `Net
+Salary`, `Bank`, `Bank Name`, `Branch Code`, `Account Number`, `IBAN`, `Deputed Branch Code`, `Deputed
+Branch Name`, `Unit Working Days Breakdown`, `Remarks`. CSV: 1,198 rows, matching the API count exactly;
+sample rows internally consistent (`Days: 31` = `cycleDays: 31` = `calc.totalWorkingDays: "31"`).
+`Unit Working Days Breakdown` present in both formats but blank for every row (expected — same reason
+as Step 5). Multi-unit reconciliation not verifiable against production for the same disclosed reason.
+
+**Regression smoke (Step 7) — all confirmed against real production**: login (already-authenticated
+Master User session); Payroll Entry loads with real figures; individual Payslip PDF opens (generated
+on demand from the released July 2026 cycle for Muhammad Nawaz,
+`payslip-muhammad-nawaz-2026-07.pdf`, HTTP 200, opened inline via Chrome's PDF viewer); Reports
+navigation (catalogue of all eight report types loaded); no application-level browser/API errors (only
+three generic Chrome-extension messaging exceptions, unrelated to the app).
+
+**Deferred issues explicitly NOT touched/closed by this cutover**: `otHours` multi-unit aggregation,
+the Corrections concurrency flake, the Employee Payroll History query-count flake, the Statements
+query-count flake, remaining Reliability Phase 5 debt.
+
+**Release classification: GREEN — v1.0.0 production release candidate validated**, with two explicitly
+disclosed (not silently closed) verification gaps: no Render build-log access this session, and no
+naturally occurring multi-unit employee in current production data — both covered by strong
+corroborating evidence (functional/health checks; the completed local synthetic UAT) rather than by
+fabricating production test data or claiming unavailable log access.
+
+**Per explicit instruction, STOPPED here — the `v1.0.0` tag itself was NOT created.**
+**`v1.0.0-rc1` was not reused or moved; `backend-live-v1` was not altered.** **Recommended tag target:
+`5e097ef470956ade8b022072fbdf16949539777c`** (the `main` merge commit). Awaiting explicit approval of
+this report before tagging. Do not resume Reliability Phase 5 or begin any other roadmap work until the
+tag decision is made.
+

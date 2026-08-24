@@ -12213,6 +12213,134 @@ stop before merge for final approval.
 
 ---
 
+## v1.0.0 PRODUCTION CUTOVER — PR #14 Merged, Post-Merge CI, Render Deployment, Production Smoke (2026-08-24, later same day)
+
+Continuation of the two entries directly above. This entry records the actual production cutover:
+merging PR #14, verifying the post-merge CI run on `main`, verifying the Render auto-deploy, and
+performing production smoke checks — all under an explicit instruction to **STOP before creating the
+final `v1.0.0` tag** and report back for approval rather than tag unilaterally.
+
+### Pre-merge integrity check
+
+Immediately before merging: PR #14 was OPEN (Draft), head exactly
+`0fd7d05de680972906ae8cb2a547e294feb8e6ae`; candidate CI run **32748059529** matched that head SHA
+exactly with `conclusion: success` — Backend all six shards (`Test Suites: 16, 16, 16, 16, 16, 15
+passed`, zero `FAIL` lines), Frontend PASS, E2E PASS; `origin/main` (`44c1dbe1ee80e4b54d6cf4c0bdfdf6d83f8892cf`)
+was exactly the merge-base with the PR branch (0 behind / 5 ahead — no divergence), `mergeStateStatus:
+CLEAN`; working tree clean. All conditions met — proceeded.
+
+### Merge
+
+PR #14 marked Ready for Review, then merged with a normal merge commit (`gh pr merge 14 --merge`; no
+squash, no rebase, no `--admin`, no force-push). **Merge SHA:
+`5e097ef470956ade8b022072fbdf16949539777c`**, parents `44c1dbe1` (prior `main`) and `0fd7d05` (PR #14
+head), merged 2026-08-24T16:34:48Z. Confirmed `main == origin/main == 5e097ef470956ade8b022072fbdf16949539777c`
+by fetch + fast-forward pull. Feature branch `fix/v1-payroll-entry-audit-export` retained (not
+deleted), per instruction to keep it until production verification completes.
+
+### Post-merge CI on `main`
+
+Push-triggered run **32751649963** (event `push`, head SHA exactly the merge commit) completed
+`conclusion: success`. Backend all six shards (`Test Suites: 16, 16, 16, 16, 16, 15 passed`, zero
+`FAIL` lines — same clean pattern as the candidate run); Frontend PASS; **E2E actually executed — 187
+tests passed** (not skipped/cached), confirming this is a genuine independent run and not a reuse of
+the PR candidate run's result.
+
+### Render deployment verification
+
+**Gap disclosed up front: this session has no Render API token or Render CLI installed, so Render's
+own build logs (Node version, `EBADENGINE` warnings, Prisma generate/`migrate deploy` output) could
+not be inspected directly.** Verification was therefore functional/HTTP-based rather than log-based:
+
+- Production's actual custom domains (discovered via the user directly, and corroborated by the
+  backend's own `access-control-allow-origin: https://payroll.brooms.com.pk` response header) are
+  **`https://payroll.brooms.com.pk`** (frontend) and **`https://payroll-api.brooms.com.pk`** (backend
+  API) — not the raw `*.onrender.com` URLs recorded in earlier doc entries, which remain valid
+  underlying Render service URLs but are not what the user actually uses day-to-day.
+- Backend `/health` (both the `onrender.com` URL and the production domain) returned
+  `{"status":"ok"}` / HTTP 200 on every one of 4 checks spaced ~15s apart — no crash/restart loop
+  observed in that window.
+- Frontend: confirmed a **genuinely new build** went live, not a stale cache hit — the served bundle
+  hash (`index-D8KpctNH.js` / `index-pX5FHF6J.css`) differs from every bundle hash previously recorded
+  in this file and `docs/SESSION_HANDOFF.md` (`index-EtUPl6NR.js`, `index-BaSCNw9m.js`,
+  `index-DIYkpnKI.js`, `index-DjuAUycg.css`). Root and `/login` both HTTP 200.
+- **Authenticated app shell and frontend↔backend communication confirmed working directly** — the
+  user's own already-authenticated browser session on `payroll.brooms.com.pk` (Master User) loaded the
+  Dashboard, Payroll Entry (real 1,198-row Draft cycle data), Payslips, and Reports pages successfully
+  against the newly deployed backend.
+- Functional evidence (health stable, real API data loading, a Puppeteer/Chrome-rendered PDF payslip
+  generated on demand and opened successfully — see Step 7 below) strongly corroborates that
+  `npm ci`/`build:shared`/`prisma generate`/`prisma migrate deploy`/Puppeteer Chrome install/backend
+  start all succeeded on Node 24.19.0 as configured in `render.yaml`, but this is inference from
+  application behavior, not a direct read of Render's build log — **flagged as a verification gap**,
+  not silently treated as equivalent to a log-confirmed deploy.
+
+### Production Payroll Entry smoke (Step 5)
+
+Queried the production backend's own entries API (read-only `GET`, authenticated session,
+`credentials: 'include'`) for the only Draft cycle that exists — **August 2026**
+(`235770e4-c444-4adf-8e5b-c2da0ff02f35`), 1,198 payroll entries. Every single entry has exactly one
+work line (`{"1": 1198}` — no entry has more than one). **No naturally occurring split-unit/multi-unit
+employee exists in current production data.** Per the explicit instruction not to create or mutate
+real payroll merely to manufacture a test case, the split-modal/parent-aggregation/read-only-cell
+checks were **not performed against production** — this is a disclosed gap, not a silent skip. The
+completed local synthetic manual UAT (this file's "Manual UAT PASS and Export-Warning Wording
+Correction" entry directly above, and `docs/SESSION_HANDOFF.md` §51/§52) remains the authoritative
+functional evidence for multi-unit aggregation correctness. What **was** confirmed against real
+production data: the Payroll Entry grid loads real employee rows (verified: Murad Khan, Sadaan Suhail,
+Shazia Suhail, and others) with "All changes saved," and no data was altered by this verification (all
+checks were read-only `GET` requests).
+
+### Production export smoke (Step 6)
+
+Exported both **CSV** and **Excel (XLSX)** from the same production August 2026 Draft cycle via the
+UI's own Export buttons (both underlying API calls `GET .../entries/export?format=csv|xlsx`, both HTTP
+200 — read-only, no data mutated). Both files carry the full documented 30-column contract, identical
+column order in both formats: `CNIC, Employee Code, Name, Site, Designation, Gross Pay, Days, OT Hrs,
+OT Rate, Allowance, Leave, Leave Rate, Cycle Days, EOBI Amount, EOBI On, Advance, Eid Advance, Fine,
+Hold, Released, Net Salary, Bank, Bank Name, Branch Code, Account Number, IBAN, Deputed Branch Code,
+Deputed Branch Name, Unit Working Days Breakdown, Remarks`. CSV: 1,198 data rows, matching the API
+entry count exactly. Sample rows internally consistent (e.g. `Days: 31` matches both `cycleDays: 31`
+and the entry's own `calc.totalWorkingDays: "31"`). `Unit Working Days Breakdown` is present as a
+column in both formats but blank for every row — expected and consistent with the Step 5 finding that
+no multi-unit employee exists in this cycle. **Multi-unit aggregate/breakdown reconciliation was not
+verifiable against production data for the same reason as Step 5** (no such employee exists) — same
+disclosed gap, covered by the local synthetic UAT instead.
+
+### Regression smoke (Step 7)
+
+All items confirmed against real production: **login** (already-authenticated Master User session on
+`payroll.brooms.com.pk`); **Payroll Entry loads** with real figures (August 2026 Draft, 1,198 entries);
+**individual Payslip PDF opens** — generated on demand from the July 2026 (released/Archived) cycle for
+employee Muhammad Nawaz, opened inline via Chrome's PDF viewer as
+`payslip-muhammad-nawaz-2026-07.pdf`, HTTP 200; **Reports navigation** — the Reports catalogue page
+loaded all eight report types (Payroll Summary, Employee Payroll History, Project Site Payroll Report,
+Deduction Report, Overtime Report, Advance Recovery Report, Salary Release Report, Variance
+Report). **No application-level browser/API errors** — the only console exceptions captured were three
+generic Chrome-extension messaging errors ("A listener indicated an asynchronous response... message
+channel closed"), a known artifact of installed browser extensions, not the payroll application itself.
+
+### Deferred issues — explicitly NOT touched, NOT closed by this cutover
+
+`otHours` multi-unit aggregation; the Corrections-module concurrency flake; the Employee Payroll
+History query-count flake; the Statements query-count flake; remaining Reliability Phase 5 debt. None
+of these are silently resolved by v1.0.0 shipping — they remain open, separate follow-ups.
+
+### Release classification (supersedes the entry directly above)
+
+**GREEN — v1.0.0 production release candidate validated.** Merge, post-merge CI on `main`, and
+production functional smoke (auth, Payroll Entry, exports, Payslip PDF, Reports) all passed. Two
+verification gaps are explicitly disclosed rather than silently closed: (1) no Render build-log access
+this session (API-key/CLI-less environment) — covered by strong functional/health evidence instead;
+(2) no naturally occurring multi-unit employee in current production Draft data — covered by the
+completed local synthetic manual UAT instead, which remains the authoritative multi-unit functional
+evidence. **Recommended tag target: `5e097ef470956ade8b022072fbdf16949539777c`** (the `main` merge
+commit). **Per explicit instruction, the `v1.0.0` tag itself was NOT created — awaiting separate
+approval of this report before tagging. `v1.0.0-rc1` was not reused or moved; `backend-live-v1` was not
+altered.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -12591,9 +12719,32 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-24, later same day (latest) — v1.0.0 RELEASE BLOCKER: Payroll Entry Working-Days
-Aggregation and Export Correctness — IMPLEMENTED, PR #14 CI GREEN (all six backend shards, frontend,
-E2E), Draft PR still open, NOT merged, NOT deployed, awaiting manual UAT only.** A split-unit employee's Working Days showed only the primary work line's
+**Updated 2026-08-24, later same day (latest) — v1.0.0 PRODUCTION CUTOVER COMPLETE: PR #14 merged,
+post-merge `main` CI green, Render deployed, production smoke GREEN — awaiting explicit approval of the
+`v1.0.0` tag itself.** PR #14 merged via a normal merge commit
+(`5e097ef470956ade8b022072fbdf16949539777c`, parents `44c1dbe1` + `0fd7d05`); `main == origin/main ==
+5e097ef...`. Post-merge push-triggered CI run `32751649963` on that exact SHA: Backend all six shards
+PASS, Frontend PASS, E2E PASS (187 tests, genuinely executed). Render auto-deploy verified functionally
+(no Render API token available this session, so build logs themselves were not inspected — disclosed
+gap): backend `/health` stable across repeated checks, frontend serving a confirmed-new bundle hash,
+authenticated app shell and frontend↔backend communication confirmed live on the real production domain
+`payroll.brooms.com.pk`. Production smoke: Payroll Entry loads real data (August 2026 Draft, 1,198
+entries, all single-work-line — **no multi-unit employee exists in production data**, so the split/
+aggregation UI checks could not be run against real data and rely on the completed local synthetic UAT
+instead); CSV and Excel export both carry the full 30-column contract; Payslip PDF opens; Reports
+navigation works; no application-level errors. Full record: this file's own "v1.0.0 PRODUCTION CUTOVER —
+PR #14 Merged, Post-Merge CI, Render Deployment, Production Smoke" entry (immediately above §2).
+**Next action: review that report and explicitly approve (or reject) tagging `5e097ef470956ade8b022072fbdf16949539777c`
+as `v1.0.0`. Do not reuse/move `v1.0.0-rc1`, do not alter `backend-live-v1`. No other roadmap work
+(otHours, Corrections flake, Employee Payroll History flake, Statements flake, Reliability Phase 5)
+should begin until the tag decision is made.**
+
+---
+
+**Updated 2026-08-24, later same day (superseded by the entry above for status purposes) — v1.0.0
+RELEASE BLOCKER: Payroll Entry Working-Days Aggregation and Export Correctness — IMPLEMENTED, PR #14 CI
+GREEN (all six backend shards, frontend, E2E), Draft PR still open, NOT merged, NOT deployed, awaiting
+manual UAT only.** A split-unit employee's Working Days showed only the primary work line's
 value (e.g. 10+10 displayed as 10) in the grid parent row, the sticky totals row footer, and the
 CSV/XLSX export — a display/audit defect only, never a payment-correctness one (`calcNet`'s
 `earnedAmount`/`otEarned` already summed correctly across every line). Fixed with one new canonical
