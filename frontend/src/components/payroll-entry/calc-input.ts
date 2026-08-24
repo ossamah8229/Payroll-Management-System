@@ -97,9 +97,13 @@ export function buildCalcInput(
  */
 export function computeServerSnapshot(entry: PayrollEntry): RowLiveSnapshot {
   const primary = entry.workLines[0];
+  // Computed once, reused for both `days` (the aggregate Working Days figure, v1.0.0 audit-
+  // correctness fix) and `netSalary` below — the same single `calcNet` call this function already
+  // made for `netSalary` alone, never a second, independently-derived total (Principle 5).
+  const calc = calcNet(buildCalcInput(entry));
   return {
     grossPay: toNumberOrNull(entry.grossPay),
-    days: toNumberOrNull(primary?.days),
+    days: toNumberOrNull(calc.totalWorkingDays),
     otHours: toNumberOrNull(primary?.otHours),
     otRate: toNumberOrNull(primary?.otRate),
     cycleDays: primary?.cycleDays ?? null,
@@ -115,6 +119,6 @@ export function computeServerSnapshot(entry: PayrollEntry): RowLiveSnapshot {
     advanceDeduction: toNumberOrNull(entry.advanceDeduction),
     eidAdvanceDeduction: toNumberOrNull(entry.eidAdvanceDeduction),
     fine: toNumberOrNull(entry.fine),
-    netSalary: toNumberOrNull(calcNet(buildCalcInput(entry)).netSalary),
+    netSalary: toNumberOrNull(calc.netSalary),
   };
 }

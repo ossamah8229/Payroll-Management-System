@@ -81,6 +81,15 @@ export interface PayrollWorkLineCalcResult {
 
 export interface CalcNetResult {
   workLines: PayrollWorkLineCalcResult[];
+  /** Sum of every work line's `days` (docs/architecture/database/payroll-entry.md §12a) — the
+   * canonical "employee aggregate Working Days" figure. A split-unit employee's own Working Days
+   * is the sum across every line, never just the primary line's; for the common single-line entry
+   * this is simply that one line's own `days`, unchanged in value or string formatting (no forced
+   * decimal places — `.toString()`, not `.toFixed()`). This is the single computation every
+   * display of "Working Days" (grid parent row, sticky totals row, CSV/XLSX export) must read,
+   * rather than each re-deriving it independently.
+   */
+  totalWorkingDays: string;
   /** Full precision — a rate, not a final monetary figure; not rounded. */
   effectiveLeaveRate: string;
   /** Final, rounded to 2 decimal places. Sum of every line's unrounded earned amount. */
@@ -147,12 +156,14 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
 
   let earnedAmountFull = new Decimal(0);
   let otEarnedFull = new Decimal(0);
+  let totalWorkingDaysFull = new Decimal(0);
   const workLineResults: PayrollWorkLineCalcResult[] = [];
 
   for (const line of entry.workLines) {
     const cycleDays = new Decimal(line.cycleDays);
     const days = toDecimal(line.days);
     const otHours = toDecimal(line.otHours);
+    totalWorkingDaysFull = totalWorkingDaysFull.plus(days);
 
     // Full precision — never rounded before being used in the next multiplication (this file's
     // rounding policy). grossPay/cycleDays is frequently a repeating decimal (e.g. 40000/27).
@@ -202,6 +213,11 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
 
   return {
     workLines: workLineResults,
+    // `.toString()`, not `.toFixed(TWO_DP)` — deliberately no forced trailing zeros, so a
+    // single-line entry's aggregate is byte-identical to that one line's own stored `days` value
+    // (this file's own precision, `numeric(5,2)`, is preserved by `toDecimalPlaces` without being
+    // display-padded).
+    totalWorkingDays: totalWorkingDaysFull.toDecimalPlaces(TWO_DP, Decimal.ROUND_HALF_UP).toString(),
     effectiveLeaveRate: effectiveLeaveRate.toString(),
     earnedAmount: earnedAmount.toFixed(TWO_DP),
     otEarned: otEarned.toFixed(TWO_DP),

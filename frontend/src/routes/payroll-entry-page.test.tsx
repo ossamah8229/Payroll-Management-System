@@ -304,6 +304,7 @@ describe('Payroll Entry page — Employee Row Actions (UAT 2026-08-11)', () => {
       ],
       calc: {
         workLines: [{ sortOrder: 0, dailyRate: '1500', effectiveOtRate: '0', earnedAmount: '45000', otEarned: '0' }],
+        totalWorkingDays: '30',
         effectiveLeaveRate: '0',
         earnedAmount: '45000',
         otEarned: '0',

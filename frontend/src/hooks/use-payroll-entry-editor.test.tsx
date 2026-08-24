@@ -106,6 +106,7 @@ function makeEntry(overrides: Partial<PayrollEntry> & { id: string }): PayrollEn
     workLines: [makeWorkLine({ id: `line-${id}` })],
     calc: {
       workLines: [{ sortOrder: 0, dailyRate: '1000', effectiveOtRate: '0', earnedAmount: '26000', otEarned: '0' }],
+      totalWorkingDays: '26',
       effectiveLeaveRate: '0',
       earnedAmount: '26000',
       otEarned: '0',
