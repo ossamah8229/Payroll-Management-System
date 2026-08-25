@@ -13753,6 +13753,191 @@ remain untouched, exactly as classified.
 
 ---
 
+## v1.0.2 PRODUCTION CUTOVER — PR #16 Merged, Post-Merge CI, Render Deployment, Production Smoke, Sharafat Masih Remediation-Blocked Finding (2026-08-25, later same day)
+
+Approval to merge PR #16 was granted. This entry records the actual merge, the post-merge CI gate on
+`main`, production deployment verification, read-only production smoke of the narrowed Advance
+Edit surface, and a code-level finding about Sharafat Masih's specific pre-existing corrupted
+record — under explicit instruction to **STOP before creating the `v1.0.2` tag** and report back for
+separate approval rather than tag unilaterally.
+
+### Pre-merge integrity gate
+
+Immediately before merging: PR #16 was OPEN (Draft; marked Ready for Review this session), head
+exactly `6a9ece1f7c1e1f4abfed9689bdf5a69038ae1511` (matched the remote branch tip exactly — no new
+commit had appeared since the approved Final Product Semantics checkpoint); `mergeStateStatus:
+CLEAN`, `mergeable: MERGEABLE`; `origin/main` (`7443143b8321921725317ad5238d21315f639199`) confirmed
+an ancestor of the PR branch via `git merge-base --is-ancestor` — no unexpected divergence; working
+tree clean. CI at that exact head (run `32875081305`) reconfirmed green: Backend (all six shard
+steps individually `success`), Frontend, E2E all `success`. `git diff origin/main...HEAD --stat`
+reconfirmed the scope: `backend/src/modules/advances/advances.service.ts`,
+`backend/src/modules/payroll-entry/payroll-entry.service.ts`,
+`backend/tests/advance-payroll-entry-integrity.test.ts`, `backend/tests/advances.test.ts`,
+`frontend/src/routes/advances-page.tsx`, `shared/src/schemas/advance.ts`, plus
+`docs/PROJECT_PROGRESS.md`/`docs/SESSION_HANDOFF.md` — eight files, matching the approved v1.0.2
+scope exactly. A dedicated grep for migration/schema/`package.json`/`package-lock.json`/
+`render.yaml`/`Dockerfile`/Node-version files in the diff returned nothing. All conditions met —
+proceeded.
+
+### Merge
+
+PR #16 marked Ready for Review (`gh pr ready 16`), then merged with a normal merge commit
+(`gh pr merge 16 --merge`; no squash, no rebase, no `--admin`, no force-push). **Merge SHA:
+`096cf7933876df18729f0100920caa62647c496c`**, parents `7443143b...` (prior `main`) and `6a9ece1f...`
+(PR #16 head), merged 2026-08-25T17:26:31Z. The feature branch `fix/v1.0.2-advance-edit-cancel` was
+retained (not deleted), per instruction.
+
+### Post-merge CI on `main`
+
+Push-triggered run **32877904798** (head SHA exactly the merge commit
+`096cf7933876df18729f0100920caa62647c496c`) completed `conclusion: success`. Job-level breakdown:
+**Backend — SUCCESS**, all six shard steps individually confirmed green (`Run backend tests (shard
+1/6)` through `(shard 6/6)`), plus Prisma generate/migrate/seed, typecheck, lint, and `Build backend`
+all green. **Frontend — SUCCESS.** **E2E — SUCCESS** — the `Run Playwright E2E suite` step itself
+completed successfully. This is a genuine, independently-executed gate on the actual merge commit,
+not a reuse of the PR candidate run's result.
+
+### Production deployment verification
+
+**Gap disclosed up front: this session has no Render API token, Render CLI, or dashboard/log access,
+so Render's own build/deploy logs could not be inspected directly** — same disclosed gap as every
+prior cutover. Verification was therefore functional/HTTP-based plus a live authenticated browser
+session:
+
+- Backend `https://payroll-api.brooms.com.pk/health` → HTTP 200, `{"status":"ok"}`.
+- Backend `https://payroll-management-api-wlic.onrender.com/health` (raw Render URL) → HTTP 200,
+  `{"status":"ok"}`.
+- Frontend `https://payroll.brooms.com.pk/` → HTTP 200. `last-modified: Tue, 25 Aug 2026 17:27:26
+  GMT` — ~55 seconds after the merge commit's timestamp (`17:26:31Z`), consistent with an auto-deploy
+  triggered by the merge (circumstantial timing evidence, not a SHA-level deploy confirmation).
+- Frontend `https://payroll-management-app-qa3x.onrender.com/` (raw Render URL) → HTTP 200.
+- **Authenticated frontend↔backend communication confirmed directly** — the user's own
+  already-authenticated browser session on `payroll.brooms.com.pk` (Ossamah Suhail/Finance, Master
+  User) loaded the Dashboard with real live data (August 2026 Draft cycle, 1,247 employees, Net
+  Payroll PKR 734,122.58, 0/1,247 released) against the newly deployed backend.
+- **Advances page** (`/advances`) loads normally — full list renders, filters (Site/Type/Status)
+  present, existing layout/functionality unchanged.
+- **Payroll Entry page** (`/payroll-cycles/235770e4-.../payroll-entry`) loads normally — same August
+  2026 Draft cycle, "All changes saved," Bulk Apply controls and grid columns (Code, Employee, Father
+  Name, CNIC, Designation, Site, …) all present and unchanged.
+- No obvious deployment/runtime regression observed on either page.
+
+### Advance Edit interface — confirmed exactly Amount + Date + Notes, live in production
+
+Read-only inspection: opened the Edit action on Sharafat Masih's own live Advance (code `40323`,
+CNIC `3510362708543`) to visually confirm the deployed field set, then closed the modal via its own
+**Cancel** button without submitting any change. The modal ("Edit Advance — Sharafat Masih") renders
+**exactly three fields** — Advance Amount (`5000`), Advance Date (`25-08-2026`), Notes (`10000
+Advance Amount`) — no Employee, Type, Repayment Type, Scheduled Installment Amount, or Status field
+present, matching the v1.0.2 Final Product Semantics checkpoint's design exactly. No save/submit
+action was taken; the record's `PKR 5,000.00 / PKR 0.00 / Reserved (pending release)` row values were
+re-confirmed unchanged immediately after the modal closed.
+
+### Zero production mutations — explicit confirmation
+
+Every production interaction this session was a navigation, an authenticated page load, opening the
+Edit modal for visual inspection, and clicking that modal's own **Cancel** button. No form was
+submitted, no record was created or edited, no release/hold/correction/defer action was taken. `git
+status` throughout remained clean on the local repo side.
+
+### Sharafat Masih — remediation paths, and a new finding: Edit/Cancel/Defer are all currently blocked (409) for this specific record
+
+**New finding, discovered by tracing `updateAdvance`/`cancelAdvance`/`deferAdvanceSchedule` in
+`backend/src/modules/advances/advances.service.ts` against Sharafat Masih's exact live numbers
+(`totalAmount` PKR 5,000, `outstandingBalance` PKR 0, linked Payroll Entry `advanceDeduction` PKR
+10,000) — not executed against production, traced from the deployed source and verified by symbolic
+arithmetic, not assumed:**
+
+All three of this Advance's mutating actions reverse its live (unreleased) Payroll Entry deduction
+back onto `outstandingBalance` before writing anything, then call the checkpoint's own
+`assertOutstandingBalanceWithinBounds(outstandingBalance, totalAmount)` guard. For this specific
+record, that reversal always computes `outstandingBalance = totalAmount + PKR 5,000` — because the
+live deduction (PKR 10,000) already exceeds `totalAmount` (PKR 5,000) by exactly that PKR 5,000 gap,
+and the guard's own bounds check (`outstandingBalance > totalAmount` → reject) then **fails for every
+value**, regardless of what a Master Admin enters:
+
+- **Edit** (`updateAdvance`): reversing the stale PKR 10,000 deduction always yields
+  `effectiveOutstandingBalance = newTotalAmount + PKR 5,000`, which by construction always exceeds
+  `newTotalAmount` — the bounds guard rejects the write with a 409, for *any* target amount entered
+  (including re-submitting the current PKR 5,000, or entering PKR 10,000).
+- **Cancel** (`cancelAdvance`): `outstandingAfterReversal = PKR 0 + PKR 10,000 = PKR 10,000`, checked
+  against the unchanged `totalAmount` PKR 5,000 — `10,000 > 5,000` — 409, unconditionally (Cancel
+  takes no amount input, so there is no variant that succeeds).
+- **Defer** (`deferAdvanceSchedule`): identical arithmetic to Cancel — `restoredBalance = PKR 0 + PKR
+  10,000 = PKR 10,000` checked against `totalAmount` PKR 5,000 — 409, unconditionally.
+
+**This is the checkpoint's own defensive guard working exactly as designed** — it is precisely what
+turns this exact class of pre-existing corruption into a clean, safe 409 instead of the original
+unhandled 500 crash, and it correctly refuses to let any of the three actions silently make the
+mismatch worse. But it also means the "a Master Admin uses the now-corrected Edit action through the
+application itself" remediation recorded in the two prior checkpoint entries (and in §5's prior
+"next action") does **not** actually work as stated for this specific already-corrupted record — it
+was an untested assumption, now corrected. **No self-service, single-click in-app remediation path
+currently exists for this one record**; a genuinely correct fix requires the Advance's `totalAmount`/
+`outstandingBalance` and the Payroll Entry's `advanceDeduction` to first be brought back into a
+mathematically consistent relationship (one where reversing the live deduction cannot push
+`outstandingBalance` above `totalAmount`), which itself requires a one-time, engineer-executed data
+correction — not a Finance/Master-User self-service action — before ordinary Edit/Cancel/Defer become
+usable on this record again.
+
+**Two remediation paths, as requested — neither executed, both require an engineer-level one-time
+correction rather than a plain UI click:**
+
+1. **If PKR 5,000 is the correct, authorized/disbursed amount** (the Advance's own `totalAmount` is
+   right; the linked Payroll Entry's PKR 10,000 deduction is the wrong figure, left over from the
+   pre-fix direct-PATCH defect): the Payroll Entry's `advanceDeduction` needs to be brought back down
+   to PKR 5,000 to match its Advance before any Edit/Cancel action can succeed. The application no
+   longer exposes a UI path to do this directly (this checkpoint's own fix now rejects a direct
+   `advanceDeduction` PATCH whenever the entry is Advance-linked, by design) — it requires a targeted,
+   one-time backend correction (e.g., a scoped script or direct write reconciling just this one
+   entry's `advanceDeduction` to PKR 5,000, executed by an engineer under change control, never
+   through raw production SQL run ad hoc), after which the Advance would read as a
+   fully-consistent PKR 5,000/PKR 0/RESERVED record needing no further action.
+2. **If PKR 10,000 is the correct, authorized/disbursed amount** (the employee genuinely received PKR
+   10,000 and the Advance record itself under-recorded it at PKR 5,000): the Advance's own
+   `totalAmount` needs to be raised to PKR 10,000 to match its Payroll Entry. The ordinary Edit action
+   cannot do this either, for the same reason above (any `totalAmount` value still fails the bounds
+   guard given the current stale relationship) — it also requires a one-time, engineer-executed
+   correction bringing `totalAmount` to PKR 10,000 and `outstandingBalance` to PKR 0 in the same write
+   as reconciling the two records, after which the Advance would read as a fully-consistent PKR
+   10,000/PKR 0/RESERVED (or PAID_OFF) record.
+
+**Per explicit instruction: neither path was executed, and Sharafat Masih's live record remains
+exactly as found — `totalAmount` PKR 5,000, `outstandingBalance` PKR 0, `status` RESERVED,
+`repaymentType` FULL_DEDUCTION, linked Payroll Entry `advanceDeduction` PKR 10,000, `notes` "10000
+Advance Amount" — unchanged by this cutover.** The business must first establish the actual
+authorized/disbursed amount; only then should an engineer execute the corresponding correction above,
+under separate explicit approval.
+
+### v1.0.0/v1.0.1 unchanged — explicit confirmation
+
+`git tag -l` reconfirms `v1.0.0`, `v1.0.0-rc1`, `v1.0.1`, and `backend-live-v1` all still present,
+untouched by this cutover; no tag was moved or deleted.
+
+### Deferred items — explicitly NOT started this checkpoint
+
+`v1.0.2` tag creation; GitHub Release publication; Sharafat Masih remediation (either path above);
+Reliability Phase 5; H1/H2/H3/S1/M2/M3 from Payroll Operations Readiness Checkpoint 2; any other
+unrelated improvement.
+
+### Release classification
+
+**GREEN — v1.0.2 deployed and production-validated; ready to tag, with Sharafat Masih live-data
+remediation separately pending business confirmation of the correct amount (see the two paths
+above).** Approved PR merged correctly (merge SHA `096cf7933876df18729f0100920caa62647c496c`,
+approved head confirmed as an ancestor); post-merge CI on `main` is green (run `32877904798` —
+Backend all six shards, Frontend, E2E all SUCCESS); production deployment verified functionally
+(Render log access unavailable, disclosed); the narrowed Advance Edit interface (Amount + Date +
+Notes only) confirmed live in production; Advances and Payroll Entry pages both confirmed loading
+normally with no regression; zero production data mutated; `v1.0.0`/`v1.0.0-rc1`/`v1.0.1`/
+`backend-live-v1` all confirmed unchanged; documentation complete. **Recommended `v1.0.2` tag target:
+`096cf7933876df18729f0100920caa62647c496c`** (the `main` merge commit). **Per explicit instruction,
+the `v1.0.2` tag itself was NOT created, no GitHub Release was published, and Sharafat Masih's record
+was NOT remediated — awaiting separate approval of this report before tagging, and separate business
+confirmation of the correct Advance amount before any remediation is executed.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -14131,18 +14316,34 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-25, later same day (latest) — v1.0.2 Advance Edit/Cancel: root-caused, fixed, Edit
-narrowed to its final Amount + Date + Notes semantics, local UAT GREEN, PR #16 open — STOP BEFORE
-MERGE, awaiting explicit approval.** Full record: this file's own "v1.0.2 Release Blocker — Advance
-Edit/Cancel Correctness" and "v1.0.2 Final Product Semantics — Advance Edit narrowed to Amount +
-Date + Notes" entries (immediately above §2), `docs/SESSION_HANDOFF.md` §62–§63. **Next action: none
-until the user reviews PR #16 (<https://github.com/ossamah8229/Payroll-Management-System/pull/16>)
-and explicitly approves merge — do not merge, deploy, tag `v1.0.2`, mutate production, resume
-Reliability Phase 5, or touch any of Checkpoint 2's deferred findings (H1/H2/H3/S1/M2/M3) until then.**
-Once merged and deployed, the one remaining production follow-up is: a Master Admin corrects the
-Sharafat Masih Advance (id `7213b744-...`, currently `totalAmount` PKR 5,000/`outstandingBalance`
-PKR 0/RESERVED, linked Payroll Entry `advanceDeduction` PKR 10,000) using the now-fixed Edit action
-through the application itself — never a direct database edit.
+**Updated 2026-08-25, later same day (latest) — v1.0.2 PRODUCTION CUTOVER COMPLETE: PR #16 merged,
+post-merge `main` CI green, Render deployed, production smoke GREEN — awaiting explicit approval of
+the `v1.0.2` tag itself.** PR #16 merged via a normal merge commit
+(`096cf7933876df18729f0100920caa62647c496c`, parents `7443143b...` + `6a9ece1f...`); post-merge
+push-triggered CI run `32877904798` on that exact SHA: Backend all six shards PASS, Frontend PASS,
+E2E PASS. Render auto-deploy verified functionally (no Render API token/dashboard access this
+session, disclosed gap): backend `/health` 200 on both the custom domain and the raw Render URL,
+frontend 200 with a `last-modified` ~55s after the merge, authenticated app shell and
+frontend↔backend communication confirmed live. Production smoke: Advances and Payroll Entry both
+load normally; the narrowed Edit modal (Advance Amount / Advance Date / Notes only) confirmed live
+via a read-only inspection of Sharafat Masih's own Advance, closed without saving. Full record: this
+file's own "v1.0.2 PRODUCTION CUTOVER" entry (immediately above §2).
+
+**Correction to the prior version of this note**: it previously stated a Master Admin could correct
+Sharafat Masih's Advance "using the now-fixed Edit action through the application itself." Tracing
+`updateAdvance`/`cancelAdvance`/`deferAdvanceSchedule` against this record's exact live numbers (this
+cutover's own new finding, in the entry above) found that is **not actually true** — Edit, Cancel,
+and Defer all currently return a clean 409 for this one record, for every possible input, because the
+checkpoint's own defensive bounds guard correctly refuses to reverse a PKR 10,000 live deduction
+against a PKR 5,000 Advance. **The one remaining production follow-up is not a Finance self-service
+Edit action** — it is: (1) the business first confirms whether PKR 5,000 or PKR 10,000 is the actual
+authorized/disbursed amount, then (2) an engineer executes the corresponding one-time data correction
+described in the cutover entry's two remediation paths, under separate explicit approval. **Next
+action: none until the user reviews this cutover report and separately (a) approves tagging
+`096cf7933876df18729f0100920caa62647c496c` as `v1.0.2`, and (b) confirms the correct Sharafat Masih
+Advance amount before any remediation is executed — do not tag, do not remediate Sharafat Masih,
+do not resume Reliability Phase 5, and do not touch any of Checkpoint 2's deferred findings
+(H1/H2/H3/S1/M2/M3) until then.**
 
 ---
 
