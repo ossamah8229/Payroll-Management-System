@@ -6262,3 +6262,50 @@ published, `v1.0.0` was not moved, Reliability Phase 5 was not resumed, and no u
 (Father Name search, sticky columns elsewhere) was started. Awaiting explicit approval to publish
 `v1.0.1`.
 
+---
+
+## 59. Addendum, 2026-08-25 (later same day) — v1.0.1 RELEASED: tag created, GitHub Release published
+
+§58's GREEN release classification was reviewed and release explicitly authorized.
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.1 RELEASED — Tag Created, GitHub
+Release Published" entry. This addendum is the session-chronology summary.
+
+**Final integrity check, immediately before tagging** — all passed: `v1.0.0` still resolved
+(`^{commit}`) to exactly `5e097ef470956ade8b022072fbdf16949539777c`; `v1.0.1` did not already exist
+locally or remotely; approved release commit `f5897afa38a07662fc29244e0a77e2d6866426d4` existed and
+was confirmed an ancestor of `origin/main` (`git merge-base --is-ancestor`); PR #15 confirmed
+`MERGED` with `mergeCommit.oid` = `f5897afa...` via the GitHub API; post-merge CI run `32825644622`
+confirmed via the API to have `headSha` = `f5897afa...` and `conclusion: success`, with Backend all
+six shards, Frontend, and E2E each individually green; production validation from §58 remained
+GREEN; working tree was clean; `origin/main`'s log showed only the expected documentation commit
+(`57b81ae`) on top of `f5897af`, no unexpected application commit.
+
+**Tag**: annotated tag **`v1.0.1`** created pointing exactly at
+**`f5897afa38a07662fc29244e0a77e2d6866426d4`** — PR #15's merge commit — deliberately **not** the
+subsequent documentation commit `57b81ae` (which records Checkpoint 1's merge/CI/production
+evidence but changes no application code). Pushed with `git push origin v1.0.1` (only this one ref,
+no force-push). Independently re-resolved after push via `git ls-remote --tags origin`:
+`refs/tags/v1.0.1^{}` = `f5897afa38a07662fc29244e0a77e2d6866426d4`, matching exactly.
+
+**GitHub Release**: published from the `v1.0.1` tag, title "Payroll Management System v1.0.1",
+`isDraft: false`, `isPrerelease: false`, `targetCommitish: f5897afa38a07662fc29244e0a77e2d6866426d4`
+(confirmed via `gh release view --json`). Release body covers the employee-identification
+improvements (Payroll Entry/Advances/Employee Registry all now show Employee Code/Name/Father
+Name/CNIC directly; Payroll Entry's identity columns stay visible while scrolling), the validation
+summary (no backend/payroll-calculation logic changed, no new queries/N+1 behavior, full CI green,
+local and production UAT both passed), and the payroll-safety note (no production payroll records
+modified, calculations unchanged from v1.0.0). Published `2026-08-25T09:04:02Z`.
+
+**Post-tag verification**: `v1.0.0` (`ea2bcfe4c989fcf8fc9293a09881bbdc0e9cc799` →
+`5e097ef470956ade8b022072fbdf16949539777c`), `v1.0.0-rc1`
+(`69d910dceb0579c657f04edce09a643c60cd3a92` → `45f6854fb9ed0fc97adf04a299b35029d9a3852c`), and
+`backend-live-v1` (`35ed0de422c954542b74d70d065a4802c3c97113` →
+`2f9471834fdaff1d9909010ff4a1fd2e33d366ba`) all re-confirmed unchanged on the remote after the
+`v1.0.1` push.
+
+**Final classification: v1.0.1 RELEASED — employee identity visibility production baseline
+established.** Per explicit instruction: no v1.0.2, no Reliability Phase 5 resumption, no Father
+Name search, no additional sticky columns, no unrelated flake/warning investigation, no production
+payroll-data changes. STOP.
+

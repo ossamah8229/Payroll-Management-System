@@ -12979,6 +12979,45 @@ published — awaiting separate approval of this report before tagging.**
 
 ---
 
+## v1.0.1 RELEASED — Tag Created, GitHub Release Published (2026-08-25, later same day)
+
+The GREEN release-classification report directly above was reviewed and release explicitly
+authorized.
+
+**Tag**: annotated tag **`v1.0.1`** created pointing exactly at
+**`f5897afa38a07662fc29244e0a77e2d6866426d4`** — PR #15's merge commit, which passed the
+post-merge CI gate (run `32825644622` — Backend all six shards, Frontend, E2E all SUCCESS) and was
+production-validated — deliberately **not** the later documentation-only commit `57b81ae`, which
+records the release-candidate evidence but changes no application code. This distinction matters:
+`57b81ae` sits on top of `f5897af` on `main`, but the tag identifies the exact application state
+that was tested and validated, not whatever commit happened to be `HEAD` at tagging time.
+Pre-creation check confirmed `v1.0.1` did not already exist locally or remotely, and
+`v1.0.0`/`v1.0.0-rc1`/`backend-live-v1` remained untouched throughout. Tag verified to resolve
+exactly to the intended commit before and after push (`git push origin v1.0.1`, only this one ref
+pushed, no force-push) — independently re-resolved via `git ls-remote --tags origin` after the
+push, confirming `refs/tags/v1.0.1^{}` = `f5897afa38a07662fc29244e0a77e2d6866426d4`.
+
+**GitHub Release**: published from `v1.0.1`, titled "Payroll Management System v1.0.1",
+`isDraft: false`, `isPrerelease: false`, targeting `f5897afa38a07662fc29244e0a77e2d6866426d4`.
+Body covers the employee-identity-visibility improvements (Employee Code/Name/Father Name/CNIC
+now shown directly in Payroll Entry, Advances, and Employee Registry; sticky identity columns in
+Payroll Entry), the validation checklist (no backend/payroll-calculation logic changed, no new
+queries or N+1 behavior, full Backend/Frontend/E2E CI green, local duplicate-name UAT passed,
+production read-only validation passed across all three surfaces), and the payroll-safety note
+(no production payroll records modified during validation, calculations unchanged from v1.0.0).
+Published `2026-08-25T09:04:02Z`.
+
+**`v1.0.0` integrity re-confirmed**: still resolves via `^{commit}` to exactly
+`5e097ef470956ade8b022072fbdf16949539777c` — unchanged, unmoved. `v1.0.0-rc1` and
+`backend-live-v1` also confirmed unchanged (local SHAs match remote for both).
+
+**Final classification: v1.0.1 RELEASED — employee identity visibility production baseline
+established.** Per explicit instruction: no v1.0.2 work, no Reliability Phase 5 resumption, no
+Father Name search, no additional sticky columns, no unrelated flake/warning investigation, no
+production payroll-data changes, no further changes to the `v1.0.1` tag. STOP.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
