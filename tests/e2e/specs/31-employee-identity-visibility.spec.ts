@@ -1,12 +1,13 @@
+import path from 'node:path';
 import { test, expect } from '../fixtures/auth';
 import { apiPost } from '../helpers/api';
 
 /** Visual UAT evidence (Step 7, v1.0.1 Checkpoint 1) — explicit screenshots at the harness's own
- * realistic desktop viewport (1280x720, `playwright.config.ts`), saved outside the default
- * only-on-failure `test-results/` location so they exist regardless of pass/fail and are easy to
- * retrieve for manual review. */
-const UAT_SCREENSHOT_DIR =
-  '/private/tmp/claude-501/-Users-ossamahsuhail-Documents-Payroll-Management-System/8bf23d90-d11b-419c-ad91-7a1815ea1fdd/scratchpad/uat-screenshots';
+ * realistic desktop viewport (1280x720, `playwright.config.ts`), saved unconditionally (not
+ * only-on-failure) so they exist regardless of pass/fail. Repo-relative, inside
+ * `playwright.config.ts`'s own gitignored `outputDir` (`test-results/`) — portable across any
+ * machine or CI runner, unlike a machine-specific absolute path. */
+const UAT_SCREENSHOT_DIR = path.join(process.cwd(), 'test-results', 'uat-screenshots');
 
 /**
  * Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25).
