@@ -726,7 +726,19 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
               <Table className="min-w-full">
                 <TableHeader>
                   <TableRow>
+                    {/* Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25) — Code/Father
+                        Name/CNIC join the pre-existing Employee column so two same-named employees
+                        (e.g. two "Muhammad Talha"s) are distinguishable directly in this operational
+                        grid, without opening Employee Registry. All three are already present on
+                        every loaded row (`advance.employee`, `advances.service.ts`'s existing
+                        `include: { employee: true, ... }`) — no backend change. This table has no
+                        sticky-column mechanism today; introducing one purely for this patch was
+                        judged out of scope (see this checkpoint's own record in
+                        docs/PROJECT_PROGRESS.md), so the identity block is in normal grid flow. */}
+                    <TableHead className="whitespace-nowrap">Code</TableHead>
                     <TableHead className="whitespace-nowrap">Employee</TableHead>
+                    <TableHead className="whitespace-nowrap">Father Name</TableHead>
+                    <TableHead className="whitespace-nowrap">CNIC</TableHead>
                     <TableHead className="whitespace-nowrap">Type</TableHead>
                     <TableHead className="whitespace-nowrap text-right">Total Amount</TableHead>
                     <TableHead className="whitespace-nowrap text-right">Outstanding Balance</TableHead>
@@ -743,7 +755,10 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                 <TableBody>
                   {rows.map((advance) => (
                     <TableRow key={advance.id}>
+                      <TableCell className="whitespace-nowrap text-text-muted">{advance.employee.employeeCode ?? '—'}</TableCell>
                       <TableCell className="whitespace-nowrap font-medium">{advance.employee.name}</TableCell>
+                      <TableCell className="whitespace-nowrap">{advance.employee.fatherName ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap">{advance.employee.cnic ?? '—'}</TableCell>
                       <TableCell className="whitespace-nowrap">{typeLabel(advance.type)}</TableCell>
                       <TableCell className="whitespace-nowrap text-right tabular-nums">{formatMoney(advance.totalAmount)}</TableCell>
                       <TableCell className="whitespace-nowrap text-right tabular-nums">

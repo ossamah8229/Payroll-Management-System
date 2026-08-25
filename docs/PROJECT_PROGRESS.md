@@ -12447,28 +12447,35 @@ count, row count):
 
 ### Exception list
 
-**Genuine payroll blocker (1):**
+**Expected incomplete-cycle state, not currently a blocker (1) — reclassified 2026-08-25, later same
+day, per explicit operational clarification (see the v1.0.1 Employee Identity Visibility checkpoint's
+own addendum below for the correction record):**
 
 - **1,178 of 1,198 entries (98.3%) have zero recorded attendance (`totalWorkingDays = 0`) for the
-  August cycle, five calendar days after this checkpoint's audit date (2026-08-25) and five days
-  before the scheduled 2026-09-01 salary release.** Broken down by site: **every one of the 20
-  entries with any recorded attendance belongs to "Broom Head Office"** (the company's own internal
-  staff, days = 29 or 31) — **all 19 other client sites (1,178 entries total: Ombre Apparel Park 223,
-  Outfitters Stores 145, Packages Convertors 141, Dolmen Mall 82, ABL South Region 58, ABL East
-  Region 49, ABL Region Multan 44, ABL City Region 44, Descon Headquarters 34, Pakistan Institute of
-  Fashion and Design 39, Loftex Limited 28, Packages Mall 25, ABL Islamic Region Lahore 17, Descon
-  Lahore Manufacturing Works 15, IGI Insurance 13, Ali Institute of Education 13, Siemens Healthineers
-  7, ABL Islamic Region Multan 9, and the remaining ABL building/office rows) show 0 of 0 entries with
-  any attendance recorded — a clean, unambiguous "not started" state, not partial data entry.** This
-  is what drives net salary to **946 negative (78.9%) and 233 zero (19.4%) of 1,198 entries — 98.4%
-  combined** (the flat PKR 400 EOBI deduction and, for some, an Advance deduction, applied against
-  PKR 0 earned). Only **19 of 1,198 entries (1.6%)**, all Broom Head Office staff, currently show a
-  correct positive net salary. **This is an operational data-entry gap, not a code defect** — nothing
-  in the calculation, export, or reconciliation logic is wrong (see the exact reconciliation above);
-  `calcNet` is correctly computing PKR 0 earned from PKR 0 days, exactly as designed. **No code fix or
-  local reproduction is needed or applicable; this requires Payroll Staff to enter attendance for the
-  19 client sites in the live Draft cycle before 2026-09-01.** Flagged here, not corrected — per this
-  checkpoint's explicit read-only mandate.
+  August cycle**, as observed on the audit date (2026-08-25), which is **before** the August payroll
+  month has ended. Broken down by site: **every one of the 20 entries with any recorded attendance
+  belongs to "Broom Head Office"** (the company's own internal staff, days = 29 or 31) — **all 19
+  other client sites (1,178 entries total: Ombre Apparel Park 223, Outfitters Stores 145, Packages
+  Convertors 141, Dolmen Mall 82, ABL South Region 58, ABL East Region 49, ABL Region Multan 44, ABL
+  City Region 44, Descon Headquarters 34, Pakistan Institute of Fashion and Design 39, Loftex Limited
+  28, Packages Mall 25, ABL Islamic Region Lahore 17, Descon Lahore Manufacturing Works 15, IGI
+  Insurance 13, Ali Institute of Education 13, Siemens Healthineers 7, ABL Islamic Region Multan 9,
+  and the remaining ABL building/office rows) show 0 of 0 entries with any attendance recorded — a
+  clean, unambiguous "not started" state, not partial data entry.** This is what drives net salary to
+  **946 negative (78.9%) and 233 zero (19.4%) of 1,198 entries — 98.4% combined** (the flat PKR 400
+  EOBI deduction and, for some, an Advance deduction, applied against PKR 0 earned). Only **19 of
+  1,198 entries (1.6%)**, all Broom Head Office staff, currently show a correct positive net salary.
+  **Corrected interpretation (2026-08-25, later same day):** August attendance is intentionally
+  incomplete at this point in the cycle because the payroll month has not ended — Payroll Staff enter
+  and finalize August attendance during the first week of September, before salary release. The
+  zero-attendance and resulting negative/zero-net population documented above is therefore an
+  **expected incomplete-cycle state**, not presently an application defect or release blocker. It
+  becomes actionable only if attendance remains incomplete at the **final pre-salary-release audit**.
+  **This is not a code defect regardless of classification** — nothing in the calculation, export, or
+  reconciliation logic is wrong (see the exact reconciliation above); `calcNet` is correctly computing
+  PKR 0 earned from PKR 0 days, exactly as designed. No code fix or local reproduction applies. The raw
+  observations, counts, and site breakdown above are preserved unchanged from the original audit —
+  only the blocker/non-blocker classification is corrected.
 
 **Warnings / non-blockers (2):**
 
@@ -12559,11 +12566,270 @@ attendance-anomaly scan, CSV parsing/reconciliation) was plain client-side JavaS
 browser tab against the fetched JSON/CSV — no server-side computation was added or modified, and no
 `backend/` code was changed by this checkpoint.
 
-**Classification: GREEN on data/reconciliation integrity, RED on operational readiness for the
-2026-09-01 release** — the system itself (calculation, export, reconciliation, duplicate/uniqueness
-enforcement) is functioning exactly as designed and audited clean; the blocker is that attendance has
-not yet been entered for 1,178 of 1,198 employees. **No production write, no salary release, no
-migration, no correction was performed. STOP — awaiting instruction before any further action.**
+**Classification (corrected 2026-08-25, later same day — see this file's own v1.0.1 Employee Identity
+Visibility checkpoint entry below for the full correction record): GREEN on data/reconciliation
+integrity, GREEN on operational readiness for the 2026-09-01 release as of this audit date** — the
+system itself (calculation, export, reconciliation, duplicate/uniqueness enforcement) is functioning
+exactly as designed and audited clean; the incomplete attendance for 1,178 of 1,198 employees is an
+**expected incomplete-cycle state** (the payroll month has not ended — attendance is entered/finalized
+during the first week of September, before release), not presently a blocker. It becomes actionable
+only if attendance remains incomplete at the final pre-salary-release audit. **No production write, no
+salary release, no migration, no correction was performed. STOP — awaiting instruction before any
+further action.**
+
+---
+
+## v1.0.1 Checkpoint 1 — Employee Identity Visibility (Code | Employee | Father Name | CNIC) (2026-08-25)
+
+**Operational problem.** Two employees can legitimately share a name (e.g. two "Muhammad Talha"s).
+Reviewing the live Payroll Entry grid, it was impractical to tell which employee was which without
+opening an individual detail page — a real usability/data-entry-safety risk identified ahead of August
+payroll processing. Unrelated to, and does not touch, the attendance-completeness finding recorded in
+the Production Payroll Readiness Checkpoint 1 entry above (whose classification was corrected the same
+day — see that entry's own updated text).
+
+**Branch/release integrity (Step 1).** Before any change: fetched `origin/main`; confirmed `v1.0.0`
+still resolves to `5e097ef470956ade8b022072fbdf16949539777c` (untouched, as required); confirmed `main`
+contained every subsequent release/documentation commit; found the working tree carried this session's
+own uncommitted Checkpoint 1 audit-documentation edits — committed those to `main` directly (matching
+this repository's own established practice for doc-only audit records) as `7296a8a`, pushed. Branch
+`fix/v1.0.1-employee-identity-visibility` created from `origin/main` at `7296a8a4b0639fb42453b5928b15d0a87390a036`
+— not from PR #14's branch, not from the `v1.0.0` tagged commit. Draft PR opened:
+**<https://github.com/ossamah8229/Payroll-Management-System/pull/15>**.
+
+### Data-path audit (Step 2), all three screens
+
+Traced `Employee.fatherName`/`Employee.cnic`: Prisma schema → repository/query → service → API
+response → frontend type → grid, independently for each screen, **before writing any implementation
+code**.
+
+| Screen | Schema field | Already queried? | Already in API response? | Already in frontend type? | Already rendered? | Backend change needed? |
+|---|---|---|---|---|---|---|
+| Payroll Entry | `Employee.fatherName`/`.cnic` | Yes — `payroll-entry.service.ts`'s `include: { employee: true, ... }` (whole `Employee` row) | Yes | Yes — `PayrollEntry.employee: Employee` reuses the full `Employee` interface, which already declared both | No | **No** |
+| Advances | `Employee.fatherName`/`.cnic` | Yes — `advances.service.ts`'s `include: { employee: true, ... }` (whole `Employee` row) | Yes | `cnic` yes; `fatherName` **no** — `Advance.employee`'s own narrow, hand-picked frontend type (`{ id, name, employeeCode, cnic, siteId }`) simply never declared it, though the backend already sent it | No | **No** (frontend type widened only) |
+| Employee Registry | `Employee.fatherName`/`.cnic` | Yes — `listEmployees` queries the `Employee` table directly, no `select` narrowing | Yes | Yes | No | **No** |
+
+**Zero backend files were changed.** Every field needed was already flowing end-to-end; this
+checkpoint is a purely additive, frontend-only display patch. Confirmed after the fact by
+`git diff origin/main --stat`: 10 files changed, all under `frontend/` or `tests/e2e/`, none under
+`backend/`.
+
+### Authorization/privacy finding (Step 2B) — no STOP required
+
+Checked every role that can reach each of the three screens against whether it already has legitimate
+access to `fatherName`/`cnic`:
+
+- **Payroll Entry** is reachable by Payroll Staff (`payroll:entry`, which also holds `employees:view`
+  — full legitimate identity access already) and by **Finance** (`payroll:view` only — does **not**
+  hold `employees:view`). This is the one non-trivial case: does showing CNIC/Father Name in Payroll
+  Entry newly expose them to Finance? **No** — Finance already has established, permission-backed
+  access to both fields *today*, on other screens it already holds permission for:
+  `bank-sheets:view`/`statements:view` already render `cnic` (`bank-sheet-page.tsx`,
+  `cash-receiving-page.tsx`, `statements-page.tsx`'s `IdentityField`), and `payslips:view` payslip PDFs
+  already render `fatherName` via `entry.fatherNameSnapshot` (`payslips.service.ts`). Displaying both
+  on a screen Finance already has read access to (`payroll:view`) is consistent with, not a broadening
+  of, Finance's existing permission-backed access to this same data — not a new grant.
+- **Advances** (`advances:manage`) and **Employee Registry** (`employees:view`) are each held only by
+  Payroll Staff and Master Admin — both already have full, unambiguous legitimate access to every
+  `Employee` field by definition (Employee Registry is itself the canonical source).
+
+**No permission was broadened. No STOP condition was met.**
+
+### Query/N+1 finding (Step 2C)
+
+No new query was added anywhere. Every field came from an `include`/table read the existing code
+already performed — confirmed by inspection (see the audit table above) and by a clean `typecheck`
+across every workspace with zero `backend/` files touched. No per-row Employee lookup, no N+1
+regression risk exists because no new database access was introduced at all.
+
+### Search/filter audit (Step 2D) — nothing changed
+
+- **Employee Registry**: existing server-side `search` param (`listEmployees`) already covers Employee
+  Code, CNIC (digits-normalized), Account Number, IBAN, Name, Site name, Unit name — **not** Father
+  Name.
+- **Payroll Entry**: only a Site filter exists; no text search of any kind.
+- **Advances**: only Site/Type/Status filters exist; no text search of any kind.
+
+Per this checkpoint's own explicit instruction not to expand into search behavior, **none of this was
+changed**. Extending Employee Registry's existing multi-field `OR` search to also match `fatherName`
+would be a small, low-risk, single-line addition to an already-existing contract — noted here as a
+**possible follow-up**, deliberately not implemented this checkpoint.
+
+### Sticky-column decision (Step 2E)
+
+Payroll Entry already had a Frozen Employee Identity Pane (UAT 2026-08-12) — a fully
+column-count-agnostic mechanism (`FROZEN_LEFT_COLUMN_IDS`, `stickyLeftOffsets`,
+`stickyIdentityCellClassName`; every consuming layer — `payroll-entry-row.tsx`,
+`payroll-entry-totals-row.tsx` — iterates that array generically). Widening it from
+`['employeeCode', 'employeeName']` to `['employeeCode', 'employeeName', 'fatherName', 'cnic']` required
+**zero changes to `payroll-entry-totals-row.tsx`** and only additive changes to `columns.ts`/
+`payroll-entry-row.tsx` — confirmed clean and low-risk, implemented and tested (see below). Advances
+and Employee Registry have **no** sticky-column mechanism today; introducing one purely to obtain this
+effect was judged out of scope for a display-only patch (explicit instruction: "do not introduce a
+broad table/grid refactor merely to obtain sticky columns"). Both render the four identity columns in
+normal grid flow — **sticky behavior for these two is documented here as deferred UX work**, not
+silently skipped.
+
+### Implementation (Step 3) — exact files changed
+
+```
+frontend/src/components/payroll-entry/columns.ts            (+columns, +FROZEN_LEFT_COLUMN_IDS entries, +extractColumnValue cases)
+frontend/src/components/payroll-entry/payroll-entry-row.tsx  (+two identity cells, same pattern as employeeCode/employeeName)
+frontend/src/hooks/use-advances.ts                            (Advance.employee type: +fatherName)
+frontend/src/routes/advances-page.tsx                         (+Code/Father Name/CNIC columns)
+frontend/src/routes/employees-page.tsx                        (+Father Name/CNIC columns)
+frontend/src/components/payroll-entry/columns.test.ts                    (new coverage)
+frontend/src/components/payroll-entry/payroll-entry-row.test.tsx         (new coverage)
+frontend/src/components/payroll-entry/payroll-entry-alignment.test.tsx   (updated for the widened 4-column pane)
+tests/e2e/specs/28-payroll-entry-frozen-identity.spec.ts       (Scenario J's sweep widened to the full pane)
+tests/e2e/specs/31-employee-identity-visibility.spec.ts        (new spec)
+```
+
+No `backend/`, no `shared/` (other than none needed), no schema, no migration, no calculation file.
+
+**Before → after column contracts:**
+
+| Screen | Before | After |
+|---|---|---|
+| Payroll Entry | `# \| Status \| Code \| Employee \| Designation \| ...` | `# \| Status \| Code \| Employee \| **Father Name \| CNIC** \| Designation \| ...` (Father Name/CNIC join the frozen pane) |
+| Advances | `Employee \| Type \| Total Amount \| ...` | `**Code \| Employee \| Father Name \| CNIC** \| Type \| Total Amount \| ...` |
+| Employee Registry | `Code \| Name \| Designation \| ...` | `Code \| Name \| **Father Name \| CNIC** \| Designation \| ...` |
+
+**Formatting (Step 4).** CNIC is rendered exactly as stored (this codebase's own established
+convention — `bank-sheet-page.tsx`/`cash-receiving-page.tsx`/`statements-page.tsx` already render raw
+digits-only CNIC, no dash-formatting, no dedicated "display" formatter exists anywhere in `shared/`,
+and CNIC is stored digits-only per its own Zod schema, `/^\d{13}$/`). No masking (no existing
+authorization/design rule requires it for any of these three screens/roles — see the authorization
+finding above). Missing Father Name/CNIC render as `—`, the same established empty-value convention
+this codebase already uses everywhere else (`shared/src/lib/number.ts`, `statements-page.tsx`,
+`bank-sheet-page.tsx`, ...). No data was invented anywhere.
+
+### Duplicate-name regression tests (Step 5)
+
+New coverage using two synthetic employees with the same name, different Employee Code, different
+Father Name, different CNIC (`Muhammad Talha` / `EMP-001` / `Abdul Rehman` / a valid 13-digit CNIC, and
+`Muhammad Talha` / `EMP-002` / `Muhammad Farooq` / a distinct valid 13-digit CNIC — realistic fixture
+values, not placeholder literals copied verbatim):
+
+- `columns.test.ts` — Father Name/CNIC column-width measurement (mirrors the existing IBAN/Account
+  Number tests), and confirms both are part of `FROZEN_LEFT_COLUMN_IDS` immediately after
+  `employeeName`.
+- `payroll-entry-row.test.tsx` — renders two rows with the shared name side by side, proves each is
+  independently identifiable by Code/Father Name/CNIC, and proves all four identity cells are
+  sticky-left at the correct offsets for **both** rows (not just row 0); a second test proves the `—`
+  empty-value convention for a same-named employee with no Father Name/CNIC on record.
+- `31-employee-identity-visibility.spec.ts` (new E2E spec) — creates the same two synthetic employees
+  through the real backend API and proves distinguishability in all three screens against a real
+  running app; a second test proves the `—` convention end-to-end in Payroll Entry.
+
+**Existing behavior stayed green throughout** — see full results below.
+
+### Financial/non-regression protection (Step 6)
+
+**No production calculation file changed** — confirmed by `git diff origin/main --stat` (10 files, all
+`frontend/`/`tests/e2e/`, zero `backend/`). This is an identity/display patch; Gross Pay, Working Days,
+OT, allowances, EOBI, advances, deductions, Net Salary, salary-release state, and Payroll Entry totals
+are all read from the exact same, untouched calculation path (`calcNet`/`computeEntryCalc`) as before.
+Proven via the existing regression suites (unchanged, still green) rather than new redundant financial
+tests, since the production calculation path itself was never touched — exactly per this checkpoint's
+own instruction to prefer that over duplicate coverage.
+
+### Local UAT (Step 7)
+
+Production August payroll data was never touched for this UAT. Provisioned the repository's own
+established disposable-Postgres E2E harness (`tests/e2e/setup/e2e-environment.ts`): a fresh embedded
+PostgreSQL cluster (own port, own credentials, own data directory), migrated and seeded, then the real
+compiled backend and the real production frontend build, started as ordinary child processes — the
+same harness `playwright.config.ts`'s `globalSetup`/`globalTeardown` already wire up for
+`npm run test:e2e`. Synthetic duplicate-name employees were created **only** in this disposable
+database, through the real backend API (never hand-written SQL).
+
+Ran `npm run test:e2e` (full suite): **189 passed, 8 skipped (pre-existing — two Archived-cycle-view
+scenarios, five Variance Report two-cycle scenarios, and one Employee Lookup search scenario, all
+unrelated to this checkpoint and already present in this same suite's own documented baseline before
+this checkpoint — see this file's own "195 tests: 187 passed, 0 flaky, 8 skipped" record above), 0
+failed**, in 3.2 minutes, exit code 0. Includes the new
+`31-employee-identity-visibility.spec.ts` (both tests passing) and the widened
+`28-payroll-entry-frozen-identity.spec.ts` (all 9 scenarios passing, including the corrected Scenario J
+sweep covering the full 4-column pane).
+
+**Visual verification**: four screenshots captured at the harness's own realistic desktop viewport
+(1280×720, `playwright.config.ts`'s configured viewport) —
+
+1. Payroll Entry: two "Muhammad Talha" rows, Code/Father Name/CNIC all distinct and legible.
+2. Payroll Entry scrolled to the extreme right: the widened four-column frozen pane stays pinned, no
+   overlap, no clipping, correct trailing divider after CNIC, the rest of the grid scrolled correctly
+   underneath.
+3. Advances: both rows show their own Code/Father Name/CNIC alongside the shared name.
+4. Employee Registry: both rows show their own Code/Father Name/CNIC alongside the shared name.
+
+No overlap, clipping, incorrect z-index, or alignment problem observed in any screenshot. The
+disposable environment was torn down cleanly afterward (verified: no lingering `vite preview`/
+`dist/server.js`/postgres processes, no leftover temp directory). No employee, advance, or any other
+record was created in production.
+
+### Static/build/test results (Step 8)
+
+- `typecheck` (shared/backend/frontend/e2e, via the repository's own combined script): **clean**
+- `lint` (backend + frontend): **clean** — 0 errors; the only warnings present (backend `no-console` in
+  the two pre-existing audit scripts, frontend Fast-Refresh warnings in 5 pre-existing files) are
+  unchanged from before this checkpoint and explicitly out of scope
+- `build` (shared/backend/frontend): **clean**
+- `git diff --check`: **clean**
+- Frontend suite: **1070/1070** (was 1063/1063 before this checkpoint)
+- Backend suite: **not run** — zero backend files changed this checkpoint (confirmed above), so no
+  backend regression risk exists; relying on the unchanged, already-green backend suite rather than
+  re-running it against a second local database provisioning
+- E2E (local, disposable environment): **189 passed, 8 skipped (pre-existing), 0 failed**
+
+### GitHub Actions gate (Step 8, continued)
+
+**PR #15's first CI run** (head `f2ca0a3`, run
+<https://github.com/ossamah8229/Payroll-Management-System/actions/runs/32819404181>): Backend
+**PASS** (14m43s), Frontend **PASS** (1m35s), **E2E FAILED** (`31-employee-identity-visibility.spec.ts`,
+both tests, on both the initial attempt and its retry). **Root cause, found by reading the actual CI
+log (`gh run view --log-failed`), not assumed**: `Error: ENOENT: no such file or directory, open
+'/private/tmp/claude-501/.../scratchpad/uat-screenshots/01-payroll-entry-identity-block.png'` — the
+new spec's own `UAT_SCREENSHOT_DIR` constant was a hardcoded absolute path specific to this session's
+local sandbox (used for the local UAT screenshots above), which obviously does not exist on a GitHub
+Actions runner. **A genuine defect in this checkpoint's own test code, not a pre-existing or unrelated
+flake** — classified as such, not silently ignored, no assertion weakened. Fixed
+(`e99c211`): `UAT_SCREENSHOT_DIR` changed to `path.join(process.cwd(), 'test-results',
+'uat-screenshots')` — repo-relative, inside `playwright.config.ts`'s own gitignored `outputDir`,
+portable across any machine. Re-verified locally before pushing: both specs green, screenshots written
+correctly to the corrected path, environment torn down cleanly, then the **full local suite re-run
+end to end once more** — 189 passed, 8 skipped, 0 failed, unchanged.
+
+**PR #15's second CI run** (head **`e99c211fd6cbded4b1ad0e9268788a0870a59ad3`**, run
+<https://github.com/ossamah8229/Payroll-Management-System/actions/runs/32821442298>): **Backend PASS
+(13m17s), Frontend PASS (1m31s), E2E PASS (7m30s) — all three green.**
+<https://github.com/ossamah8229/Payroll-Management-System/pull/15>.
+
+### Documentation status (Step 9)
+
+This entry, plus `docs/SESSION_HANDOFF.md` §56 (correction to §55's blocker classification) and §57
+(this checkpoint's own session-chronology summary). The Production Payroll Readiness Checkpoint 1
+entry above (this same file) was corrected in place per the explicit operational clarification
+received: incomplete August attendance is an **expected incomplete-cycle state** (the payroll month
+has not ended), not presently a blocker — the original audit numbers and site-by-site evidence are
+preserved unchanged; only the classification changed.
+
+### Remaining known limitations
+
+- Father Name is not searchable in Employee Registry (CNIC already is); Payroll Entry and Advances
+  have no text search at all. Deliberately left unchanged this checkpoint — see the Search/filter
+  audit above.
+- Advances/Employee Registry's identity columns are not sticky — deliberately left in normal grid flow
+  this checkpoint — see the Sticky-column decision above.
+- CSV/XLSX exports (Payroll Entry already includes CNIC, not Father Name) were not touched — out of
+  this checkpoint's explicit scope (display-only patch, not an export-contract change).
+
+### Release classification
+
+**GREEN — v1.0.1 employee-identification patch merge-ready.** PR #15's own GitHub Actions gate is
+green at head `e99c211fd6cbded4b1ad0e9268788a0870a59ad3` (Backend/Frontend/E2E all PASS — see above).
+**STOP BEFORE MERGE per explicit instruction — not merged, not deployed, no `v1.0.1` tag created,
+Reliability Phase 5 not resumed. Awaiting explicit approval.**
 
 ---
 

@@ -332,3 +332,218 @@ describe('PayrollEntryRow — employee aggregate Working Days display (v1.0.0 Wo
     expect(daysCell.textContent).toBe('22.5');
   });
 });
+
+/**
+ * Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25) — duplicate-name regression
+ * coverage. Two employees can legitimately share a name (e.g. two "Muhammad Talha"s); before this
+ * checkpoint, Payroll Entry's frozen identity pane (Code + Employee only) could not tell them apart
+ * without opening Employee Registry. Renders two rows with the same `employee.name` but distinct
+ * Employee Code/Father Name/CNIC, side by side, and proves each is independently identifiable.
+ */
+describe('PayrollEntryRow — duplicate-name distinguishability (Employee Identity Visibility, v1.0.1 Checkpoint 1)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.resetModules();
+    vi.doUnmock('@/hooks/use-payroll-entry-editor');
+  });
+
+  function makeDuplicateNameEntry(overrides: {
+    id: string;
+    employeeCode: string;
+    fatherName: string;
+    cnic: string;
+  }) {
+    const base = makeEntry();
+    return makeEntry({
+      id: overrides.id,
+      employeeId: overrides.id,
+      employee: {
+        ...base.employee,
+        id: overrides.id,
+        employeeCode: overrides.employeeCode,
+        name: 'Muhammad Talha',
+        fatherName: overrides.fatherName,
+        cnic: overrides.cnic,
+      },
+    });
+  }
+
+  it('two same-named employees (Muhammad Talha) render distinct Code/Father Name/CNIC in the same grid, both simultaneously visible and independently identifiable', async () => {
+    const entryA = makeDuplicateNameEntry({
+      id: 'employee-talha-a',
+      employeeCode: 'EMP-001',
+      fatherName: 'Abdul Rehman',
+      cnic: '3520212345671',
+    });
+    const entryB = makeDuplicateNameEntry({
+      id: 'employee-talha-b',
+      employeeCode: 'EMP-002',
+      fatherName: 'Muhammad Farooq',
+      cnic: '3520298765432',
+    });
+
+    // A single mock, keyed off whichever `entry` its own row passes in — both rows share this one
+    // mocked hook module, unlike every other describe block in this file (which each render exactly
+    // one row per test and can afford a mock closed over one fixed entry).
+    vi.doMock('@/hooks/use-payroll-entry-editor', () => ({
+      usePayrollEntryEditor: (entry: PayrollEntry) => ({
+        editable: true,
+        effectiveEntry: entry,
+        effectiveLine: entry.workLines[0],
+        effectiveLines: entry.workLines,
+        cycleDaysInputValue: String(entry.workLines[0]!.cycleDays),
+        calc: entry.calc,
+        status: 'idle' as const,
+        errorMessage: undefined,
+        hasUnsavedChanges: false,
+        setEntryField: vi.fn(),
+        setWorkLineField: vi.fn(),
+        setLineField: vi.fn(),
+        addLine: vi.fn(),
+        deleteLine: vi.fn(),
+        retryNow: vi.fn(),
+        reload: vi.fn(),
+      }),
+    }));
+
+    const { PayrollEntryRow } = await import('./payroll-entry-row');
+    const resolved = computeColumnWidths([entryA, entryB], [testBank]);
+    const gridTemplate = gridTemplateColumns(resolved);
+    const offsets = stickyLeftOffsets(resolved);
+    const queryClient = new QueryClient();
+    const store = new LiveTotalsStore();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <div role="table" aria-label="Payroll Entry grid">
+          <PayrollEntryRow
+            entry={entryA}
+            rowIndex={0}
+            cycleId="cycle-1"
+            cycleStatus="DRAFT"
+            banks={[testBank]}
+            liveTotalsStore={store}
+            gridTemplateColumns={gridTemplate}
+            identityOffsets={offsets}
+            canEditEmployee={false}
+            canMarkEmployeeLeft={false}
+            onEditEmployee={() => {}}
+            onMarkLeftEmployee={() => {}}
+            style={{}}
+          />
+          <PayrollEntryRow
+            entry={entryB}
+            rowIndex={1}
+            cycleId="cycle-1"
+            cycleStatus="DRAFT"
+            banks={[testBank]}
+            liveTotalsStore={store}
+            gridTemplateColumns={gridTemplate}
+            identityOffsets={offsets}
+            canEditEmployee={false}
+            canMarkEmployeeLeft={false}
+            onEditEmployee={() => {}}
+            onMarkLeftEmployee={() => {}}
+            style={{}}
+          />
+        </div>
+      </QueryClientProvider>,
+    );
+
+    // Both rows genuinely render, both under the same displayed name — the exact ambiguity this
+    // checkpoint exists to resolve.
+    const rows = screen.getAllByRole('row');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.textContent).toContain('Muhammad Talha');
+    }
+
+    const codeCells = document.querySelectorAll('[data-col-id="employeeCode"]');
+    const fatherCells = document.querySelectorAll('[data-col-id="fatherName"]');
+    const cnicCells = document.querySelectorAll('[data-col-id="cnic"]');
+    expect(codeCells).toHaveLength(2);
+    expect(fatherCells).toHaveLength(2);
+    expect(cnicCells).toHaveLength(2);
+
+    // Row A and Row B are each independently distinguishable purely from grid content — never
+    // requiring navigation to an employee detail page.
+    expect(codeCells[0]!.textContent).toBe('EMP-001');
+    expect(codeCells[1]!.textContent).toBe('EMP-002');
+    expect(fatherCells[0]!.textContent).toBe('Abdul Rehman');
+    expect(fatherCells[1]!.textContent).toBe('Muhammad Farooq');
+    expect(cnicCells[0]!.textContent).toBe('3520212345671');
+    expect(cnicCells[1]!.textContent).toBe('3520298765432');
+    expect(codeCells[0]!.textContent).not.toBe(codeCells[1]!.textContent);
+    expect(fatherCells[0]!.textContent).not.toBe(fatherCells[1]!.textContent);
+    expect(cnicCells[0]!.textContent).not.toBe(cnicCells[1]!.textContent);
+
+    // Both rows' four identity cells are sticky-left, at the same shared offsets — the frozen pane
+    // protects both rows identically, not just row 0.
+    for (const cell of [...codeCells, ...fatherCells, ...cnicCells]) {
+      expect(cell.className).toMatch(/\bsticky\b/);
+    }
+  });
+
+  it('a same-named employee with no Father Name/CNIC on record renders the established "—" empty-value convention, never blank/undefined, and stays distinguishable by Employee Code', async () => {
+    const entry = makeDuplicateNameEntry({
+      id: 'employee-talha-c',
+      employeeCode: 'EMP-003',
+      fatherName: '',
+      cnic: '',
+    });
+    entry.employee.fatherName = null;
+    entry.employee.cnic = null;
+
+    vi.doMock('@/hooks/use-payroll-entry-editor', () => ({
+      usePayrollEntryEditor: (e: PayrollEntry) => ({
+        editable: true,
+        effectiveEntry: e,
+        effectiveLine: e.workLines[0],
+        effectiveLines: e.workLines,
+        cycleDaysInputValue: String(e.workLines[0]!.cycleDays),
+        calc: e.calc,
+        status: 'idle' as const,
+        errorMessage: undefined,
+        hasUnsavedChanges: false,
+        setEntryField: vi.fn(),
+        setWorkLineField: vi.fn(),
+        setLineField: vi.fn(),
+        addLine: vi.fn(),
+        deleteLine: vi.fn(),
+        retryNow: vi.fn(),
+        reload: vi.fn(),
+      }),
+    }));
+
+    const { PayrollEntryRow } = await import('./payroll-entry-row');
+    const resolved = computeColumnWidths([entry], [testBank]);
+    const queryClient = new QueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PayrollEntryRow
+          entry={entry}
+          rowIndex={0}
+          cycleId="cycle-1"
+          cycleStatus="DRAFT"
+          banks={[testBank]}
+          liveTotalsStore={new LiveTotalsStore()}
+          gridTemplateColumns={gridTemplateColumns(resolved)}
+          identityOffsets={stickyLeftOffsets(resolved)}
+          canEditEmployee={false}
+          canMarkEmployeeLeft={false}
+          onEditEmployee={() => {}}
+          onMarkLeftEmployee={() => {}}
+          style={{}}
+        />
+      </QueryClientProvider>,
+    );
+
+    const fatherCell = document.querySelector('[data-col-id="fatherName"]') as HTMLElement;
+    const cnicCell = document.querySelector('[data-col-id="cnic"]') as HTMLElement;
+    expect(fatherCell.textContent).toBe('—');
+    expect(cnicCell.textContent).toBe('—');
+    const codeCell = document.querySelector('[data-col-id="employeeCode"]') as HTMLElement;
+    expect(codeCell.textContent).toBe('EMP-003');
+  });
+});

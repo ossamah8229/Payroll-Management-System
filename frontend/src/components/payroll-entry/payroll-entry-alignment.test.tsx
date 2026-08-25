@@ -4,7 +4,7 @@ import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, stickyLeftOffsets } from './columns';
+import { FROZEN_LEFT_COLUMN_IDS, PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, stickyLeftOffsets } from './columns';
 import { PayrollEntryRow } from './payroll-entry-row';
 import { PayrollEntryTotalsRow } from './payroll-entry-totals-row';
 import { LiveTotalsStore } from './live-totals-store';
@@ -224,13 +224,14 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
    * isolated Released-badge margin/transform hack, exactly what this checkpoint was told not to do
    * again.
    *
-   * One deliberate exception lives here now — **Frozen Employee Identity Pane (UAT 2026-08-12)**:
-   * `employeeCode`/`employeeName` are intentionally sticky on the *horizontal* axis with a dynamic
-   * `left` offset (no static `left-0` class — the offset is per-column and computed from measured
-   * widths), the data-entry-safety fix for employee identity scrolling out of view while entering
-   * payroll values — see `columns.ts`'s `FROZEN_LEFT_COLUMN_IDS`/`stickyIdentityCellClassName` doc
-   * comments. Carved out by id below; every other column must still pass the strict check this test
-   * exists for.
+   * One deliberate exception lives here now — **Frozen Employee Identity Pane (UAT 2026-08-12;
+   * widened to Code/Employee/Father Name/CNIC, Employee Identity Visibility v1.0.1 Checkpoint 1,
+   * 2026-08-25)**: `FROZEN_LEFT_COLUMN_IDS` are intentionally sticky on the *horizontal* axis with a
+   * dynamic `left` offset (no static `left-0` class — the offset is per-column and computed from
+   * measured widths), the data-entry-safety fix for employee identity scrolling out of view while
+   * entering payroll values — see `columns.ts`'s `FROZEN_LEFT_COLUMN_IDS`/
+   * `stickyIdentityCellClassName` doc comments. Carved out by (imported, not hardcoded) id below;
+   * every other column must still pass the strict check this test exists for.
    *
    * **Employee Row Actions (UAT 2026-08-11) no longer has a sticky-right exception at all** — UAT
    * feedback on that original implementation (a dedicated sticky-right `actions` column) was that
@@ -274,7 +275,7 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
     for (const cell of cells) {
       const colId = cell.getAttribute('data-col-id');
       const className = cell.className;
-      if (colId === 'employeeCode' || colId === 'employeeName') {
+      if (FROZEN_LEFT_COLUMN_IDS.includes(colId as (typeof FROZEN_LEFT_COLUMN_IDS)[number])) {
         // The documented sticky-left exception — see this test's own doc comment above. The offset
         // is dynamic (measured column widths), so it lives in the inline `style`, never a static
         // `left-\d` Tailwind class — asserted explicitly by the next block, not skipped here.
@@ -490,30 +491,35 @@ describe('Payroll Entry grid — header/body/totals column alignment', () => {
 });
 
 /**
- * Frozen Employee Identity Pane (UAT 2026-08-12) — payroll values directly affect salary
- * calculations, so employee identity (`employeeCode`/`employeeName`) must stay visible while the
- * grid's ~26 columns scroll horizontally, never scrolling out of view alongside them. These tests
- * assert the mechanics `columns.ts`'s `stickyLeftOffsets`/`stickyIdentityCellClassName` are built
- * on: correct, cumulative-only-across-the-frozen-pair pixel offsets, and that the header, body, and
- * totals row all render those columns pixel-aligned on the exact same shared offsets — never three
+ * Frozen Employee Identity Pane (UAT 2026-08-12; widened to Code/Employee/Father Name/CNIC,
+ * Employee Identity Visibility v1.0.1 Checkpoint 1, 2026-08-25) — payroll values directly affect
+ * salary calculations, so employee identity must stay visible while the grid's ~28 columns scroll
+ * horizontally, never scrolling out of view alongside them, and two same-named employees must be
+ * distinguishable by Father Name/CNIC without opening Employee Registry. These tests assert the
+ * mechanics `columns.ts`'s `stickyLeftOffsets`/`stickyIdentityCellClassName` are built on: correct,
+ * cumulative-only-across-the-frozen-set pixel offsets, and that the header, body, and totals row all
+ * render those columns pixel-aligned on the exact same shared offsets — never three
  * independently-computed copies that could silently drift apart under horizontal scroll.
  */
-describe('Payroll Entry grid — Frozen Employee Identity Pane (UAT 2026-08-12)', () => {
-  it('employeeCode sticks at offset 0 and employeeName sticks immediately after it — never offset by serial/status, which are not part of the frozen pane', () => {
+describe('Payroll Entry grid — Frozen Employee Identity Pane (UAT 2026-08-12; widened 2026-08-25)', () => {
+  it('the four identity columns stick in order (Code, Employee, Father Name, CNIC), each immediately after the previous one\'s width — never offset by serial/status, which are not part of the frozen pane', () => {
     const entry = makeEntry();
     const resolved = computeColumnWidths([entry], [testBank]);
     const offsets = stickyLeftOffsets(resolved);
+    const widthOf = (id: string) => resolved.find((c) => c.id === id)!.width;
 
-    const employeeCodeWidth = resolved.find((c) => c.id === 'employeeCode')!.width;
+    expect(FROZEN_LEFT_COLUMN_IDS).toEqual(['employeeCode', 'employeeName', 'fatherName', 'cnic']);
     expect(offsets.employeeCode).toBe(0);
-    expect(offsets.employeeName).toBe(employeeCodeWidth);
+    expect(offsets.employeeName).toBe(widthOf('employeeCode'));
+    expect(offsets.fatherName).toBe(widthOf('employeeCode') + widthOf('employeeName'));
+    expect(offsets.cnic).toBe(widthOf('employeeCode') + widthOf('employeeName') + widthOf('fatherName'));
 
     // Sanity check the exclusion: `serial`/`status` precede `employeeCode` in `PAYROLL_COLUMNS` and
     // together are non-trivially wide, so a bug that accidentally included them in the cumulative
     // sum would produce a non-zero `employeeCode` offset — this assertion would catch that class of
     // regression, not just happen to pass by coincidence.
-    const serialWidth = resolved.find((c) => c.id === 'serial')!.width;
-    const statusWidth = resolved.find((c) => c.id === 'status')!.width;
+    const serialWidth = widthOf('serial');
+    const statusWidth = widthOf('status');
     expect(serialWidth + statusWidth).toBeGreaterThan(0);
     expect(offsets.employeeCode).not.toBe(serialWidth + statusWidth);
   });
@@ -524,13 +530,13 @@ describe('Payroll Entry grid — Frozen Employee Identity Pane (UAT 2026-08-12)'
     const offsets = stickyLeftOffsets(resolved);
 
     for (const column of resolved) {
-      if (column.id === 'employeeCode' || column.id === 'employeeName') continue;
+      if (FROZEN_LEFT_COLUMN_IDS.includes(column.id as (typeof FROZEN_LEFT_COLUMN_IDS)[number])) continue;
       expect(offsets[column.id as keyof typeof offsets]).toBeUndefined();
     }
   });
 
-  it('the body row renders employeeCode/employeeName as sticky-left at those exact offsets, with the trailing divider only on employeeName', () => {
-    const entry = makeEntry();
+  it('the body row renders all four identity columns as sticky-left at those exact offsets, with the trailing divider only on the last one (CNIC)', () => {
+    const entry = makeEntry({ employee: { ...makeEntry().employee, fatherName: 'Test Father', cnic: '1234567890123' } });
     const resolved = computeColumnWidths([entry], [testBank]);
     const offsets = stickyLeftOffsets(resolved);
     const queryClient = new QueryClient();
@@ -557,25 +563,37 @@ describe('Payroll Entry grid — Frozen Employee Identity Pane (UAT 2026-08-12)'
 
     const codeCell = container.querySelector('[data-col-id="employeeCode"]') as HTMLElement;
     const nameCell = container.querySelector('[data-col-id="employeeName"]') as HTMLElement;
+    const fatherCell = container.querySelector('[data-col-id="fatherName"]') as HTMLElement;
+    const cnicCell = container.querySelector('[data-col-id="cnic"]') as HTMLElement;
 
-    expect(codeCell.className).toMatch(/\bsticky\b/);
-    expect(codeCell.className).not.toMatch(/\bleft-\d/); // dynamic offset, not a static Tailwind class
-    expect(codeCell.style.left).toBe(`${offsets.employeeCode}px`);
-    expect(codeCell.className).not.toMatch(/\bborder-r\b/); // no divider between the pane's own two columns
+    for (const [id, cell] of [
+      ['employeeCode', codeCell],
+      ['employeeName', nameCell],
+      ['fatherName', fatherCell],
+      ['cnic', cnicCell],
+    ] as const) {
+      expect(cell.className).toMatch(/\bsticky\b/);
+      expect(cell.className).not.toMatch(/\bleft-\d/); // dynamic offset, not a static Tailwind class
+      expect(cell.style.left).toBe(`${offsets[id]}px`);
+    }
 
-    expect(nameCell.className).toMatch(/\bsticky\b/);
-    expect(nameCell.style.left).toBe(`${offsets.employeeName}px`);
-    expect(nameCell.className).toMatch(/\bborder-r\b/); // the pane's own right-edge divider
+    // No divider between the pane's own interior columns — only its right-edge (CNIC, the new last
+    // entry in `FROZEN_LEFT_COLUMN_IDS`).
+    expect(codeCell.className).not.toMatch(/\bborder-r\b/);
+    expect(nameCell.className).not.toMatch(/\bborder-r\b/);
+    expect(fatherCell.className).not.toMatch(/\bborder-r\b/);
+    expect(cnicCell.className).toMatch(/\bborder-r\b/); // the pane's own right-edge divider
+
+    expect(fatherCell.textContent).toBe('Test Father');
+    expect(cnicCell.textContent).toBe('1234567890123');
 
     // Body and its own offsets must resolve to the same numbers `computeColumnWidths` produced —
     // the mechanical proof that this row is pixel-aligned with the header/totals row, which are fed
     // the identical `offsets` object from the same grid-level calculation in real usage.
-    const employeeCodeWidth = resolved.find((c) => c.id === 'employeeCode')!.width;
     expect(codeCell.style.left).toBe('0px');
-    expect(nameCell.style.left).toBe(`${employeeCodeWidth}px`);
   });
 
-  it('the totals row renders employeeCode/employeeName as sticky-left at the same offsets the body row uses', () => {
+  it('the totals row renders all four identity columns as sticky-left at the same offsets the body row uses', () => {
     const entry = makeEntry();
     const resolved = computeColumnWidths([entry], [testBank]);
     const offsets = stickyLeftOffsets(resolved);
@@ -586,12 +604,15 @@ describe('Payroll Entry grid — Frozen Employee Identity Pane (UAT 2026-08-12)'
       <PayrollEntryTotalsRow store={store} gridTemplateColumns={gridTemplateColumns(resolved)} identityOffsets={offsets} />,
     );
 
-    const codeCell = container.querySelector('[data-col-id="employeeCode"]') as HTMLElement;
+    for (const id of FROZEN_LEFT_COLUMN_IDS) {
+      const cell = container.querySelector(`[data-col-id="${id}"]`) as HTMLElement;
+      expect(cell.className).toMatch(/\bsticky\b/);
+      expect(cell.style.left).toBe(`${offsets[id]}px`);
+    }
+    // Trailing divider is on the new last frozen column (CNIC), not employeeName.
+    const cnicCell = container.querySelector('[data-col-id="cnic"]') as HTMLElement;
     const nameCell = container.querySelector('[data-col-id="employeeName"]') as HTMLElement;
-    expect(codeCell.className).toMatch(/\bsticky\b/);
-    expect(codeCell.style.left).toBe(`${offsets.employeeCode}px`);
-    expect(nameCell.className).toMatch(/\bsticky\b/);
-    expect(nameCell.style.left).toBe(`${offsets.employeeName}px`);
-    expect(nameCell.className).toMatch(/\bborder-r\b/);
+    expect(cnicCell.className).toMatch(/\bborder-r\b/);
+    expect(nameCell.className).not.toMatch(/\bborder-r\b/);
   });
 });

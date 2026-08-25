@@ -86,12 +86,16 @@ async function assertNoScrollingContentPaintsOverIdentity(
     await page.waitForTimeout(40);
 
     for (const x of xs) {
+      // Frozen identity pane widened to Code/Employee/Father Name/CNIC (Employee Identity
+      // Visibility, v1.0.1 Checkpoint 1, 2026-08-25) — any of the four is a valid identity
+      // ancestor now, not just the original two.
       const hasIdentityAncestor = await page.evaluate(
         ({ x, y }) => {
+          const identityColIds = ['employeeCode', 'employeeName', 'fatherName', 'cnic'];
           let node = document.elementFromPoint(x, y);
           for (let i = 0; i < 8 && node; i++) {
             const colId = node.getAttribute?.('data-col-id');
-            if (colId === 'employeeCode' || colId === 'employeeName') return true;
+            if (colId && identityColIds.includes(colId)) return true;
             node = node.parentElement;
           }
           return false;
@@ -454,8 +458,12 @@ test.describe('Payroll Entry — Frozen Employee Identity Pane', () => {
     // not where it visually sits once actually scrolled (see Scenario B/C's own comment on this).
     await scrollGridHorizontally(page, 400);
     const codeHeaderBox = (await page.locator('[data-col-id="employeeCode"][role="columnheader"]').boundingBox())!;
-    const nameHeaderBox = (await page.locator('[data-col-id="employeeName"][role="columnheader"]').boundingBox())!;
-    const identityBox = { x: codeHeaderBox.x, width: nameHeaderBox.x + nameHeaderBox.width - codeHeaderBox.x };
+    // The pane's own trailing edge is now CNIC (widened to Code/Employee/Father Name/CNIC,
+    // Employee Identity Visibility v1.0.1 Checkpoint 1, 2026-08-25), not Employee — the sweep must
+    // cover the pane's real, full width or it silently stops proving anything about the two new
+    // columns.
+    const cnicHeaderBox = (await page.locator('[data-col-id="cnic"][role="columnheader"]').boundingBox())!;
+    const identityBox = { x: codeHeaderBox.x, width: cnicHeaderBox.x + cnicHeaderBox.width - codeHeaderBox.x };
 
     const columnHeaderY = codeHeaderBox.y + codeHeaderBox.height / 2;
     // The group-header row sits directly above the column-header row (`GROUP_ROW_HEIGHT`, 22px).

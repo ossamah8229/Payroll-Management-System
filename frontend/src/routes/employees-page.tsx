@@ -442,6 +442,15 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                   <TableRow>
                     <TableHead>Code</TableHead>
                     <TableHead>Name</TableHead>
+                    {/* Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25) — this is the
+                        canonical Employee Registry itself; `fatherName`/`cnic` are already native
+                        `Employee` columns returned by the existing `GET /employees` query with no
+                        `select` narrowing (`employees.service.ts`'s `listEmployees`), just not
+                        previously rendered as their own columns. Placed immediately after Name so two
+                        same-named employees are distinguishable at a glance, matching the same
+                        Code | Employee | Father Name | CNIC block used in Payroll Entry/Advances. */}
+                    <TableHead>Father Name</TableHead>
+                    <TableHead>CNIC</TableHead>
                     <TableHead>Designation</TableHead>
                     <TableHead>Site</TableHead>
                     <TableHead>Pay type</TableHead>
@@ -458,6 +467,8 @@ export function EmployeesPage({ user }: { user: SessionUser }) {
                     <TableRow key={employee.id}>
                       <TableCell className="text-text-muted">{employee.employeeCode ?? '—'}</TableCell>
                       <TableCell className="font-medium">{employee.name}</TableCell>
+                      <TableCell className="text-text-muted">{employee.fatherName ?? '—'}</TableCell>
+                      <TableCell className="text-text-muted">{employee.cnic ?? '—'}</TableCell>
                       <TableCell className="text-text-muted">{employee.designation}</TableCell>
                       <TableCell className="text-text-muted">{employee.site.name}</TableCell>
                       <TableCell className="text-text-muted">

@@ -259,6 +259,37 @@ function PayrollEntryRowImpl({
       </ReadOnlyCell>
     ),
 
+    // Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25) — Father Name/CNIC join the
+    // frozen identity pane alongside Code/Name (`columns.ts`'s `FROZEN_LEFT_COLUMN_IDS`), for the
+    // same reason and via the exact same mechanism: `entry.employee.fatherName`/`.cnic` are already
+    // present on every loaded entry (no new query), display-only (Employee Registry is the sole
+    // editable source, same tier as `designation`/banking below), never truncated (a business
+    // identifier, same rule `employeeCode` already follows) and never masked (no existing
+    // authorization/design rule requires masking CNIC on this screen — see this checkpoint's own
+    // authorization-audit record in `docs/PROJECT_PROGRESS.md`).
+    fatherName: (
+      <ReadOnlyCell
+        colId="fatherName"
+        truncate={false}
+        fullHeight
+        className={stickyIdentityCellClassName('fatherName', rowBackgroundClassName)}
+        style={{ left: identityOffsets.fatherName }}
+      >
+        {entry.employee.fatherName ?? '—'}
+      </ReadOnlyCell>
+    ),
+    cnic: (
+      <ReadOnlyCell
+        colId="cnic"
+        truncate={false}
+        fullHeight
+        className={stickyIdentityCellClassName('cnic', rowBackgroundClassName)}
+        style={{ left: identityOffsets.cnic }}
+      >
+        {entry.employee.cnic ?? '—'}
+      </ReadOnlyCell>
+    ),
+
     // Master Data Boundary (Phase 7D, 2026-07-30) — designation is Employee Registry's identity
     // data (same tier as employeeCode/employeeName above), never independently editable here. While
     // unreleased, the value shown is already the *live* Employee Registry value (the backend
