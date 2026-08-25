@@ -13938,6 +13938,61 @@ confirmation of the correct Advance amount before any remediation is executed.**
 
 ---
 
+## v1.0.2 RELEASED — Tag Created, GitHub Release Published (2026-08-25, later same day)
+
+The GREEN release-classification report directly above was reviewed and release explicitly
+authorized: "The Sharafat Masih inconsistency is a pre-existing live-data anomaly and does not
+block tagging the successfully deployed integrity fix."
+
+**Tag**: annotated tag **`v1.0.2`** (tag object `065aa682f7f4129a7f949994a1afa2fcac77f8d0`) created
+pointing exactly at **`096cf7933876df18729f0100920caa62647c496c`** — PR #16's merge commit, which
+passed the post-merge CI gate (run `32877904798` — Backend all six shards, Frontend, E2E all
+SUCCESS) and was production-validated — deliberately **not** the later documentation-only commit
+`4634b93`, which records the release-candidate evidence but changes no application code. Pre-
+creation check confirmed `v1.0.2` did not already exist locally or remotely (`git tag -l` /
+`git ls-remote --tags origin`), the target commit's parents were confirmed exactly `7443143b...`
+(prior `main`) and `6a9ece1f...` (PR #16 head), and the target was confirmed an ancestor of
+`origin/main`. Tag verified to resolve exactly to the intended commit before and after push
+(`git push origin v1.0.2`, only this one ref pushed, no force-push) — independently re-resolved via
+`git ls-remote --tags origin` after the push, confirming `refs/tags/v1.0.2^{}` =
+`096cf7933876df18729f0100920caa62647c496c`.
+
+**GitHub Release**: published from `v1.0.2`, titled "Payroll Management System v1.0.2",
+`isDraft: false`, `isPrerelease: false`, targeting `096cf7933876df18729f0100920caa62647c496c`
+(confirmed via `gh release view --json`), published `2026-08-25T18:01:57Z`. Body covers the
+Advance Edit/Cancel and Advance↔Payroll Entry integrity improvements (Edit narrowed to Amount +
+Advance Date + Notes; Amount edits atomically synchronize the Advance and any linked unreleased
+Draft Payroll Entry deduction; Advance Date is non-financial metadata editable at every lifecycle
+stage; Cancel correctly reverses valid unreleased reservations; Payroll Entry can no longer
+independently overwrite an Advance-managed deduction; a legacy inconsistent Advance/Payroll state
+now fails safely with a 409 instead of a 500; released payroll history remains immutable;
+concurrency guards prevent Advance/Payroll Entry divergence), and an explicit scope note that this
+release fixes the defect going forward and does **not** automatically repair any Advance/Payroll
+Entry pair already left inconsistent in production before this release.
+
+**Prior tags integrity re-confirmed**: `v1.0.0` still resolves via `^{commit}` to exactly
+`5e097ef470956ade8b022072fbdf16949539777c`; `v1.0.1` to `f5897afa38a07662fc29244e0a77e2d6866426d4`;
+`v1.0.0-rc1` to `45f6854fb9ed0fc97adf04a299b35029d9a3852c`; `backend-live-v1` to
+`2f9471834fdaff1d9909010ff4a1fd2e33d366ba` — all unchanged, unmoved, local SHAs matching remote for
+every one (`git ls-remote --tags origin`).
+
+**Sharafat Masih remains a separately controlled live-data remediation item — untouched by this
+release.** Preserved exactly as found and re-confirmed by the prior cutover entry: Advance
+`totalAmount` PKR 5,000, `outstandingBalance` PKR 0, `status` RESERVED, linked Payroll Entry
+`advanceDeduction` PKR 10,000. Ordinary Edit/Cancel/Defer now safely return a 409 domain conflict
+on this specific record rather than corrupting its state further — this is the new guard working
+as designed, not a regression. Remediation status: **PENDING BUSINESS CONFIRMATION** of whether
+PKR 5,000 or PKR 10,000 is the actual authorized/disbursed amount; the two application-level
+remediation paths remain recorded in the cutover entry above, neither executed. No direct SQL was
+run, no guard was bypassed, no production validation was weakened.
+
+**Final classification: v1.0.2 RELEASED — Advance Edit/Cancel and Advance↔Payroll Entry integrity
+production baseline established.** Per explicit instruction: no Sharafat Masih repair, no
+Reliability Phase 5 resumption, no H1/H2/H3/M2/M3 work, no further changes to the `v1.0.2` tag, no
+other release. STOP.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -14316,34 +14371,45 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-25, later same day (latest) — v1.0.2 PRODUCTION CUTOVER COMPLETE: PR #16 merged,
-post-merge `main` CI green, Render deployed, production smoke GREEN — awaiting explicit approval of
-the `v1.0.2` tag itself.** PR #16 merged via a normal merge commit
-(`096cf7933876df18729f0100920caa62647c496c`, parents `7443143b...` + `6a9ece1f...`); post-merge
-push-triggered CI run `32877904798` on that exact SHA: Backend all six shards PASS, Frontend PASS,
-E2E PASS. Render auto-deploy verified functionally (no Render API token/dashboard access this
-session, disclosed gap): backend `/health` 200 on both the custom domain and the raw Render URL,
-frontend 200 with a `last-modified` ~55s after the merge, authenticated app shell and
-frontend↔backend communication confirmed live. Production smoke: Advances and Payroll Entry both
-load normally; the narrowed Edit modal (Advance Amount / Advance Date / Notes only) confirmed live
-via a read-only inspection of Sharafat Masih's own Advance, closed without saving. Full record: this
-file's own "v1.0.2 PRODUCTION CUTOVER" entry (immediately above §2).
+**Updated 2026-08-25, later same day (latest) — v1.0.2 RELEASED.** Tag `v1.0.2` created pointing at
+`096cf7933876df18729f0100920caa62647c496c` (PR #16's merge commit — not the later docs-only
+`4634b93`); GitHub Release published (`isDraft: false`, `isPrerelease: false`, published
+`2026-08-25T18:01:57Z`). Full record: this file's own "v1.0.2 RELEASED — Tag Created, GitHub Release
+Published" entry (immediately above §2) and `docs/SESSION_HANDOFF.md` §65. **Next action: none —
+this was the terminal step of the v1.0.2 release process. Explicitly do not begin Sharafat Masih
+remediation (status: PENDING BUSINESS CONFIRMATION of whether PKR 5,000 or PKR 10,000 is correct —
+the two application-level remediation paths are recorded in the cutover entry, neither executed), do
+not resume Reliability Phase 5, do not work H1/H2/H3/S1/M2/M3, and do not change the `v1.0.2` tag,
+until separately authorized.** The next real development session should start by reading this file's
+§2–§5 for the still-open deferred items before picking up any new work.
 
-**Correction to the prior version of this note**: it previously stated a Master Admin could correct
-Sharafat Masih's Advance "using the now-fixed Edit action through the application itself." Tracing
-`updateAdvance`/`cancelAdvance`/`deferAdvanceSchedule` against this record's exact live numbers (this
-cutover's own new finding, in the entry above) found that is **not actually true** — Edit, Cancel,
-and Defer all currently return a clean 409 for this one record, for every possible input, because the
-checkpoint's own defensive bounds guard correctly refuses to reverse a PKR 10,000 live deduction
-against a PKR 5,000 Advance. **The one remaining production follow-up is not a Finance self-service
-Edit action** — it is: (1) the business first confirms whether PKR 5,000 or PKR 10,000 is the actual
-authorized/disbursed amount, then (2) an engineer executes the corresponding one-time data correction
-described in the cutover entry's two remediation paths, under separate explicit approval. **Next
-action: none until the user reviews this cutover report and separately (a) approves tagging
-`096cf7933876df18729f0100920caa62647c496c` as `v1.0.2`, and (b) confirms the correct Sharafat Masih
-Advance amount before any remediation is executed — do not tag, do not remediate Sharafat Masih,
-do not resume Reliability Phase 5, and do not touch any of Checkpoint 2's deferred findings
-(H1/H2/H3/S1/M2/M3) until then.**
+---
+
+**Updated 2026-08-25, later same day (superseded by the entry above for status purposes) — v1.0.2
+PRODUCTION CUTOVER COMPLETE: PR #16 merged, post-merge `main` CI green, Render deployed, production
+smoke GREEN — awaited explicit approval of the `v1.0.2` tag itself (now granted, see the entry
+above).** PR #16 merged via a normal merge commit (`096cf7933876df18729f0100920caa62647c496c`,
+parents `7443143b...` + `6a9ece1f...`); post-merge push-triggered CI run `32877904798` on that exact
+SHA: Backend all six shards PASS, Frontend PASS, E2E PASS. Render auto-deploy verified functionally
+(no Render API token/dashboard access this session, disclosed gap): backend `/health` 200 on both
+the custom domain and the raw Render URL, frontend 200 with a `last-modified` ~55s after the merge,
+authenticated app shell and frontend↔backend communication confirmed live. Production smoke:
+Advances and Payroll Entry both load normally; the narrowed Edit modal (Advance Amount / Advance
+Date / Notes only) confirmed live via a read-only inspection of Sharafat Masih's own Advance, closed
+without saving. Full record: this file's own "v1.0.2 PRODUCTION CUTOVER" entry (immediately above
+§2).
+
+**Correction to the prior version of this note, carried forward for its still-relevant content**: it
+previously stated a Master Admin could correct Sharafat Masih's Advance "using the now-fixed Edit
+action through the application itself." Tracing `updateAdvance`/`cancelAdvance`/
+`deferAdvanceSchedule` against this record's exact live numbers found that is **not actually true**
+— Edit, Cancel, and Defer all currently return a clean 409 for this one record, for every possible
+input, because the checkpoint's own defensive bounds guard correctly refuses to reverse a PKR 10,000
+live deduction against a PKR 5,000 Advance. The one remaining production follow-up is not a Finance
+self-service Edit action — it is: (1) the business first confirms whether PKR 5,000 or PKR 10,000 is
+the actual authorized/disbursed amount, then (2) an engineer executes the corresponding one-time
+data correction described in the cutover entry's two remediation paths, under separate explicit
+approval.
 
 ---
 

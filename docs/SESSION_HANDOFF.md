@@ -17,8 +17,28 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-25 (later same day, latest) — v1.0.2 PRODUCTION CUTOVER: PR #16 merged, post-merge
-> CI GREEN, production deployment and smoke all GREEN, STOP BEFORE TAG — and a new finding: Edit/
+> **Update, 2026-08-25 (later same day, latest) — v1.0.2 RELEASED.** Annotated tag `v1.0.2` (tag
+> object `065aa682f7f4129a7f949994a1afa2fcac77f8d0`) created pointing exactly at
+> **`096cf7933876df18729f0100920caa62647c496c`** (PR #16's merge commit — not the later docs-only
+> `4634b93`), pushed as the only ref (`git push origin v1.0.2`, no force-push), independently
+> re-resolved via `git ls-remote --tags origin` after the push. GitHub Release "Payroll Management
+> System v1.0.2" published from that tag — `isDraft: false`, `isPrerelease: false`, targeting
+> `096cf7933876df18729f0100920caa62647c496c`, published `2026-08-25T18:01:57Z`. `v1.0.0`, `v1.0.1`,
+> `v1.0.0-rc1`, and `backend-live-v1` all reconfirmed unchanged (local SHAs match remote for every
+> one). **Sharafat Masih remains untouched — remediation status PENDING BUSINESS CONFIRMATION** of
+> whether PKR 5,000 or PKR 10,000 is the actual authorized amount; the two application-level
+> remediation paths (both requiring a one-time engineer-executed correction, not a Finance
+> self-service UI action) remain recorded, neither executed; no direct SQL, no guard bypassed, no
+> production validation weakened. **Final classification: v1.0.2 RELEASED — Advance Edit/Cancel and
+> Advance↔Payroll Entry integrity production baseline established.** Full record:
+> `docs/PROJECT_PROGRESS.md`'s own "v1.0.2 RELEASED — Tag Created, GitHub Release Published" entry
+> and this file's own §65 — not duplicated here in full.
+>
+> ---
+>
+> **Update, 2026-08-25 (superseded by the entry above for status purposes) — v1.0.2 PRODUCTION
+> CUTOVER: PR #16 merged, post-merge CI GREEN, production deployment and smoke all GREEN, STOP BEFORE
+> TAG (tag has since been approved and created — see the entry above) — and a new finding: Edit/
 > Cancel/Defer are all currently blocked (409) for Sharafat Masih's specific record.** PR #16 (Advance
 > Edit/Cancel integrity fix, narrowed to Amount + Date + Notes) merged into `main` with a normal merge
 > commit, **`096cf7933876df18729f0100920caa62647c496c`**, after a re-checked pre-merge integrity gate
@@ -6703,4 +6723,67 @@ was published, `v1.0.0`/`v1.0.0-rc1`/`v1.0.1`/`backend-live-v1` were not moved, 
 NOT remediated (either path), Reliability Phase 5 was not resumed, and none of H1/H2/H3/S1/M2/M3 was
 touched. Awaiting explicit approval to tag `v1.0.2`, and separately, business confirmation of the
 correct Sharafat Masih Advance amount before any remediation is executed.
+
+---
+
+## 65. Addendum, 2026-08-25 (later same day) — v1.0.2 RELEASED: tag created, GitHub Release
+published, Sharafat Masih remediation status PENDING BUSINESS CONFIRMATION
+
+§64's GREEN release classification was reviewed and release explicitly authorized: "The Sharafat
+Masih inconsistency is a pre-existing live-data anomaly and does not block tagging the successfully
+deployed integrity fix."
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.2 RELEASED — Tag Created, GitHub
+Release Published" entry. This addendum is the session-chronology summary.
+
+**Final integrity check, immediately before tagging** — all passed: `v1.0.2` did not already exist
+locally or remotely (`git tag -l` / `git ls-remote --tags origin`); target commit
+`096cf7933876df18729f0100920caa62647c496c` confirmed to exist with exactly the expected parents
+(`7443143b...` prior `main`, `6a9ece1f...` PR #16 head) and confirmed an ancestor of `origin/main`;
+`v1.0.0`/`v1.0.0-rc1`/`v1.0.1`/`backend-live-v1` all reconfirmed unchanged on the remote before
+tagging.
+
+**Tag**: annotated tag **`v1.0.2`** (tag object `065aa682f7f4129a7f949994a1afa2fcac77f8d0`) created
+pointing exactly at **`096cf7933876df18729f0100920caa62647c496c`** — PR #16's merge commit —
+deliberately **not** the subsequent documentation commit `4634b933c41ad11091538f04b667dff60d92ff9b`
+(which records this cutover's own merge/CI/production evidence but changes no application code).
+Pushed with `git push origin v1.0.2` (only this one ref, no force-push). Independently re-resolved
+after push via `git ls-remote --tags origin`: `refs/tags/v1.0.2^{}` =
+`096cf7933876df18729f0100920caa62647c496c`, matching exactly.
+
+**GitHub Release**: published from the `v1.0.2` tag, title "Payroll Management System v1.0.2",
+`isDraft: false`, `isPrerelease: false`, `targetCommitish: 096cf7933876df18729f0100920caa62647c496c`
+(confirmed via `gh release view --json`). Release body covers the Advance Edit/Cancel and
+Advance↔Payroll Entry integrity improvements (Edit narrowed to Amount + Advance Date + Notes;
+Amount edits atomically synchronize the Advance and any linked unreleased Draft Payroll Entry
+deduction; Advance Date is non-financial metadata editable at every lifecycle stage; Cancel
+correctly reverses valid unreleased reservations; Payroll Entry can no longer independently
+overwrite an Advance-managed deduction; a legacy inconsistent state now fails safely with a 409
+instead of a 500; released payroll history remains immutable; concurrency guards prevent
+Advance/Payroll Entry divergence), with an explicit scope note that this release does not
+automatically repair any pre-existing inconsistent production record. Published
+`2026-08-25T18:01:57Z`.
+
+**Post-tag verification**: `v1.0.0` (`ea2bcfe4c989fcf8fc9293a09881bbdc0e9cc799` →
+`5e097ef470956ade8b022072fbdf16949539777c`), `v1.0.1` (`3a8592fcb4268490b4c482f852049a21e643750b` →
+`f5897afa38a07662fc29244e0a77e2d6866426d4`), `v1.0.0-rc1`
+(`69d910dceb0579c657f04edce09a643c60cd3a92` → `45f6854fb9ed0fc97adf04a299b35029d9a3852c`), and
+`backend-live-v1` (`35ed0de422c954542b74d70d065a4802c3c97113` →
+`2f9471834fdaff1d9909010ff4a1fd2e33d366ba`) all re-confirmed unchanged on the remote after the
+`v1.0.2` push.
+
+**Sharafat Masih — remediation status PENDING BUSINESS CONFIRMATION, untouched by this release.**
+Preserved exactly as found: Advance `totalAmount` PKR 5,000, `outstandingBalance` PKR 0, `status`
+RESERVED, `repaymentType` FULL_DEDUCTION, linked Payroll Entry `advanceDeduction` PKR 10,000, `notes`
+"10000 Advance Amount." Ordinary Edit/Cancel/Defer now safely return a 409 domain conflict on this
+specific record rather than corrupting its state further, per §64's own finding. No direct SQL was
+run, no guard was bypassed, no production validation was weakened. The two application-level
+remediation paths (each requiring a one-time engineer-executed correction, not a Finance
+self-service UI action) remain recorded in `docs/PROJECT_PROGRESS.md`'s cutover entry, awaiting
+business confirmation of whether PKR 5,000 or PKR 10,000 is correct before either is executed.
+
+**Final classification: v1.0.2 RELEASED — Advance Edit/Cancel and Advance↔Payroll Entry integrity
+production baseline established.** Per explicit instruction: no v1.0.3, no Sharafat Masih
+remediation, no Reliability Phase 5 resumption, no H1/H2/H3/M2/M3 work, no further changes to the
+`v1.0.2` tag, no other release. STOP.
 
