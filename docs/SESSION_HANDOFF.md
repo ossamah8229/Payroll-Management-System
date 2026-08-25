@@ -6395,3 +6395,41 @@ resumption, no Father Name search, no sticky columns, no CI-warning cleanup, no 
 refactor. Salary was not released. **STOP — a further, final read-only audit is required after
 September attendance completion, immediately before the first Salary Release click of this cycle.**
 
+---
+
+## 61. Addendum, 2026-08-25 (later same day) — Checkpoint 2 Supplementary Findings: two new items
+(H3 confirmed indistinguishable duplicate pair, S1 68%-missing Employee Code), M1 closed, still AMBER
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "Payroll Operations Readiness Checkpoint 2 —
+Supplementary Findings" entry, directly below §60's referenced entry.
+
+**Process note.** §60's own audit was produced and pushed (`a53c4d8`) by a research subagent that had
+inherited this checkpoint's full instructions (including the documentation-update mandate) while it
+had only been asked, narrowly, to research a subset of steps and report back — it committed and
+pushed to `origin/main` on its own initiative, not authorized by this session in the moment. Its
+content was independently reviewed and found accurate; nothing in it is retracted. Disclosed here for
+process-integrity reasons, not to relitigate — established practice in this repo already commits
+audit documentation directly to `main` without a per-commit approval gate, and this checkpoint's own
+instructions explicitly asked for `docs/` to be updated throughout.
+
+**S1 (new, MEDIUM)**: a full read-only sweep of all 1,247 current Draft-cycle entries (not just the
++49 new since Checkpoint 1) found **850/1,247 employees (68%) have no Employee Code recorded** —
+weakening v1.0.1's own identity-visibility fix for the majority of the roster (CNIC/Father Name remain
+populated for ~92%). Not release-blocking; a data-completeness backfill recommendation.
+
+**H3 (new, HIGH)**: the same sweep found a **live, confirmed pair of two active employees both named
+"Muhammad Tariq," both missing Employee Code, CNIC, and Father Name** — genuinely indistinguishable in
+the UI even with v1.0.1's fix, because the fields it displays are themselves empty for both. A real
+attendance/payment-misattribution risk for this specific pair. Recommend Master User/HR capture CNIC
+or Employee Code for both before September attendance entry for their site. 138 total duplicate-name
+groups (370 employees) exist in the current roster — expected at this scale, not itself an anomaly;
+only this one pair was found with zero distinguishing data on both sides.
+
+**M1 closed**: the same full-population sweep re-confirms 0 duplicate CNIC/Employee Code/Account
+Number/IBAN across all 1,247 entries, closing §60's residual "+49 not independently re-swept" gap.
+
+**Revised severity, still AMBER**: BLOCKER none; HIGH now H1, H2, H3; MEDIUM now S1, M2, M3; LOW
+unchanged. No blocker against ordinary processing; three conditions (H1/H2/H3) need resolution before
+Salary Release. Production stayed strictly read-only (GET-only against the same authenticated
+session); no file outside `docs/` touched. **STOP.**
+

@@ -13418,6 +13418,82 @@ changed. Salary was not released. STOP.
 
 ---
 
+## Payroll Operations Readiness Checkpoint 2 — Supplementary Findings (2026-08-25, later same day)
+
+**Process note, for the record.** The audit entry directly above was produced and committed
+(`a53c4d8`) by a research subagent that had inherited this checkpoint's full instructions (including
+§15's explicit "update `docs/PROJECT_PROGRESS.md`/`docs/SESSION_HANDOFF.md` throughout the
+checkpoint") while it had only been asked, narrowly, to research and report back — it committed and
+pushed to `origin/main` on its own initiative rather than returning its findings for review first. Its
+content was reviewed in full against this session's own independent findings below and found accurate
+and well-sourced (correct baseline, correct code citations, no fabricated figures) — nothing in it is
+retracted. It is being supplemented, not replaced, because this session's own parallel production
+read-only checks (below) surfaced two concrete items its code-only review could not have found, and
+because a git push to the shared `main` branch is an action this session would ordinarily confirm
+before taking. Disclosed transparently rather than silently absorbed.
+
+**S1 — Employee Code is absent for the majority of the active roster (new finding).** A full,
+read-only sweep of all 1,247 Draft-cycle `PayrollEntry` rows (not just the +49 created since
+Checkpoint 1 — this closes Finding M1's residual duplicate-sweep gap) found **850 of 1,247 employees
+(68%) have `employeeCode: null`** in the live production Employee Registry. `Employee Code` is the
+first of the four identity columns v1.0.1 added specifically to distinguish same-named employees
+(`Code | Employee | Father Name | CNIC`) — for over two-thirds of the current roster, that column is
+simply blank, so v1.0.1's own fix falls back entirely on Father Name/CNIC for those employees (both of
+which *are* populated for the large majority: 1,144/1,247 have a CNIC, 1,152/1,247 have a Father Name
+recorded). **Classification: MEDIUM** — not release-blocking (Employee Code is not a required field
+anywhere in the release-eligibility, bank-sheet, or cash-sheet code paths), but a real data-completeness
+gap worth a Master-User/HR backfill pass, since it directly weakens the tool the identity-visibility
+fix intended to give Payroll Staff.
+
+**S2 — A live, confirmed example of a genuinely indistinguishable duplicate-named pair (new finding,
+elevates part of Finding M1).** The same full-population sweep grouped all 1,247 entries by employee
+name: **138 distinct names are shared by more than one active employee, covering 370 employees in
+total** (e.g. "Imran Masih" ×12, "Shahbaz Masih" ×6) — expected at this company's scale and not itself
+an anomaly (per this checkpoint's own instructions). Cross-checking each group's Code/CNIC/Father Name
+combination found **one confirmed pair with zero distinguishing data on either side**: two active
+employees, both named "Muhammad Tariq," both `employeeCode: null`, both `cnic: null`, both
+`fatherName: null`, both assigned to the same site (`8476a430-...`). They differ only by their
+internal `employeeId` (never shown to Payroll Staff) and by banking data — one has an Account Number on
+file, the other does not. **This is a concrete, live instance of exactly the risk class v1.0.1 was
+built to mitigate, in a case its fix cannot help with, because the underlying master-data fields it
+displays are themselves empty for both employees.** Not caught by any duplicate-CNIC/Employee-Code
+database constraint, because those partial-unique indexes only fire `WHERE ... IS NOT NULL` — two
+`NULL` values never collide. **Classification: HIGH** (labeled H3, alongside H1/H2 above) — a real,
+present-day payment/attendance-misattribution risk for this one specific pair (which of the two
+"Muhammad Tariq" entries an attendance edit or a payment is actually intended for cannot currently be
+determined from anything visible in the UI), not merely a theoretical gap. Recommended resolution:
+Master User/HR should obtain and enter CNIC (or at minimum Employee Code) for both "Muhammad Tariq"
+records before September attendance entry begins for their site — a one-time Employee Registry data
+fix, not a code change, and well within read-only-checkpoint-to-actionable-item scope (this checkpoint
+did not make the edit itself, consistent with the production read-only constraint). No other
+completely-indistinguishable pair was found among the other 137 duplicate-name groups in this sweep.
+
+**Revised severity summary (supersedes the "M1" partial-sweep hedge in the entry above, all other
+findings unchanged):** BLOCKER: none. HIGH: H1 (Held-past-Finalize), H2 (Render PITR tier
+unverified), **H3 (the "Muhammad Tariq" indistinguishable pair, new)**. MEDIUM: **S1 (68% of roster
+missing Employee Code, new)**, M2 (Working Days vs. Cycle Days unguarded), M3 (two sites showing 0
+entries, coverage not yet confirmed). M1 is now closed — the full 1,247-row sweep this entry describes
+found 0 duplicate CNIC, 0 duplicate Employee Code, 0 duplicate Account Number, and 0 duplicate IBAN
+across the complete current population, confirming the database-level uniqueness guarantees hold at
+today's larger population size; the residual risk that sweep could not rule out (two employees sharing
+identical, populated identifiers) is zero, but it surfaced the *different* S1/H3 risk (missing
+identifiers) instead, which is now tracked in its own right. LOW: unchanged (`otHours` multi-unit gap,
+blank-IBAN cleanup, both carried forward).
+
+**Overall classification: unchanged at AMBER.** No blocker exists against beginning or continuing
+ordinary August/September payroll processing. Three conditions now require explicit resolution/sign-off
+before Salary Release: H1, H2, and H3 (in addition to the S1 backfill recommended, though S1 alone does
+not block release). The final pre-release audit checklist (§N above) should explicitly re-run this
+session's full-population name/identifier sweep methodology (group by name, cross-check Code/CNIC/
+Father Name within each group) as part of its own item 11, not just a raw duplicate-field count.
+
+**Production remained strictly read-only for these supplementary checks**: all findings above came
+from GET requests against `payroll-api.brooms.com.pk` (the same authenticated Master User browser
+session) aggregated and analyzed client-side; no employee record, Payroll Entry, or Advance was
+created, edited, held, or released. No new file outside `docs/` was touched. STOP.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
