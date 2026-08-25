@@ -1,6 +1,13 @@
 import { test, expect } from '../fixtures/auth';
 import { apiPost } from '../helpers/api';
 
+/** Visual UAT evidence (Step 7, v1.0.1 Checkpoint 1) — explicit screenshots at the harness's own
+ * realistic desktop viewport (1280x720, `playwright.config.ts`), saved outside the default
+ * only-on-failure `test-results/` location so they exist regardless of pass/fail and are easy to
+ * retrieve for manual review. */
+const UAT_SCREENSHOT_DIR =
+  '/private/tmp/claude-501/-Users-ossamahsuhail-Documents-Payroll-Management-System/8bf23d90-d11b-419c-ad91-7a1815ea1fdd/scratchpad/uat-screenshots';
+
 /**
  * Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25).
  *
@@ -87,12 +94,25 @@ test.describe('Employee Identity Visibility — duplicate-name distinguishabilit
     expect(peCodeCells).toEqual(expect.arrayContaining([codeA, codeB]));
     expect(peFatherCells).toEqual(expect.arrayContaining(['Abdul Rehman', 'Muhammad Farooq']));
     expect(peCnicCells).toEqual(expect.arrayContaining([cnicA, cnicB]));
+    await page.screenshot({ path: `${UAT_SCREENSHOT_DIR}/01-payroll-entry-identity-block.png` });
 
-    // Both rows are frozen-left sticky, exactly like the original Code/Employee pair.
+    // Both rows are frozen-left sticky, exactly like the original Code/Employee pair. Scroll well
+    // right and confirm the pane (now four columns) stays visually pinned, with no overlap/clipping.
+    await grid.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await page.waitForTimeout(150);
     const fatherHeaderBox = await page.locator('[data-col-id="fatherName"][role="columnheader"]').boundingBox();
     const cnicHeaderBox = await page.locator('[data-col-id="cnic"][role="columnheader"]').boundingBox();
     expect(fatherHeaderBox).not.toBeNull();
     expect(cnicHeaderBox).not.toBeNull();
+    // No overlap between adjacent frozen cells at the extreme scroll position.
+    expect(fatherHeaderBox!.x + fatherHeaderBox!.width).toBeLessThanOrEqual(cnicHeaderBox!.x + 1);
+    await expect(grid.getByText(sharedName).first()).toBeVisible();
+    await page.screenshot({ path: `${UAT_SCREENSHOT_DIR}/02-payroll-entry-scrolled-identity-pinned.png` });
+    await grid.evaluate((el) => {
+      el.scrollLeft = 0;
+    });
 
     // --- Advances ------------------------------------------------------------------------------
     const today = new Date().toISOString().slice(0, 10);
@@ -126,6 +146,7 @@ test.describe('Employee Identity Visibility — duplicate-name distinguishabilit
     // distinguishable by reading the row, not by any secondary lookup.
     expect(advRowTexts.some((t) => t.includes(codeA) && t.includes('Abdul Rehman') && t.includes(cnicA))).toBe(true);
     expect(advRowTexts.some((t) => t.includes(codeB) && t.includes('Muhammad Farooq') && t.includes(cnicB))).toBe(true);
+    await page.screenshot({ path: `${UAT_SCREENSHOT_DIR}/03-advances-identity-columns.png` });
 
     // --- Employee Registry -----------------------------------------------------------------------
     await page.goto('/employees');
@@ -140,6 +161,7 @@ test.describe('Employee Identity Visibility — duplicate-name distinguishabilit
     const regRowTexts = await regRows.allTextContents();
     expect(regRowTexts.some((t) => t.includes(codeA) && t.includes('Abdul Rehman') && t.includes(cnicA))).toBe(true);
     expect(regRowTexts.some((t) => t.includes(codeB) && t.includes('Muhammad Farooq') && t.includes(cnicB))).toBe(true);
+    await page.screenshot({ path: `${UAT_SCREENSHOT_DIR}/04-employee-registry-identity-columns.png` });
   });
 
   test('a same-named employee with no Father Name on record shows the established "—" empty-value convention in Payroll Entry, never a blank or broken cell', async ({
