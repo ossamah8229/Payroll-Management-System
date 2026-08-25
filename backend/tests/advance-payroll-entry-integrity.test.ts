@@ -256,6 +256,145 @@ describe('v1.0.2 — Advance/Payroll Entry deduction integrity, RESERVED edit, l
     expect(Number(entryAfter.advanceDeduction)).toBe(2000);
   });
 
+  // --- v1.0.2 Final Product Semantics: Advance Date editing (Amount + Date + Notes, exactly) -----
+
+  it('editing dateGiven on a RESERVED Advance is a pure metadata change — never touches the live Draft deduction, never re-versions the entry, never re-materializes', async () => {
+    const admin = await masterAdminAgent('integ-reserved-date-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Integ Reserved Date');
+    const employee = await makeEmployee(site.id, unit.id, 'Reserved Date Employee');
+    const cycle = await makeDraftCycle(admin, 2911, 3);
+
+    const advance = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '5000',
+      dateGiven: '2911-03-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2911, month: 3 },
+    });
+    const advanceId = advance.body.advance.id as string;
+
+    const beforeEdit = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
+    expect(beforeEdit.status).toBe('RESERVED');
+    const entryBefore = await getEntry(admin, cycle.id, employee.id);
+    expect(Number(entryBefore.advanceDeduction)).toBe(5000);
+
+    const materializationCountBefore = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+
+    const editRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ dateGiven: '2911-03-15' });
+    expect(editRes.status).toBe(200);
+    expect(editRes.body.advance.dateGiven.slice(0, 10)).toBe('2911-03-15');
+    expect(editRes.body.advance.status).toBe('RESERVED'); // unaffected
+    expect(Number(editRes.body.advance.outstandingBalance)).toBe(0); // unaffected
+
+    // The live Draft entry is completely untouched — no reversal, no re-materialization, no
+    // version bump. `dateGiven` never moves an Advance between payroll cycles (it has no coupling
+    // with `originalScheduledPeriodId`/`currentScheduledPeriodId` at all).
+    const entryAfter = await getEntry(admin, cycle.id, employee.id);
+    expect(entryAfter.version).toBe(entryBefore.version);
+    expect(Number(entryAfter.advanceDeduction)).toBe(5000);
+    expect(entryAfter.advanceId).toBe(advanceId);
+
+    const materializationCountAfter = await prisma.auditLog.count({
+      where: { action: 'advance.schedule_materialized', entityId: advanceId },
+    });
+    expect(materializationCountAfter).toBe(materializationCountBefore); // no duplicate materialization
+
+    const reversalAudit = await prisma.auditLog.findFirst({
+      where: { action: 'payroll_entry.advance_edit_reversed', entityId: entryBefore.id },
+    });
+    expect(reversalAudit).toBeNull();
+  });
+
+  it('a combined Amount + Date + Notes edit applies all three atomically — exactly one reversal and one re-materialization, not three', async () => {
+    const admin = await masterAdminAgent('integ-combined-edit-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Integ Combined Edit');
+    const employee = await makeEmployee(site.id, unit.id, 'Combined Edit Employee');
+    const cycle = await makeDraftCycle(admin, 2911, 4);
+
+    const advance = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '5000',
+      dateGiven: '2911-04-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2911, month: 4 },
+    });
+    const advanceId = advance.body.advance.id as string;
+    const entryBefore = await getEntry(admin, cycle.id, employee.id);
+    expect(Number(entryBefore.advanceDeduction)).toBe(5000);
+
+    const editRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '8000', dateGiven: '2911-04-20', notes: 'Corrected amount and date together' });
+    expect(editRes.status).toBe(200);
+    expect(Number(editRes.body.advance.totalAmount)).toBe(8000);
+    expect(editRes.body.advance.dateGiven.slice(0, 10)).toBe('2911-04-20');
+    expect(editRes.body.advance.notes).toBe('Corrected amount and date together');
+    expect(editRes.body.advance.status).toBe('RESERVED'); // still fully reserved at the new amount
+
+    const entryAfter = await getEntry(admin, cycle.id, employee.id);
+    expect(Number(entryAfter.advanceDeduction)).toBe(8000); // Draft deduction moved to the new amount
+    expect(entryAfter.version).toBe(entryBefore.version + 2); // exactly one reversal + one re-materialization
+
+    const reversalAudit = await prisma.auditLog.findFirst({
+      where: { action: 'payroll_entry.advance_edit_reversed', entityId: entryBefore.id },
+    });
+    expect(reversalAudit).not.toBeNull();
+  });
+
+  it('Eid Advance integrity: a combined Amount + Date + Notes edit on a RESERVED Eid Advance moves eidAdvanceDeduction in lockstep, symmetric with LOAN', async () => {
+    const admin = await masterAdminAgent('integ-eid-combined-edit-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Integ Eid Combined Edit');
+    const employee = await makeEmployee(site.id, unit.id, 'Eid Combined Edit Employee');
+    const cycle = await makeDraftCycle(admin, 2911, 5);
+
+    const advance = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'EID_ADVANCE',
+      totalAmount: '4000',
+      dateGiven: '2911-05-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2911, month: 5 },
+    });
+    const advanceId = advance.body.advance.id as string;
+    const entryBefore = await getEntry(admin, cycle.id, employee.id);
+    expect(Number(entryBefore.eidAdvanceDeduction)).toBe(4000);
+    expect(Number(entryBefore.advanceDeduction)).toBe(0); // the ordinary LOAN column is untouched
+
+    const editRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '6000', dateGiven: '2911-05-20', notes: 'Eid advance corrected' });
+    expect(editRes.status).toBe(200);
+    expect(Number(editRes.body.advance.totalAmount)).toBe(6000);
+    expect(editRes.body.advance.dateGiven.slice(0, 10)).toBe('2911-05-20');
+    expect(editRes.body.advance.status).toBe('RESERVED');
+
+    const entryAfter = await getEntry(admin, cycle.id, employee.id);
+    expect(Number(entryAfter.eidAdvanceDeduction)).toBe(6000);
+    expect(entryAfter.eidAdvanceId).toBe(advanceId);
+    expect(entryAfter.version).toBe(entryBefore.version + 2);
+
+    // Cancel reverses it exactly like a LOAN Advance would.
+    const cancelRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Eid advance no longer needed' });
+    expect(cancelRes.status).toBe(200);
+    expect(Number(cancelRes.body.advance.outstandingBalance)).toBe(6000);
+
+    const entryAfterCancel = await getEntry(admin, cycle.id, employee.id);
+    expect(Number(entryAfterCancel.eidAdvanceDeduction)).toBe(0);
+    expect(entryAfterCancel.eidAdvanceId).toBeNull();
+  });
+
   it('rejects reducing a RESERVED Advance below what has already been repaid via RELEASED payroll', async () => {
     const admin = await masterAdminAgent('integ-reserved-floor-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site Integ Reserved Floor');
@@ -421,12 +560,13 @@ describe('v1.0.2 — Advance/Payroll Entry deduction integrity, RESERVED edit, l
       data: { advanceDeduction: '9000', version: { increment: 1 } },
     });
 
-    // Editing repaymentType (not totalAmount) still triggers the reverse-and-recalculate path,
-    // exercising the guard even when totalAmount itself isn't part of this particular edit.
+    // v1.0.2: totalAmount is the only field left that can trigger the reverse-and-recalculate path
+    // (repaymentType/scheduledInstallmentAmount are fixed at creation now) — a genuine change to it
+    // still exercises the guard the same way.
     const editRes = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ repaymentType: 'FULL_DEDUCTION' });
+      .send({ totalAmount: '6000' });
     expect(editRes.status).toBe(409);
     expect(editRes.body.error.message).toMatch(/inconsistent with its recorded amount/i);
   });

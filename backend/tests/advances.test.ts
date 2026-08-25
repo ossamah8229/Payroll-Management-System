@@ -697,7 +697,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
 
   // --- Update -------------------------------------------------------------------------------------
 
-  it('updates notes/repaymentType/scheduledInstallmentAmount and audits the change', async () => {
+  it('updates dateGiven/notes and audits the change — repaymentType/scheduledInstallmentAmount are fixed at creation and no longer accepted by Edit (v1.0.2)', async () => {
     const admin = await masterAdminAgent('adv-update-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Update');
     const employee = await makeEmployee(site.id, unit.id, 'Update Employee');
@@ -708,6 +708,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
       totalAmount: '9000',
       dateGiven: '2026-01-01',
       repaymentType: 'INSTALLMENT',
+      scheduledInstallmentAmount: '2500',
       originalPeriod: { year: 2900, month: 1 },
     });
     const advanceId = created.body.advance.id as string;
@@ -715,12 +716,59 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     const res = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ scheduledInstallmentAmount: '3000', notes: 'Standing schedule set' });
+      // repaymentType/scheduledInstallmentAmount are sent alongside dateGiven/notes on purpose —
+      // the schema silently strips them (they're no longer part of `updateAdvanceSchema`), proving
+      // they can never be changed through this endpoint any more, not just that the UI stopped
+      // offering them.
+      .send({ dateGiven: '2026-01-15', notes: 'Corrected the date entered at creation', scheduledInstallmentAmount: '3000' });
     expect(res.status).toBe(200);
-    expect(Number(res.body.advance.scheduledInstallmentAmount)).toBeCloseTo(3000, 2);
+    expect(res.body.advance.dateGiven.slice(0, 10)).toBe('2026-01-15');
+    expect(res.body.advance.notes).toBe('Corrected the date entered at creation');
+    expect(Number(res.body.advance.scheduledInstallmentAmount)).toBeCloseTo(2500, 2); // unchanged
 
     const auditEntry = await prisma.auditLog.findFirst({ where: { action: 'advance.updated', entityId: advanceId } });
     expect(auditEntry).not.toBeNull();
+    const changes = (auditEntry?.metadata as { changes: Record<string, unknown> }).changes;
+    expect(Object.keys(changes)).toEqual(expect.arrayContaining(['dateGiven', 'notes']));
+    expect(changes.scheduledInstallmentAmount).toBeUndefined();
+  });
+
+  it('allows editing dateGiven at any lifecycle stage, including once CANCELLED — never requires Cancel-and-recreate merely to fix a mistyped date', async () => {
+    const admin = await masterAdminAgent('adv-update-date-cancelled-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site ADV Update Date Cancelled');
+    const employee = await makeEmployee(site.id, unit.id, 'Update Date Cancelled Employee');
+
+    const created = await createAdvance(admin, {
+      employeeId: employee.id,
+      type: 'LOAN',
+      totalAmount: '9000',
+      dateGiven: '2026-01-01',
+      repaymentType: 'FULL_DEDUCTION',
+      originalPeriod: { year: 2900, month: 1 },
+    });
+    const advanceId = created.body.advance.id as string;
+
+    const cancelRes = await admin.agent
+      .post(`/api/v1/advances/${advanceId}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Wrong employee — voiding' });
+    expect(cancelRes.status).toBe(200);
+
+    const dateEditRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ dateGiven: '2026-02-10' });
+    expect(dateEditRes.status).toBe(200);
+    expect(dateEditRes.body.advance.dateGiven.slice(0, 10)).toBe('2026-02-10');
+    expect(dateEditRes.body.advance.status).toBe('CANCELLED'); // date-only edit never touches status
+
+    // A financial edit is still correctly rejected once CANCELLED — dateGiven's free editability is
+    // not a loophole that reopens the amount too.
+    const amountEditRes = await admin.agent
+      .patch(`/api/v1/advances/${advanceId}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ totalAmount: '5000' });
+    expect(amountEditRes.status).toBe(400);
   });
 
   // --- Operational Stabilization Checkpoint (2026-07-24) — Defect D/E: immediate materialization
@@ -916,7 +964,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(Number(releasedEntry?.advanceDeduction)).toBeCloseTo(4000, 2);
   });
 
-  it('editing an ACTIVE Advance already materialized into the current Draft recalculates the Draft deduction correctly and exactly once, while a prior Released deduction stays untouched', async () => {
+  it('editing totalAmount (v1.0.2: the only remaining live-recalc trigger) on an ACTIVE Advance already materialized into the current Draft recalculates the Draft deduction correctly and exactly once, while a prior Released deduction stays untouched', async () => {
     const admin = await masterAdminAgent('adv-edit-live-recalc-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit Live Recalc');
     const employee = await makeEmployee(site.id, unit.id, 'Edit Live Recalc Employee', '40000');
@@ -968,25 +1016,29 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
       where: { action: 'advance.schedule_materialized', entityId: advanceId },
     });
 
-    // Edit the standing installment schedule while Cycle 2's deduction is still live (unreleased).
+    // Edit totalAmount (12000 -> 6000) while Cycle 2's 4000 deduction is still live (unreleased).
+    // scheduledInstallmentAmount stays fixed at 4000 (no longer editable, v1.0.2) — the new,
+    // lower total still forces a genuinely different recalculated deduction because the standing
+    // 4000 installment now exceeds what remains outstanding once the 4000 already-released amount
+    // is excluded (6000 - 4000 released = 2000 left, capped below the 4000 installment).
     const editRes = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ scheduledInstallmentAmount: '1500' });
+      .send({ totalAmount: '6000' });
     expect(editRes.status).toBe(200);
 
     // Cycle 2's Draft deduction recalculates to the new amount — exactly once, not additive/doubled.
     const cycle2EntryAfter = (
       await admin.agent.get(`/api/v1/payroll-cycles/${cycle2.id}/entries?employeeId=${employee.id}`)
     ).body.entries[0];
-    expect(Number(cycle2EntryAfter.advanceDeduction)).toBeCloseTo(1500, 2);
+    expect(Number(cycle2EntryAfter.advanceDeduction)).toBeCloseTo(2000, 2);
     expect(cycle2EntryAfter.advanceId).toBe(advanceId);
     expect(cycle2EntryAfter.version).toBe(cycle2EntryBefore.version + 2); // one reversal + one re-materialization
 
     const advanceAfter = (await admin.agent.get(`/api/v1/advances/${advanceId}`)).body.advance;
-    // 12000 total - 4000 released (cycle 1) - 1500 newly recalculated (cycle 2) = 6500.
-    expect(Number(advanceAfter.outstandingBalance)).toBeCloseTo(6500, 2);
-    expect(advanceAfter.status).toBe('ACTIVE');
+    // 6000 total - 4000 released (cycle 1) - 2000 newly recalculated (cycle 2) = 0 — fully reserved.
+    expect(Number(advanceAfter.outstandingBalance)).toBeCloseTo(0, 2);
+    expect(advanceAfter.status).toBe('RESERVED');
 
     // Exactly one new materialization audit entry was recorded for this recalculation.
     const materializationCountAfter = await prisma.auditLog.count({
@@ -1102,7 +1154,7 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     const res = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
       .set('x-csrf-token', admin.csrfToken)
-      .send({ totalAmount: '9000', repaymentType: 'INSTALLMENT', scheduledInstallmentAmount: '4000', notes: 'just a note' });
+      .send({ totalAmount: '9000', dateGiven: '2026-01-01', notes: 'just a note' });
     expect(res.status).toBe(200);
 
     const entryAfter = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entryBefore.id } });

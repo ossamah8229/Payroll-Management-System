@@ -422,24 +422,25 @@ export async function createAdvance(
   });
 }
 
-/** Ordinary field edit — deliberately narrow (see `updateAdvanceSchema`'s own doc comment).
- * `totalAmount`/`outstandingBalance`/`type`/`status`/scheduled-period fields never move through
- * this path; they only ever change via the system actions that own them. */
 /**
- * Ordinary field edits — lifecycle-aware (Operational Stabilization Checkpoint, 2026-07-24; widened
- * from the original Phase 4 Checkpoint 5 shape, which allowed only `repaymentType`/
- * `scheduledInstallmentAmount`/`notes`). The full editability matrix:
+ * Ordinary field edits — lifecycle-aware, narrowed to exactly `totalAmount`/`dateGiven`/`notes` by
+ * explicit business decision (v1.0.2 Advance Edit/Cancel Final Product Semantics checkpoint,
+ * 2026-08-25 — see `updateAdvanceSchema`'s own doc comment for the full "why exactly these three"
+ * reasoning). Widened from the Operational Stabilization Checkpoint's (2026-07-24) shape, which also
+ * allowed `repaymentType`/`scheduledInstallmentAmount`; those are now fixed at creation. The full
+ * editability matrix:
  *
  * - `notes`: always editable, at any lifecycle stage, including `PAID_OFF`/`CANCELLED`.
- * - `repaymentType`, `scheduledInstallmentAmount`: editable while `status = 'ACTIVE'`; rejected once
- *   `PAID_OFF`/`CANCELLED` (nothing left to schedule).
- * - `totalAmount`: editable while `status = 'ACTIVE'`, bounded below by what has already been repaid
- *   (`totalAmount - outstandingBalance`, computed from THIS advance's own already-materialized
- *   deductions) — `outstandingBalance` is adjusted by the exact same delta so it always stays
- *   internally consistent (`newOutstanding = newTotalAmount - alreadyRepaid`), never independently
- *   recalculated. Rejected once `PAID_OFF`/`CANCELLED` — reopening a closed Advance is out of this
- *   checkpoint's scope (`status` stays a system-managed field either way; see `cancelAdvance` for the
- *   one user-facing status transition this module exposes).
+ * - `dateGiven`: always editable, at any lifecycle stage, same as `notes` — traced to have zero
+ *   effect on materialization/reservation/release (purely descriptive/reporting), so there is no
+ *   lifecycle stage at which it needs to be, or safely can be, blocked.
+ * - `totalAmount`: editable while `status = 'ACTIVE'` or `'RESERVED'`, bounded below by what has
+ *   already been repaid (`totalAmount - outstandingBalance`, computed from THIS advance's own
+ *   already-materialized deductions) — `outstandingBalance` is adjusted by the exact same delta so
+ *   it always stays internally consistent (`newOutstanding = newTotalAmount - alreadyRepaid`), never
+ *   independently recalculated. Rejected once `PAID_OFF`/`CANCELLED` — reopening a closed Advance is
+ *   out of this checkpoint's scope (`status` stays a system-managed field either way; see
+ *   `cancelAdvance` for the one user-facing status transition this module exposes).
  * - the deduction start cycle (`originalScheduledPeriodId`/`currentScheduledPeriodId`): never
  *   editable here, at any lifecycle stage. Before materialization, correct it by cancelling this
  *   Advance and recording a fresh one (`cancelAdvance`, below) — never a silent field edit, and never
@@ -448,7 +449,8 @@ export async function createAdvance(
  *   path, and only that path may write an audited `AdvanceScheduleChange` row (its `payrollEntryId`
  *   column is `NOT NULL` by design — there never was, and still isn't, a "reschedule before it ever
  *   lands" mechanism, matching that function's own doc comment).
- * - `type`, `status`: always system-managed only, never a plain field edit.
+ * - `type`, `status`, `repaymentType`, `scheduledInstallmentAmount`: always system-/creation-managed
+ *   only, never a plain field edit through this function.
  */
 export async function updateAdvance(
   currentUser: SessionUser,
@@ -459,33 +461,24 @@ export async function updateAdvance(
   const advance = await getAdvanceOrThrow(id);
   assertSiteAccess(currentUser, advance.employee.siteId);
 
-  // v1.0.2 Advance Edit/Cancel checkpoint (2026-08-25): RESERVED is now editable too, not just
-  // ACTIVE — a fully-materialized-but-unreleased Advance (outstandingBalance already 0) still has
-  // a live, reversible Draft deduction, and Finance needs to correct it (e.g. a mis-entered amount)
-  // without cancelling and re-recording. Reuses the exact same reverse-then-re-materialize path
-  // below that already handles an ACTIVE Advance's own live deduction — RESERVED was excluded only
-  // by this status gate, not by any actual limitation in that logic.
-  const isFinancialEdit = input.totalAmount !== undefined || input.repaymentType !== undefined || input.scheduledInstallmentAmount !== undefined;
+  // v1.0.2 checkpoint: `totalAmount` is now the only remaining "financial" (ledger-affecting)
+  // field — the status gate below exists for it alone; `dateGiven`/`notes` bypass it entirely at
+  // every lifecycle stage (see the doc comment above). RESERVED is included alongside ACTIVE
+  // (unchanged from the prior checkpoint) — a fully-materialized-but-unreleased Advance
+  // (outstandingBalance already 0) still has a live, reversible Draft deduction, and Finance needs
+  // to correct it without cancelling and re-recording.
+  const isFinancialEdit = input.totalAmount !== undefined;
   if (isFinancialEdit && advance.status !== 'ACTIVE' && advance.status !== 'RESERVED') {
     const statusDescription = advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled';
-    throw badRequest(`This Advance is ${statusDescription} — only its notes can still be edited`);
+    throw badRequest(`This Advance is ${statusDescription} — only its date and notes can still be edited`);
   }
 
   // Does this edit actually change a value that affects what should be deducted this cycle? A
-  // same-value resubmission (e.g. saving the modal after only touching `notes`, which the frontend
-  // always submits totalAmount/repaymentType/scheduledInstallmentAmount alongside for an ACTIVE
-  // advance) must not needlessly reverse-and-recalculate an already-correct live Draft deduction —
-  // that would bump the entry's `version` and write audit noise for a no-op.
-  const scheduledInstallmentChanged =
-    input.scheduledInstallmentAmount !== undefined &&
-    (input.scheduledInstallmentAmount === null
-      ? advance.scheduledInstallmentAmount !== null
-      : advance.scheduledInstallmentAmount === null ||
-        !advance.scheduledInstallmentAmount.equals(input.scheduledInstallmentAmount));
-  const financialValueChanged =
-    (input.totalAmount !== undefined && !advance.totalAmount.equals(input.totalAmount)) ||
-    (input.repaymentType !== undefined && input.repaymentType !== advance.repaymentType) ||
-    scheduledInstallmentChanged;
+  // same-value resubmission (e.g. saving the modal after only touching `notes`/`dateGiven`) must not
+  // needlessly reverse-and-recalculate an already-correct live Draft deduction — that would bump the
+  // entry's `version` and write audit noise for a no-op. `totalAmount` is the only field left that
+  // can ever trigger this (`dateGiven`/`notes` never touch the ledger — see the doc comment above).
+  const financialValueChanged = input.totalAmount !== undefined && !advance.totalAmount.equals(input.totalAmount);
 
   const isLoan = advance.type === 'LOAN';
 
@@ -495,9 +488,9 @@ export async function updateAdvance(
      * deduction, if any — same lookup `cancelAdvance` uses. **Root-cause fix (post-review, this
      * checkpoint):** a prior version of this function only ever wrote `Advance.totalAmount`/
      * `outstandingBalance` on edit — it never touched an already-materialized Draft deduction, which
-     * meant editing `totalAmount`/`repaymentType`/`scheduledInstallmentAmount` on an Advance that
-     * already had a live (unreleased) Draft deduction silently left that Draft figure stale under
-     * the OLD rules. Fixed by reversing that deduction first (the identical math `cancelAdvance` and
+     * meant editing `totalAmount` on an Advance that already had a live (unreleased) Draft deduction
+     * silently left that Draft figure stale under the OLD rules. Fixed by reversing that deduction
+     * first (the identical math `cancelAdvance` and
      * `deferAdvanceSchedule` already use) and re-materializing it under the NEW rules, in the same
      * transaction, via the same shared `materializeOneAdvanceDeduction` helper every other
      * materialization path uses — never a second, independent recalculation. A RELEASED entry is
@@ -561,11 +554,8 @@ export async function updateAdvance(
     }
 
     const data: Prisma.AdvanceUncheckedUpdateInput = {
-      ...(input.repaymentType !== undefined && { repaymentType: input.repaymentType }),
-      ...(input.scheduledInstallmentAmount !== undefined && {
-        scheduledInstallmentAmount: input.scheduledInstallmentAmount,
-      }),
       ...(input.notes !== undefined && { notes: input.notes }),
+      ...(input.dateGiven !== undefined && { dateGiven: isoDateToUtcDate(input.dateGiven)! }),
       ...(input.totalAmount !== undefined && { totalAmount: effectiveTotalAmount }),
       ...((input.totalAmount !== undefined || reversedAmount) && { outstandingBalance: effectiveOutstandingBalance }),
     };

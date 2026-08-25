@@ -55,22 +55,49 @@ export const createAdvanceSchema = z.object({
 
 export type CreateAdvanceInput = z.infer<typeof createAdvanceSchema>;
 
-/** Ordinary field edits to an already-created Advance (Operational Stabilization Checkpoint,
- * 2026-07-24 — widened from the original Phase 4 Checkpoint 5 shape to add `totalAmount`, per the
- * lifecycle-aware editability review). `outstandingBalance`, `type`, `status`, and every
- * scheduled-period field are still never directly editable here — they only ever change through the
- * system actions that own them (materialization, deferral, cancellation): editing them as plain
- * fields would let history be silently rewritten. `totalAmount` IS editable here, but the service
- * layer enforces it can never drop below what has already been repaid (`totalAmount -
- * outstandingBalance`) and rejects the edit entirely once `status` is `PAID_OFF`/`CANCELLED` — see
- * `advances.service.ts`'s `updateAdvance` for the full lifecycle-aware editability matrix. The
- * Advance's own "deduction start cycle" is deliberately still not editable through this endpoint at
- * any lifecycle stage — correct it via Cancel (pre-materialization) or Defer (post-materialization)
- * instead, never a silent field edit (see `cancelAdvanceSchema` and `deferAdvanceScheduleSchema`). */
+/**
+ * Ordinary field edits to an already-created Advance — narrowed to exactly three user-editable
+ * fields by explicit business decision (v1.0.2 Advance Edit/Cancel Final Product Semantics
+ * checkpoint, 2026-08-25): `totalAmount`, `dateGiven`, `notes`. Nothing more. The frozen rule this
+ * enforces: **Edit is for correcting an existing Advance's own recorded figures; Cancel is for
+ * invalidating one.** A user should never have to Cancel-and-recreate an otherwise-valid Advance
+ * merely because its Amount or Date was mistyped.
+ *
+ * `outstandingBalance`, `type`, `status`, and every scheduled-period field are still never directly
+ * editable here — they only ever change through the system actions that own them (materialization,
+ * deferral, cancellation): editing them as plain fields would let history be silently rewritten.
+ *
+ * `repaymentType`/`scheduledInstallmentAmount` were editable here in the prior (Operational
+ * Stabilization Checkpoint, 2026-07-24) shape but are deliberately retired from this endpoint by
+ * this checkpoint's business decision — they are now fixed at creation (`createAdvanceSchema`) for
+ * the life of the Advance. This is not a technical limitation; it's the explicit "exactly three
+ * fields, nothing more" scope this checkpoint's brief mandated for Edit.
+ *
+ * `totalAmount` IS editable here, but the service layer enforces it can never drop below what has
+ * already been repaid (`totalAmount - outstandingBalance`, RELEASED-only) and rejects the edit
+ * entirely once `status` is `PAID_OFF`/`CANCELLED` — see `advances.service.ts`'s `updateAdvance` for
+ * the full lifecycle-aware editability matrix.
+ *
+ * `dateGiven` — traced (this checkpoint) to have zero coupling with payroll-cycle placement or
+ * released-history immutability: which cycle an Advance's deduction lands in is governed
+ * exclusively by `originalScheduledPeriodId`/`currentScheduledPeriodId` (set at creation via
+ * `originalPeriod`, moved only by `deferAdvanceSchedule`), never by `dateGiven` — a purely
+ * descriptive/reporting field (statements, the Advance Recovery Report, Employee Payroll History).
+ * Editing it therefore never touches materialization, reservation, or release state, and — like
+ * `notes` — is deliberately editable at every lifecycle stage, including `PAID_OFF`/`CANCELLED`:
+ * blocking it there would recreate exactly the "must Cancel-and-recreate to fix a typo" friction
+ * this checkpoint exists to remove, and worse, `cancelAdvance` itself already refuses a non-ACTIVE/
+ * RESERVED Advance, so Edit would be the only possible avenue to ever fix it.
+ *
+ * The Advance's own "deduction start cycle" is deliberately still not editable through this
+ * endpoint at any lifecycle stage — correct it via Cancel (pre-materialization) or Defer
+ * (post-materialization) instead, never a silent field edit (see `cancelAdvanceSchema` and
+ * `deferAdvanceScheduleSchema`). Employee and Advance/Eid Advance `type` are likewise immutable —
+ * never part of this schema at all.
+ */
 export const updateAdvanceSchema = z.object({
   totalAmount: decimalString.optional(),
-  repaymentType: advanceRepaymentTypeSchema.optional(),
-  scheduledInstallmentAmount: z.preprocess(emptyToNull, decimalString.nullable().optional()),
+  dateGiven: z.string().date().optional(),
   notes: optionalTrimmedString(2000),
 });
 
