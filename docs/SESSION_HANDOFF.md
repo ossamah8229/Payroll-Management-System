@@ -17,7 +17,29 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-21 (latest) — Backend/CI Reliability Checkpoint 2, and Payslips Batch-Audit
+> **Update, 2026-08-25 (latest) — v1.0.1 Checkpoint 1: PR #15 merged, post-merge CI GREEN, production
+> deployment and read-only smoke all GREEN, STOP BEFORE TAG.** PR #15 (Employee Identity Visibility —
+> `Code | Employee | Father Name | CNIC` in Payroll Entry, Advances, Employee Registry) merged into
+> `main` with a normal merge commit, **`f5897afa38a07662fc29244e0a77e2d6866426d4`**, after a re-checked
+> pre-merge integrity gate (head unchanged, CI green at that head, no diverged `main`, zero backend/
+> payroll-calculation files). Post-merge CI (run `32825644622`, on the actual merge commit) is
+> **SUCCESS** — Backend all six shards, Frontend, E2E all green. Production deployment verified
+> functionally (no Render API/CLI access this session, disclosed): backend `/health` 200, frontend
+> 200, authenticated session loads real data. **Read-only production smoke all GREEN** on all three
+> screens — the identity columns are live in production, the frozen Payroll Entry pane behaves
+> correctly under horizontal scroll, and **a real duplicate-name pair was found directly in
+> production** (four distinct active employees all named "Muhammad Imran," distinguished only by the
+> new Father Name/CNIC columns) — no synthetic case was needed. **Zero production data was mutated.**
+> `v1.0.0` confirmed unchanged (`5e097ef470956ade8b022072fbdf16949539777c`). **Classification: GREEN —
+> v1.0.1 production candidate validated and ready to tag; recommended tag target
+> `f5897afa38a07662fc29244e0a77e2d6866426d4`.** Per explicit instruction, **the `v1.0.1` tag was NOT
+> created, no GitHub Release was published** — awaiting separate approval. Full record:
+> `docs/PROJECT_PROGRESS.md`'s own "v1.0.1 Checkpoint 1 — Merge, Production Verification" entry and
+> this file's own §58 — not duplicated here in full.
+>
+> ---
+>
+> **Update, 2026-08-21 — Backend/CI Reliability Checkpoint 2, and Payslips Batch-Audit
 > Ordering Fix — Reliability Phase 4 COMPLETE. Both COMMITTED and MERGED to `main`.** Continues the
 > Checkpoint 2 item left open by the entry below. **Checkpoint 2A** (`5b6b9b8`, "fix: dispose session
 > store before pool teardown"): the `Jest did not exit...` warning and CI run #88's
@@ -6188,4 +6210,55 @@ pre-existing/unrelated flake — fixed (`e99c211`) to a repo-relative path insid
 
 **Per explicit instruction: STOP BEFORE MERGE.** Not merged, not deployed, no `v1.0.1` tag created, no
 Reliability Phase 5 work resumed. Awaiting explicit approval.
+
+---
+
+## 58. Addendum, 2026-08-25 (later same day) — v1.0.1 Checkpoint 1: PR #15 merged, post-merge CI
+GREEN, production deployment and read-only smoke all GREEN, STOP BEFORE TAG
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.1 Checkpoint 1 — Merge, Production
+Verification" entry, directly below §57's entry. This addendum is the session-chronology summary.
+
+Approval to merge PR #15 was granted. Pre-merge integrity gate re-checked and passed in full (head
+still `369ea3dc23dfe292078a55b8b201fa9147540877`, CI green at that exact head, `mergeStateStatus:
+CLEAN`, `origin/main` not diverged, working tree clean, diff scope unchanged — zero backend/
+payroll-calculation files). Merged with a normal merge commit — **`f5897afa38a07662fc29244e0a77e2d6866426d4`**
+— no squash, no rebase, no `--admin`. The approved PR head confirmed as an ancestor of the resulting
+`main`.
+
+**Post-merge CI** (run `32825644622`, head exactly the merge commit) — **SUCCESS**: Backend all six
+shard steps individually green, Frontend green, E2E green (`Run Playwright E2E suite` itself
+completed; only the on-failure-only artifact-upload steps were skipped, not the suite).
+
+**Production deployment verification** — no Render API token/CLI available this session (disclosed,
+not glossed over). Backend `/health` → 200 `{"status":"ok"}`; frontend → 200, `last-modified` ~64s
+after the merge timestamp (circumstantial evidence of auto-deploy pickup, not SHA-level proof).
+Authenticated production session (Ossamah Suhail/Finance, Master User) loaded the Dashboard with real
+live data, confirming frontend↔backend communication.
+
+**Production smoke, all read-only** (no employee/Payroll Entry/Advance/Correction/release/attendance
+mutation of any kind): **Payroll Entry** — `Code | Employee | Father Name | CNIC` visible directly in
+the frozen identity pane; horizontal-scroll test confirmed the widened pane stays correctly pinned
+with no overlap/clipping/z-index regression; existing rows and columns intact. **Advances** — same
+four-column identity block visible directly; existing layout/functionality unchanged. **Employee
+Registry** — same four-column identity block visible in the main grid; rows load normally; Father Name
+search still deliberately deferred. **A real duplicate-name pair was found directly in production** —
+four separate active employees all literally named "Muhammad Imran," each now cleanly distinguishable
+only via the newly-visible Father Name/CNIC columns (full table in `PROJECT_PROGRESS.md`'s entry) — so
+**no synthetic duplicate-name case was needed**; the local "Muhammad Talha" UAT from the prior
+checkpoint was not required as a fallback. Regression smoke (Payslips, Reports, Advances, Employee
+Registry navigation) all clean; the known incomplete-August-attendance state was correctly **not**
+re-flagged as a defect.
+
+**Zero production mutations, confirmed.** `v1.0.0` confirmed unchanged (tag object
+`ea2bcfe4c989fcf8fc9293a09881bbdc0e9cc799` still resolves to commit
+`5e097ef470956ade8b022072fbdf16949539777c`).
+
+**Release classification: GREEN — v1.0.1 production candidate validated and ready to tag. Recommended
+tag target: `f5897afa38a07662fc29244e0a77e2d6866426d4`.**
+
+**Per explicit instruction: STOP BEFORE TAG.** The `v1.0.1` tag was NOT created, no GitHub Release was
+published, `v1.0.0` was not moved, Reliability Phase 5 was not resumed, and no unrelated improvement
+(Father Name search, sticky columns elsewhere) was started. Awaiting explicit approval to publish
+`v1.0.1`.
 

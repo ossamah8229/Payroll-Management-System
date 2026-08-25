@@ -12833,6 +12833,152 @@ Reliability Phase 5 not resumed. Awaiting explicit approval.**
 
 ---
 
+## v1.0.1 Checkpoint 1 — Merge, Production Verification (2026-08-25, later same day)
+
+Approval to merge PR #15 was granted. This entry records the actual merge, the post-merge CI gate on
+`main`, production deployment verification, and read-only production smoke of the Employee Identity
+Visibility patch — under explicit instruction to **STOP before creating the `v1.0.1` tag** and report
+back for separate approval rather than tag unilaterally.
+
+### Pre-merge integrity gate
+
+Immediately before merging: PR #15 was OPEN (marked Ready for Review this session), head exactly
+`369ea3dc23dfe292078a55b8b201fa9147540877` (matched `refs/pull/15/head` and the remote branch tip
+exactly — no new commit had appeared since the approved checkpoint); `mergeStateStatus: CLEAN`,
+`mergeable: MERGEABLE`; `origin/main` (`7296a8a4b0639fb42453b5928b15d0a87390a036`) was exactly the
+merge-base with the PR branch — no unexpected divergence; working tree clean. `git diff
+origin/main..369ea3dc` re-confirmed the full 12-file scope (`docs/`, `frontend/src/`,
+`tests/e2e/specs/` only) — **zero backend files, zero payroll-calculation files**, matching the
+approved Checkpoint 1 scope exactly. All conditions met — proceeded.
+
+### Merge
+
+PR #15 marked Ready for Review, then merged with a normal merge commit (`gh pr merge 15 --merge`; no
+squash, no rebase, no `--admin`, no force-push). **Merge SHA:
+`f5897afa38a07662fc29244e0a77e2d6866426d4`**, parents `7296a8a4` (prior `main`) and `369ea3dc` (PR #15
+head), merged 2026-08-25T08:14:57Z. Confirmed the approved PR head `369ea3dc23dfe292078a55b8b201fa9147540877`
+is an ancestor of the resulting `main` (`git merge-base --is-ancestor`, exit 0).
+
+### Post-merge CI on `main`
+
+Push-triggered run **32825644622** (event `push`, head SHA exactly the merge commit
+`f5897afa38a07662fc29244e0a77e2d6866426d4`) completed `conclusion: success`. Job-level breakdown:
+**Backend — SUCCESS**, all six shard steps individually confirmed green (`Run backend tests (shard
+1/6)` through `(shard 6/6)`, each `conclusion: success`), plus the surrounding Prisma
+generate/migrate/seed, typecheck, lint, and `Build backend` steps all green. **Frontend — SUCCESS.**
+**E2E — SUCCESS** — the `Run Playwright E2E suite` step itself completed successfully (not skipped);
+only the two artifact-upload steps (`Upload Playwright HTML report` / `.../traces/screenshots/videos`)
+were skipped, which is expected — those are on-failure-only steps, not a dependency skip of the suite
+itself. This is a genuine, independently-executed gate on the actual merge commit, not a reuse of the
+PR candidate run's result.
+
+### Production deployment verification
+
+**Gap disclosed up front: this session has no Render API token or Render CLI installed, so Render's
+own build/deploy logs could not be inspected directly.** Verification was therefore functional/
+HTTP-based:
+
+- Backend `https://payroll-api.brooms.com.pk/health` → HTTP 200, `{"status":"ok"}`.
+- Frontend `https://payroll.brooms.com.pk/` → HTTP 200. Its `last-modified` response header
+  (`2026-08-25 08:16:01 UTC`) is only ~64 seconds after the merge commit's timestamp
+  (`08:14:57 UTC`) — consistent with an auto-deploy triggered by the merge, though this is
+  circumstantial timing evidence, not a SHA-level deploy confirmation (no Render log access, as
+  disclosed above).
+- **Authenticated app shell and frontend↔backend communication confirmed working directly** — the
+  user's own already-authenticated browser session on `payroll.brooms.com.pk`
+  (Ossamah Suhail/Finance, Master User) loaded the Dashboard with real live data (August 2026 Draft
+  cycle, 1,247 employees, Net Payroll PKR 934,122.58, 0/1,247 released) against the newly deployed
+  backend.
+- **Newly deployed Employee Identity UI confirmed present** — see the three screen-by-screen smoke
+  checks below; the `Code | Father Name | CNIC` columns are live in production, not just locally.
+
+### Production smoke — read-only only (Steps 6–9)
+
+All checks below were performed as authenticated `GET`/navigation/client-side search only — no
+employee edited, no Father Name/CNIC changed, no Payroll Entry or Working Days figure altered, no
+attendance entered, no Advance created or modified, no Correction approved, no entry held/unheld, no
+salary released, no employee created, no production seeding, no migration, no SQL run.
+
+**Payroll Entry** (`/payroll-cycles/235770e4-c444-4adf-8e5b-c2da0ff02f35/payroll-entry`, August 2026
+Draft): identity block directly shows `Code | Employee | Father Name | CNIC` — both Father Name and
+CNIC visible without opening any employee detail page. Existing rows render correctly (Murad Khan,
+Sadaan Suhail, Shazia Suhail, Durr E Nayyab, Hamza Suhail, Muhammad Abrar, and others). Horizontal
+scroll test: scrolled the grid right through Bank No./IBAN/Gross Pay/Units/Working Days — the widened
+4-column frozen/sticky identity pane stayed correctly pinned throughout, with a clean divider and no
+overlap, clipping, or z-index regression observed (confirmed via a zoomed screenshot of the pane
+boundary). All pre-existing payroll columns (Designation, Site, Bank details, Gross Pay, Units,
+Working Days, etc.) remain present.
+
+**Advances** (`/advances`): identity presentation directly exposes `Code | Employee | Father Name |
+CNIC`. Existing Advance functionality/layout (Type, Total Amount, Outstanding Balance, Repayment Type,
+Status) unchanged and rendering correctly. No Advance created or edited.
+
+**Employee Registry** (`/employees`): the main grid directly exposes `Code | Name | Father Name |
+CNIC`. Existing rows load normally (confirmed via both the unfiltered list and targeted searches). No
+employee edited. Father Name search remains explicitly deferred, as scoped — not added during this
+cutover.
+
+**Duplicate-name production evidence — real pair found, no synthetic case needed.** A search for
+"Muhammad Imran" in Employee Registry returned **four separate active employees legitimately sharing
+the exact same name**, each cleanly distinguished only by the newly-visible Father Name/CNIC columns:
+
+| Name | Father Name | CNIC | Site |
+|---|---|---|---|
+| Muhammad Imran | Liaqat Ali | 3640181784177 | Outfitters Stores |
+| Muhammad Imran | Muhammad Arif | 3520271772193 | Pakistan Institute of Fashion and Design |
+| Muhammad Imran | Asghar Ali | 3520194668177 | Packages Convertors (Code 11) |
+| Muhammad Imran | Manzoor Ahmad | 3530177675447 | ABL Islamic Region, Lahore |
+
+This is exactly the real-world operational problem this patch was built to solve, observed directly in
+live production data — **no synthetic duplicate-name case was manufactured**; the local synthetic
+"Muhammad Talha" UAT evidence (previous entry) was not needed as a fallback.
+
+### Payroll regression smoke (Step 9)
+
+All read-only: **Payroll Entry** loads the August 2026 Draft cycle with real figures (1,247 employees,
+Net Payroll PKR 934,122.58, 0/1,247 released — consistent with the known incomplete-cycle state,
+attendance to be finalized in the first week of September, per the Production Payroll Readiness
+Checkpoint 1 entry above); **Payslips** page loads correctly, correctly reporting "No released
+Payslips for this selection" (expected — August is still Draft, nothing released yet, not a defect);
+**Reports** navigation loads the full eight-report catalogue (Payroll Summary, Employee Payroll
+History, Project Site Payroll Report, Deduction Report, Overtime Report, Advance Recovery Report,
+Salary Release Report, Variance/Month-on-Month Report); **Advances** and **Employee Registry** both
+load normally (see above). Incomplete August attendance was **not** re-flagged as a defect, per
+standing instruction.
+
+### Zero production mutations — explicit confirmation
+
+Every production interaction this session was a navigation, a nav-menu click, typing into a
+client-side/server-side **read** search filter, horizontal scrolling, or a screenshot. No form was
+submitted, no record was created or edited, no release/hold/correction action was taken. `git status`
+throughout remained clean on the local repo side (no untracked/modified files from this verification
+pass).
+
+### v1.0.0 unchanged — explicit confirmation
+
+`v1.0.0` (annotated tag object `ea2bcfe4c989fcf8fc9293a09881bbdc0e9cc799`) still resolves via
+`^{commit}` to exactly `5e097ef470956ade8b022072fbdf16949539777c` — unchanged, unmoved.
+
+### Deferred items — explicitly NOT started this checkpoint
+
+Father Name search in Employee Registry; sticky/frozen columns for Advances or Employee Registry;
+`v1.0.1` tag creation; GitHub Release publication; Reliability Phase 5; any other unrelated
+improvement.
+
+### Release classification
+
+**GREEN — v1.0.1 production candidate validated and ready to tag.** Approved PR merged correctly
+(merge SHA `f5897afa38a07662fc29244e0a77e2d6866426d4`, approved head confirmed as ancestor); post-merge
+CI on `main` is green (run `32825644622` — Backend all six shards, Frontend, E2E all SUCCESS);
+production deployment verified functionally (Render log access unavailable, disclosed); Payroll
+Entry/Advances/Employee Registry identity fields all confirmed live in production; regression smoke
+clean; zero production data mutated; `v1.0.0` confirmed unchanged; documentation complete.
+**Recommended `v1.0.1` tag target: `f5897afa38a07662fc29244e0a77e2d6866426d4`** (the `main` merge
+commit). **Per explicit instruction, the `v1.0.1` tag itself was NOT created, no GitHub Release was
+published — awaiting separate approval of this report before tagging.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
