@@ -13018,6 +13018,406 @@ production payroll-data changes, no further changes to the `v1.0.1` tag. STOP.
 
 ---
 
+## Post-v1.0.1 — Payroll Operations Readiness Checkpoint 2 (2026-08-25, later same day)
+
+A second, deeper read-only August 2026 payroll audit, explicitly distinct from a software-development
+checkpoint: not "is the code correct" (already covered) but "is the system, workflow, and data
+structurally ready for Payroll Staff to complete August payroll after month-end." Production remained
+READ-ONLY throughout — access was the user's own already-authenticated Master User browser session
+against `https://payroll.brooms.com.pk` (the same method Checkpoint 1 used; this sandbox still has no
+production database credentials — `backend/.env`'s `DATABASE_URL` still resolves to the local sandbox
+Postgres, the same disclosed gap as every prior checkpoint), plus direct, read-only inspection of the
+backend/shared/schema source and architecture docs, plus read-only GitHub CLI calls (`gh run view`,
+`gh release list`, `gh pr list`). No form was submitted, no mutating button (Release/Hold/Edit/Create/
+Cancel/Defer) was clicked, and no file outside `docs/` was edited this checkpoint.
+
+### A. Release/software baseline — confirmed unchanged
+`v1.0.0` tag (`ea2bcfe4...^{commit}`) → `5e097ef470956ade8b022072fbdf16949539777c`, unchanged.
+`v1.0.1` tag (`3a8592fc...^{commit}`) → `f5897afa38a07662fc29244e0a77e2d6866426d4`, unchanged, confirmed
+an ancestor of `main` (`git merge-base --is-ancestor`). `main` == `origin/main` ==
+`39f442442fe56913ac1c3254016e36cff1826702`, working tree clean. Latest doc commit (`39f4424`, "docs:
+record v1.0.1 tag creation and GitHub Release publication") independently re-verified via
+`gh run view 32830081199 --json headSha,conclusion`: `headSha` matches `39f4424` exactly,
+`conclusion: success`. `gh release list`/`gh pr list` confirm `v1.0.1`/`v1.0.0` both published, PR #15
+`MERGED`. No new release, tag, or branch created this checkpoint.
+
+### B. Production read-only safety — confirmed
+Every production interaction was a page navigation/GET (Payroll Entry, Payroll Summary, Salary
+Release Report, Advances, Bank Sheet, Cash Receiving Sheet, Employee Registry — all for the same
+August 2026 Draft cycle, `235770e4-c444-4adf-8e5b-c2da0ff02f35`, Checkpoint 1 already audited). No
+Employee/PayrollEntry/Advance/Correction/release/attendance mutation of any kind. The only DB writes
+any of these reads may have produced are the application's own built-in `AuditLog` "viewed" entries —
+the same disclosed, non-hidden side effect every prior read-only checkpoint has already recorded.
+
+### C. Current August payroll baseline — grown since Checkpoint 1, same cycle, no defect
+Same cycle id as Checkpoint 1 (a few hours earlier the same day). **Employees/Entries: 1,247** (was
+1,198 at Checkpoint 1 — 49 more `PayrollEntry` rows now exist, created by ordinary Payroll Staff
+activity in the intervening hours, not by this audit). Gross Pay PKR 50,460,989.46; Allowances PKR
+6,820.00; Overtime PKR 0.00; EOBI PKR 397,200.00; Advances (incl. EID) PKR 401,820.00; Fines PKR 0.00;
+Correction Balance Recovery Ded. PKR 4,000.00 (carried from a prior settlement, per the report's own
+note — not a new discrepancy); Correction Balance Payable PKR 0.00; **Net Salary / Pending Release
+Amount PKR 734,122.58**; Released PKR 0.00 (0/1,247); Held 0/1,247. **Reconciled exactly** between the
+Payroll Summary Report and the Salary Release Report (Employees = Matching Entries = 1,247; Net Salary
+= Pending Release Amount on both; Released/Held identical on both). 21 sites carry entries this cycle
+(Payroll Summary "Showing 1–21 of 21"); Employee Registry lists 23 assigned sites total — "Al Fatah
+Stores" and "Goldcrest Mall" show 0 entries this cycle, not independently confirmed this session
+whether that's 0 active employees (expected) or a coverage gap — flagged for the final pre-release
+audit (§N below), not classified as a defect here.
+
+### D. Attendance-entry readiness — structurally sound, no blocker found
+Read `backend/prisma/schema.prisma` (`PayrollEntry`, `PayrollEntryWorkLine`, `Employee`) and
+`shared/src/schemas/payroll-entry.ts` directly. `PayrollEntry` carries `@@unique([cycleId,
+employeeId])` — DB-enforced, exactly one entry per employee per cycle by construction, matching the
+observed exact 1:1 population match. `PayrollEntryWorkLine` carries `@@unique([payrollEntryId,
+unitId])` and "every entry has at least one line, always... enforced transactionally at write time"
+(schema's own doc comment) — split-unit attendance is one work line per touched Unit, each
+independently tracking `days`/`otHours`/`otRate`/`cycleDays`. Raw-SQL CHECK constraints: `days >= 0`,
+`otHours >= 0`, `cycleDays BETWEEN 1 AND 31`. **No DB or application constraint prevents Working Days
+(`days`) from exceeding Cycle Days (`cycleDays`)** on a work line — an informational gap, not a
+release blocker, worth a quick eyeball during the September attendance-entry review (Finding M2).
+Optimistic concurrency: every entry/work-line mutation (`updatePayrollEntrySchema`,
+`addWorkLineSchema`, `updateWorkLineSchema`) requires and validates the parent entry's `version` token
+— protects concurrent attendance edits. "Copy to All" bulk-apply (`bulkUpdatePayrollEntriesSchema`,
+`shared/src/schemas/payroll-entry.ts`) is scoped to an explicit, non-empty `siteIds` list (never
+implicit "every employee") and covers only `leaveRate`/`otRate`/`cycleDays`/`eobiAmount` — **never**
+`days`/`otHours` (actual attendance), which must be entered per-row — a sound safeguard against a
+bulk action mass-overwriting real attendance. `Employee.siteId`/`.unitId` are non-nullable and
+composite-FK'd (`Employee.unit` → `ProjectUnit(id, siteId)`), so an employee's unit always structurally
+belongs to its own site. **Conclusion: nothing in the current data model or attendance-entry code path
+would prevent Payroll Staff from entering attendance normally in September.**
+
+### E. Employee/payment-master readiness
+Checkpoint 1 (same day, 1,198-employee population) already found 0 duplicate CNIC/Employee
+Code/Account Number/IBAN and 0 release-blocked entries. This session's population grew to 1,247 (+49);
+**a fresh full duplicate sweep of the +49 new entries was not independently re-run this session** —
+judged lower-value than covering this checkpoint's remaining scope, and genuinely defense-in-depth
+only: `payroll-release-eligibility.ts`'s `evaluatePayrollEntryReleaseReadiness` independently
+re-checks Duplicate CNIC/Employee Code/Account Number/IBAN and Missing Account Number **at the moment
+Finance actually attempts release** (see §H), so any real new duplicate among the +49 would still be
+caught and blocked before payment, never silently paid — flagged as residual work for the final
+pre-release audit (Finding M1), not a blocker. Confirmed directly in code:
+`RELEASE_BLOCK_REASONS` never includes a missing-IBAN reason, and "Cash employee (`bankId = null`):
+never blocked for a missing Account Number/IBAN" is an explicit code comment/behavior — so the 962
+bank-paid, empty-IBAN entries Checkpoint 1 found remain correctly non-blocking by the app's own actual
+rule, not just by informal convention.
+
+### F. Advance readiness — over-recovery structurally impossible
+`Advance.outstandingBalance` carries a raw-SQL CHECK: `>= 0 AND <= totalAmount` — a negative
+outstanding balance (over-recovery) is impossible at the database level, not merely an application
+convention. A partial unique index on `(employeeId, type) WHERE status IN ('ACTIVE', 'RESERVED')`
+structurally prevents an employee holding two simultaneously active/reserved Advances of the same
+type. Live spot check of the production Advances list (read-only): the great majority
+"Reserved (pending release)" with `outstandingBalance = PKR 0.00` (fully deducted this cycle, awaiting
+release to flip to `PAID_OFF`) — the expected end-of-recovery state; a handful "Cancelled" (balance
+retained, not zeroed — expected, a cancelled advance simply stops recovering) and one "Paid Off". No
+advance observed or structurally possible with `outstandingBalance` exceeding `totalAmount` or
+negative. The Payroll Summary's "Advances (incl. EID)" figure (PKR 401,820.00) is a live re-sum of
+`PayrollEntry.advanceDeduction + eidAdvanceDeduction` across all 1,247 entries — each entry's
+`advanceId`/`eidAdvanceId` records exactly which `Advance` row it applies to (never re-inferred later),
+per `corrections-and-balance-adjustments.md`'s "Interaction with Advances" section. Several individual
+site subtotals currently show negative Net Salary purely from the same expected zero-attendance state
+interacting with a real Advance/EOBI deduction — not a new, advance-specific defect, the identical
+interaction Checkpoint 1 already classified. **No structural advance defect, no over-recovery, no
+advance-specific release blocker found.**
+
+### G. Financial reconciliation — no discrepancy found
+Payroll Summary Report and Salary Release Report agree exactly (§C). No release-time `payoutOutcome`
+(No Pay Due / Recovery Due) has been assigned to any entry yet — correctly so: `payoutOutcome` is only
+ever set at the moment of actual per-Unit release (confirmed directly in `payroll-release.service.ts`),
+so the many currently-negative-net entries visible in the site-by-site breakdown correctly show as
+"Pending," never misclassified as "Recovery Due" pre-release. CSV/Excel exports were **not**
+independently re-downloaded this session (deliberately, to avoid the extra `AuditLog` "exported" side
+effect beyond what §C/§D/§E/§F/§H/§I/§J's on-screen reads already needed) — the two-report
+cross-check above (both server-computed from the same underlying `PayrollEntry` rows via independent
+query paths) is judged sufficient corroboration for this same-day follow-up; a full four-way
+reconciliation (including exports) should be repeated at the final pre-release audit (§N).
+
+### H. Salary Release safety — read directly from `payroll-release.service.ts` and
+`payroll-release-eligibility.ts` (not inferred from docs alone)
+**Granularity**: per Project Unit, per cycle (`PayrollUnitRelease`, `@@unique([cycleId, unitId])`,
+insert-once, no "un-release," Principle 9). A multi-unit/split employee's entry only flips to
+`released = true` once every Unit its work lines touch has released. "Release All" is a sequential,
+unmodified loop over `releaseProjectUnit` per not-yet-released Unit in a chosen Site or every
+accessible Site — never a second release mechanism.
+
+**Eligibility/prerequisites** (`RELEASE_BLOCK_REASONS`): Duplicate CNIC, Duplicate Employee Code,
+Missing Account Number (bank-paid only), Duplicate Account Number, Duplicate IBAN. A blocked entry is
+excluded from the sweep entirely (same tier as Hold) — stays `released: false, hold: false,
+payoutOutcome: null`, visible with its exact block reasons, and continues blocking cycle Finalization
+until fixed or manually held.
+
+**Hold**: `hold: false` is an explicit filter in the release-candidate query — code-enforced, not a
+convention; independently re-confirmed as the same filter in Bank Sheet/Cash Receiving (§I/§J).
+
+**Negative/zero Net Salary at release**: net > 0 → `PAID` (`released = true`, the only case `released`
+is ever set true); net = 0 → `NO_PAY_DUE`; net < 0 → `RECOVERY_DUE` (auto-creates a
+`BalanceAdjustment(type: RECOVERY)` in the same transaction). Mutually exclusive with `released = true`
+via a raw-SQL CHECK constraint.
+
+**Transactional guarantees**: the whole per-Unit sweep runs inside one `prisma.$transaction` (30s
+timeout), first acquiring `lockPayrollCycleForUpdate` (documented lock order: cycle, then correction
+adjustment) and re-confirming `cycle.status === 'DRAFT'` under lock (closes a stale-read race against a
+concurrent Finalize). An optional `expectedVersions` (entryId+version pairs from the operator's last
+read) is verified inside the same lock — a mismatch rejects the whole call with a 409 rather than
+silently releasing entries in a form the operator never actually saw.
+
+**Idempotency**: re-calling release on an already-released Unit never creates a duplicate
+`PayrollUnitRelease` row or re-releases an already-resolved entry; it performs a "Late/Straggler Sweep"
+for any entry that became newly eligible since the original release (e.g., a Hold removed afterward),
+separately audited (`payroll_unit.late_sweep`). If nothing is newly eligible, it correctly rejects with
+409 "already been released" — **safe to call twice.**
+
+**Concurrency**: same-cycle concurrent release calls fully serialize via the cycle-level row lock;
+per-entry optimistic locking (`version`) additionally guards a specific entry changing underneath the
+sweep.
+
+**DB state changed on release**: `PayrollEntry.released/releasedAt/releasedBy/payoutOutcome/version`
+plus a one-time re-sync of `designation/bankId/branchCode/accountNumber/iban/grossPay/
+employeeNameSnapshot/fatherNameSnapshot` from Employee Registry's then-current values — release is the
+last moment these sync, frozen permanently afterward. Advance/correction materializations settle in
+the same transaction.
+
+**Partial-failure handling**: "Release All" deliberately uses one transaction *per Unit*, not one
+giant transaction — a genuine failure on one Unit never rolls back or blocks any other Unit's
+already-committed release; failed Units are reported individually (`failedUnits`) for the operator to
+retry, while a Unit that races to "already released" between lookup and its turn is a benign skip, not
+a failure. **This is a deliberate design trade-off Finance must know about**: a single "Release All"
+run can legitimately leave some Units released and others not, by design — Finance must check
+`unitsFailed`/`failedUnits` after every Release All and retry them, never assume all-or-nothing.
+
+**Post-release editing**: released fields are permanently frozen (`assertEntryEditable` keys off
+`PayrollEntry.released` alone, at any cycle status). **Correction is the sole path** — any authorized
+payroll user may propose a `CorrectionRequest`; only the Master User may approve/reject it, or make a
+Direct Correction personally. An approved correction produces exactly one `BalanceAdjustment`, settled
+in the *current* Draft cycle — never by writing back into the original released figures.
+
+**Audit trail**: `payroll_unit.released`, `payroll_entry.released`, `payroll_entry.no_pay_due`,
+`payroll_entry.recovery_due`, `payroll_entry.release_blocked` (with block reasons),
+`payroll_unit.late_sweep`, `payroll_release.release_all` — every outcome, including blocked and
+no-pay-due, is individually audited, not just successful payments.
+
+**Cycle-level Finalize** (separate, later action — `Draft → Released`, Master User only,
+`payroll-cycle:manage`, read from `docs/architecture/workflows/payroll-lifecycle.md §4`): strictly
+requires every entry be released-or-held first, **with no override anywhere in the route/service** — a
+genuine structural backstop against closing the month with unresolved stragglers. Finalize does not
+itself archive or generate a Backup Package — those are later, separately authorized actions
+(`archive-and-create-next`, Master-Admin-only).
+
+**Known, disclosed product gap (documented in `payroll-lifecycle.md`, not something this checkpoint
+should fix): there is no post-finalization release path for a Held-and-never-released entry.** Once
+its cycle finalizes, a held entry can never be released for that specific cycle — the only path
+forward is carrying that employee's pay into a future Draft cycle's own entry. **This makes resolving
+every Hold before clicking Finalize operationally important** — see Finding H1 and the runbook's STOP
+gate (§O).
+
+### I. Bank-payment readiness — read directly from `bank-sheets.service.ts`
+Population: `released: true, hold: false`, filtered by a specific active Bank — one row per employee,
+purely derived/read-only, no table stores Bank Sheet rows. Zero/negative salaries explicitly filtered
+out (`netSalary > 0`) as defense-in-depth (release itself should never produce a released, non-positive
+entry, but this guards against a historical bad row resurfacing). Required fields mirror release
+eligibility (§H): a bank-paid employee needs an Account Number to release at all; IBAN is never
+required. Export (CSV/XLSX) confirmed pure-read (`findMany` only, no write call anywhere in the
+module). Reconciles by construction to the same `released`/`hold`/`netSalary` population Payroll
+Summary/Salary Release Report read — "no duplicate business logic" is the module's own explicit
+design principle. Confirmed live in production this session: Bank Sheet for this cycle currently shows
+empty for every Bank, correctly matching 0/1,247 released.
+
+### J. Cash-payment readiness
+Deliberately unified with Bank Sheet, not a separate module: "Cash" is the `bankId = null` case of the
+exact same `getBankSheet()` query (`CASH_BANK_FILTER` sentinel) — identical release/hold/positive-net
+filtering, export mechanics, and reconciliation guarantee as §I. Confirmed live in production: the
+dedicated Cash Receiving Sheet page states plainly, "Cash Receiving Sheets are generated only from
+released payroll for employees with no bank account on file — release the relevant Project Unit(s)
+first" — currently, correctly, empty. No dedicated Cash-specific audit-trail action was found beyond
+the generic release-time `AuditLog` entries §H already covers.
+
+### K. Hold/exception handling
+`PayrollEntry.hold` is a Draft-editable boolean gated by the same `payroll:entry` permission as any
+ordinary entry edit — held by Payroll Staff (site-scoped) and Master User; Finance
+(`payroll:view`/`payroll:release`, no `payroll:entry`, per `docs/architecture/authentication.md`)
+**cannot** toggle Hold. Enforcement verified in code, not just documented: `hold: false` is an
+explicit filter in every release-candidate/Bank-Sheet/Cash-Receiving query. Finalize's own precondition
+explicitly exempts Held entries from blocking Finalize — but per §H's disclosed gap, a Held entry left
+unresolved past Finalize can then never be released for that cycle. Which exceptional scenarios are
+code-enforced vs. purely operational (Payroll Staff judgment via Hold + the entry's free-text
+`remarks`):
+- **Disputed attendance / incomplete employee info / suspicious salary** — no dedicated workflow;
+  operational Hold + remarks only, no automated "suspicious salary" detection found in code.
+- **Unresolved Advance** — not an automatic Hold trigger; release eligibility never checks Advance
+  status; Payroll Staff must manually Hold if an advance issue needs resolving first.
+- **Employee leaving mid-month** — `Employee.dateOfLeaving` is stored, but no code path automatically
+  Holds or excludes a leaving employee's current-cycle entry; operational judgment call.
+- **Salary intentionally withheld** — the ordinary Hold use case, fully code-enforced.
+- **Correction pending at cutoff** — Corrections apply only to already-released entries; a
+  not-yet-released entry with a pending issue is handled via ordinary Draft editing/Hold instead.
+
+**Conclusion**: Hold reliably and verifiably (in code) prevents accidental payment/release. Most
+"exceptional employee" scenarios rely on Payroll Staff's manual judgment to apply Hold — a standard,
+reasonable payroll-operations design, not a defect, but worth stating plainly in the runbook (§O) so
+Payroll Staff know Hold is the correct tool for every one of these cases.
+
+### L. Recovery/PITR readiness
+**Application-level**: a `BackupPackage` (manifest + Payroll Entry CSV/XLSX + Bank Sheets CSV + Cash
+Receiving CSV, each checksummed) is generated automatically only at cycle *archival*
+(`archive-and-create-next`, Master-Admin-only) — well after Salary Release and Finalize, **not
+available as a pre-release snapshot mechanism**.
+
+**Database-level**: the intended design (`docs/architecture/deployment.md`) is Render managed
+PostgreSQL on a **PITR-enabled tier**, "given the financial-data criticality." **Not independently
+re-verified this session that production is actually currently provisioned on that tier** — no Render
+dashboard/API access available in this sandbox, the same disclosed gap `docs/release/
+BACKUP_RESTORE_VALIDATION_v1.0.md` already recorded (that validation proved PostgreSQL's own
+backup/restore *mechanics* locally, with full data fidelity, but explicitly could not exercise
+Render's actual managed-backup product).
+
+**Recommended pre-release evidence capture** (since the automatic Backup Package isn't available yet
+at this point in the lifecycle): manually trigger the existing Export CSV/Excel buttons on Payroll
+Summary, Salary Release Report, and Bank Sheet/Cash Receiving Sheet immediately before starting Salary
+Release for a cycle — the same read-only, already-shipped exports used throughout this audit, run
+once deliberately as a dated snapshot.
+
+**Recovery mechanism for an operational mistake**: the **Corrections workflow, not database restore**
+— confirmed directly in code and docs (§H) as the sole sanctioned path for fixing a released entry;
+PITR restore is reserved for genuine platform-level disaster recovery, never for routine "released the
+wrong amount" corrections.
+
+**Conclusion**: no gap in the *mechanism* (Corrections is correctly the intended fix path); the one
+real gap is the **unverified current Render backup/PITR tier** (Finding H2).
+
+### M. Findings by severity
+**BLOCKER**: none found.
+
+**HIGH**:
+- **H1 — Held-past-Finalize entries can never be released for that cycle** (disclosed product gap, not
+  a defect — working as designed/documented in `payroll-lifecycle.md`). Operationally significant
+  because there is no override; every Hold must be resolved or explicitly, knowingly left as
+  "carry forward to next cycle" *before* clicking Finalize. Actionable: runbook STOP gate (§O).
+- **H2 — Production Render backup/PITR tier not independently re-verified this session** (no Render
+  API/dashboard access in this sandbox). Recommend Finance/Master User confirm directly in the Render
+  dashboard before September's Salary Release — a one-time, low-effort check.
+
+**MEDIUM**:
+- **M1** — the +49 Payroll Entries created since Checkpoint 1's same-day duplicate sweep were not
+  independently re-checked for duplicate CNIC/Code/Account/IBAN this session (defense-in-depth gap
+  only — §H's release-time check will still catch any real duplicate before payment).
+- **M2** — no DB/app constraint prevents Working Days exceeding Cycle Days on a work line (§D) —
+  worth a quick eyeball during the September attendance-entry review.
+- **M3** — "Al Fatah Stores"/"Goldcrest Mall" show 0 entries in the August cycle vs. 21 sites that do
+  (§C) — not confirmed whether expected (0 active employees) or a coverage gap; verify at the final
+  pre-release audit (§N).
+
+**LOW**: none newly identified this checkpoint beyond already-known, previously-disclosed items
+(the `otHours` multi-unit aggregation gap, the all-bank-paid-blank-IBAN Employee Registry cleanup
+Checkpoint 1 already noted) — both explicitly out of this checkpoint's scope to fix, carried forward
+unchanged.
+
+**EXPECTED INCOMPLETE-CYCLE STATE**: zero/negative Net Salary across the great majority of entries,
+driven by zero attendance at the 19 client sites, unchanged in *nature* from Checkpoint 1 — now
+affecting a larger population (1,247 vs. 1,198) purely because more entries were created in the
+intervening hours, not because anything got worse. Attendance is intentionally not yet entered per
+business context (entered/finalized during the first week of September). **Not re-flagged as a
+blocker.**
+
+### N. Final pre-Salary-Release audit checklist (to run in the first week of September, after
+attendance is entered, before any Salary Release click)
+Automated (re-run the same read-only checks this checkpoint and Checkpoint 1 already exercise):
+1. Attendance completion — 0 (or an explicitly accepted, understood residual) zero-attendance entries
+   remaining across all 19 client sites (compare against this checkpoint's §C baseline).
+2. Abnormal zero Working Days on any work line whose Unit is otherwise active/staffed.
+3. Working Days vs. Cycle Days — flag any work line where `days > cycleDays` (Finding M2 — no system
+   guard exists, this must be a manual/reporting check).
+4. Split-unit aggregation — spot-check at least one genuinely multi-unit employee's Net Salary once
+   real split-unit attendance exists (Checkpoint 1 found 0 multi-unit entries in production to date;
+   the `otHours` multi-unit aggregation known gap has still never been exercised by real data).
+5. OT Hours/Rate and Leave Days/Rate — no negative values, no implausible outliers.
+6. Advances — re-run §F's checks (no over-recovery is possible structurally, but re-confirm
+   deduction-vs-plausible-salary once real attendance drives real Net Salary figures).
+7. Holds — enumerate every currently-Held entry by name/site/reason (`remarks`); for each, an explicit
+   Payroll-Staff/Finance decision: release-ready now, or knowingly carried forward (Finding H1 — there
+   is no in-cycle recovery once Finalized).
+8. Negative salaries — re-run §G; confirm each is attendance-driven, not a data error, before release.
+9. Zero salaries — same treatment as negative.
+10. Unusually high/low salaries — a simple outlier pass (e.g. Net Salary far outside each Site's own
+    typical range) — no such report currently exists dedicated to this; use Payroll Summary's own
+    per-Site totals as a first-pass sanity check.
+11. Employee/payment data — full duplicate CNIC/Employee Code/Account Number/IBAN sweep across the
+    *complete* then-current population (closing Finding M1), plus resolve Finding M3 (site coverage).
+12. Payroll Entry ↔ reports reconciliation — repeat §G's cross-check, this time including a fresh
+    CSV/Excel export as the fourth independent source (Checkpoint 1's original four-way method).
+13. Bank totals — Bank Sheet total, per Bank, cross-checked against the Salary Release Report's own
+    pending totals for the same population, immediately before use.
+14. Cash totals — same cross-check for the Cash Receiving Sheet.
+15. Unreleased state before authorization — confirm 0 entries are `released = true` before the first
+    intentional Release click of the cycle (trivially true today; re-confirm at that time).
+16. Release-block reasons — 0 unexplained `blockReasons` remaining across the population immediately
+    before release (any real duplicate/missing-banking issue must be resolved, not just noted).
+17. Final expected release total — an independently pre-computed expected Net Salary total (from the
+    automated checks above) that the actual post-release Salary Release Report total must match
+    exactly, as the final go/no-go signal.
+
+Human payroll review (judgment calls automation cannot make): resolving every flagged Hold (item 7);
+deciding whether an outlier salary (item 10) is legitimate; confirming site coverage (item 11's M3
+follow-up) against actual site staffing reality; final sign-off that Working-Days-vs-Cycle-Days
+outliers (item 3) are legitimate overtime/special cases, not data-entry errors; the Render backup/PITR
+tier confirmation (Finding H2), which is an infrastructure check outside the application entirely.
+
+### O. Payroll operational runbook (August/September 2026 cycle)
+1. **First week of September** — Payroll Staff enter/finalize attendance for all 19 client sites
+   (Working Days, OT, Leave per Unit/work line) via ordinary Payroll Entry editing. No system change
+   needed to begin this (§D).
+2. Payroll Staff resolve/adjust any Draft-editable field as attendance lands (advances, fines,
+   allowances, remarks) — all still freely editable pre-release.
+3. Payroll Staff/Finance run the Payroll Summary and Salary Release Report and eyeball totals against
+   expectations.
+4. **STOP GATE — Confirm Render backup/PITR tier** (Finding H2) — a one-time infrastructure check in
+   the Render dashboard, not blocking day-to-day entry, but required before the first Release click of
+   this cycle.
+5. **STOP GATE — Run the full final pre-release audit checklist (§N)** before any Release action.
+6. **STOP GATE — Manually export CSV/Excel snapshots** of Payroll Summary, Salary Release Report, and
+   Bank Sheet/Cash Receiving Sheet as the pre-release evidence record (§L — the automatic Backup
+   Package doesn't exist yet at this point in the lifecycle).
+7. **STOP GATE — Resolve every Hold** (§K/§N item 7) — release-ready or knowingly carried forward;
+   there is no in-cycle recovery once Finalized (Finding H1).
+8. Finance releases eligible Project Units — one at a time or via "Release All" per Site/all
+   accessible Sites (§H). After any "Release All," Finance **must** check `unitsFailed`/`failedUnits`
+   and retry any failed Unit individually — a partial run is expected behavior, not silently
+   all-or-nothing (§H).
+9. Finance generates/downloads Bank Sheet(s) per Bank and the Cash Receiving Sheet, cross-checked
+   against the Salary Release Report's own released totals (§I/§J/§N items 13–14) before actual
+   payment/disbursement (outside the application).
+10. Finance/Payroll Staff handle any post-release correction exclusively via the Corrections workflow
+    (Correction Request → Master User approval, or a Direct Correction by the Master User) — **never**
+    a database restore (§H/§L).
+11. **STOP GATE — Master User Finalize Cycle** — only once every entry is released or explicitly,
+    knowingly Held (no override exists) — this is the point of no return for this cycle's Hold
+    resolutions (Finding H1).
+12. Only after Finalize: "Start New Payroll Cycle" (archives the outgoing cycle, generates its formal
+    `BackupPackage`, opens the next Draft cycle) — a separate, explicitly authorized Master-Admin-only
+    action.
+
+### P/Q. Documentation and CI
+This entry and its `docs/SESSION_HANDOFF.md` companion addendum are this checkpoint's only file
+changes. If this documentation commit triggers CI, the result will be recorded as a follow-up addendum
+in `docs/SESSION_HANDOFF.md`, per the existing convention — no application code was touched, so a
+CI failure here would only ever indicate an unrelated pre-existing flake, not a regression from this
+checkpoint.
+
+### R. Overall operational-readiness classification
+
+**AMBER — payroll processing may proceed (attendance entry, Draft-cycle editing, advance/hold
+management all structurally ready per §D–§F), but two identified conditions require explicit
+resolution/sign-off before Salary Release specifically: H1 (resolve every Hold before Finalize — no
+in-cycle recovery exists after) and H2 (independently confirm the production Render backup/PITR tier).
+No blocker exists against beginning or continuing ordinary payroll processing itself.** A further,
+final read-only audit (§N) is still required after September attendance completion and immediately
+before the first Salary Release click of this cycle.
+
+Per explicit instruction: no v1.0.2 created, no Reliability Phase 5 resumed, no Father Name search, no
+sticky columns, no CI-warning cleanup, no `otHours` aggregation fix, no refactor, no production data
+changed. Salary was not released. STOP.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

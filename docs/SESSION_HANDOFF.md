@@ -6309,3 +6309,89 @@ established.** Per explicit instruction: no v1.0.2, no Reliability Phase 5 resum
 Name search, no additional sticky columns, no unrelated flake/warning investigation, no production
 payroll-data changes. STOP.
 
+---
+
+## 60. Addendum, 2026-08-25 (later same day) — Payroll Operations Readiness Checkpoint 2: deep
+read-only workflow/code audit COMPLETE, AMBER — no blocker, two conditions (Hold-before-Finalize,
+Render PITR tier) need sign-off before Salary Release
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "Post-v1.0.1 — Payroll Operations Readiness
+Checkpoint 2" entry, directly following §59's referenced v1.0.1-release entry. This addendum is the
+session-chronology summary.
+
+**Scope, distinct from §55/§56's Checkpoint 1**: not a repeat production data audit, but a deep
+read-only trace of the payroll *workflow and code* — Salary Release transactional/idempotency/
+concurrency behavior, Bank Sheet/Cash Receiving eligibility rules, Hold enforcement, and recovery/PITR
+posture — read directly from `payroll-release.service.ts`, `payroll-release-eligibility.ts`,
+`bank-sheets.service.ts`, `backend/prisma/schema.prisma`, `shared/src/schemas/payroll-entry.ts`, and
+the architecture docs, plus a lighter production spot-check (same read-only browser method as
+Checkpoint 1) to refresh the baseline. **Hard constraint honored throughout: read-only.** No
+Employee/PayrollEntry/Advance/Correction/release/attendance mutation of any kind; no mutating button
+was ever clicked; the only DB writes any read may have produced are the app's own `AuditLog` "viewed"
+entries, same disclosed convention as every prior checkpoint.
+
+**A — Release baseline reconfirmed unchanged**: `v1.0.0` → `5e097ef4...`, `v1.0.1` → `f5897afa...`
+(confirmed ancestor of `main`), `main` == `origin/main` == `39f4424...`, working tree clean. Doc-commit
+CI (`32830081199`) independently re-verified via `gh run view`: `headSha` = `39f4424`,
+`conclusion: success`. No new release/tag/branch created.
+
+**C — Baseline grew, same cycle, no defect**: same Draft cycle (`235770e4-...`); population grew from
+Checkpoint 1's 1,198 to **1,247** (ordinary Payroll Staff activity in the intervening hours, not this
+audit). Net Salary now PKR 734,122.58 (was PKR 1,013,722.58) — expected, more zero-attendance entries
+now exist. Payroll Summary and Salary Release Report reconciled exactly against each other again.
+
+**H — Salary Release, read directly from code, not inferred from docs**: per-Project-Unit granularity,
+fully transactional (cycle-lock-first, 30s timeout, optimistic-version check against stale reads),
+safely idempotent (re-release is a no-op or a scoped "Late/Straggler Sweep," never a duplicate
+payment), concurrency-safe (cycle-level row lock serializes concurrent releases). Negative/zero Net
+Salary at release correctly branches to `RECOVERY_DUE`/`NO_PAY_DUE` (never `released = true`) — but
+**pre-release** (today's Draft state), none of that classification exists yet, so today's many
+negative-net entries correctly show as "Pending," not "Recovery Due." Hold is code-enforced (not just
+documented) at every release/Bank-Sheet/Cash-Receiving query. Post-release editing is permanently
+frozen; Corrections is the sole fix path. **"Release All" partial-failure behavior is a real,
+deliberate design point Finance must know**: one transaction per Unit means a single Unit's failure
+never blocks or rolls back any other Unit's already-committed release — Finance must check
+`failedUnits` after every Release All and retry, never assume all-or-nothing.
+
+**Disclosed product gap surfacing a real operational risk (Finding H1)**: once a cycle Finalizes,
+a Held-and-never-released entry can **never** be released for that specific cycle — no
+post-finalization release path exists, by design, per `payroll-lifecycle.md`. This makes resolving
+every Hold *before* clicking Finalize operationally critical for September's cycle-close — added as an
+explicit STOP gate in the new runbook.
+
+**L — Recovery/PITR**: the in-app `BackupPackage` (manifest + Payroll Entry/Bank Sheets/Cash Receiving
+exports, checksummed) only generates at cycle *archival*, well after Salary Release — **not** available
+as a pre-release snapshot. Recommended workaround: manually export the existing CSV/Excel buttons on
+Payroll Summary/Salary Release Report/Bank Sheet/Cash Receiving immediately before the first Release
+click, as a deliberate evidence snapshot. Production's actual current Render backup/PITR tier was
+**not** independently re-verified this session (no Render dashboard/API access in this sandbox, same
+disclosed gap as `docs/release/BACKUP_RESTORE_VALIDATION_v1.0.md`) — Finding H2, a one-time Finance/
+Master-User confirmation recommended before September's release. Corrections (not database restore)
+is confirmed, directly in code, as the sole sanctioned fix path for a released entry.
+
+**Findings**: 0 BLOCKER. 2 HIGH (H1 — Hold-before-Finalize, no override/recovery after; H2 — Render
+PITR tier unverified this session). 3 MEDIUM (M1 — the +49 new entries since Checkpoint 1 weren't
+independently re-swept for duplicates, defense-in-depth gap only since release-time eligibility still
+catches any real duplicate; M2 — no system guard against Working Days exceeding Cycle Days; M3 — two
+Employee-Registry sites show 0 entries this cycle, coverage not independently confirmed). 0 new LOW
+(the `otHours` multi-unit aggregation gap and blank-IBAN cleanup remain carried-forward, unchanged,
+out of scope). Zero/negative Net Salary across most entries remains correctly classified as EXPECTED
+INCOMPLETE-CYCLE STATE, not a blocker — same nature as Checkpoint 1, now over a larger population.
+
+**A full final pre-Salary-Release audit checklist (17 automated items + explicit human-judgment items)
+and a 12-step operational runbook with explicit STOP gates (Render PITR confirmation, full final
+audit, evidence export, Hold resolution, Release All failed-unit retry, Finalize as the point of no
+return) were written into `docs/PROJECT_PROGRESS.md`'s own entry for direct reuse in September**,
+before attendance completion and before the first Salary Release click of this cycle.
+
+**Overall classification: AMBER** — payroll processing (attendance entry, Draft editing, advance/hold
+management) may proceed; two conditions (H1, H2) require explicit resolution/sign-off specifically
+before Salary Release, not before ordinary processing. No blocker found anywhere in the workflow, data
+model, or Salary Release/Bank Sheet/Cash Receiving/Corrections code paths audited.
+
+**No commit, push beyond this documentation, correction, migration, or salary release occurred — no
+production write of any kind.** Per explicit instruction: no v1.0.2, no Reliability Phase 5
+resumption, no Father Name search, no sticky columns, no CI-warning cleanup, no `otHours` fix, no
+refactor. Salary was not released. **STOP — a further, final read-only audit is required after
+September attendance completion, immediately before the first Salary Release click of this cycle.**
+
