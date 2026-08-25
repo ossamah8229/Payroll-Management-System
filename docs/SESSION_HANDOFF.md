@@ -6433,3 +6433,158 @@ unchanged. No blocker against ordinary processing; three conditions (H1/H2/H3) n
 Salary Release. Production stayed strictly read-only (GET-only against the same authenticated
 session); no file outside `docs/` touched. **STOP.**
 
+---
+
+## 62. Addendum, 2026-08-25 (later same day) — v1.0.2 Advance Edit/Cancel Correctness: root-caused,
+fixed, tested, local UAT GREEN, Draft PR — STOP BEFORE MERGE
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.2 Release Blocker — Advance Edit/
+Cancel Correctness" entry, directly below §61's Checkpoint 2 entries. This addendum is the
+session-chronology summary.
+
+**Step 0 first**: CI run `32834028569` for commit `7443143` (Checkpoint 2 documentation) confirmed
+green before any v1.0.2 work began — Backend all six shards, Frontend, E2E all `success`, head SHA
+matched exactly. Checkpoint 2 formally closed.
+
+**Production symptom, read-only Phase A**: the reported failed Cancel (employee Sharafat Masih,
+LOAN, PKR 5,000) left the Advance untouched (RESERVED, PKR 5,000/PKR 0) — the transaction rolled
+back atomically, no partial mutation from Cancel itself — but its linked Payroll Entry already showed
+`advanceDeduction: PKR 10,000`, double the Advance's own total, computing Net Salary −10,400. STOPPED
+and reported this pre-existing mismatch before writing any code, per the checkpoint's own explicit
+instruction.
+
+**Root cause, fully reproduced locally** (disposable embedded-Postgres, synthetic data): Payroll
+Entry's ordinary field-edit endpoint accepted `advanceDeduction` as a directly-PATCHable field with
+zero cross-check against its linked Advance — a completely separate write path from the Advances
+module. That let the entry drift to PKR 10,000 (the employee's own notes field, "10000 Advance
+Amount," pointed at a manual workaround after Advances correctly blocked editing a RESERVED amount
+there). Cancel's own reversal then computed an out-of-bounds `outstandingBalance` and crashed on the
+database's own CHECK constraint — an unhandled `PrismaClientUnknownRequestError` — surfacing in
+production as exactly the generic 500 reported ("Something went wrong").
+
+**Fix, four parts**: (1) Payroll Entry now rejects a direct `advanceDeduction`/`eidAdvanceDeduction`
+edit whenever the entry is Advance-linked (`advanceId`/`eidAdvanceId` set) — the root-cause
+prevention; a genuinely manual, unlinked deduction remains exactly as editable as before. (2)
+`updateAdvance` now allows the financial fields while `RESERVED`, not just `ACTIVE` — the actual
+authorized business fix (Advance and Draft deduction move together atomically, e.g. PKR 5,000 →
+10,000 exactly as specified), reusing the existing reverse-and-re-materialize transaction unchanged.
+(3) A defensive bounds check before every Advance write turns any remaining legacy-mismatch case into
+one clear 409 instead of a crash. (4) A concurrency gap found *during this checkpoint's own testing*
+(a first-draft fix using a separate read-then-write had a real TOCTOU race) was closed with an atomic
+compare-and-swap `updateMany`, mirroring the already-proven `PayrollEntry` version-guard pattern —
+confirmed stable across repeated runs after the fix.
+
+**Tests**: 14 new (`advance-payroll-entry-integrity.test.ts`) plus one pre-existing test corrected
+(its own assertion that RESERVED editing was blocked, now intentionally superseded). Full regression:
+backend 1857/1857 (2 confirmed pre-existing, unrelated, load-sensitive flakes — clean 67/67 in
+isolation, zero diff from `origin/main`), frontend 1070/1070, typecheck/lint/build clean both
+workspaces.
+
+**Local UAT, real dev servers + real browser**: full lifecycle walkthrough (create → Draft deduction
+matches → direct-PATCH correctly rejected → Edit down, Draft deduction follows, unrelated figures
+unchanged → Cancel, deduction reverses cleanly) plus a second Advance reproducing the exact original
+5,000→10,000 production numbers end-to-end, confirmed in both the Advances list and the Payroll Entry
+grid. Also found and fixed, during UAT, a genuinely misleading pre-existing frontend hint ("PKR X
+already repaid") that would have shown a false floor for the exact new RESERVED-edit case — removed
+rather than patched with a guessed formula, since only the backend can compute the true
+released-only floor.
+
+**Production**: read-only throughout. Sharafat Masih's live record was deliberately left uncorrected,
+preserved exactly as found, per explicit instruction — recommended remediation (once this fix
+deploys): a Master Admin uses the now-corrected Edit or Cancel action through the application itself,
+never a direct database edit.
+
+**Branch `fix/v1.0.2-advance-edit-cancel`**, cut from `main` at `7443143`, committed as `293c095`,
+pushed. **Draft PR #16** opened (<https://github.com/ossamah8229/Payroll-Management-System/pull/16>),
+not merged. **PR CI green**: run `32845033101`, head `293c095`, Backend (all six shards), Frontend,
+and E2E (the actual Playwright suite step, not skipped) all `success`.
+
+**Per explicit instruction: STOP BEFORE MERGE.** No merge, no deploy, no `v1.0.2` tag, no production
+mutation, Reliability Phase 5 not resumed. Checkpoint 2's own deferred findings (H1/H2/H3/S1/M2/M3)
+remain untouched and unresolved by this checkpoint, exactly as classified.
+
+---
+
+## 63. Addendum, 2026-08-25 (later same day) — v1.0.2 Final Product Semantics: Advance Edit narrowed
+to Amount + Date + Notes, Advance Date made editable — root-caused, tested, local UAT GREEN, PR #16
+updated — STILL STOP BEFORE MERGE
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.2 Final Product Semantics — Advance
+Edit narrowed to Amount + Date + Notes" entry, directly below §62's entry. This addendum is the
+session-chronology summary. Continues PR #16 on the same branch — no second PR opened.
+
+**Business decision this checkpoint implements**: the prior checkpoint's Edit action effectively
+only let Amount and Notes be corrected. The explicit, final business rule for v1.0.2 is that Edit
+exposes exactly three fields — Advance Amount, Advance Date, Notes — nothing more (Employee,
+Advance/Eid Advance type, repayment type, and status stay immutable through Edit); Cancel remains the
+separate action for invalidating an Advance outright. `repaymentType`/`scheduledInstallmentAmount`,
+editable through Edit in the prior (2026-07-24) shape, are retired from it — they are now fixed at
+creation for the Advance's whole life.
+
+**State-machine tracing performed before any code change** (per the checkpoint's own explicit
+instruction not to guess accounting semantics): `dateGiven` was traced through the entire codebase
+and found to have **zero coupling** with payroll-cycle placement, materialization, reservation, or
+release. Which cycle an Advance's deduction lands in is governed exclusively by
+`originalScheduledPeriodId`/`currentScheduledPeriodId` — set once at creation from a wholly separate
+`(year, month)` input, moved only by `deferAdvanceSchedule`. `dateGiven` is written only at creation
+and is otherwise read only by reporting/display code (statements, the Advance Recovery Report,
+Employee Payroll History) — never by any materialization, reservation, or release computation. This
+resolved every one of the brief's Case A–E scenarios by architecture rather than by guesswork: Case A
+(same-cycle date edit) is trivially safe; Case B (date moving an Advance between cycles) and Case C
+(date requiring released-history rewrite) are **not reachable at all** under this data model — editing
+`dateGiven` can never move an Advance's cycle or touch released state; Case D (future date) already had
+no restriction at creation and Edit preserves that; Case E (partial recovery/history) is safe for the
+same zero-coupling reason. No ambiguity remained to escalate.
+
+**Final semantics implemented**: `totalAmount` unchanged from the prior checkpoint (editable while
+`ACTIVE`/`RESERVED`, RELEASED-only floor, atomic reverse-and-re-materialize against any live Draft
+deduction). `dateGiven` is now editable at every lifecycle stage, including `PAID_OFF`/`CANCELLED` —
+like `notes`, and for the same reason (zero ledger consequence) — deliberately not gated the way
+`totalAmount` is, since gating it would recreate exactly the "must Cancel-and-recreate to fix a typo"
+friction this checkpoint removes, and `cancelAdvance` itself already refuses a non-ACTIVE/RESERVED
+Advance, so Edit would otherwise be the only possible avenue to ever correct a wrong date on a closed
+Advance. `notes` unchanged.
+
+**Files changed**: `shared/src/schemas/advance.ts` (`updateAdvanceSchema` narrowed to
+`{ totalAmount, dateGiven, notes }`), `backend/src/modules/advances/advances.service.ts`
+(`updateAdvance`'s financial-edit gate and live-Draft recalculation now key off `totalAmount` alone),
+`frontend/src/routes/advances-page.tsx` (Edit modal now shows exactly Advance Amount / Advance Date /
+Notes; the not-editable hint text now correctly says "its date and notes can still be edited"),
+`backend/tests/advances.test.ts` and `backend/tests/advance-payroll-entry-integrity.test.ts` (two
+prior `repaymentType`/`scheduledInstallmentAmount`-edit tests converted to their `totalAmount`/
+`dateGiven` equivalents so the regression coverage they protected is preserved; new tests for a
+RESERVED date-only edit — proven to cause zero re-materialization and zero re-versioning — a combined
+Amount+Date+Notes edit, `dateGiven` remaining editable through CANCELLED, and Eid Advance parity).
+
+**Tests**: full backend regression run per-shard in isolation against a freshly migrated+seeded local
+Postgres (Homebrew, provisioned this session — no Docker available in this sandbox): 1861/1861 across
+all six shards (359/350/180/323/314/335), zero diff from `origin/main` outside this checkpoint's own
+files. Two transient failures were observed only when running the six shards back-to-back
+immediately after a fresh DB reset (one in `payroll-schema.test.ts`, two in performance-report
+suites under real load); both suites are pre-existing, untouched by this diff, and reran 100% green
+individually — the same class of load-sensitive flake this project's prior checkpoints have already
+documented, not a regression. Frontend: 1070/1070. `typecheck` (all three workspaces + E2E),
+`lint`, and full `build` all clean.
+
+**Local UAT, real dev servers + real browser** (fresh synthetic Site/Branch/Employee, disposable
+local Postgres): recorded a PKR 5,000 LOAN targeting the current Draft cycle (materializes
+immediately, RESERVED) — confirmed the Payroll Entry grid shows the PKR 5,000 deduction — Edited the
+Advance Amount 5,000 → 10,000 (the exact original production numbers) — confirmed the Draft
+deduction moved to PKR 10,000 in lockstep — Edited only the Advance Date (RESERVED, amount
+untouched) — reopened Edit and confirmed the new date persisted — Edited Notes only — Cancelled, with
+a reason — confirmed the Advance returned to `outstandingBalance` PKR 10,000 and the Payroll Entry
+grid's deduction reversed to 0, freeing the field back to ordinary manual editability. Full lifecycle
+confirmed working end-to-end through the real UI the way a Payroll Staff user would use it.
+
+**Production**: read-only throughout — no browser or API action in this checkpoint touched anything
+but the disposable local database. Sharafat Masih's live production record remains exactly as found
+by the prior checkpoint (untouched); the recommended remediation is unchanged — a Master Admin uses
+the now-corrected Edit action through the application itself once this deploys.
+
+**Branch/PR/CI**: continued on `fix/v1.0.2-advance-edit-cancel`, committed as `66f4024`, pushed.
+**PR #16 CI**: run `32872985805`, head `66f4024` — see `docs/PROJECT_PROGRESS.md`'s own entry for the
+final per-job result.
+
+**Per explicit instruction: STILL STOP BEFORE MERGE.** No merge, no deploy, no `v1.0.2` tag, no
+production mutation, Reliability Phase 5 not resumed, no other Checkpoint 2 finding touched.
+

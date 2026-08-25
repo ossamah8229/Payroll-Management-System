@@ -39,6 +39,29 @@ const advanceWithEmployeeInclude = { employee: true } as const;
 
 type AdvanceWithEmployee = Prisma.AdvanceGetPayload<{ include: typeof advanceWithEmployeeInclude }>;
 
+/**
+ * Defensive backstop (v1.0.2 Advance Edit/Cancel checkpoint, 2026-08-25) for the DB-level
+ * `Advance_outstandingBalance_check` CHECK constraint (`outstandingBalance >= 0 AND
+ * outstandingBalance <= totalAmount`). Every code path in this module that computes a new
+ * `outstandingBalance` derives it from figures that should already keep it in range — but a
+ * pre-existing inconsistent Advance (its linked `PayrollEntry.advanceDeduction`/
+ * `eidAdvanceDeduction` diverged from what this Advance's own bookkeeping expects, e.g. because it
+ * was edited directly on the Payroll Entry before `assertDeductionNotAdvanceLinked`
+ * — `payroll-entry.service.ts` — existed) can still produce an out-of-range value here. Called
+ * immediately before every `tx.advance.update()` in this file so that case fails with one clear,
+ * actionable domain error instead of an unhandled Postgres constraint violation surfacing as a
+ * generic 500 (the exact production defect this checkpoint root-caused).
+ */
+function assertOutstandingBalanceWithinBounds(outstandingBalance: Prisma.Decimal, totalAmount: Prisma.Decimal): void {
+  if (outstandingBalance.lessThan(0) || outstandingBalance.greaterThan(totalAmount)) {
+    throw conflict(
+      `This Advance's outstanding balance (PKR ${outstandingBalance.toFixed(2)}) is inconsistent with its recorded amount ` +
+        `(PKR ${totalAmount.toFixed(2)}) — its linked payroll deduction was likely changed outside the Advances module. ` +
+        'A Master Admin should review this employee\'s Payroll Entry before this Advance can be edited or cancelled.',
+    );
+  }
+}
+
 async function getAdvanceOrThrow(id: string, client: PrismaTransactionClient = prisma): Promise<AdvanceWithEmployee> {
   const advance = await client.advance.findUnique({ where: { id }, include: advanceWithEmployeeInclude });
   if (!advance) {
@@ -399,24 +422,25 @@ export async function createAdvance(
   });
 }
 
-/** Ordinary field edit — deliberately narrow (see `updateAdvanceSchema`'s own doc comment).
- * `totalAmount`/`outstandingBalance`/`type`/`status`/scheduled-period fields never move through
- * this path; they only ever change via the system actions that own them. */
 /**
- * Ordinary field edits — lifecycle-aware (Operational Stabilization Checkpoint, 2026-07-24; widened
- * from the original Phase 4 Checkpoint 5 shape, which allowed only `repaymentType`/
- * `scheduledInstallmentAmount`/`notes`). The full editability matrix:
+ * Ordinary field edits — lifecycle-aware, narrowed to exactly `totalAmount`/`dateGiven`/`notes` by
+ * explicit business decision (v1.0.2 Advance Edit/Cancel Final Product Semantics checkpoint,
+ * 2026-08-25 — see `updateAdvanceSchema`'s own doc comment for the full "why exactly these three"
+ * reasoning). Widened from the Operational Stabilization Checkpoint's (2026-07-24) shape, which also
+ * allowed `repaymentType`/`scheduledInstallmentAmount`; those are now fixed at creation. The full
+ * editability matrix:
  *
  * - `notes`: always editable, at any lifecycle stage, including `PAID_OFF`/`CANCELLED`.
- * - `repaymentType`, `scheduledInstallmentAmount`: editable while `status = 'ACTIVE'`; rejected once
- *   `PAID_OFF`/`CANCELLED` (nothing left to schedule).
- * - `totalAmount`: editable while `status = 'ACTIVE'`, bounded below by what has already been repaid
- *   (`totalAmount - outstandingBalance`, computed from THIS advance's own already-materialized
- *   deductions) — `outstandingBalance` is adjusted by the exact same delta so it always stays
- *   internally consistent (`newOutstanding = newTotalAmount - alreadyRepaid`), never independently
- *   recalculated. Rejected once `PAID_OFF`/`CANCELLED` — reopening a closed Advance is out of this
- *   checkpoint's scope (`status` stays a system-managed field either way; see `cancelAdvance` for the
- *   one user-facing status transition this module exposes).
+ * - `dateGiven`: always editable, at any lifecycle stage, same as `notes` — traced to have zero
+ *   effect on materialization/reservation/release (purely descriptive/reporting), so there is no
+ *   lifecycle stage at which it needs to be, or safely can be, blocked.
+ * - `totalAmount`: editable while `status = 'ACTIVE'` or `'RESERVED'`, bounded below by what has
+ *   already been repaid (`totalAmount - outstandingBalance`, computed from THIS advance's own
+ *   already-materialized deductions) — `outstandingBalance` is adjusted by the exact same delta so
+ *   it always stays internally consistent (`newOutstanding = newTotalAmount - alreadyRepaid`), never
+ *   independently recalculated. Rejected once `PAID_OFF`/`CANCELLED` — reopening a closed Advance is
+ *   out of this checkpoint's scope (`status` stays a system-managed field either way; see
+ *   `cancelAdvance` for the one user-facing status transition this module exposes).
  * - the deduction start cycle (`originalScheduledPeriodId`/`currentScheduledPeriodId`): never
  *   editable here, at any lifecycle stage. Before materialization, correct it by cancelling this
  *   Advance and recording a fresh one (`cancelAdvance`, below) — never a silent field edit, and never
@@ -425,7 +449,8 @@ export async function createAdvance(
  *   path, and only that path may write an audited `AdvanceScheduleChange` row (its `payrollEntryId`
  *   column is `NOT NULL` by design — there never was, and still isn't, a "reschedule before it ever
  *   lands" mechanism, matching that function's own doc comment).
- * - `type`, `status`: always system-managed only, never a plain field edit.
+ * - `type`, `status`, `repaymentType`, `scheduledInstallmentAmount`: always system-/creation-managed
+ *   only, never a plain field edit through this function.
  */
 export async function updateAdvance(
   currentUser: SessionUser,
@@ -436,32 +461,24 @@ export async function updateAdvance(
   const advance = await getAdvanceOrThrow(id);
   assertSiteAccess(currentUser, advance.employee.siteId);
 
-  const isFinancialEdit = input.totalAmount !== undefined || input.repaymentType !== undefined || input.scheduledInstallmentAmount !== undefined;
-  if (isFinancialEdit && advance.status !== 'ACTIVE') {
-    const statusDescription =
-      advance.status === 'PAID_OFF'
-        ? 'fully paid off'
-        : advance.status === 'RESERVED'
-          ? 'reserved against the current Draft payroll (not yet released) — cancel it instead if these figures need to change before release'
-          : 'cancelled';
-    throw badRequest(`This Advance is ${statusDescription} — only its notes can still be edited`);
+  // v1.0.2 checkpoint: `totalAmount` is now the only remaining "financial" (ledger-affecting)
+  // field — the status gate below exists for it alone; `dateGiven`/`notes` bypass it entirely at
+  // every lifecycle stage (see the doc comment above). RESERVED is included alongside ACTIVE
+  // (unchanged from the prior checkpoint) — a fully-materialized-but-unreleased Advance
+  // (outstandingBalance already 0) still has a live, reversible Draft deduction, and Finance needs
+  // to correct it without cancelling and re-recording.
+  const isFinancialEdit = input.totalAmount !== undefined;
+  if (isFinancialEdit && advance.status !== 'ACTIVE' && advance.status !== 'RESERVED') {
+    const statusDescription = advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled';
+    throw badRequest(`This Advance is ${statusDescription} — only its date and notes can still be edited`);
   }
 
   // Does this edit actually change a value that affects what should be deducted this cycle? A
-  // same-value resubmission (e.g. saving the modal after only touching `notes`, which the frontend
-  // always submits totalAmount/repaymentType/scheduledInstallmentAmount alongside for an ACTIVE
-  // advance) must not needlessly reverse-and-recalculate an already-correct live Draft deduction —
-  // that would bump the entry's `version` and write audit noise for a no-op.
-  const scheduledInstallmentChanged =
-    input.scheduledInstallmentAmount !== undefined &&
-    (input.scheduledInstallmentAmount === null
-      ? advance.scheduledInstallmentAmount !== null
-      : advance.scheduledInstallmentAmount === null ||
-        !advance.scheduledInstallmentAmount.equals(input.scheduledInstallmentAmount));
-  const financialValueChanged =
-    (input.totalAmount !== undefined && !advance.totalAmount.equals(input.totalAmount)) ||
-    (input.repaymentType !== undefined && input.repaymentType !== advance.repaymentType) ||
-    scheduledInstallmentChanged;
+  // same-value resubmission (e.g. saving the modal after only touching `notes`/`dateGiven`) must not
+  // needlessly reverse-and-recalculate an already-correct live Draft deduction — that would bump the
+  // entry's `version` and write audit noise for a no-op. `totalAmount` is the only field left that
+  // can ever trigger this (`dateGiven`/`notes` never touch the ledger — see the doc comment above).
+  const financialValueChanged = input.totalAmount !== undefined && !advance.totalAmount.equals(input.totalAmount);
 
   const isLoan = advance.type === 'LOAN';
 
@@ -471,9 +488,9 @@ export async function updateAdvance(
      * deduction, if any — same lookup `cancelAdvance` uses. **Root-cause fix (post-review, this
      * checkpoint):** a prior version of this function only ever wrote `Advance.totalAmount`/
      * `outstandingBalance` on edit — it never touched an already-materialized Draft deduction, which
-     * meant editing `totalAmount`/`repaymentType`/`scheduledInstallmentAmount` on an Advance that
-     * already had a live (unreleased) Draft deduction silently left that Draft figure stale under
-     * the OLD rules. Fixed by reversing that deduction first (the identical math `cancelAdvance` and
+     * meant editing `totalAmount` on an Advance that already had a live (unreleased) Draft deduction
+     * silently left that Draft figure stale under the OLD rules. Fixed by reversing that deduction
+     * first (the identical math `cancelAdvance` and
      * `deferAdvanceSchedule` already use) and re-materializing it under the NEW rules, in the same
      * transaction, via the same shared `materializeOneAdvanceDeduction` helper every other
      * materialization path uses — never a second, independent recalculation. A RELEASED entry is
@@ -515,6 +532,13 @@ export async function updateAdvance(
 
     if (input.totalAmount !== undefined) {
       const newTotalAmount = new Prisma.Decimal(input.totalAmount);
+      // `decimalString` (shared/src/schemas/advance.ts) only validates decimal *format* — a zero or
+      // negative amount would otherwise reach the DB's own `Advance_totalAmount_check` (`totalAmount
+      // > 0`) CHECK constraint unvalidated, surfacing as the same class of unhandled 500 this
+      // checkpoint's `assertOutstandingBalanceWithinBounds` already fixes for `outstandingBalance`.
+      if (newTotalAmount.lessThanOrEqualTo(0)) {
+        throw badRequest('Total amount must be greater than zero');
+      }
       const alreadyRepaid = effectiveTotalAmount.minus(effectiveOutstandingBalance);
       if (newTotalAmount.lessThan(alreadyRepaid)) {
         throw badRequest(
@@ -525,19 +549,42 @@ export async function updateAdvance(
       effectiveTotalAmount = newTotalAmount;
     }
 
+    if (input.totalAmount !== undefined || reversedAmount) {
+      assertOutstandingBalanceWithinBounds(effectiveOutstandingBalance, effectiveTotalAmount);
+    }
+
     const data: Prisma.AdvanceUncheckedUpdateInput = {
-      ...(input.repaymentType !== undefined && { repaymentType: input.repaymentType }),
-      ...(input.scheduledInstallmentAmount !== undefined && {
-        scheduledInstallmentAmount: input.scheduledInstallmentAmount,
-      }),
       ...(input.notes !== undefined && { notes: input.notes }),
+      ...(input.dateGiven !== undefined && { dateGiven: isoDateToUtcDate(input.dateGiven)! }),
       ...(input.totalAmount !== undefined && { totalAmount: effectiveTotalAmount }),
       ...((input.totalAmount !== undefined || reversedAmount) && { outstandingBalance: effectiveOutstandingBalance }),
     };
 
     const changes = diffFields(advance as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
 
-    const updated = await tx.advance.update({ where: { id }, data });
+    // Concurrency guard (v1.0.2 checkpoint) — `Advance` carries no `version` column of its own
+    // (unlike `PayrollEntry`), so this compares-and-swaps atomically on the exact fields this
+    // function's own math was computed from (`status`/`outstandingBalance`/`totalAmount`) in one
+    // SQL statement, exactly mirroring the proven `PayrollEntry` `updateMany({ where: { id,
+    // version } })` pattern used a few lines above for the live entry. A prior version of this
+    // guard used a separate `findUniqueOrThrow` read followed by a plain `.update()` — that has a
+    // real, provable TOCTOU gap (two concurrent calls can both pass the read-check before either
+    // commits its write), caught by this checkpoint's own concurrency tests; a single guarded
+    // `updateMany` closes it, since Postgres evaluates the `WHERE` clause and applies the write
+    // atomically, and a transaction that would touch an already-changed row blocks until the
+    // winner commits, then correctly re-evaluates against the post-commit values. Ordinarily a
+    // concurrent Edit/Cancel racing on the exact same live Draft deduction is already caught by
+    // the `PayrollEntry`-side guard above (both this function and `cancelAdvance` touch it first);
+    // this is what catches the remaining case — two concurrent calls that both find no live entry
+    // to serialize on (e.g. two Advance edits before materialization, or a duplicate Cancel).
+    const guardedAdvance = await tx.advance.updateMany({
+      where: { id, status: advance.status, outstandingBalance: advance.outstandingBalance, totalAmount: advance.totalAmount },
+      data,
+    });
+    if (guardedAdvance.count === 0) {
+      throw conflict('This Advance was changed by someone else — reload and try again');
+    }
+    const updated = await tx.advance.findUniqueOrThrow({ where: { id } });
 
     if (Object.keys(changes).length > 0) {
       await recordAuditLog(
@@ -660,14 +707,24 @@ export async function cancelAdvance(
       }
     }
 
-    const cancelled = await tx.advance.update({
-      where: { id },
+    assertOutstandingBalanceWithinBounds(outstandingAfterReversal, advance.totalAmount);
+
+    // Concurrency guard (v1.0.2 checkpoint) — see `updateAdvance`'s identical guard for the full
+    // reasoning: a single atomic compare-and-swap `updateMany`, not a separate read-then-write,
+    // closes the real TOCTOU gap two concurrent Cancel calls (or an Edit racing a Cancel) would
+    // otherwise hit when there's no shared live `PayrollEntry` row to serialize them on.
+    const guardedCancel = await tx.advance.updateMany({
+      where: { id, status: advance.status, outstandingBalance: advance.outstandingBalance },
       data: {
         status: 'CANCELLED',
         outstandingBalance: outstandingAfterReversal,
         currentScheduledPeriodId: null,
       },
     });
+    if (guardedCancel.count === 0) {
+      throw conflict('This Advance was changed by someone else — reload and try again');
+    }
+    const cancelled = await tx.advance.findUniqueOrThrow({ where: { id } });
 
     await recordAuditLog(
       {
@@ -784,9 +841,14 @@ export async function deferAdvanceSchedule(
     }
 
     const restoredBalance = advance.outstandingBalance.plus(deductedAmount);
+    assertOutstandingBalanceWithinBounds(restoredBalance, advance.totalAmount);
 
-    const updatedAdvance = await tx.advance.update({
-      where: { id: advanceId },
+    // Concurrency guard (v1.0.2 checkpoint) — same atomic compare-and-swap as `updateAdvance`/
+    // `cancelAdvance`; this path always has a live entry (required above), so the entry-side
+    // version guard already serializes the common race, but this keeps the Advance write itself
+    // consistent with its siblings rather than leaving it as the one plain, unguarded `.update()`.
+    const guardedDefer = await tx.advance.updateMany({
+      where: { id: advanceId, status: advance.status, outstandingBalance: advance.outstandingBalance },
       data: {
         outstandingBalance: restoredBalance,
         status: 'ACTIVE',
@@ -794,6 +856,10 @@ export async function deferAdvanceSchedule(
         paidOffAt: null,
       },
     });
+    if (guardedDefer.count === 0) {
+      throw conflict('This Advance was changed by someone else — reload and try again');
+    }
+    const updatedAdvance = await tx.advance.findUniqueOrThrow({ where: { id: advanceId } });
 
     await tx.advanceScheduleChange.create({
       data: {
