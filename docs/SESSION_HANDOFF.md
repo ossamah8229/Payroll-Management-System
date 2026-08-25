@@ -5997,3 +5997,82 @@ debt) — explicitly not claimed as release blockers, and v1.0.0 explicitly not 
 operation.** Per explicit instruction: do not begin v1.0.1 work, do not resume Reliability Phase 5, do
 not fix warnings/dependencies, do not change the `v1.0.0` tag after publication. STOP.
 
+---
+
+## 55. Addendum, 2026-08-25 — Production Payroll Readiness Checkpoint 1: read-only August 2026 Draft
+cycle audit COMPLETE — one genuine operational blocker found (attendance not yet entered for 19 of
+20 sites), zero code/reconciliation defects, NO production write of any kind
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "Production Payroll Readiness Checkpoint 1 —
+Read-Only August 2026 Draft Cycle Audit" entry, directly following §54's referenced v1.0.0-release
+entry. This addendum is the session-chronology summary.
+
+**Hard constraint honored: production was READ-ONLY throughout, no exceptions.** Verified before
+touching anything that this sandbox has no production database credentials (`backend/.env`'s
+`DATABASE_URL` resolves to `127.0.0.1`, local dev Postgres only — same gap §53 already disclosed).
+Every production read this session was a `GET` issued from the user's own already-authenticated
+Master User browser session against the live REST API
+(`https://payroll-api.brooms.com.pk/api/v1/...`) — never a direct database connection, never any
+non-`GET` verb. No `PayrollEntry`/`PayrollCycle`/`Employee`/`Advance`/`Correction` row was created,
+edited, deleted, held/unheld, approved, rejected, released, corrected, imported, seeded, or migrated.
+The only database writes these reads produced were the application's own built-in, INSERT-only
+`AuditLog` "viewed"/"exported" entries — the identical side effect a human operator opening the same
+report/export pages would generate, disclosed rather than hidden.
+
+**Cycle audited**: August 2026, the sole Draft cycle (`235770e4-c444-4adf-8e5b-c2da0ff02f35`), 1,198
+entries — the same cycle §53's production smoke already touched read-only on 2026-08-24.
+
+**Baseline totals** (all reconciled exactly across four independent sources — the Payroll Entry API
+re-summed from raw fields, the Payroll Summary Report, the Salary Release Report, and a properly
+CSV-parsed export — zero discrepancy found anywhere): Gross Pay PKR 48,482,989.46; Allowances PKR
+6,820; Overtime PKR 0; EOBI PKR 377,600 (944 applicable entries); Advances PKR 141,820; Eid Advances
+PKR 0; Fines PKR 0; Correction Recovery PKR 4,000; Total Earnings PKR 1,537,142.58; Total Deductions
+PKR 523,420; **Net Payroll Total PKR 1,013,722.58**; Hold 0/1,198; Released 0/1,198.
+
+**The one genuine blocker**: 1,178 of 1,198 entries (98.3%) have **zero recorded attendance days**.
+Broken down by site, the picture is stark and unambiguous — every entry with any recorded attendance
+(20 of 1,198) belongs to "Broom Head Office" (the company's own internal staff); **all 19 client
+sites show 0% attendance entered**, not partial progress. This drives 946 entries (78.9%) to a
+negative net salary and 233 (19.4%) to exactly zero — 98.4% of the roster combined — purely because
+the flat PKR 400 EOBI deduction (and, for some, an Advance deduction) applies against PKR 0 earned.
+Only 19 of 1,198 entries (1.6%) currently show a correct positive net salary. **Confirmed to be an
+operational data-entry gap, not a code defect** — `calcNet` is computing exactly what its inputs say
+(PKR 0 earned from 0 days); the full reconciliation above proves the calculation/export/report
+pipeline itself is correct. **No code fix applies here and no local reproduction was attempted or is
+needed — this requires Payroll Staff to enter attendance for the 19 client sites in the live system
+before the 2026-09-01 release.** Flagged, not corrected, per this checkpoint's explicit mandate.
+
+**Everything else audited came back clean or non-blocking**: 0 duplicate CNIC/Employee
+Code/Account Number/IBAN across the full 1,203-employee registry (checked two independently
+corroborating ways — the app's own server-computed `releaseBlockReasons` per entry, and a separate
+client-side normalize-and-group pass); 0 entries blocked by the app's own release-readiness check; 0
+zero/negative Gross Pay; 0 negative/impossible attendance figures on any work line; 0 entries missing
+their Site relationship or any work line missing its Unit relationship; 0 active employees without a
+Draft-cycle entry (1,198 = 1,198, exact 1:1) and 0 duplicate/unexpected entries per employee; 0 held,
+0 released (both correct for an untouched Draft cycle); 0 multi-unit/split employees this cycle (same
+finding as §53's production smoke, so the disclosed `otHours` multi-unit gap from §51/§54 still has
+no production data exercising it). **One non-blocking data-completeness observation**: all 962
+bank-paid entries (100%) have an empty IBAN — not release-blocking per the app's own rule (only
+Account Number is required), most plausibly because `iban` postdates many employees'
+original creation (added 2026-07-11 per schema history) and was never backfilled — worth a future
+Employee Registry cleanup, not a release blocker.
+
+**Existing repo audit scripts** (`backend/scripts/find-employee-identifier-duplicates.ts`,
+`find-negative-released-entries.ts`) were read in full and confirmed read-only by inspection (Prisma
+`findMany` + `$disconnect` only, no write calls anywhere) but **could not be run against production**
+— no production DB credentials in this sandbox, the same gap both scripts' own header comments
+already name. Equivalent read-only coverage was obtained instead via the production REST API (the
+duplicate-identifier and release-readiness findings above). Noted for the record:
+`find-negative-released-entries.ts`'s own scope is `released = true` entries only, so it would report
+clean today even though 946 *unreleased Draft* entries currently compute a negative net salary — not
+a contradiction, just a narrower question than this checkpoint's own attendance-driven finding.
+
+**Items requiring local/UAT reproduction: none.** No code, calculation, export, or reconciliation
+defect was found — nothing to reproduce against a disposable local database this checkpoint.
+
+**No commit, push, deployment, correction, migration, or salary release occurred this session — no
+production write of any kind.** Full exact-query list (all `GET`, proof of read-only access) is
+recorded in `docs/PROJECT_PROGRESS.md`'s own entry for this checkpoint. **STOP — awaiting explicit
+instruction on the attendance-data-entry blocker before any further action.** Do not begin v1.0.1
+work, do not resume Reliability Phase 5, do not touch production write paths, until directed.
+

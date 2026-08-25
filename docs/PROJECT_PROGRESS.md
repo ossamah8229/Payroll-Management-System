@@ -12371,6 +12371,202 @@ warning/dependency fixes, no further changes to the `v1.0.0` tag. STOP.
 
 ---
 
+## Production Payroll Readiness Checkpoint 1 — Read-Only August 2026 Draft Cycle Audit (2026-08-25)
+
+**Hard constraint honored throughout: production was READ-ONLY.** No `PayrollEntry`/`PayrollCycle`/
+`Employee`/`Advance`/`Correction`/`BalanceAdjustment` row was created, edited, deleted, held/unheld,
+approved, rejected, released, corrected, imported, seeded, or migrated. No production write, no
+salary release, no migration, no correction, no Phase 5/v1.0.1 work. **STOPPED before any corrective
+action, exactly as instructed.**
+
+**Access method.** This sandbox has no production database credentials — `backend/.env`'s own
+`DATABASE_URL` resolves to `127.0.0.1` (local dev Postgres), confirmed before touching anything;
+same gap the 2026-08-24 production-cutover session (§ "v1.0.0 PRODUCTION CUTOVER" above) already
+disclosed. All production data below was read through the user's own already-authenticated Master
+User browser session (`ossamah@brooms.com.pk`, role `MASTER_ADMIN`) issuing `fetch(..., {credentials:
+'include'})` **GET-only** calls against `https://payroll-api.brooms.com.pk/api/v1/...` — the same
+REST API the production UI itself calls, never a direct SQL connection. Every one of these GET reads
+(report views, the CSV/XLSX exports) triggers the application's own built-in, INSERT-only
+`AuditLog` "viewed"/"exported" tracking entries — identical to what a human operator opening the same
+pages would generate, not a payroll-record mutation, and not disabled by (or in conflict with) this
+checkpoint's read-only mandate.
+
+**Cycle identified.** Exactly one Draft cycle exists: **August 2026**, id
+`235770e4-c444-4adf-8e5b-c2da0ff02f35`, status `DRAFT`, created 2026-08-03 from the archived July
+2026 cycle. July 2026 is `ARCHIVED`/released; no other cycle exists.
+
+### Production baseline totals (August 2026 Draft cycle, 1,198 entries)
+
+| Figure | Value |
+|---|---|
+| Payroll-entry / employee count | **1,198** (exactly 1:1 against 1,198 active employees — see reconciliation below) |
+| Gross Pay | **PKR 48,482,989.46** |
+| Allowances | PKR 6,820.00 |
+| Overtime (`otEarned`) | PKR 0.00 |
+| Leave earned | PKR 0.00 (`leaveDays` sums to 0 across every entry) |
+| EOBI | 944 of 1,198 entries `eobiApplicable`; PKR 377,600.00 (944 × 400.00) |
+| Advance deductions | PKR 141,820.00 |
+| Eid Advance deductions | PKR 0.00 |
+| Fines | PKR 0.00 |
+| Correction Balance Payable (Phase 6) | PKR 0.00 |
+| Correction Balance Recovery (Phase 6) | PKR 4,000.00 |
+| Total Earnings | PKR 1,537,142.58 |
+| Total Deductions | PKR 523,420.00 |
+| **Net Payroll Total** | **PKR 1,013,722.58** |
+| Hold | 0 of 1,198 |
+| Released | 0 of 1,198 (`payoutOutcome` null on all 1,198 — no Unit release has occurred yet, consistent with an untouched Draft cycle) |
+| Bank-paid / Cash-paid | 962 bank-paid, 236 cash-paid (`bankId` null) |
+
+### Reconciliation results (Payroll Entry ↔ Reports ↔ Exports ↔ Salary Release view)
+
+Four independent sources were cross-checked for the same cycle and matched **exactly**, to the
+cent, on every figure (Gross Pay, Overtime, Allowances, EOBI, Advance/Eid Advance deductions, Fines,
+Correction Payable/Recovery, Total Earnings, Total Deductions, Net Salary, Hold count, Released
+count, row count):
+
+1. **Payroll Entry API** (`GET /payroll-cycles/{id}/entries`, all 1,198 rows, independently re-summed
+   client-side from the raw stored fields — not read from any pre-aggregated total).
+2. **Payroll Summary Report** (`GET /reports/payroll-summary?cycleId=...`) — `cycleTotals.netSalary =
+   "1013722.58"`, `employeeCount: 1198`, `heldCount: 0`, `releasedCount: 0`, matching (1) exactly.
+3. **Salary Release Report** (`GET /reports/salary-release?cycleId=...`) — `totals.pendingReleaseAmount
+   = "1013722.58"`, `matchingCount: 1198`, `releasedCount: 0`, `heldCount: 0`, matching (1)/(2) exactly.
+4. **CSV export** (`GET /payroll-cycles/{id}/entries/export?format=csv`) — parsed with a proper
+   quoted-field CSV parser (not a naive `split(',')`, since Name/Site can contain commas): **1,198**
+   data rows, `Net Salary` column sums to **1,013,722.58**, `Gross Pay` sums to **48,482,989.46**,
+   `Hold`/`Released` columns both all-`No`. Column contract confirmed identical to the one
+   `docs/SESSION_HANDOFF.md` §51/§52 documented (Days, Net Salary, Bank, Bank Name, Branch Code,
+   Account Number, IBAN, Deputed Branch Code, Deputed Branch Name, Unit Working Days Breakdown,
+   Remarks all present, correctly ordered).
+5. **XLSX export** — confirmed reachable and correctly typed (`GET .../export?format=xlsx` → HTTP
+   200, `content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, 150,719
+   bytes) but **not independently re-parsed this session** (binary format; the CSV reconciliation
+   above already closes the loop, and PR #14's own manual UAT — §51/§52 — already validated
+   byte-identical CSV/XLSX column parity).
+
+**No reconciliation discrepancy of any kind was found.**
+
+### Exception list
+
+**Genuine payroll blocker (1):**
+
+- **1,178 of 1,198 entries (98.3%) have zero recorded attendance (`totalWorkingDays = 0`) for the
+  August cycle, five calendar days after this checkpoint's audit date (2026-08-25) and five days
+  before the scheduled 2026-09-01 salary release.** Broken down by site: **every one of the 20
+  entries with any recorded attendance belongs to "Broom Head Office"** (the company's own internal
+  staff, days = 29 or 31) — **all 19 other client sites (1,178 entries total: Ombre Apparel Park 223,
+  Outfitters Stores 145, Packages Convertors 141, Dolmen Mall 82, ABL South Region 58, ABL East
+  Region 49, ABL Region Multan 44, ABL City Region 44, Descon Headquarters 34, Pakistan Institute of
+  Fashion and Design 39, Loftex Limited 28, Packages Mall 25, ABL Islamic Region Lahore 17, Descon
+  Lahore Manufacturing Works 15, IGI Insurance 13, Ali Institute of Education 13, Siemens Healthineers
+  7, ABL Islamic Region Multan 9, and the remaining ABL building/office rows) show 0 of 0 entries with
+  any attendance recorded — a clean, unambiguous "not started" state, not partial data entry.** This
+  is what drives net salary to **946 negative (78.9%) and 233 zero (19.4%) of 1,198 entries — 98.4%
+  combined** (the flat PKR 400 EOBI deduction and, for some, an Advance deduction, applied against
+  PKR 0 earned). Only **19 of 1,198 entries (1.6%)**, all Broom Head Office staff, currently show a
+  correct positive net salary. **This is an operational data-entry gap, not a code defect** — nothing
+  in the calculation, export, or reconciliation logic is wrong (see the exact reconciliation above);
+  `calcNet` is correctly computing PKR 0 earned from PKR 0 days, exactly as designed. **No code fix or
+  local reproduction is needed or applicable; this requires Payroll Staff to enter attendance for the
+  19 client sites in the live Draft cycle before 2026-09-01.** Flagged here, not corrected — per this
+  checkpoint's explicit read-only mandate.
+
+**Warnings / non-blockers (2):**
+
+- **All 962 of 962 bank-paid entries (100%) have an empty IBAN.** Not release-blocking — the app's
+  own `evaluatePayrollEntryReleaseReadiness` (`payroll-release-eligibility.ts`) only requires Account
+  Number for a bank-paid entry, and only flags IBAN for *duplication*, never for *absence*; confirmed
+  zero entries are actually blocked (see below). Most plausibly explained by `iban` being a
+  Phase-4-banking-refinement-era addition (2026-07-11, schema doc comment) never backfilled for
+  employees created earlier — a data-completeness item worth a future Employee Registry cleanup pass,
+  not a release blocker.
+- **`PayrollEntryWorkLine.cycleDays` varies across the roster (26: 34 lines, 27: 145, 30: 999, 31:
+  20).** All values fall inside the schema's own valid `1–31` CHECK-constraint range; every single
+  entry's own work line(s) use one consistent `cycleDays` (0 entries with mixed cycleDays across their
+  own lines). Read as legitimate per-site pay-period-length variation, not a data anomaly — informational
+  only.
+
+**Clean — checked, zero findings (reported for completeness, not because anything needs fixing):**
+
+- **Duplicate identifiers, registry-wide** (1,203 employees: 1,198 active + 5 departed) — 0 duplicate
+  CNIC, 0 duplicate Employee Code, 0 duplicate Account Number, 0 duplicate IBAN. Checked two
+  independent ways that corroborate each other: (a) the app's own server-computed
+  `releaseBlockReasons` per entry (`evaluatePayrollEntryReleaseReadiness`, the exact canonical
+  uniqueness logic `backend/scripts/find-employee-identifier-duplicates.ts` mirrors) — **0 of 1,198
+  entries carry any block reason**; (b) an independent client-side normalize-and-group cross-check
+  across the full employee registry (digits-only CNIC, uppercase-alphanumeric Account
+  Number/IBAN) — 0 duplicate groups found by either method.
+- 0 entries with missing Account Number among the 962 bank-paid entries.
+- 0 entries with zero/negative Gross Pay.
+- 0 negative `days`/`otHours` on any work line; 0 lines where `days > cycleDays`; 0 lines with
+  `cycleDays` outside the schema's 1–31 range; 0 entries with inconsistent `cycleDays` across their
+  own work lines.
+- 0 entries missing their Project Site relationship; 0 work lines missing their Project Unit
+  relationship.
+- 0 active employees without a Draft-cycle payroll entry (1,198 active employees = 1,198 entries,
+  exact 1:1); 0 employees with more than one entry in this cycle (the schema's own
+  `@@unique([cycleId, employeeId])` holds); 0 entries belonging to a departed (non-active) employee.
+- 0 held entries; 0 released entries (expected and correct for an untouched Draft cycle).
+- 0 multi-unit/split-employee entries this cycle — same finding the 2026-08-24 production smoke
+  (§53 above) already recorded; the `otHours`/multi-unit aggregation gap disclosed in §51/§54
+  therefore still has no production data to exercise it.
+
+**Items requiring local/UAT reproduction:** **none.** No code, calculation, export, or reconciliation
+defect was found this checkpoint — everything above that isn't the attendance-data-entry gap is
+either a clean pass or a non-blocking data-completeness observation. There is nothing to reproduce
+against a disposable local database, and per the read-only mandate nothing was corrected in
+production.
+
+### Existing repository audit scripts — inspected, proven read-only, NOT run against production
+
+`backend/scripts/find-employee-identifier-duplicates.ts` and
+`backend/scripts/find-negative-released-entries.ts` were both read in full before any execution was
+considered. Both make Prisma `findMany` reads only, end with `prisma.$disconnect()`, and contain no
+`create`/`update`/`upsert`/`delete`/`deleteMany`/`updateMany`/`$executeRaw`/`$transaction`-with-writes
+call anywhere — confirmed read-only by inspection. **Neither was executed against production**: this
+sandbox has no production `DATABASE_URL`/credentials (see "Access method" above) — the same
+already-disclosed gap both scripts' own header comments name ("there is no production access
+available to whoever authored this checkpoint"). Read-only production coverage for what these two
+scripts check was instead obtained via the production REST API (see "Reconciliation results" and the
+duplicate-identifier findings above) — for `find-negative-released-entries.ts` specifically, note its
+own scope is **`released = true` entries only**; since 0 entries in this cycle are released, that
+script would report a clean "no released rows with negative net salary" today even though 946 *Draft,
+unreleased* entries currently compute a negative net salary. The two findings are not in conflict —
+this checkpoint's own negative-net-salary figures above are the more complete, currently-relevant
+picture for a Draft cycle five days from release.
+
+### Exact scripts/queries used (all GET, proof of read-only access)
+
+All requests below were issued from the browser (`javascript_tool`, page context
+`https://payroll.brooms.com.pk/`) as `fetch(url, {credentials:'include'})` — no HTTP method other
+than `GET` was used at any point this checkpoint:
+
+```
+GET /api/v1/auth/me
+GET /api/v1/payroll-cycles?pageSize=100
+GET /api/v1/reports/payroll-summary?cycleId=235770e4-c444-4adf-8e5b-c2da0ff02f35&pageSize=200
+GET /api/v1/reports/salary-release?cycleId=235770e4-c444-4adf-8e5b-c2da0ff02f35&pageSize=1
+GET /api/v1/payroll-cycles/235770e4-c444-4adf-8e5b-c2da0ff02f35/entries?page={1..6}&pageSize=200
+GET /api/v1/employees?activeOnly=true
+GET /api/v1/employees?activeOnly=false
+GET /api/v1/banks
+GET /api/v1/sites
+GET /api/v1/payroll-cycles/235770e4-c444-4adf-8e5b-c2da0ff02f35/entries/export?format=csv
+GET /api/v1/payroll-cycles/235770e4-c444-4adf-8e5b-c2da0ff02f35/entries/export?format=xlsx
+```
+
+(base `https://payroll-api.brooms.com.pk`). Aggregation/anomaly detection (duplicate grouping,
+attendance-anomaly scan, CSV parsing/reconciliation) was plain client-side JavaScript run in the
+browser tab against the fetched JSON/CSV — no server-side computation was added or modified, and no
+`backend/` code was changed by this checkpoint.
+
+**Classification: GREEN on data/reconciliation integrity, RED on operational readiness for the
+2026-09-01 release** — the system itself (calculation, export, reconciliation, duplicate/uniqueness
+enforcement) is functioning exactly as designed and audited clean; the blocker is that attendance has
+not yet been entered for 1,178 of 1,198 employees. **No production write, no salary release, no
+migration, no correction was performed. STOP — awaiting instruction before any further action.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
