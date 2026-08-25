@@ -13494,6 +13494,143 @@ created, edited, held, or released. No new file outside `docs/` was touched. STO
 
 ---
 
+## v1.0.2 Release Blocker — Advance Edit/Cancel Correctness (2026-08-25, later same day)
+
+**Scope**: fix a real production Cancel failure ("Something went wrong") for a specific Advance
+(employee Sharafat Masih), root-cause it, and correct the underlying integrity gap it exposed.
+Explicitly narrow — does not touch H1/H2/H3/M1–M3 from Checkpoint 2, does not resume Reliability
+Phase 5. Branch `fix/v1.0.2-advance-edit-cancel`, cut from `main` at `7443143` after re-confirming
+`main == origin/main`, working tree clean, `v1.0.0`/`v1.0.1` unchanged, no existing Advance-fix
+branch/PR to resume.
+
+**Production symptom (Phase A, strictly read-only)**: the Advance (id `7213b744-...`, LOAN,
+`totalAmount` PKR 5,000, `outstandingBalance` PKR 0, status `RESERVED`) was found exactly as left by
+the failed attempt — **no partial mutation from Cancel itself**: the transaction had rolled back
+atomically. But the linked August Draft `PayrollEntry` showed `advanceDeduction: PKR 10,000` —
+**double the Advance's own `totalAmount`** — computing a live Net Salary of −10,400.00. This
+mismatch predated the Cancel attempt; the entry's `notes` field ("10000 Advance Amount") indicated
+the amount was typed directly into the Payroll Entry grid's own "Advance Ded." cell as a workaround
+after the Advances module correctly blocked editing a `RESERVED` Advance's amount.
+
+**Root cause, confirmed by full local reproduction** (disposable embedded-Postgres, synthetic data,
+`backend/tests/_repro-advance-cancel.test.ts`, deleted after use): `shared/src/schemas/
+payroll-entry.ts`'s `updatePayrollEntrySchema` accepted `advanceDeduction`/`eidAdvanceDeduction` as
+ordinary directly-PATCHable fields with **zero cross-check against the linked Advance** — a
+completely separate write path from the Advances module's own `updateAdvance`/`cancelAdvance`. When
+Cancel then tried to reverse the (corrupted) 10,000 deduction, it computed
+`outstandingAfterReversal = 0 + 10,000 = 10,000`, violated the DB's own
+`Advance_outstandingBalance_check` CHECK constraint (`outstandingBalance <= totalAmount`) with
+Postgres error `23514`, surfaced as an unhandled `PrismaClientUnknownRequestError` →
+`error-handler.ts`'s generic 500 (`"Something went wrong"` in production). Reproduced exactly:
+identical Postgres error, identical 500, identical untouched post-failure state.
+
+**Advance lifecycle traced before any change** (Phase C): `updateAdvance`'s financial-edit gate
+(`isFinancialEdit && status !== 'ACTIVE'`) had deliberately excluded `RESERVED` — the design
+intent (per its own prior doc comment) was "cancel and re-record" for a RESERVED correction, not a
+limitation of the reverse-then-re-materialize machinery itself, which already handled the identical
+ACTIVE-with-live-deduction case correctly (traced by hand against the exact 5,000→10,000 numbers:
+`alreadyRepaid` computes from the RELEASED-only remainder after reversing the live Draft deduction,
+never the not-yet-released figure).
+
+**Final amount-edit semantics (Phase D)**: widened `updateAdvance`'s gate to `status !== 'ACTIVE' &&
+status !== 'RESERVED'`, reusing 100% of the existing reverse-then-re-materialize transaction
+unchanged. Verified atomically consistent for the exact required example: Advance PKR 5,000 →
+10,000, Draft deduction PKR 5,000 → 10,000, `outstandingBalance` stays 0 (still fully reserved) — one
+backend test (`advance-payroll-entry-integrity.test.ts`) and one live browser UAT walkthrough both
+confirm this exactly. Released history is untouched by construction (`liveEntry` query always
+excludes `released: true`). Added: a `totalAmount <= 0` rejection (a related, previously-unvalidated
+gap the DB's own `Advance_totalAmount_check` would otherwise have hit as the same unhandled-500
+class — closed the same way as the outstanding-balance guard, see below).
+
+**The root-cause fix (Payroll Entry boundary)**: `payroll-entry.service.ts`'s new
+`assertDeductionNotAdvanceLinked` rejects a direct `advanceDeduction`/`eidAdvanceDeduction` PATCH
+**only when the entry's own `advanceId`/`eidAdvanceId` is set** — the existing, already-authoritative
+signal for "this deduction is Advance-ledger-owned," written exclusively by
+`materializeOneAdvanceDeduction`/`cancelAdvance`/`deferAdvanceSchedule`, never by the ordinary entry
+PATCH. An entry with no linked Advance keeps the field exactly as freely editable as before —
+confirmed a supported, unaffected case by a dedicated test, per the explicit instruction not to
+blanket-lock a field that is only conditionally ledger-owned.
+
+**Defensive backstop (Phase E)**: `assertOutstandingBalanceWithinBounds`, called immediately before
+every `tx.advance.update()`/`updateMany()` in `advances.service.ts` (`updateAdvance`, `cancelAdvance`,
+`deferAdvanceSchedule`), turns any *remaining* legacy-mismatch scenario (a pre-existing corrupted row,
+or any future gap the boundary fix doesn't anticipate) into one clear 409 domain error instead of the
+old unhandled 500 — reproduced directly against the exact production numbers in a dedicated test.
+
+**Transaction/concurrency design (Phase F)** — one genuine gap found and fixed, not just tested:
+`updateAdvance`/`cancelAdvance`/`deferAdvanceSchedule` already serialize correctly against each other
+*when they share a live `PayrollEntry` row* (both always touch the entry before the Advance, via the
+entry's own proven `version`-guarded `updateMany`). The gap was the **Advance row's own write** — a
+first attempt at a fix used a separate `findUniqueOrThrow`-then-compare read before the write, which
+has a real, provable TOCTOU race (caught by this checkpoint's own concurrency tests, initially
+flaky — two concurrent calls with no shared entry row to serialize on could both pass the check
+before either committed). Replaced with a single atomic compare-and-swap `tx.advance.updateMany({
+where: { id, status, outstandingBalance, ... } })`, mirroring the exact pattern already proven
+correct for `PayrollEntry`'s own version guard — `count === 0` means someone else won, and Postgres's
+own row-lock blocking/re-evaluation makes this correct regardless of timing, not just in the common
+case. Verified deterministically stable across repeated runs (duplicate Cancel: exactly one 200,
+zero double-audit, zero 500, confirmed clean 3/3 consecutive full-suite runs after the fix).
+
+**Files changed**: `backend/src/modules/advances/advances.service.ts` (RESERVED-editable gate,
+`assertOutstandingBalanceWithinBounds`, atomic compare-and-swap guards in all three mutation
+functions, zero/negative `totalAmount` rejection), `backend/src/modules/payroll-entry/
+payroll-entry.service.ts` (`assertDeductionNotAdvanceLinked`), `frontend/src/routes/
+advances-page.tsx` (Edit modal now offers the financial fields for `RESERVED` too, with an
+explanatory note; removed a pre-existing, now-more-visible frontend correctness bug — the
+"PKR X already repaid" hint computed `totalAmount - outstandingBalance` client-side, which conflates
+a still-reversible Draft reservation with actual RELEASED repayment and would have shown a false
+"cannot reduce below PKR 5,000" for the exact RESERVED case this checkpoint just enabled editing for;
+removed rather than guessed at a correct client-side formula, since only the backend can compute the
+true released-only floor, and its own accurate error already surfaces via the existing catch block).
+
+**Tests**: 14 new tests in `backend/tests/advance-payroll-entry-integrity.test.ts` (direct-PATCH
+rejection linked/unlinked/Eid-symmetric, the exact Phase D increase/decrease examples, the released-
+repayment floor, zero/negative rejection, PAID_OFF/CANCELLED still blocked, the production defect
+reproduced against both Cancel and Edit, Edit-vs-Cancel and duplicate-Cancel concurrency, Cancel-vs-
+Release, RBAC unchanged); 1 pre-existing test in `advances.test.ts` updated (its own prior assertion
+that RESERVED editing was rejected — now factually superseded by Phase D, corrected and expanded, not
+deleted) plus one stale comment corrected. Full regression: backend **1857/1857** (2 pre-existing,
+environment-load-sensitive flakes in files with zero diff from `origin/main` — `corrections-
+materialization.test.ts`'s own concurrency test, `payroll-entry-draft-roster-reconciliation.test.ts`'s
+"socket hang up" — both independently confirmed clean, 67/67, in isolation); frontend **1070/1070**;
+`typecheck`/`lint`/`build` clean on both workspaces; `git diff --check` clean.
+
+**Local UAT (Phase I)**, real dev servers against a disposable database, real browser: created a
+synthetic Site/Branch/Employee, started a Draft cycle, recorded a PKR 5,000 LOAN (Draft deduction
+correctly shows PKR 5,000) — confirmed the direct Payroll Entry PATCH is now rejected (400) — edited
+the Advance down to PKR 2,000 (Draft deduction correctly follows to PKR 2,000, unrelated EOBI/Fine
+figures unchanged) — Cancelled (deduction correctly reverses to 0, `outstandingBalance` restored to
+PKR 2,000) — recorded a second Advance and edited it **PKR 5,000 → 10,000, the exact original
+production numbers**: Advance and Draft deduction both land on PKR 10,000 atomically, confirmed
+directly in both the Advances list and the Payroll Entry grid. The previously-misleading "already
+repaid" hint is confirmed gone from the Edit modal.
+
+**Deferred Checkpoint 2 findings, explicitly untouched this checkpoint**: H1 (Finalize/Hold
+behavior), H2 (Render PITR verification), H3 (the "Muhammad Tariq" employee master-data pair), S1
+(missing Employee Codes), M2 (Working Days vs Cycle Days), M3 (zero-entry sites) — all remain exactly
+as classified in Checkpoint 2, none fixed or re-investigated here. The broader Payroll Operations
+Readiness process still requires its own final read-only audit after September attendance completion
+and before Salary Release.
+
+**Production**: read-only throughout (the Phase A inspection of the Sharafat Masih Advance/entry).
+Sharafat Masih's live production record was **deliberately left uncorrected** per explicit
+instruction — preserved exactly as found (`totalAmount` PKR 5,000, `outstandingBalance` PKR 0, status
+RESERVED, linked `PayrollEntry.advanceDeduction` PKR 10,000) for the record. No production Advance
+was edited, cancelled, or deferred; no Payroll Entry was changed; no Correction was created; no
+attendance was touched; no Cancel was retried in production.
+
+**Recommended production remediation (not performed this checkpoint)**: once this fix is deployed,
+a Master Admin should open Sharafat Masih's Advance in the Advances module and use the now-corrected
+Edit action to set the amount to whatever the actually-intended figure is (or Cancel and re-record it
+if the intended figure is unclear) — the sanctioned application workflow this checkpoint's own fix
+makes safe to use, never a direct database edit.
+
+**Per explicit instruction: STOP BEFORE MERGE.** Draft PR to be opened, not merged; no deploy; no
+`v1.0.2` tag; no production mutation of any kind occurred or is authorized by this entry; Reliability
+Phase 5 not resumed.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

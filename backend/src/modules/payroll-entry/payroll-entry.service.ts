@@ -608,6 +608,36 @@ export function mapUpdateInputToEntryData(
 }
 
 /**
+ * Advance/Payroll Entry integrity boundary (v1.0.2 Advance Edit/Cancel checkpoint, 2026-08-25).
+ * `advanceDeduction`/`eidAdvanceDeduction` are ordinary Draft-editable fields — but only for an
+ * entry with no linked `Advance`/`eidAdvance` (a legitimately manual, ledger-free deduction; that
+ * case is untouched by this guard). Once `advanceId`/`eidAdvanceId` is set, that figure is
+ * Advance-ledger-owned: it was written by `materializeOneAdvanceDeduction` and must only ever
+ * change via the Advances module's own `updateAdvance`/`cancelAdvance`/`deferAdvanceSchedule`,
+ * which keep the Advance's own `totalAmount`/`outstandingBalance` in lockstep with it in the same
+ * transaction. Editing it directly here would silently desync the two — exactly the production
+ * defect this checkpoint root-caused (a direct `advanceDeduction` PATCH to 10,000 against a 5,000
+ * Advance left the entry and its Advance disagreeing, which then crashed Cancel's own reversal
+ * with an unhandled `Advance_outstandingBalance_check` violation). Rejected with a clear domain
+ * error rather than silently accepted or left to fail later at the Advance layer.
+ */
+function assertDeductionNotAdvanceLinked(
+  existing: { advanceId: string | null; eidAdvanceId: string | null },
+  input: { advanceDeduction?: string; eidAdvanceDeduction?: string },
+): void {
+  if (input.advanceDeduction !== undefined && existing.advanceId !== null) {
+    throw badRequest(
+      'This deduction is managed by a linked Advance — edit or cancel the Advance itself (Advances) instead of changing it directly here',
+    );
+  }
+  if (input.eidAdvanceDeduction !== undefined && existing.eidAdvanceId !== null) {
+    throw badRequest(
+      'This deduction is managed by a linked Eid Advance — edit or cancel the Advance itself (Advances) instead of changing it directly here',
+    );
+  }
+}
+
+/**
  * Ordinary field edit to an already-created `PayrollEntry`. Optimistic locking (§22): the caller
  * must supply the `version` they last read; a stale version is rejected with 409, never silently
  * overwritten. Guarded via `updateMany({ where: { id, version } })` rather than `update()` — a
@@ -624,6 +654,7 @@ export async function updatePayrollEntry(
   const existing = await getEntryForMutation(id);
   assertSiteAccess(currentUser, existing.siteId);
   assertEntryEditable(existing);
+  assertDeductionNotAdvanceLinked(existing, input);
 
   const { version, ...fields } = input;
   const data = mapUpdateInputToEntryData(fields);

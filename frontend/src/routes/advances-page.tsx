@@ -297,11 +297,15 @@ function RecordAdvanceModal({
   );
 }
 
-/** Lifecycle-aware editability (Section F, Operational Stabilization Checkpoint 2026-07-24) — see
+/** Lifecycle-aware editability (Section F, Operational Stabilization Checkpoint 2026-07-24;
+ * widened to include RESERVED, v1.0.2 Advance Edit/Cancel checkpoint, 2026-08-25) — see
  * `advances.service.ts`'s `updateAdvance` doc comment for the full matrix this mirrors. `notes` is
- * always editable; `repaymentType`/`scheduledInstallmentAmount`/`totalAmount` only while
- * `status === 'ACTIVE'` (the backend independently enforces this — the UI just avoids offering an
- * edit that would only bounce back as a 400). The deduction start cycle is deliberately not offered
+ * always editable; `repaymentType`/`scheduledInstallmentAmount`/`totalAmount` are editable while
+ * `status === 'ACTIVE'` *or* `'RESERVED'` (the backend independently enforces this — the UI just
+ * avoids offering an edit that would only bounce back as a 400) — a RESERVED Advance still has a
+ * live, reversible Draft deduction, and the backend atomically reverses and re-materializes it
+ * under the edited figures in the same transaction, so Finance can correct a mis-entered amount
+ * without cancelling and re-recording it. The deduction start cycle is deliberately not offered
  * here at all — see the same doc comment for why (Cancel + re-record before materialization, Defer
  * after).
  */
@@ -327,8 +331,8 @@ function EditAdvanceModal({
     }
   }, [advance]);
 
-  const isActive = advance?.status === 'ACTIVE';
-  const alreadyRepaid = advance ? (Number(advance.totalAmount) - Number(advance.outstandingBalance)).toFixed(2) : '0.00';
+  const isEditable = advance?.status === 'ACTIVE' || advance?.status === 'RESERVED';
+  const isReserved = advance?.status === 'RESERVED';
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -337,7 +341,7 @@ function EditAdvanceModal({
       await updateAdvance.mutateAsync({
         id: advance.id,
         input: {
-          ...(isActive && {
+          ...(isEditable && {
             totalAmount,
             repaymentType,
             scheduledInstallmentAmount: repaymentType === 'INSTALLMENT' && scheduledInstallmentAmount ? scheduledInstallmentAmount : null,
@@ -357,18 +361,20 @@ function EditAdvanceModal({
       {advance && (
         <ModalContent title={`Edit ${typeLabel(advance.type)} — ${advance.employee.name}`} widthClassName="max-w-[480px]">
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
-            {!isActive && (
+            {!isEditable && (
               <p className="rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted">
-                This Advance is{' '}
-                {advance.status === 'PAID_OFF'
-                  ? 'fully paid off'
-                  : advance.status === 'RESERVED'
-                    ? 'reserved against the current Draft payroll (not yet released) — cancel it instead if these figures need to change before release'
-                    : 'cancelled'}{' '}
-                — only its notes can still be edited.
+                This Advance is {advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled'} — only its notes can
+                still be edited.
               </p>
             )}
-            {isActive && (
+            {isReserved && (
+              <p className="rounded border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted">
+                This Advance is reserved against the current Draft payroll (not yet released). Changing these figures
+                will automatically recalculate that Draft deduction to match — the current payroll figures below will
+                update once saved.
+              </p>
+            )}
+            {isEditable && (
               <>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="edit-advance-total">Total Amount</Label>
@@ -378,11 +384,15 @@ function EditAdvanceModal({
                     value={totalAmount}
                     onChange={(e) => setTotalAmount(e.target.value)}
                   />
-                  {Number(alreadyRepaid) > 0 && (
-                    <p className="text-[11px] text-text-muted">
-                      {formatMoney(alreadyRepaid)} already repaid — cannot reduce below this.
-                    </p>
-                  )}
+                  {/* No client-side "already repaid" floor hint (v1.0.2 checkpoint, 2026-08-25):
+                   * `totalAmount - outstandingBalance` conflates a still-reversible Draft
+                   * reservation with actual RELEASED repayment — a RESERVED Advance's own
+                   * outstandingBalance is always 0 (that's what RESERVED means), so this would
+                   * always claim the full amount is "already repaid" even though nothing has
+                   * actually released yet, and the backend would still allow reducing well below
+                   * it. Only the backend knows the true released-only floor (it reverses any live
+                   * Draft deduction before computing it); its own accurate error surfaces via the
+                   * existing catch block below if a reduction genuinely goes too far. */}
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="edit-advance-repayment-type">Repayment Type</Label>

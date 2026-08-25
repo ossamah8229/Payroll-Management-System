@@ -39,6 +39,29 @@ const advanceWithEmployeeInclude = { employee: true } as const;
 
 type AdvanceWithEmployee = Prisma.AdvanceGetPayload<{ include: typeof advanceWithEmployeeInclude }>;
 
+/**
+ * Defensive backstop (v1.0.2 Advance Edit/Cancel checkpoint, 2026-08-25) for the DB-level
+ * `Advance_outstandingBalance_check` CHECK constraint (`outstandingBalance >= 0 AND
+ * outstandingBalance <= totalAmount`). Every code path in this module that computes a new
+ * `outstandingBalance` derives it from figures that should already keep it in range — but a
+ * pre-existing inconsistent Advance (its linked `PayrollEntry.advanceDeduction`/
+ * `eidAdvanceDeduction` diverged from what this Advance's own bookkeeping expects, e.g. because it
+ * was edited directly on the Payroll Entry before `assertDeductionNotAdvanceLinked`
+ * — `payroll-entry.service.ts` — existed) can still produce an out-of-range value here. Called
+ * immediately before every `tx.advance.update()` in this file so that case fails with one clear,
+ * actionable domain error instead of an unhandled Postgres constraint violation surfacing as a
+ * generic 500 (the exact production defect this checkpoint root-caused).
+ */
+function assertOutstandingBalanceWithinBounds(outstandingBalance: Prisma.Decimal, totalAmount: Prisma.Decimal): void {
+  if (outstandingBalance.lessThan(0) || outstandingBalance.greaterThan(totalAmount)) {
+    throw conflict(
+      `This Advance's outstanding balance (PKR ${outstandingBalance.toFixed(2)}) is inconsistent with its recorded amount ` +
+        `(PKR ${totalAmount.toFixed(2)}) — its linked payroll deduction was likely changed outside the Advances module. ` +
+        'A Master Admin should review this employee\'s Payroll Entry before this Advance can be edited or cancelled.',
+    );
+  }
+}
+
 async function getAdvanceOrThrow(id: string, client: PrismaTransactionClient = prisma): Promise<AdvanceWithEmployee> {
   const advance = await client.advance.findUnique({ where: { id }, include: advanceWithEmployeeInclude });
   if (!advance) {
@@ -436,14 +459,15 @@ export async function updateAdvance(
   const advance = await getAdvanceOrThrow(id);
   assertSiteAccess(currentUser, advance.employee.siteId);
 
+  // v1.0.2 Advance Edit/Cancel checkpoint (2026-08-25): RESERVED is now editable too, not just
+  // ACTIVE — a fully-materialized-but-unreleased Advance (outstandingBalance already 0) still has
+  // a live, reversible Draft deduction, and Finance needs to correct it (e.g. a mis-entered amount)
+  // without cancelling and re-recording. Reuses the exact same reverse-then-re-materialize path
+  // below that already handles an ACTIVE Advance's own live deduction — RESERVED was excluded only
+  // by this status gate, not by any actual limitation in that logic.
   const isFinancialEdit = input.totalAmount !== undefined || input.repaymentType !== undefined || input.scheduledInstallmentAmount !== undefined;
-  if (isFinancialEdit && advance.status !== 'ACTIVE') {
-    const statusDescription =
-      advance.status === 'PAID_OFF'
-        ? 'fully paid off'
-        : advance.status === 'RESERVED'
-          ? 'reserved against the current Draft payroll (not yet released) — cancel it instead if these figures need to change before release'
-          : 'cancelled';
+  if (isFinancialEdit && advance.status !== 'ACTIVE' && advance.status !== 'RESERVED') {
+    const statusDescription = advance.status === 'PAID_OFF' ? 'fully paid off' : 'cancelled';
     throw badRequest(`This Advance is ${statusDescription} — only its notes can still be edited`);
   }
 
@@ -515,6 +539,13 @@ export async function updateAdvance(
 
     if (input.totalAmount !== undefined) {
       const newTotalAmount = new Prisma.Decimal(input.totalAmount);
+      // `decimalString` (shared/src/schemas/advance.ts) only validates decimal *format* — a zero or
+      // negative amount would otherwise reach the DB's own `Advance_totalAmount_check` (`totalAmount
+      // > 0`) CHECK constraint unvalidated, surfacing as the same class of unhandled 500 this
+      // checkpoint's `assertOutstandingBalanceWithinBounds` already fixes for `outstandingBalance`.
+      if (newTotalAmount.lessThanOrEqualTo(0)) {
+        throw badRequest('Total amount must be greater than zero');
+      }
       const alreadyRepaid = effectiveTotalAmount.minus(effectiveOutstandingBalance);
       if (newTotalAmount.lessThan(alreadyRepaid)) {
         throw badRequest(
@@ -523,6 +554,10 @@ export async function updateAdvance(
       }
       effectiveOutstandingBalance = newTotalAmount.minus(alreadyRepaid);
       effectiveTotalAmount = newTotalAmount;
+    }
+
+    if (input.totalAmount !== undefined || reversedAmount) {
+      assertOutstandingBalanceWithinBounds(effectiveOutstandingBalance, effectiveTotalAmount);
     }
 
     const data: Prisma.AdvanceUncheckedUpdateInput = {
@@ -537,7 +572,29 @@ export async function updateAdvance(
 
     const changes = diffFields(advance as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
 
-    const updated = await tx.advance.update({ where: { id }, data });
+    // Concurrency guard (v1.0.2 checkpoint) — `Advance` carries no `version` column of its own
+    // (unlike `PayrollEntry`), so this compares-and-swaps atomically on the exact fields this
+    // function's own math was computed from (`status`/`outstandingBalance`/`totalAmount`) in one
+    // SQL statement, exactly mirroring the proven `PayrollEntry` `updateMany({ where: { id,
+    // version } })` pattern used a few lines above for the live entry. A prior version of this
+    // guard used a separate `findUniqueOrThrow` read followed by a plain `.update()` — that has a
+    // real, provable TOCTOU gap (two concurrent calls can both pass the read-check before either
+    // commits its write), caught by this checkpoint's own concurrency tests; a single guarded
+    // `updateMany` closes it, since Postgres evaluates the `WHERE` clause and applies the write
+    // atomically, and a transaction that would touch an already-changed row blocks until the
+    // winner commits, then correctly re-evaluates against the post-commit values. Ordinarily a
+    // concurrent Edit/Cancel racing on the exact same live Draft deduction is already caught by
+    // the `PayrollEntry`-side guard above (both this function and `cancelAdvance` touch it first);
+    // this is what catches the remaining case — two concurrent calls that both find no live entry
+    // to serialize on (e.g. two Advance edits before materialization, or a duplicate Cancel).
+    const guardedAdvance = await tx.advance.updateMany({
+      where: { id, status: advance.status, outstandingBalance: advance.outstandingBalance, totalAmount: advance.totalAmount },
+      data,
+    });
+    if (guardedAdvance.count === 0) {
+      throw conflict('This Advance was changed by someone else — reload and try again');
+    }
+    const updated = await tx.advance.findUniqueOrThrow({ where: { id } });
 
     if (Object.keys(changes).length > 0) {
       await recordAuditLog(
@@ -660,14 +717,24 @@ export async function cancelAdvance(
       }
     }
 
-    const cancelled = await tx.advance.update({
-      where: { id },
+    assertOutstandingBalanceWithinBounds(outstandingAfterReversal, advance.totalAmount);
+
+    // Concurrency guard (v1.0.2 checkpoint) — see `updateAdvance`'s identical guard for the full
+    // reasoning: a single atomic compare-and-swap `updateMany`, not a separate read-then-write,
+    // closes the real TOCTOU gap two concurrent Cancel calls (or an Edit racing a Cancel) would
+    // otherwise hit when there's no shared live `PayrollEntry` row to serialize them on.
+    const guardedCancel = await tx.advance.updateMany({
+      where: { id, status: advance.status, outstandingBalance: advance.outstandingBalance },
       data: {
         status: 'CANCELLED',
         outstandingBalance: outstandingAfterReversal,
         currentScheduledPeriodId: null,
       },
     });
+    if (guardedCancel.count === 0) {
+      throw conflict('This Advance was changed by someone else — reload and try again');
+    }
+    const cancelled = await tx.advance.findUniqueOrThrow({ where: { id } });
 
     await recordAuditLog(
       {
@@ -784,9 +851,14 @@ export async function deferAdvanceSchedule(
     }
 
     const restoredBalance = advance.outstandingBalance.plus(deductedAmount);
+    assertOutstandingBalanceWithinBounds(restoredBalance, advance.totalAmount);
 
-    const updatedAdvance = await tx.advance.update({
-      where: { id: advanceId },
+    // Concurrency guard (v1.0.2 checkpoint) — same atomic compare-and-swap as `updateAdvance`/
+    // `cancelAdvance`; this path always has a live entry (required above), so the entry-side
+    // version guard already serializes the common race, but this keeps the Advance write itself
+    // consistent with its siblings rather than leaving it as the one plain, unguarded `.update()`.
+    const guardedDefer = await tx.advance.updateMany({
+      where: { id: advanceId, status: advance.status, outstandingBalance: advance.outstandingBalance },
       data: {
         outstandingBalance: restoredBalance,
         status: 'ACTIVE',
@@ -794,6 +866,10 @@ export async function deferAdvanceSchedule(
         paidOffAt: null,
       },
     });
+    if (guardedDefer.count === 0) {
+      throw conflict('This Advance was changed by someone else — reload and try again');
+    }
+    const updatedAdvance = await tx.advance.findUniqueOrThrow({ where: { id: advanceId } });
 
     await tx.advanceScheduleChange.create({
       data: {

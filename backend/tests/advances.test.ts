@@ -1110,7 +1110,17 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(Number(entryAfter.advanceDeduction)).toBeCloseTo(4000, 2);
   });
 
-  it('rejects any financial-field edit once an Advance is RESERVED, but still allows notes', async () => {
+  /**
+   * v1.0.2 Advance Edit/Cancel checkpoint (2026-08-25) — supersedes this test's own prior
+   * assertion. RESERVED financial edits are now deliberately *allowed* (Phase D of that
+   * checkpoint's own brief): a fully-materialized-but-unreleased Advance still has a live,
+   * reversible Draft deduction, and Finance needs to correct a mis-entered amount without having
+   * to Cancel and re-record it. Full end-to-end coverage of this new path (exact atomic
+   * Advance/Draft-deduction synchronization, the floor/negative/zero rejections, the legacy-
+   * mismatch defensive guard, concurrency) lives in `advance-payroll-entry-integrity.test.ts`; this
+   * test now only re-confirms notes remain editable alongside a financial edit at this status.
+   */
+  it('allows a financial-field edit while an Advance is RESERVED, and notes remain editable too', async () => {
     const admin = await masterAdminAgent('adv-edit-paidoff-admin@test.local');
     const { site, unit } = await makeSiteWithUnit('Test Site ADV Edit PaidOff');
     const employee = await makeEmployee(site.id, unit.id, 'Edit PaidOff Employee', '40000');
@@ -1126,11 +1136,14 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     const advanceId = created.body.advance.id as string;
     await makeDraftCycle(admin, 2903, 9); // fully materializes and reserves immediately (2026-07-25)
 
-    const rejected = await admin.agent
+    const allowed = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
       .set('x-csrf-token', admin.csrfToken)
       .send({ totalAmount: '15000' });
-    expect(rejected.status).toBe(400);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.advance.status).toBe('RESERVED');
+    expect(Number(allowed.body.advance.totalAmount)).toBeCloseTo(15000, 2);
+    expect(Number(allowed.body.advance.outstandingBalance)).toBe(0); // still fully reserved
 
     const notesOk = await admin.agent
       .patch(`/api/v1/advances/${advanceId}`)
@@ -1142,11 +1155,11 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
 
   /**
    * Final Verification, RESERVED-lifecycle Case 3 — "RESERVED → Payroll Release → PAID_OFF →
-   * Editing correctly blocked. No further lifecycle regression." The test above already proves
-   * editing is blocked while still `RESERVED` (pre-release); this is the distinct case of editing
-   * an Advance that has gone all the way through an actual Release and is genuinely `PAID_OFF` —
-   * proving the same guard (`advance.status !== 'ACTIVE'`) still holds once `RESERVED` has advanced
-   * past it, not just before.
+   * Editing correctly blocked. No further lifecycle regression." The test above now proves editing
+   * is *allowed* while still `RESERVED` (pre-release, v1.0.2 checkpoint); this is the distinct case
+   * of editing an Advance that has gone all the way through an actual Release and is genuinely
+   * `PAID_OFF` — proving the guard (`advance.status !== 'ACTIVE' && !== 'RESERVED'`) still holds
+   * once release has actually settled it, the one lifecycle stage editing must never reach.
    */
   it('rejects any financial-field edit once an Advance is genuinely PAID_OFF via release, but still allows notes — Case 3', async () => {
     const admin = await masterAdminAgent('adv-edit-real-paidoff-admin@test.local');
