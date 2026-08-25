@@ -58,6 +58,15 @@ export const PAYROLL_COLUMNS = [
   { id: 'status', label: 'Status', align: 'center', fixedWidth: 90 },
   { id: 'employeeCode', label: 'Code', minWidth: 70 },
   { id: 'employeeName', label: 'Employee', minWidth: 110 },
+  // Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25) — two employees can legitimately
+  // share a name (e.g. two "Muhammad Talha"s); Code + Name alone was found insufficient to
+  // distinguish them at a glance in the operational grid. Father Name/CNIC are canonical `Employee`
+  // fields (`Employee.fatherName`/`Employee.cnic`), already present on every loaded entry's
+  // `entry.employee` object via the existing `include: { employee: true, ... }` query — no backend
+  // change, no new query, no N+1 (see `docs/PROJECT_PROGRESS.md`'s own entry for this checkpoint's
+  // full data-path audit).
+  { id: 'fatherName', label: 'Father Name', minWidth: 110 },
+  { id: 'cnic', label: 'CNIC', minWidth: 100 },
   { id: 'designation', label: 'Designation', minWidth: 100 },
   { id: 'site', label: 'Site', minWidth: 90 },
   // The deputed branch/site code (`ProjectUnit.code`) for this entry's primary work line —
@@ -113,18 +122,25 @@ export type PayrollColumnId = (typeof PAYROLL_COLUMNS)[number]['id'];
  * exactly as it was before. */
 export const ROW_ACTION_WIDTH = 44;
 
-/** Frozen Employee Identity Pane (UAT 2026-08-12) — the minimum column set that unambiguously
+/** Frozen Employee Identity Pane (UAT 2026-08-12; widened to four columns, Employee Identity
+ * Visibility v1.0.1 Checkpoint 1, 2026-08-25) — the minimum column set that unambiguously
  * identifies which employee a payroll row's editable values belong to, kept permanently visible on
- * the LEFT while this grid's ~26 columns scroll horizontally underneath (data-entry safety: a
+ * the LEFT while this grid's ~28 columns scroll horizontally underneath (data-entry safety: a
  * payroll value must never be entered against a row whose employee identity has scrolled out of
  * view). `employeeName` alone was judged insufficient — two employees can share a name — so
- * `employeeCode` (Employee Registry's own unique business identifier, already this row's leftmost
- * identity column) is frozen alongside it. Deliberately excludes `serial`/`status` (before it) and
- * `designation`/`site`/... (after it): freezing more than the minimum needed to identify the
- * employee was explicitly out of scope for this checkpoint. Single source of truth reused by every
- * layer that renders these two columns — the group-header row, the column-header row, every
- * virtualized body row, and the totals row. */
-export const FROZEN_LEFT_COLUMN_IDS: readonly PayrollColumnId[] = ['employeeCode', 'employeeName'];
+ * `employeeCode` (Employee Registry's own unique business identifier) was frozen alongside it in
+ * the original UAT. **`fatherName`/`cnic` were added to this same frozen set** once UAT found that
+ * even Code + Name is not always enough for a *human* to instantly tell two same-named employees
+ * apart while scanning the grid (Employee Code is an opaque internal id) — Father Name and CNIC are
+ * the two fields an operator actually recognizes an employee by. Deliberately still excludes
+ * `serial`/`status` (before it) and `designation`/`site`/... (after it): freezing more than the
+ * minimum needed to identify the employee remains out of scope. Single source of truth reused by
+ * every layer that renders these four columns — the group-header row, the column-header row, every
+ * virtualized body row, and the totals row; every layer that reads this array is already
+ * column-count-agnostic (`stickyLeftOffsets`/`stickyIdentityCellClassName` below, and
+ * `payroll-entry-row.tsx`/`payroll-entry-totals-row.tsx`), so widening it from two to four columns
+ * required no change to any of them. */
+export const FROZEN_LEFT_COLUMN_IDS: readonly PayrollColumnId[] = ['employeeCode', 'employeeName', 'fatherName', 'cnic'];
 
 /** The one sticky-left treatment (UAT 2026-08-12; layering correction, UAT 2026-08-12b) — takes the
  * cell's own real background (never a hardcoded guess) so header/body/totals rows each carry
@@ -185,6 +201,10 @@ function extractColumnValue(columnId: string, entry: PayrollEntry, bankCodeById:
       return entry.employee.employeeCode ?? '';
     case 'employeeName':
       return entry.employee.name;
+    case 'fatherName':
+      return entry.employee.fatherName ?? '';
+    case 'cnic':
+      return entry.employee.cnic ?? '';
     case 'designation':
       return entry.designation;
     case 'site':

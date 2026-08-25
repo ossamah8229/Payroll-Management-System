@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Bank } from '@/hooks/use-banks';
 import type { PayrollEntry } from '@/hooks/use-payroll-entries';
-import { PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, totalGridWidth } from './columns';
+import { FROZEN_LEFT_COLUMN_IDS, PAYROLL_COLUMNS, computeColumnWidths, gridTemplateColumns, totalGridWidth } from './columns';
 
 function makeEntry(overrides: Partial<PayrollEntry> = {}): PayrollEntry {
   return {
@@ -174,5 +174,38 @@ describe('computeColumnWidths', () => {
     expect(tokens).toHaveLength(resolved.length);
     const summedFromTemplate = tokens.reduce((sum, token) => sum + Number(token.replace('px', '')), 0);
     expect(summedFromTemplate).toBe(totalGridWidth(resolved));
+  });
+
+  /**
+   * Employee Identity Visibility (v1.0.1 Checkpoint 1, 2026-08-25) — Father Name/CNIC join the
+   * frozen identity block. Same measurement discipline as the existing IBAN/Account Number tests
+   * above: a column's width must reflect the longest loaded value across the full dataset.
+   */
+  it('Father Name column widens for a longer loaded value across the dataset', () => {
+    const shortFather = makeEntry({ id: 'e1', employee: { ...makeEntry().employee, fatherName: 'Ali' } });
+    const longFather = makeEntry({ id: 'e2', employee: { ...makeEntry().employee, fatherName: 'Muhammad Abdul Rehman Chaudhry' } });
+    const resolved = computeColumnWidths([shortFather, longFather], []);
+    const soloShort = computeColumnWidths([shortFather], []);
+    const fatherColumn = resolved.find((c) => c.id === 'fatherName')!;
+    const soloShortColumn = soloShort.find((c) => c.id === 'fatherName')!;
+    expect(fatherColumn.width).toBeGreaterThan(soloShortColumn.width);
+  });
+
+  it('CNIC column reflects a real 13-digit value; a missing CNIC contributes nothing wider than the header', () => {
+    const withCnic = makeEntry({ employee: { ...makeEntry().employee, cnic: '3520212345671' } });
+    const withoutCnic = makeEntry({ employee: { ...makeEntry().employee, cnic: null } });
+    const resolvedWith = computeColumnWidths([withCnic], []);
+    const resolvedWithout = computeColumnWidths([withoutCnic], []);
+    const cnicWith = resolvedWith.find((c) => c.id === 'cnic')!;
+    const cnicWithout = resolvedWithout.find((c) => c.id === 'cnic')!;
+    expect(cnicWith.width).toBeGreaterThanOrEqual(cnicWithout.width);
+    expect(cnicWithout.width).toBeGreaterThan(0); // header "CNIC" still sizes the column
+  });
+
+  it('Father Name and CNIC are part of the frozen identity pane, positioned immediately after Code/Employee', () => {
+    expect(FROZEN_LEFT_COLUMN_IDS).toEqual(['employeeCode', 'employeeName', 'fatherName', 'cnic']);
+    const ids = PAYROLL_COLUMNS.map((c) => c.id);
+    expect(ids.indexOf('fatherName')).toBe(ids.indexOf('employeeName') + 1);
+    expect(ids.indexOf('cnic')).toBe(ids.indexOf('fatherName') + 1);
   });
 });

@@ -35,7 +35,10 @@ export interface ScheduledPayrollPeriod {
 export interface Advance {
   id: string;
   employeeId: string;
-  employee: { id: string; name: string; employeeCode: string | null; cnic: string | null; siteId: string };
+  // fatherName added (Employee Identity Visibility, v1.0.1 Checkpoint 1, 2026-08-25) — already
+  // present on every row the backend returns (`advances.service.ts`'s `include: { employee: true,
+  // ... }`), just not previously typed/rendered here. No backend change.
+  employee: { id: string; name: string; employeeCode: string | null; cnic: string | null; fatherName: string | null; siteId: string };
   type: AdvanceType;
   totalAmount: string;
   outstandingBalance: string;
