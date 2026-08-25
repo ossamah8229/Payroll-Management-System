@@ -13625,7 +13625,11 @@ Edit action to set the amount to whatever the actually-intended figure is (or Ca
 if the intended figure is unclear) — the sanctioned application workflow this checkpoint's own fix
 makes safe to use, never a direct database edit.
 
-**Per explicit instruction: STOP BEFORE MERGE.** Draft PR to be opened, not merged; no deploy; no
+**Branch/PR/CI**: committed as `293c095` on `fix/v1.0.2-advance-edit-cancel`, pushed, **Draft PR #16**
+opened. PR CI (`32845033101`, head `293c095`) **green**: Backend all six shards, Frontend, and E2E
+(the actual Playwright suite, genuinely executed) all `success`.
+
+**Per explicit instruction: STOP BEFORE MERGE.** Not merged; no deploy; no
 `v1.0.2` tag; no production mutation of any kind occurred or is authorized by this entry; Reliability
 Phase 5 not resumed.
 

@@ -6494,7 +6494,11 @@ preserved exactly as found, per explicit instruction — recommended remediation
 deploys): a Master Admin uses the now-corrected Edit or Cancel action through the application itself,
 never a direct database edit.
 
-**Branch `fix/v1.0.2-advance-edit-cancel`**, cut from `main` at `7443143`. Draft PR to be opened next.
+**Branch `fix/v1.0.2-advance-edit-cancel`**, cut from `main` at `7443143`, committed as `293c095`,
+pushed. **Draft PR #16** opened (<https://github.com/ossamah8229/Payroll-Management-System/pull/16>),
+not merged. **PR CI green**: run `32845033101`, head `293c095`, Backend (all six shards), Frontend,
+and E2E (the actual Playwright suite step, not skipped) all `success`.
+
 **Per explicit instruction: STOP BEFORE MERGE.** No merge, no deploy, no `v1.0.2` tag, no production
 mutation, Reliability Phase 5 not resumed. Checkpoint 2's own deferred findings (H1/H2/H3/S1/M2/M3)
 remain untouched and unresolved by this checkpoint, exactly as classified.
