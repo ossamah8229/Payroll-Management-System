@@ -14301,6 +14301,168 @@ disposable) and no production mutation.
 
 ---
 
+## v1.0.3 PRODUCTION CUTOVER — PR #17 Merged, Post-Merge CI, Render Deployment, Read-Only Production M2 Validation (2026-08-26, later same day)
+
+Approval to merge PR #17 was granted, explicitly scoped to merge + production cutover + read-only
+validation only — **not** Salary Release, which remains separately gated on attendance completion
+regardless of this checkpoint's outcome.
+
+### Pre-merge integrity gate
+
+Immediately before merging: PR #17 was OPEN, not Draft, head exactly
+`5934a40cab4da68f0192768b7f1bd18f7ac33e4d` — matched the head covered by the approved green CI run
+exactly, no new commit had appeared since; `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`.
+`origin/main` was exactly the PR's base (`9be4f9e0922e46aa3f68b937ecf203a7c75d5c54`) — main had not
+moved at all since the branch was cut, so no rebase/conflict risk existed. CI at that exact head (run
+`32935261850`) reconfirmed green: Backend (all six shard steps individually `success`), Frontend,
+E2E all `success`, all genuinely executed (real per-step timings, not skipped). `git diff` over the
+full base..head range reconfirmed the scope: `backend/src/modules/payroll-entry/payroll-entry.service.ts`,
+`backend/src/modules/payroll-release/payroll-release-eligibility.ts`,
+`backend/src/modules/payroll-release/payroll-release.service.ts`, `backend/tests/calc-net.test.ts`,
+`backend/tests/working-days-cycle-days-guard.test.ts`, `shared/src/index.ts`,
+`shared/src/lib/calc-net.ts`, three E2E fixture spec files, plus `docs/PROJECT_PROGRESS.md`/
+`docs/SESSION_HANDOFF.md` — twelve files, matching the approved v1.0.3 M2 scope exactly. A dedicated
+grep for migration/schema/`package.json`/`package-lock.json`/`render.yaml`/`Dockerfile`/CI-workflow
+changes in the diff returned nothing. `v1.0.2` tag reconfirmed unchanged at `065aa682f7f4129a7f949994a1afa2fcac77f8d0`.
+All conditions met — proceeded.
+
+### Merge
+
+PR #17 merged with a normal merge commit (`gh pr merge 17 --merge`; no squash, no rebase, no
+`--admin`, no force-push). **Merge SHA: `9492fa811956707c57859b72583a4e57d0b15250`**, parents
+`9be4f9e0922e46aa3f68b937ecf203a7c75d5c54` (prior `main`) and
+`5934a40cab4da68f0192768b7f1bd18f7ac33e4d` (PR #17 head), merged 2026-08-26T06:16:24Z. The feature
+branch `fix/v1.0.3-working-days-cycle-days-guard` was retained (not deleted), per instruction.
+
+### Post-merge CI on `main`
+
+Push-triggered run **32937436013** (head SHA exactly the merge commit
+`9492fa811956707c57859b72583a4e57d0b15250`) completed `conclusion: success`. Job-level breakdown:
+**Backend — SUCCESS**, all six shard steps individually confirmed green (`Run backend tests (shard
+1/6)` through `(shard 6/6)`), plus `Build backend` green. **Frontend — SUCCESS.** **E2E — SUCCESS** —
+the `Run Playwright E2E suite` step itself completed successfully. This is a genuine,
+independently-executed gate on the actual merge commit, not a reuse of the PR candidate run's result.
+(Note: the first `gh run watch` attached to this run dropped with a transient network read error
+mid-run, before the run had actually finished; a second watch, followed by a direct API status check
+against the run ID, confirmed genuine completion — the dropped watch was not mistaken for a real
+result.)
+
+### Production deployment verification — SHA-level, not circumstantial
+
+Render CLI access was available this session. Rather than relying on health-check timing alone, each
+service's own deploy history was queried directly (`render deploys list <service-id>`):
+
+- **Backend** (`srv-d9euhnjtqb8s73b8f1s0`, `payroll-management-api`): latest deploy `dep-da789f3ncjis73ad28m0`,
+  `status: "live"`, commit `9492fa811956707c57859b72583a4e57d0b15250` — **the exact merge commit** —
+  started 06:16:28Z, finished 06:18:10Z (auto-deploy triggered by the push, ~4 seconds after merge).
+- **Frontend** (`srv-d9fg41jrjlhs73dqiq7g`, `payroll-management-app`): latest deploy `dep-da789f3ncjis73ad292g`,
+  `status: "live"`, commit `9492fa811956707c57859b72583a4e57d0b15250` — same merge commit — started
+  06:16:28Z, finished 06:17:23Z.
+
+This is SHA-level deploy confirmation directly from Render, not the circumstantial `last-modified`
+timing evidence used in prior cutovers (though that also lined up: frontend `last-modified:
+06:17:24 UTC`, ~1 minute after the 06:16:24Z merge).
+
+Additional functional checks: backend `https://payroll-api.brooms.com.pk/health` → HTTP 200,
+`{"status":"ok"}`; same on the raw Render URL. Frontend `https://payroll.brooms.com.pk/` → HTTP 200;
+same on the raw Render URL. Unauthenticated probe of a protected route
+(`GET /api/v1/employees/00000000-.../statement`) → HTTP 401 (expected, confirms the new backend
+build is live and responding, not crash-looping to a generic error).
+
+**Authenticated verification**, using the user's own already-authenticated browser session
+(Ossamah Suhail/Finance, Master User):
+- **Dashboard** loads real live data — August 2026 Draft cycle, 1,247 employees, Net Payroll
+  PKR 734,122.58, 0/1,247 released.
+- **Payroll Entry** (`/payroll-cycles/235770e4-.../payroll-entry`) loads the same real August Draft
+  cycle normally — "All changes saved," Bulk Apply controls and grid columns all present and
+  unchanged.
+- **Salary Release** (`/payroll-cycles/235770e4-.../release`) loads normally, per-unit Pending status
+  grid rendering. **No Release/Release All/Finalize control was clicked.**
+- **Advances**, **Reports → Payroll Summary**, and **Payslips** all render normally against real data
+  (Payslips correctly shows "No released Payslips for this selection" — expected, since nothing in
+  August has been released yet, not a defect).
+
+### Production M2 read-only audit — zero violations
+
+Read via the same authenticated session's own REST API (`GET /api/v1/payroll-cycles/{id}/entries`,
+paginated, `credentials: 'include'`) — the same read-only method this project's prior M2 audit used,
+GET-only, no write endpoint touched. All 1,247 entries fetched and aggregated client-side:
+
+| Metric | Count |
+|---|---|
+| Total PayrollEntries | 1,247 |
+| Total work lines | 1,247 |
+| Split-unit entries (>1 work line) | 0 |
+| Individual `days > cycleDays` | **0** |
+| `SUM(days) > MAX(cycleDays)` per entry | **0** |
+| `days == cycleDays` | 19 |
+| `0 < days < cycleDays` | 1 |
+| `days == 0` | 1,227 |
+
+**Zero M2 violations in current production data** — matches the expected result from the prior audit.
+No entry's own `releaseBlockReasons` (returned live by the deployed API for every one of the 1,247
+entries) contained a Working-Days/Cycle-Days reason, confirming the deployed
+`evaluatePayrollEntryReleaseReadiness` function actually executed the new M2 check against every real
+entry and found nothing to block — not merely that the code exists, but that it ran, live, against
+production data, with a result consistent with zero underlying violations.
+
+### Deployed release-guard verification
+
+Two independent lines of evidence, neither requiring a fabricated invalid entry:
+1. **Code identity**: `RELEASE_BLOCK_REASONS.WORKING_DAYS_EXCEED_CYCLE_DAYS` exists in
+   `backend/src/modules/payroll-release/payroll-release-eligibility.ts` and
+   `backend/src/modules/payroll-entry/payroll-entry.service.ts`, both files inside the diff scope
+   confirmed above, at the exact commit Render confirms is live on both services.
+2. **Live behavioral evidence**: the same deployed endpoint's `releaseBlockReasons` field, returned
+   for all 1,247 real production entries above, shows the check executing normally (zero blocks,
+   consistent with zero violations) rather than erroring, being absent from the response shape, or
+   behaving as though the old (pre-fix) code were still running.
+
+No invalid attendance was created, no attendance was edited, and no release/hold/correction/finalize
+action was taken anywhere in this checkpoint.
+
+### Zero production mutations — explicit confirmation
+
+Every production interaction this checkpoint was a navigation, an authenticated page load, or a
+GET-only `fetch` against existing list endpoints. No form was submitted, no record was created,
+edited, released, held, or corrected. `git status` throughout remained clean on the local repo side.
+
+### v1.0.0/v1.0.1/v1.0.2 unchanged — explicit confirmation
+
+`git tag -l` reconfirms `v1.0.0`, `v1.0.0-rc1`, `v1.0.1`, `v1.0.2`, and `backend-live-v1` all still
+present, untouched by this cutover; no tag was moved or deleted.
+
+### Deferred items — explicitly NOT touched this checkpoint
+
+Employee Code generation/cleanup; H1 Finalize/Hold; H2 PITR; remaining H3 identity-data remediation;
+M3 zero-entry sites; EmployeeLookup UX; Father Name search; blank IBAN cleanup; `otHours` multi-unit
+gap; Reliability Phase 5; any unrelated branch cleanup or refactor. Employee Codes remain expected
+current state, not a payroll-readiness defect. Sharafat Masih's legacy Advance inconsistency remains
+already repaired, out of this checkpoint's scope.
+
+### Release classification
+
+**GREEN — v1.0.3 deployed, M2 production protection validated. Ready to tag.** Approved PR merged
+correctly (merge SHA `9492fa811956707c57859b72583a4e57d0b15250`); post-merge CI on `main` is green
+(run `32937436013` — Backend all six shards, Frontend, E2E all SUCCESS, genuinely executed);
+production deployment verified at the SHA level via Render's own deploy records (both services
+`live` at the exact merge commit); current production data contains **zero** M2 violations;
+Working-Days/Cycle-Days release-guard confirmed live via both code identity and live behavioral
+evidence; normal read-only regression smoke across Dashboard, Payroll Entry, Salary Release,
+Advances, Reports, and Payslips all clean; zero production data mutated;
+`v1.0.0`/`v1.0.0-rc1`/`v1.0.1`/`v1.0.2`/`backend-live-v1` all confirmed unchanged; documentation
+complete. **Recommended `v1.0.3` tag target: `9492fa811956707c57859b72583a4e57d0b15250`** (the PR #17
+merge commit — not any later documentation-only commit).
+
+**Per explicit instruction: the `v1.0.3` tag itself was NOT created, no GitHub Release was published,
+and Salary Release was NOT performed — this checkpoint's GREEN classification removes the v1.0.3
+software blocker but does not itself authorize payroll release. Attendance for the August 2026 cycle
+remains operationally incomplete (1,227 of 1,247 entries still show 0 Working Days); the final
+payroll-readiness audit required before Salary Release remains a separate, not-yet-performed step,
+to run after attendance entry is complete. Awaiting separate approval of this report before tagging.**
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

@@ -7049,3 +7049,43 @@ GitHub Release, no Salary Release, no Reliability Phase 5 resumption, no other c
 touched (Employee Code, H1/H2, M3, EmployeeLookup UX, Father Name search, Advances, Sharafat Masih —
 all explicitly untouched).
 
+---
+
+## 69. Addendum, 2026-08-26, later same day — v1.0.3 PRODUCTION CUTOVER — PR #17 merged, read-only
+production M2 validation, STOP BEFORE TAG
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.3 PRODUCTION CUTOVER" entry, directly
+above its own "§2. Remaining work" heading. This addendum is the session-chronology summary.
+Continues directly from this file's prior addendum (#68, IMPLEMENTED/STOP BEFORE MERGE) — approval
+to merge was given, scoped explicitly to merge + cutover + read-only validation, not Salary Release.
+
+PR #17 merged via normal merge commit `9492fa811956707c57859b72583a4e57d0b15250` (parents `9be4f9e`
+main, `5934a40` PR head) after pre-merge integrity checks all passed (head/CI match, no main drift,
+diff scope confirmed, `v1.0.2` tag unchanged). Post-merge CI on `main` (run `32937436013`) green —
+Backend all six shards, Frontend, E2E, genuinely executed. Render CLI access was available this
+session; both the backend and frontend services' own deploy records confirm `status: "live"` at the
+exact merge commit SHA — stronger than the circumstantial timing evidence used in prior cutovers.
+
+Read-only production M2 audit (via the authenticated browser session's own REST API, GET-only,
+same method the original M2 audit used): all 1,247 real August 2026 Draft cycle PayrollEntries
+fetched and aggregated client-side — **zero individual `days > cycleDays`, zero
+`SUM(days) > MAX(cycleDays)` per entry, zero split-unit entries currently** (19 at `days ==
+cycleDays`, 1 partial, 1,227 still at `days == 0` — attendance simply not yet entered for most).
+Every entry's own live `releaseBlockReasons` (returned by the deployed API) confirmed empty of any
+Working-Days/Cycle-Days reason — the deployed guard actually ran against all 1,247 real entries, not
+merely present in source. Dashboard, Payroll Entry, Salary Release, Advances, Reports (Payroll
+Summary), and Payslips all confirmed loading normally against real data. **No Release, Release All,
+Finalize, Correction, Hold, or attendance edit was performed anywhere this checkpoint** — zero
+production mutations.
+
+**Classification: GREEN — v1.0.3 deployed, M2 production protection validated, ready to tag.**
+Recommended tag target: `9492fa811956707c57859b72583a4e57d0b15250` (the PR #17 merge commit, not a
+later docs-only commit). **Per explicit instruction: STOP BEFORE TAG** — `v1.0.3` was NOT created, no
+GitHub Release was published. **Salary Release remains NOT authorized** — this checkpoint removes
+the v1.0.3 software blocker only; the August 2026 cycle's attendance is still operationally
+incomplete (1,227/1,247 entries at zero Working Days), and the final pre-release payroll-readiness
+audit remains a required, separate, not-yet-performed step after attendance entry completes. All
+deferred items from the prior checkpoint (Employee Code, H1/H2, remaining H3, M3, EmployeeLookup UX,
+Father Name search, blank IBAN cleanup, `otHours` multi-unit gap, Reliability Phase 5) remain
+untouched. Awaiting separate approval before tagging.
+
