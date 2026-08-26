@@ -14463,6 +14463,89 @@ to run after attendance entry is complete. Awaiting separate approval of this re
 
 ---
 
+## v1.0.3 RELEASED — Tag Created, GitHub Release Published (2026-08-26, later same day)
+
+Approval to publish `v1.0.3` was granted, explicitly against the qualified release commit
+`9492fa811956707c57859b72583a4e57d0b15250` (PR #17's merge commit) — explicitly **not** the later
+documentation commit.
+
+### Step 1 — docs-only CI (run `32939435527`, commit `5ae1538`) resolved
+
+**FAILURE**, not success — reported and disposed of before proceeding, not silently ignored. Backend
+job, shard 5/6, one test failed: `tests/statements.test.ts` →
+"the canonical Statement query is issued once per XLSX/CSV export, not duplicated by the export path"
+(`expect(csvQueries).toBe(jsonQueries + 1)`, expected `22`, received `21`). 313/314 backend tests
+passed; Frontend SUCCESS; E2E skipped only because it is gated on the Backend job. This is this
+repo's own long-documented, pre-existing, non-deterministic Statements query-count flake (the same
+one called out in the v1.0.2 cutover and v1.0.3 M2 regression-evidence entries), not a regression —
+the docs-only commit's diff is exactly `docs/PROJECT_PROGRESS.md` and `docs/SESSION_HANDOFF.md`, zero
+application code. Per instruction, this was **not** rerun to chase green, and the qualified release
+commit was **not** changed. Explicit user approval was obtained before proceeding to tagging on this
+basis.
+
+### Step 2 — final release integrity check
+
+Immediately before tagging: working tree clean; `main`/`origin/main` both at `5ae1538` (the docs
+commit, correctly ahead of the tag target); merge commit `9492fa811956707c57859b72583a4e57d0b15250`
+confirmed to exist with parents `9be4f9e0922e46aa3f68b937ecf203a7c75d5c54` and
+`5934a40cab4da68f0192768b7f1bd18f7ac33e4d`; PR #17 confirmed `MERGED`; post-merge CI run
+`32937436013` reconfirmed `SUCCESS` at that exact head; no `v1.0.3` tag or GitHub Release existed yet
+(locally or remotely). Historical tags reconfirmed unchanged: `v1.0.0` → `5e097ef470956ade8b022072fbdf16949539777c`,
+`v1.0.1` → `f5897afa38a07662fc29244e0a77e2d6866426d4`, `v1.0.2` → `096cf7933876df18729f0100920caa62647c496c`,
+`v1.0.0-rc1` → `45f6854fb9ed0fc97adf04a299b35029d9a3852c`, `backend-live-v1` → `2f9471834fdaff1d9909010ff4a1fd2e33d366ba`.
+
+**One notable finding, recorded for accuracy**: re-checking Render's own deploy records at this step
+showed both the backend and frontend services' latest `live` deploy had moved to commit `5ae1538`
+(the docs commit), not `9492fa8` — because both services have `autoDeploy: yes` on `main`, and the
+earlier docs-only push (Step 7 of the prior checkpoint) triggered its own auto-deploy independent of
+this tagging step. This involves **zero application-code change** — `5ae1538`'s diff from `9492fa8`
+is exactly the two documentation files — so it does not affect the release commit's own qualification
+or the production M2 validation already performed against the identical application code.
+
+### Step 3 — tag created
+
+Annotated tag `v1.0.3` created locally, tag object `987e400271b03468de6f9832b31a6ec9558bcd9d`,
+dereferencing to commit `9492fa811956707c57859b72583a4e57d0b15250` exactly (`git cat-file`/
+`git rev-parse v1.0.3^{}` both confirmed this before push). Pushed with `git push origin v1.0.3` —
+only the new tag, no other ref touched.
+
+### Step 4 — remote tag independently verified
+
+`git ls-remote --tags origin` confirms `refs/tags/v1.0.3^{}` resolves exactly to
+`9492fa811956707c57859b72583a4e57d0b15250`. All historical tags reconfirmed unchanged in the same
+listing.
+
+### Step 5/6 — GitHub Release published and independently verified
+
+Created via `gh release create v1.0.3 --target 9492fa811956707c57859b72583a4e57d0b15250`, title
+"Payroll Management System v1.0.3", with release notes covering the financial-integrity highlights
+and an explicit statement that this release does not authorize Salary Release. Independently
+re-queried via `gh release view v1.0.3 --json ...`: `isDraft: false`, `isPrerelease: false`,
+`tagName: "v1.0.3"`, `targetCommitish: "9492fa811956707c57859b72583a4e57d0b15250"`,
+`publishedAt: "2026-08-26T07:01:37Z"`. **Release URL**:
+`https://github.com/ossamah8229/Payroll-Management-System/releases/tag/v1.0.3`.
+
+### Zero production/application-state mutation — explicit confirmation
+
+This checkpoint's only actions were: reading CI/tag/release state, creating and pushing one
+annotated git tag, and creating one GitHub Release. No attendance was changed, no payroll data was
+changed, no Salary Release was performed, no new feature branch was started, and no other
+checkpoint's deferred scope was touched.
+
+### Final classification
+
+**v1.0.3 RELEASED — Working Days/Cycle Days financial-integrity protection production baseline
+established.** Tag `v1.0.3` points to `9492fa811956707c57859b72583a4e57d0b15250` (PR #17's merge
+commit), not the documentation commit. GitHub Release published, not draft, not prerelease, correct
+target. All five historical tags (`v1.0.0`, `v1.0.1`, `v1.0.2`, `v1.0.0-rc1`, `backend-live-v1`)
+confirmed unchanged. **Salary Release remains NOT AUTHORIZED** — the August 2026 cycle's attendance
+remains operationally incomplete, and the final pre-Salary-Release read-only payroll audit remains a
+required, separate, not-yet-performed step after attendance entry is complete. No next development
+work (H1, H2, M3, Employee Code, EmployeeLookup UX, Father Name search, IBAN cleanup, `otHours`,
+Reliability Phase 5, v1.0.4, branch cleanup) was started.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

@@ -7089,3 +7089,38 @@ deferred items from the prior checkpoint (Employee Code, H1/H2, remaining H3, M3
 Father Name search, blank IBAN cleanup, `otHours` multi-unit gap, Reliability Phase 5) remain
 untouched. Awaiting separate approval before tagging.
 
+---
+
+## 70. Addendum, 2026-08-26, later same day — v1.0.3 RELEASED — tag created, GitHub Release published
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.3 RELEASED" entry. Continues directly
+from this file's prior addendum (#69) — approval to publish was given, explicitly against the
+qualified merge commit `9492fa8`, not the later docs commit.
+
+Docs-only CI (run `32939435527`) was checked first and found **FAILED** on a known, pre-existing,
+non-deterministic `statements.test.ts` query-count flake, unrelated to the docs-only diff (zero
+application code) and to the already-independently-green release commit. Reported per instruction,
+not silently rerun; explicit approval obtained to proceed anyway before tagging.
+
+Final integrity check confirmed: merge commit `9492fa811956707c57859b72583a4e57d0b15250` intact with
+correct parents, PR #17 `MERGED`, post-merge CI `32937436013` still `SUCCESS`, no `v1.0.3` tag/release
+existed yet, all five historical tags unchanged. One finding recorded for accuracy: Render's own
+deploy records showed both services' latest `live` deploy had moved to `5ae1538` (the docs commit)
+via normal `autoDeploy: yes` behavior — zero application-code difference from `9492fa8`, so this does
+not affect the release commit's qualification.
+
+**Tag `v1.0.3`** (annotated, object `987e400271b03468de6f9832b31a6ec9558bcd9d`) created pointing
+exactly at `9492fa811956707c57859b72583a4e57d0b15250`, pushed alone, and independently reconfirmed via
+`git ls-remote --tags origin` (`refs/tags/v1.0.3^{}` = `9492fa8...` exactly). **GitHub Release**
+"Payroll Management System v1.0.3" published — not draft, not prerelease, target
+`9492fa811956707c57859b72583a4e57d0b15250` — independently reconfirmed via `gh release view`. URL:
+`https://github.com/ossamah8229/Payroll-Management-System/releases/tag/v1.0.3`.
+
+Zero attendance/payroll data changed, zero Salary Release performed, zero new feature branch started.
+
+**Classification: v1.0.3 RELEASED — Working Days/Cycle Days financial-integrity protection
+production baseline established. Salary Release remains NOT AUTHORIZED** pending completion of
+August attendance and the final, separate, pre-release payroll audit. No further development work
+was started per instruction (H1, H2, M3, Employee Code, EmployeeLookup UX, Father Name search, IBAN
+cleanup, `otHours`, Reliability Phase 5, v1.0.4, branch cleanup all remain untouched).
+
