@@ -13993,6 +13993,123 @@ other release. STOP.
 
 ---
 
+## Sharafat Masih Legacy Advance Repair — Path 2 Local Rehearsal, Production Dry Run, One-Row
+Production Repair (2026-08-26)
+
+**Business confirmation received**: PKR 10,000 is the actual authorized/disbursed amount — Sharafat
+Masih's Advance `totalAmount` (PKR 5,000) under-recorded it; the linked Payroll Entry's
+`advanceDeduction` (PKR 10,000) was already correct. This settles the "PENDING BUSINESS
+CONFIRMATION" question left open by the v1.0.2 cutover/release entries above — Path 2 (raise the
+Advance) is the authorized remediation, Path 1 (lower the Payroll Entry) explicitly not to be
+reconsidered.
+
+**Exact pre-repair inconsistency** (Advance `7213b744-1802-4d73-bf92-877c202e7592`, employee
+`7618d938-be7c-453a-a411-15d1a09ae21c`, linked Payroll Entry `f0a7ae83-fde4-4358-8a63-4c2706ae7b2f`,
+August 2026 Draft cycle `235770e4-c444-4adf-8e5b-c2da0ff02f35`): `totalAmount` PKR 5,000.00,
+`outstandingBalance` PKR 0.00, `status` RESERVED, `repaymentType` FULL_DEDUCTION; Payroll Entry
+`advanceDeduction` PKR 10,000.00, `released` false, `version` 3 — exactly as recorded by every prior
+checkpoint, unchanged since first found.
+
+**Local rehearsal (disposable Postgres, never touched production)**: a throwaway Jest integration
+file (`backend/tests/_rehearsal-sharafat-repair.test.ts` — deleted after use, never committed)
+reproduced this exact record shape against the local `payroll_dev` database: a real Advance created
+through the actual `POST /api/v1/advances` API (confirming genuine materialization to
+`outstandingBalance 0`/`RESERVED` first), then one direct-Prisma write of the linked entry's
+`advanceDeduction` to 10000 — standing in for the pre-fix direct-PATCH defect the app itself can no
+longer produce (this checkpoint's own fix blocks that path). Rehearsed the identical **standalone,
+Advance-only compare-and-swap transaction** (deliberately not a call into `updateAdvance` — that
+function's own reversal logic would touch the PayrollEntry, which must not happen) and proved,
+empirically: exactly one Advance row changes; `totalAmount` 5000.00 → 10000.00; `outstandingBalance`/
+`status`/`repaymentType` all unchanged; the linked PayrollEntry's `version`/`updatedAt` are bit-for-
+bit unchanged (zero writes, not merely an equal value); one correctly-shaped `advance.updated`
+AuditLog entry recorded in the same transaction. On fresh, independent fixtures: Edit (a genuine
+amount change)/Cancel/Defer all correctly 409 **before** repair, and all succeed (200) **after**
+repair — matching the documented finding. **One correction to that prior "traced, not executed"
+finding surfaced by this rehearsal**: a *same-value* Edit resubmission (e.g. resubmitting 5000) does
+**not** exercise the bounds guard at all — `updateAdvance`'s own `financialValueChanged` gate skips
+the live-entry reversal entirely once the submitted amount already equals the Advance's current
+`totalAmount`; only a genuine amount change, or Cancel/Defer (which take no amount input), actually
+reach the guard. Local Postgres was also found to be carrying one piece of unrelated orphaned test
+data from an earlier, unrelated session (`"Scratch Repair Site"`/`"Scratch Repair Employee"`, year
+2910) blocking `cleanTestData()`'s FK-ordered cleanup — removed directly via SQL, in FK order, before
+the rehearsal could run; not production, not caused by this checkpoint's own fixtures.
+
+**Production identification (read-only, before any credential was touched)**: Render CLI (`render`
+v2.24.0, installed via Homebrew) authenticated by the user themselves (`render login`, device-code
+OAuth flow) — this session never handled a password or API token directly. Single workspace ("My
+Workspace", `tea-d9etknn41pts73fjiac0`), single project ("My project"), single "Production"
+environment (`evm-d9etoj5aeets73bvck40`) containing exactly one backend web service
+(`payroll-management-api`, `srv-d9euhnjtqb8s73b8f1s0`) and exactly one Postgres database
+(`payroll-management-db`, `dpg-d9etojbeo5us73ftma40-a`, database name `payroll_management_db_1gvi`,
+region `singapore`, plan `basic_256mb`, status `available`). The backend service was positively
+identified as the one actually serving `payroll-api.brooms.com.pk` — not assumed from a similar
+name — via DNS: `payroll-api.brooms.com.pk` CNAMEs directly to
+`payroll-management-api-wlic.onrender.com`, exactly this service's own `serviceDetails.url`. The
+service↔database relationship was established by both residing in the single Production
+environment and this being the only Postgres database anywhere in the workspace.
+
+**Production repair actor — resolved by read-only lookup, not invented**: `SELECT` against
+production's `User`/`Role` (joined on `role.code = 'MASTER_ADMIN'`) found two active Master Admin
+accounts — Ossamah Suhail/Finance (`ossamah@brooms.com.pk`, `4ba66cfc-615a-484c-991e-fc9d7497de04`,
+last login `2026-08-25T06:17:52Z`) and Muhammad Suhail/CEO (`admin@broomservices.pk`,
+`53d89f53-efa2-491b-b29b-03a58ca25243`, last login `2026-08-15T12:47:43Z`). Ambiguous, so execution
+paused and the user was asked to choose explicitly rather than guessing — **Ossamah Suhail/Finance**
+selected; `REPAIR_ACTOR_USER_ID = 4ba66cfc-615a-484c-991e-fc9d7497de04` used for the audit log.
+
+**Credential handling**: the production connection string was obtained via
+`render postgres get --include-sensitive-connection-info` and held only in-memory, inline in each
+command's own `DATABASE_URL` env var — never written to any file (`.env` or otherwise), never
+echoed to this document, terminal transcript, or any commit, with an output-redaction filter applied
+as a safety net. No Render environment variable, service configuration, database setting,
+networking rule, backup, or deployment setting was ever modified. No migration, Prisma schema
+operation, seed, `db push`, or reset was run — only the one reviewed application-level repair
+script and a small number of plain read-only `SELECT` queries.
+
+**Production dry run**: the exact, unmodified, already-rehearsed script pointed at the real
+production database, without `--execute`. Re-read and validated every precondition inside a
+transaction — Advance id/employeeId/`totalAmount`(5000.00)/`outstandingBalance`(0.00)/
+`status`(RESERVED)/`repaymentType`(FULL_DEDUCTION); PayrollEntry id/cycleId/employeeId/`advanceId`-
+linkage/`advanceDeduction`(10000.00)/`released`(false); PayrollCycle id/`status`(DRAFT) — all
+matched exactly — then deliberately threw to force a rollback. **Zero writes; production state
+confirmed unchanged before proceeding to execute.**
+
+**Execution**: the script file's SHA-256 checksum and `git status` were re-confirmed identical
+between the dry run and the execute call — never edited in between, exactly as required. Ran with
+`--execute` and `REPAIR_ACTOR_USER_ID=4ba66cfc-615a-484c-991e-fc9d7497de04`. The same in-transaction
+precondition re-validation passed again, then a single guarded `Advance.updateMany` compare-and-swap
+(`WHERE id, totalAmount, outstandingBalance, status, repaymentType` all matching the just-re-read
+values) wrote **`totalAmount` 5000.00 → 10000.00 only** — no PayrollEntry write of any kind — followed
+by one `recordAuditLog` call in the same transaction, then committed.
+
+**Post-write, read-only verification** (separate fresh queries after commit): Advance —
+`totalAmount` **10000.00**, `outstandingBalance` 0.00 (unchanged), `status` RESERVED (unchanged),
+`repaymentType` FULL_DEDUCTION (unchanged), `updatedAt` changed to `2026-08-26T03:38:14.363Z`.
+PayrollEntry — `advanceDeduction` 10000.00 (unchanged), `advanceId` still exactly this Advance,
+`version` **3 (bit-for-bit unchanged)**, `updatedAt` **`2026-08-25T08:58:36.17Z` (unchanged)** —
+proving zero writes to this row, not merely an equal value; `released` false. PayrollCycle —
+DRAFT (unchanged). Exactly one Advance row exists for this employee (confirmed by count). AuditLog
+— exactly one new `advance.updated` entry (`12aa20e4-5f7a-48e1-901e-71a192ec1d0f`), `actorUserId`
+`4ba66cfc-...` (Ossamah Suhail/Finance), `entityType` Advance, `entityId` matching,
+`metadata.changes.totalAmount = {from: "5000.00", to: "10000.00"}`, a `note` explicitly identifying
+this as the one-time, engineer-executed, business-confirmed legacy-data correction,
+`occurredAt` `2026-08-26T03:38:14.641Z`.
+
+**No other production mutation was performed.** No Save/Edit/Cancel/Defer/Hold/Release/Finalize
+action was exercised against production after the one authorized CAS write — every subsequent step
+was strictly read-only.
+
+**Repository/script cleanup**: `backend/scripts/repair-sharafat-masih-advance.ts` deleted;
+`git log --all --oneline -- backend/scripts/repair-sharafat-masih-advance.ts` confirmed empty (never
+committed to any branch or ref, on this machine); `git status` confirmed the working tree fully
+clean, still on `main`; `v1.0.2` (and `v1.0.0`/`v1.0.0-rc1`/`v1.0.1`/`backend-live-v1`) unchanged.
+
+**Final classification: GREEN — Sharafat Masih legacy Advance inconsistency repaired; Advance and
+its linked August 2026 Draft Payroll Entry now reconciled at PKR 10,000.** Per explicit instruction:
+no further production mutation, no Reliability Phase 5 resumption, no H1/H2/H3/M2/M3 work, no new
+release.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
@@ -14371,7 +14488,24 @@ row-level report must follow instead) — are both done, reusing the existing `r
 
 ## 5. Exact next action for the next development session
 
-**Updated 2026-08-25, later same day (latest) — v1.0.2 RELEASED.** Tag `v1.0.2` created pointing at
+**Updated 2026-08-26 (latest) — Sharafat Masih legacy Advance inconsistency REPAIRED in
+production.** Business-confirmed PKR 10,000 was the authorized/disbursed amount; the Advance's
+`totalAmount` was raised 5,000 → 10,000 by a one-time, engineer-executed, pre-rehearsed,
+dry-run-verified production transaction — one Advance row changed, zero PayrollEntry writes, one
+audit log entry recorded, attributed to Master Admin Ossamah Suhail/Finance
+(`4ba66cfc-615a-484c-991e-fc9d7497de04`). Full record: this file's own "Sharafat Masih Legacy
+Advance Repair" entry (immediately above §2) and `docs/SESSION_HANDOFF.md` §66. **Next action: none
+— this was a fully self-contained, one-record data repair, not a code/release change.** The
+one-time repair script (`backend/scripts/repair-sharafat-masih-advance.ts`) was deleted and was
+never committed to any branch. `v1.0.2` tag unchanged. **Explicitly do not perform any further
+production mutation on this or any other record as a result of this entry, do not resume
+Reliability Phase 5, do not work H1/H2/H3/S1/M2/M3, and do not create another release, until
+separately authorized.**
+
+---
+
+**Updated 2026-08-25, later same day (superseded by the entry above for status purposes) — v1.0.2
+RELEASED.** Tag `v1.0.2` created pointing at
 `096cf7933876df18729f0100920caa62647c496c` (PR #16's merge commit — not the later docs-only
 `4634b93`); GitHub Release published (`isDraft: false`, `isPrerelease: false`, published
 `2026-08-25T18:01:57Z`). Full record: this file's own "v1.0.2 RELEASED — Tag Created, GitHub Release

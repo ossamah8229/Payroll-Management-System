@@ -17,7 +17,33 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-25 (later same day, latest) — v1.0.2 RELEASED.** Annotated tag `v1.0.2` (tag
+> **Update, 2026-08-26 (latest) — Sharafat Masih legacy Advance inconsistency REPAIRED in
+> production.** Business confirmed PKR 10,000 was the actual authorized/disbursed amount — the
+> Advance's own `totalAmount` (PKR 5,000) had under-recorded it; the linked Payroll Entry's
+> `advanceDeduction` (PKR 10,000) was already correct. Repaired via a one-time, engineer-executed
+> production transaction: rehearsed empirically against a local disposable Postgres first, then a
+> production dry run (all preconditions matched exactly, deliberately rolled back, zero writes),
+> then execution with the same unmodified script — a single guarded compare-and-swap raised
+> `Advance.totalAmount` **5,000 → 10,000 only** (`outstandingBalance`/`status`/`repaymentType`/
+> scheduling/notes all unchanged), **zero PayrollEntry writes** (its `version`/`updatedAt` confirmed
+> bit-for-bit unchanged after commit), one `advance.updated` AuditLog entry recorded in the same
+> transaction, attributed to the real authenticated Master Admin (Ossamah Suhail/Finance,
+> `4ba66cfc-615a-484c-991e-fc9d7497de04` — resolved by read-only lookup after two active Master
+> Admin accounts were found and the user was asked to disambiguate, never invented). Production
+> access was obtained via the official Render CLI, authenticated by the user themselves; the
+> production connection string was held only in-memory for each command and never written to any
+> file, log, or commit; no Render configuration of any kind was touched; no migration/seed/db-push
+> was run. The one-time repair script was deleted immediately after verification and was never
+> committed to any branch. `v1.0.2` tag unchanged. **Final classification: GREEN — Sharafat Masih's
+> Advance and its linked August 2026 Draft Payroll Entry now reconciled at PKR 10,000.** Full
+> record: `docs/PROJECT_PROGRESS.md`'s own "Sharafat Masih Legacy Advance Repair — Path 2 Local
+> Rehearsal, Production Dry Run, One-Row Production Repair" entry and this file's own §66 — not
+> duplicated here in full.
+>
+> ---
+>
+> **Update, 2026-08-25 (superseded by the entry above for status purposes) — v1.0.2 RELEASED.**
+> Annotated tag `v1.0.2` (tag
 > object `065aa682f7f4129a7f949994a1afa2fcac77f8d0`) created pointing exactly at
 > **`096cf7933876df18729f0100920caa62647c496c`** (PR #16's merge commit — not the later docs-only
 > `4634b93`), pushed as the only ref (`git push origin v1.0.2`, no force-push), independently
@@ -6786,4 +6812,76 @@ business confirmation of whether PKR 5,000 or PKR 10,000 is correct before eithe
 production baseline established.** Per explicit instruction: no v1.0.3, no Sharafat Masih
 remediation, no Reliability Phase 5 resumption, no H1/H2/H3/M2/M3 work, no further changes to the
 `v1.0.2` tag, no other release. STOP.
+
+---
+
+## 66. Addendum, 2026-08-26 — Sharafat Masih legacy Advance inconsistency REPAIRED in production:
+local rehearsal, production dry run, one-row production repair, full read-only post-verification
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "Sharafat Masih Legacy Advance Repair —
+Path 2 Local Rehearsal, Production Dry Run, One-Row Production Repair" entry, directly above its
+"§2. Remaining work" heading. This addendum is the session-chronology summary.
+
+**Business confirmation**: PKR 10,000 is the actual authorized/disbursed amount — settles the
+"PENDING BUSINESS CONFIRMATION" status carried by §64/§65 above. Path 2 (raise the Advance to match
+its already-correct Payroll Entry) explicitly authorized; Path 1 explicitly not reconsidered.
+
+**Local rehearsal, disposable Postgres only**: a throwaway Jest file reproduced Sharafat Masih's
+exact live numbers (`totalAmount` 5,000 / `outstandingBalance` 0 / `status` RESERVED /
+`repaymentType` FULL_DEDUCTION, linked unreleased Payroll Entry `advanceDeduction` 10,000) and
+rehearsed the exact standalone Advance-only compare-and-swap transaction intended for production —
+proved one Advance row changes, zero PayrollEntry writes, one correctly-shaped audit log entry, and
+that Edit/Cancel/Defer all 409 before repair and all succeed after, on independent fresh fixtures.
+Also corrected one inaccuracy in the prior "traced, not executed" finding (§64): a same-value Edit
+resubmission does not exercise the guard at all — only a genuine amount change, or Cancel/Defer,
+actually reach it. Deleted after use, never committed. One piece of unrelated orphaned local test
+data from an earlier session was found and removed to unblock cleanup — not production.
+
+**Production access**: the official Render CLI (installed this session via Homebrew), authenticated
+by the user themselves (`render login`, browser device-code flow — this session never handled a
+password or token directly). The production backend was positively identified via DNS
+(`payroll-api.brooms.com.pk` → `payroll-management-api-wlic.onrender.com`, exactly
+`srv-d9euhnjtqb8s73b8f1s0`'s own service URL) and its database via the single shared Production
+environment (`payroll-management-db`, `dpg-d9etojbeo5us73ftma40-a`) — not assumed from name
+similarity. The production connection string was obtained via `render postgres get
+--include-sensitive-connection-info` and held only in-memory, inline per command, never written to
+any file/log/commit. No Render configuration (env vars, service settings, database settings,
+networking, backups, deployment) was touched. No migration/seed/`db push`/reset was run.
+
+**Repair actor**: resolved by a strictly read-only `SELECT` against production's `User`/`Role`
+tables — two active Master Admin accounts were found (Ossamah Suhail/Finance and Muhammad
+Suhail/CEO); execution paused and the user was asked to disambiguate rather than guessing.
+`REPAIR_ACTOR_USER_ID = 4ba66cfc-615a-484c-991e-fc9d7497de04` (Ossamah Suhail/Finance) used.
+
+**Production dry run**: the exact, unmodified, already-rehearsed script against the real production
+database, no `--execute`. All preconditions (Advance id/employeeId/totalAmount/outstandingBalance/
+status/repaymentType; PayrollEntry id/cycleId/employeeId/advanceId-linkage/advanceDeduction/
+released; PayrollCycle id/status) matched exactly, then deliberately rolled back. Zero writes.
+
+**Execution**: script file confirmed byte-identical (SHA-256 + `git status`) between dry run and
+execute. Ran with `--execute` and the same actor id. Preconditions re-validated inside the
+transaction a second time, then one guarded `Advance.updateMany` CAS wrote `totalAmount` 5,000.00 →
+10,000.00 only — `outstandingBalance`/`status`/`repaymentType`/scheduling/notes all unchanged, zero
+PayrollEntry writes — followed by one `advance.updated` AuditLog entry in the same transaction,
+then committed.
+
+**Post-write read-only verification**: Advance — `totalAmount` 10,000.00, `outstandingBalance` 0.00
+(unchanged), `status` RESERVED (unchanged), `repaymentType` FULL_DEDUCTION (unchanged), `updatedAt`
+changed. PayrollEntry — `advanceDeduction` 10,000.00 (unchanged), `advanceId` unchanged, `version`
+**3 (bit-for-bit unchanged)**, `updatedAt` **unchanged** — proving zero writes, not merely an equal
+value; `released` false. PayrollCycle — DRAFT (unchanged). Exactly one Advance row exists for this
+employee. AuditLog — exactly one new `advance.updated` entry, correct actor, correct entity,
+`changes.totalAmount = {from: "5000.00", to: "10000.00"}`, a note identifying this as the
+business-confirmed legacy-data correction. **No other production mutation was performed** — every
+step after the one authorized CAS write was strictly read-only; no Save/Edit/Cancel/Defer/Hold/
+Release/Finalize action was exercised.
+
+**Repository/script cleanup**: `backend/scripts/repair-sharafat-masih-advance.ts` deleted; confirmed
+never committed to any branch or ref; working tree confirmed fully clean, still on `main`; `v1.0.2`
+(and every other tag) unchanged.
+
+**Final classification: GREEN — Sharafat Masih legacy Advance inconsistency repaired; Advance and
+its linked August 2026 Draft Payroll Entry now reconciled at PKR 10,000.** Per explicit instruction:
+no further production mutation, no Reliability Phase 5 resumption, no H1/H2/H3/M2/M3 work, no new
+release. STOP.
 
