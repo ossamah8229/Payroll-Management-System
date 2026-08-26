@@ -395,11 +395,12 @@ export { pluralize } from './lib/text';
 export { normalizeCnic } from './lib/cnic';
 export { normalizeIban, normalizeAccountNumber } from './lib/banking';
 export { formatMoney, formatNumber } from './lib/number';
-export { calcNet, sumMoney } from './lib/calc-net';
+export { calcNet, sumMoney, workingDaysExceedCycleDays } from './lib/calc-net';
 export type {
   CalcNetResult,
   MoneyInput,
   PayrollEntryCalcInput,
   PayrollWorkLineCalcInput,
   PayrollWorkLineCalcResult,
+  WorkingDaysCeilingInput,
 } from './lib/calc-net';

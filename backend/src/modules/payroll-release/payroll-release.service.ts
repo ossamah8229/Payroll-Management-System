@@ -452,6 +452,7 @@ export async function releaseProjectUnit(
               bankId: liveMaster.bankId,
               accountNumber: liveMaster.accountNumber,
               iban: liveMaster.iban,
+              workLines: entry.workLines.map((line) => ({ days: line.days.toString(), cycleDays: line.cycleDays })),
             },
             entry.employee,
             adjustedNetSalary,

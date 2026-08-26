@@ -254,13 +254,20 @@ test.describe('Salary Release Report — Multi-Unit release', () => {
     });
 
     const entry = await getEntryForEmployee(context, cycle.id, employeeId);
-    await fillDays(context, entry); // primary line (Unit A) worked in full
+    // v1.0.3 M2 checkpoint — a genuine multi-unit split's combined Working Days can never exceed
+    // the applicable Cycle Days, so Unit A is left with 5 days of headroom for Unit B's own 5
+    // below, rather than `fillDays`'s usual "full month on one line" convention — this test's
+    // assertions are about release status/row-collapsing, never the exact days split.
+    await apiPatch(context, `/api/v1/work-lines/${entry.workLines[0]!.id}`, {
+      version: entry.version,
+      days: String(entry.workLines[0]!.cycleDays - 5),
+    });
 
     const afterFirstLine = await getEntryForEmployee(context, cycle.id, employeeId);
     await apiPost(context, `/api/v1/payroll-entries/${afterFirstLine.id}/work-lines`, {
       version: afterFirstLine.version,
       unitId: unitB.unit.id,
-      days: String(afterFirstLine.workLines[0]!.cycleDays),
+      days: '5',
     });
 
     await page.goto(`/payroll-cycles/${cycle.id}/reports/salary-release`);

@@ -242,3 +242,42 @@ export function sumMoney(values: MoneyInput[]): string {
   const total = values.reduce((sum, value) => sum.plus(toDecimal(value)), new Decimal(0));
   return roundMoney(total).toFixed(TWO_DP);
 }
+
+/** Input shape for `workingDaysExceedCycleDays` — deliberately not the full `PayrollWorkLineCalcInput`
+ * (no `otHours`/`otRate`/`sortOrder` needed for this one check). */
+export interface WorkingDaysCeilingInput {
+  days: MoneyInput;
+  cycleDays: number;
+}
+
+/**
+ * The v1.0.3 M2 financial-integrity invariant (Working Days vs Cycle Days audit, 2026-08-26): an
+ * entry's aggregate Working Days (`SUM(workLines.days)`, the same `totalWorkingDays` figure
+ * `calcNet` computes) must never exceed the *most generous* Cycle Days basis among its own work
+ * lines — `MAX(workLines.cycleDays)`, deliberately not any single line's own value and deliberately
+ * not a per-line-only check.
+ *
+ * Two failure modes this specifically guards against, both empirically reproduced during the audit:
+ * (1) a single line whose own `days` exceeds its own `cycleDays` (the simple case — `MAX` of one
+ * line is just that line's value); (2) a split-unit entry where every individual line's `days` stays
+ * within its own `cycleDays`, but the *combined* total does not (e.g. two lines at `cycleDays: 26`
+ * with `days: 13` and `days: 14` — neither line alone looks wrong, but 13+14=27 > 26) — a per-line
+ * check would silently miss this second case entirely, which is exactly why this function sums
+ * every line before comparing, rather than checking each in isolation.
+ *
+ * `MAX`, not "every line's own basis," is what correctly allows legitimate multi-site deputation:
+ * an employee splitting time across a 26-day-cycle site and a 30-day-cycle site can legitimately
+ * accumulate up to 30 combined days (10 at the first + 20 at the second, say) without that being a
+ * data-integrity problem — only exceeding the single most generous basis present is impossible to
+ * explain as real attendance.
+ *
+ * Pure, decimal-safe (never native floats, matching this file's own rounding/precision policy), and
+ * the single implementation every write-time guard, the release backstop, and (optionally) a
+ * proactive frontend check must all call — never reimplemented per call site.
+ */
+export function workingDaysExceedCycleDays(workLines: WorkingDaysCeilingInput[]): boolean {
+  if (workLines.length === 0) return false;
+  const totalDays = workLines.reduce((sum, line) => sum.plus(toDecimal(line.days)), new Decimal(0));
+  const maxCycleDays = Math.max(...workLines.map((line) => line.cycleDays));
+  return totalDays.greaterThan(maxCycleDays);
+}

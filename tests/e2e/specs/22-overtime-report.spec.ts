@@ -64,11 +64,16 @@ async function getEntryForEmployee(context: BrowserContext, cycleId: string, emp
 async function fillDaysAndOvertime(
   context: BrowserContext,
   entry: EntryRow,
-  overrides: { otHours?: string; otRate?: string | null } = {},
+  // v1.0.3 M2 checkpoint — `days` is overridable (default unchanged: a full month on this one
+  // line) so a multi-work-line test can leave headroom on the primary line for a second line's own
+  // days, since a genuine multi-unit split's combined Working Days can never exceed the applicable
+  // Cycle Days (`workingDaysExceedCycleDays`) — none of this file's assertions depend on the exact
+  // days split, only on OT Hours/Rate/Earnings being independent per line.
+  overrides: { days?: string; otHours?: string; otRate?: string | null } = {},
 ): Promise<void> {
   await apiPatch(context, `/api/v1/work-lines/${entry.workLines[0]!.id}`, {
     version: entry.version,
-    days: String(entry.workLines[0]!.cycleDays),
+    days: overrides.days ?? String(entry.workLines[0]!.cycleDays),
     ...(overrides.otHours !== undefined ? { otHours: overrides.otHours } : {}),
     ...(overrides.otRate !== undefined ? { otRate: overrides.otRate } : {}),
   });
@@ -350,8 +355,15 @@ test.describe('Overtime Report — Multi-unit work-line grain', () => {
     });
 
     const entry = await getEntryForEmployee(context, cycle.id, employee.employee.id);
-    // Primary work line (Unit A): 4 OT hours at an explicit 120/hr rate.
-    await fillDaysAndOvertime(context, entry, { otHours: '4', otRate: '120' });
+    // Primary work line (Unit A): 4 OT hours at an explicit 120/hr rate. Days left at
+    // cycleDays - 9 so the second line's own 9 days below keeps the combined total exactly at
+    // cycleDays (v1.0.3 M2's invariant) — neither this test's OT assertions nor row-count
+    // assertions depend on the exact days split.
+    await fillDaysAndOvertime(context, entry, {
+      days: String(entry.workLines[0]!.cycleDays - 9),
+      otHours: '4',
+      otRate: '120',
+    });
 
     // A second, genuinely independent work line (Unit B, same Site — the only cross-unit shape
     // this schema allows, Principle 7's concrete instance): 9 OT hours at a different, explicit
@@ -360,7 +372,7 @@ test.describe('Overtime Report — Multi-unit work-line grain', () => {
     await apiPost(context, `/api/v1/payroll-entries/${refetchedEntry.id}/work-lines`, {
       version: refetchedEntry.version,
       unitId: unitB.unit.id,
-      days: String(refetchedEntry.workLines[0]!.cycleDays),
+      days: '9',
       otHours: '9',
       otRate: '200',
     });
@@ -542,12 +554,19 @@ test.describe('Overtime Report — Export', () => {
       grossPay: '30000',
     });
     const entry = await getEntryForEmployee(context, cycle.id, employee.employee.id);
-    await fillDaysAndOvertime(context, entry, { otHours: '3', otRate: '100' });
+    // Days split leaves room for the second line's own 5 days below (v1.0.3 M2's Working Days <=
+    // Cycle Days invariant) — this test's assertions are about export headers/row retention, never
+    // the exact days split.
+    await fillDaysAndOvertime(context, entry, {
+      days: String(entry.workLines[0]!.cycleDays - 5),
+      otHours: '3',
+      otRate: '100',
+    });
     const refetchedEntry = await getEntryForEmployee(context, cycle.id, employee.employee.id);
     await apiPost(context, `/api/v1/payroll-entries/${refetchedEntry.id}/work-lines`, {
       version: refetchedEntry.version,
       unitId: unitB.unit.id,
-      days: String(refetchedEntry.workLines[0]!.cycleDays),
+      days: '5',
       otHours: '5',
       otRate: '110',
     });

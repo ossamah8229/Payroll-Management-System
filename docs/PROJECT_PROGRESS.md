@@ -14163,6 +14163,144 @@ each remains a separately trackable, non-urgent item.
 
 ---
 
+## v1.0.3 M2 — Working Days vs Cycle Days Financial-Integrity Fix (2026-08-26) — IMPLEMENTED,
+STOP BEFORE MERGE
+
+Implements the RED financial-integrity defect the preceding M2 audit established: no DB/app
+constraint prevented `PayrollEntryWorkLine.days` (actual attendance) from exceeding `.cycleDays`
+(the daily-rate denominator), individually or in aggregate across a split-unit entry's lines, and
+an inflated entry could reach real Salary Release and be paid at the inflated figure — all
+empirically proven in the audit, not merely inferred. **Approved classification carried forward
+unchanged: ATTENDANCE-ENTRY BLOCKER — NO (zero current production violations, September attendance
+entry may proceed); SALARY-RELEASE BLOCKER — YES (must ship before August's actual release).**
+
+**Approved invariant, implemented exactly as specified**: `SUM(workLines.days) <=
+MAX(workLines.cycleDays)` for every `PayrollEntry` — `MAX`, deliberately not a per-line-only check,
+since the audit proved a per-line check misses the real case (two lines each individually within
+their own `cycleDays` whose combined total is not). New pure, decimal-safe (never native floats)
+function `workingDaysExceedCycleDays` in `shared/src/lib/calc-net.ts` — the single implementation
+every write-time guard and the release backstop call, never reimplemented per call site.
+`calcNet` itself is completely untouched (a pure appended addition to the same file, confirmed by
+diff) — **no financial calculation was changed**, per the explicit instruction: invalid data is
+rejected/blocked, never silently clamped.
+
+**Layer 1 — write-time validation, backend-authoritative**, protecting every real write path that
+can change `days`/`cycleDays`:
+- `createPayrollEntry` — validated against the caller's resolved initial work-line seed (no
+  transaction needed — a brand-new entry has no siblings to race against).
+- `addWorkLine`, `updateWorkLine`, `deleteWorkLine` — each already ran inside a version-guarded
+  transaction (the parent `PayrollEntry`'s optimistic-lock CAS, unchanged, reused as-is); the new
+  check re-reads the entry's full, post-write sibling-line set fresh, inside that same transaction,
+  immediately before returning — never the caller's stale view, never a separate read-then-write.
+  A violation throws, rolling back the whole transaction (including the version increment and the
+  write itself) — zero partial state. `deleteWorkLine` needed the same guard too: removing the one
+  line providing an entry's most generous `cycleDays` basis can retroactively invalidate the
+  *remaining* lines' own aggregate.
+- `bulkUpdatePayrollEntries` (`field: 'cycleDays'`, Copy to All) — the one path that bypasses the
+  three functions above entirely via a direct `updateMany`. The audit's own worked example (existing
+  `days: 27, cycleDays: 31`, bulk-lowered to 26) is exactly what this closes: every *editable*
+  matched entry's projected post-write state is validated before any write; if even one would become
+  invalid, the **whole operation is rejected atomically** (a `badRequest` naming the affected count,
+  thrown before the transaction's first write) — never a partial apply, preserving this action's own
+  existing all-editable-or-none contract, just extended to this one new invariant.
+- Error messages, distinguished by line count (never a generic 500, always `badRequest`/400, this
+  codebase's existing convention for a caller-input business-rule rejection): `"Working Days cannot
+  exceed Cycle Days."` (single line) / `"Total Working Days across units cannot exceed the applicable
+  Cycle Days."` (split). Frontend needed **zero changes** — `use-payroll-entry-editor.ts`'s existing
+  generic `error instanceof ApiError ? error.message : ...` catch/report path (inline save, Split
+  modal, add/delete line) and `copy-to-all-toolbar.tsx`'s identical pattern already surface any
+  backend message cleanly; a 400 was already a recognized, non-retried category
+  (`isValidationError`).
+
+**Layer 2 — release-time backstop**: new `RELEASE_BLOCK_REASONS.WORKING_DAYS_EXCEED_CYCLE_DAYS`
+(`"Working Days Exceed Cycle Days"`), evaluated in `evaluatePayrollEntryReleaseReadiness` — the one
+canonical function `releaseProjectUnit` (the actual release action) and both of Payroll Entry's own
+display paths (`withReleaseBlockReasons`, single-entry; `attachReleaseBlockReasonsBulk`, the grid
+list) already share. A pure, no-query check against already-loaded `workLines` — free in every call
+site. This is the final safety net: even a legacy record, a future import, or an unknown write path
+would still be refused at release. Frontend needed **zero changes** here either —
+`payroll-entry-row.tsx`'s "Needs Attention" badge already renders *any* string in
+`releaseBlockReasons` generically via tooltip, with no hardcoded reason list.
+
+**Split-unit semantics, empirically proven, not just designed**: `MAX` (not per-line, not a single
+shared basis) correctly allows legitimate multi-site deputation — 10 days at a 26-day-cycle site +
+15 at a 30-day-cycle site (25 <= 30) passes — while still catching same-basis splits where every
+individual line looks fine (13 + 14 against two 26-day lines, neither line alone > 26, but the
+combined 27 is rejected).
+
+**Concurrency/atomicity**: no new locking model — reuses the existing, already-proven
+`PayrollEntry`-version-guarded `updateMany` CAS pattern unchanged (the same mechanism the Advances
+module's own `assertOutstandingBalanceWithinBounds` guard from the Sharafat checkpoint relies on).
+The aggregate check always runs against a fresh re-read from *inside* the same transaction as the
+version-guarded write, after that guard has already succeeded — a concurrent sibling-line edit is
+already serialized behind it (Postgres blocks the second writer on the row lock, then re-evaluates
+its own `WHERE` against the post-commit state), so it is structurally impossible to race around this
+invariant. Proven, not just argued: two concurrent HTTP requests editing sibling lines to
+individually-valid-but-jointly-invalid values were fired via `Promise.all` — at most one ever
+succeeds, the DB never ends in the invalid aggregate state.
+
+**No DB migration** — the invariant spans sibling `PayrollEntryWorkLine` rows, which a single-row
+`CHECK` constraint cannot express; the existing raw-SQL `days >= 0`/`cycleDays BETWEEN 1 AND 31`
+constraints are untouched. Service-layer enforcement only, per the approved design.
+
+**Local test matrix — all 16 approved cases, all passing** (`backend/tests/
+working-days-cycle-days-guard.test.ts`, new, real HTTP API against disposable local Postgres — never
+production): single-line accept/reject/zero (Cases 1–4); split accept/reject/different-bases-accept/
+sibling-edit-turns-valid-invalid (Cases 5–8); Cycle-Days-edit accept/reject (Cases 9–10); bulk
+Cycle-Days accept/atomic-reject-with-zero-partial-mutation (Cases 11–12); release backstop —
+`releaseBlockReasons` catches a direct-DB-fixture legacy-invalid entry (**test fixture creation
+only**, never through the app) and real Salary Release refuses it, `released` stays `false` (Case
+13/14); a valid entry still releases normally (Case 15); concurrency (Case 16). Plus 9 new pure
+unit tests for `workingDaysExceedCycleDays` itself in `backend/tests/calc-net.test.ts` (no database),
+including a decimal-precision boundary case. **15 + 9 = 24 new tests, all passing.**
+
+**Regression evidence**: `calcNet`'s own diff is a pure appended addition — the function itself,
+every existing test in `calc-net.test.ts` (25 pre-existing, all still passing), and the pre-existing
+"financial-regression proof" test from the v1.0.0 Working-Days Aggregation checkpoint are all
+untouched. Full backend suite (sharded 1–6, matching this repo's own CI convention exactly, after
+first discovering the un-sharded run OOMs on this sandbox regardless of these changes — a sandbox
+resource limit, not a regression) — **1,876/1,876 passing** across all six shards (two spurious
+failures during this run traced to leftover test fixture data — orphaned `Bank` rows —
+from earlier *interrupted* local runs this session, cleaned up directly, both shards re-ran clean;
+one further failure, `statements.test.ts`'s query-count assertion, is this repo's own long-documented
+pre-existing flake, unrelated, confirmed non-deterministic by re-running clean immediately after).
+Frontend suite unaffected (no frontend file touched): **1,070/1,070**. Both workspaces' typecheck,
+lint (0 errors, only pre-existing unrelated warnings), and build (`shared`/`backend`/`frontend`) all
+clean.
+
+**E2E finding, corrected — a genuine discovery, not a false alarm**: the first full local E2E run
+(31 spec files) surfaced 4 pre-existing failures, all in multi-unit report specs
+(`20-project-site-payroll-report.spec.ts`, `22-overtime-report.spec.ts` ×2,
+`26-salary-release-report.spec.ts`). Root cause traced precisely: each fixture used the existing
+shared `fillDays`/`fillDaysAndOvertime` helper convention ("fill the primary line to a full month")
+on the primary line, then added a second work line at *also* a full month's worth of days (or, in
+one case, a flat `+5` on top of an already-full primary line) — a combined attendance total that
+**cannot represent real calendar days** (e.g. 30 + 30 = 60 days of attendance inside one ~30-day
+cycle) and was only ever reachable because no guard existed before this checkpoint. **This is not a
+documented business rule contradicting the approved invariant** — no doc anywhere sanctions Working
+Days exceeding Cycle Days; these fixtures simply predate the invariant and picked convenient round
+numbers without it in mind, exactly the class of gap this checkpoint closes. Every one of the 4
+tests' actual assertions (row count/collapsing, per-line OT independence, export headers, release-
+until-both-Units status) was confirmed to depend on none of the specific days values, only on the
+*split existing at all* — so the fix was a minimal, surgical fixture correction in all 4 tests
+(reduce the primary line's days to leave headroom, matching the second line's own days, so the
+combined total lands at or under Cycle Days) with **zero assertion changed** in any of the 4 tests —
+`fillDaysAndOvertime` gained one new optional `days` override parameter (default behavior for every
+other existing caller unchanged). All 33 tests in the 3 affected spec files re-ran clean immediately
+after (including the 4 previously-failing ones), and the full 31-file E2E suite was re-run in full
+afterward for complete confirmation (result recorded separately below/in the PR). Precedent for this
+exact kind of correction already exists in this codebase (the v1.0.1 Identity checkpoint updating
+`payroll-entry-alignment.test.tsx`'s hardcoded column-count assertions; the Sharafat checkpoint
+correcting one pre-existing RESERVED-editing assertion) — not a new practice.
+
+**Branch**: `fix/v1.0.3-working-days-cycle-days-guard`, cut from `main` at
+`9be4f9e0922e46aa3f68b937ecf203a7c75d5c54` (the H3 closeout commit). **Per explicit instruction: STOP
+BEFORE MERGE.** No merge, no deploy, no `v1.0.3` tag, no GitHub Release, no Salary Release, no
+production access of any kind this checkpoint (implementation, tests, and UAT were entirely local/
+disposable) and no production mutation.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

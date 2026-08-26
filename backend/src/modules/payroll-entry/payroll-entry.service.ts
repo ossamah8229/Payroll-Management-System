@@ -7,7 +7,14 @@ import type {
   UpdatePayrollEntryInput,
   UpdateWorkLineInput,
 } from '@payroll/shared';
-import { calcNet, normalizeAccountNumber, normalizeIban, type CalcNetResult, type PayrollEntryCalcInput } from '@payroll/shared';
+import {
+  calcNet,
+  normalizeAccountNumber,
+  normalizeIban,
+  workingDaysExceedCycleDays,
+  type CalcNetResult,
+  type PayrollEntryCalcInput,
+} from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../common/http-error';
 import { diffFields, omitKeys } from '../../common/audit-diff';
@@ -29,6 +36,27 @@ const DEFAULT_PAGE_SIZE = 50;
  * this is the same historical snapshot for those entries forever; a Draft entry's lines reflect
  * whatever the roster reconciliation/edits currently have them pointing at. */
 export const WORK_LINES_INCLUDE = { orderBy: { sortOrder: 'asc' as const }, include: { unit: true } };
+
+/**
+ * v1.0.3 M2 financial-integrity checkpoint (2026-08-26) — write-time Layer 1 for the
+ * `workingDaysExceedCycleDays` invariant (`shared`'s own doc comment has the full "why MAX, why
+ * aggregate not per-line" reasoning). One implementation, called from every real write path that
+ * can change an entry's `days`/`cycleDays` (`createPayrollEntry`, `addWorkLine`, `updateWorkLine`,
+ * `deleteWorkLine`), always against a just-re-read, authoritative set of sibling lines from inside
+ * the same version-guarded transaction as the write itself — never the caller's possibly-stale
+ * view. The message distinguishes the common single-line case from a genuine split, matching how a
+ * Payroll Staff user actually experiences the error (a single-line entry editing its one and only
+ * "Working Days" cell vs. a multi-unit Split modal).
+ */
+function assertWorkingDaysWithinCycleDays(workLines: { days: Prisma.Decimal | string; cycleDays: number }[]): void {
+  const normalized = workLines.map((line) => ({ days: line.days.toString(), cycleDays: line.cycleDays }));
+  if (!workingDaysExceedCycleDays(normalized)) return;
+  throw badRequest(
+    normalized.length > 1
+      ? 'Total Working Days across units cannot exceed the applicable Cycle Days.'
+      : 'Working Days cannot exceed Cycle Days.',
+  );
+}
 
 export type EntryWithWorkLines = PayrollEntry & { workLines: PayrollEntryWorkLine[] };
 
@@ -179,6 +207,7 @@ async function withReleaseBlockReasons<
     accountNumber: string | null;
     iban: string | null;
     employee: { cnic: string | null; employeeCode: string | null };
+    workLines: { days: Prisma.Decimal; cycleDays: number }[];
   },
 >(entry: T): Promise<T & { releaseBlockReasons: string[] }> {
   if (entry.released || entry.hold || entry.payoutOutcome !== null) {
@@ -190,6 +219,7 @@ async function withReleaseBlockReasons<
       bankId: entry.bankId,
       accountNumber: entry.accountNumber,
       iban: entry.iban,
+      workLines: entry.workLines.map((line) => ({ days: line.days.toString(), cycleDays: line.cycleDays })),
     },
     entry.employee,
     '0',
@@ -219,6 +249,7 @@ async function attachReleaseBlockReasonsBulk<
     accountNumber: string | null;
     iban: string | null;
     employee: { cnic: string | null; employeeCode: string | null };
+    workLines: { days: Prisma.Decimal; cycleDays: number }[];
   },
 >(entries: T[]): Promise<Array<T & { releaseBlockReasons: string[] }>> {
   const candidates = entries.filter((entry) => !entry.released && !entry.hold && entry.payoutOutcome === null);
@@ -309,6 +340,11 @@ async function attachReleaseBlockReasonsBulk<
     }
     if (isDuplicateForEmployee(ibanHolders, ibanCanonicalByEntryId.get(entry.id) ?? null, entry.employeeId)) {
       reasons.push(RELEASE_BLOCK_REASONS.DUPLICATE_IBAN);
+    }
+    // v1.0.3 M2 checkpoint — pure, no-query check (already-loaded `workLines`), so it costs nothing
+    // extra in this batched path either.
+    if (workingDaysExceedCycleDays(entry.workLines.map((line) => ({ days: line.days.toString(), cycleDays: line.cycleDays })))) {
+      reasons.push(RELEASE_BLOCK_REASONS.WORKING_DAYS_EXCEED_CYCLE_DAYS);
     }
 
     return { ...entry, releaseBlockReasons: reasons };
@@ -512,6 +548,12 @@ export async function createPayrollEntry(
       cycleDays: seed.cycleDays ?? 30,
     });
   }
+
+  // v1.0.3 M2 financial-integrity checkpoint — write-time Layer 1. A brand-new entry has no
+  // sibling rows to race against (nothing else can concurrently add a line to an entry that
+  // doesn't exist yet), so this is a pure check against the caller's own already-resolved input,
+  // no transaction required.
+  assertWorkingDaysWithinCycleDays(resolvedLines);
 
   const maxSortOrder = await prisma.payrollEntry.aggregate({
     where: { cycleId },
@@ -866,7 +908,7 @@ export async function addWorkLine(
       tx,
     );
 
-    return tx.payrollEntry.findUniqueOrThrow({
+    const fresh = await tx.payrollEntry.findUniqueOrThrow({
       where: { id: entryId },
       include: {
         workLines: WORK_LINES_INCLUDE,
@@ -886,6 +928,16 @@ export async function addWorkLine(
         },
       },
     });
+
+    // v1.0.3 M2 financial-integrity checkpoint — write-time Layer 1. Validated against `fresh`'s
+    // own just-re-read sibling lines (authoritative, inside this same transaction, after the
+    // version-guarded write above — never the caller's possibly-stale view), so a concurrent
+    // sibling-line edit can't race around this: it would already have been serialized behind the
+    // version guard above (see this module's own CAS doc comments). Throwing here rolls back the
+    // whole transaction, including the version increment and the just-created line.
+    assertWorkingDaysWithinCycleDays(fresh.workLines);
+
+    return fresh;
   });
   return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
@@ -958,7 +1010,7 @@ export async function updateWorkLine(
       );
     }
 
-    return tx.payrollEntry.findUniqueOrThrow({
+    const fresh = await tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
       include: {
         workLines: WORK_LINES_INCLUDE,
@@ -978,6 +1030,13 @@ export async function updateWorkLine(
         },
       },
     });
+
+    // v1.0.3 M2 financial-integrity checkpoint — write-time Layer 1, same reasoning as `addWorkLine`'s
+    // own identical check: validated against `fresh`'s just-re-read sibling lines, inside this same
+    // version-guarded transaction, so no concurrent edit can race around it.
+    assertWorkingDaysWithinCycleDays(fresh.workLines);
+
+    return fresh;
   });
   return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
@@ -1030,7 +1089,7 @@ export async function deleteWorkLine(
       tx,
     );
 
-    return tx.payrollEntry.findUniqueOrThrow({
+    const fresh = await tx.payrollEntry.findUniqueOrThrow({
       where: { id: entry.id },
       include: {
         workLines: WORK_LINES_INCLUDE,
@@ -1050,6 +1109,17 @@ export async function deleteWorkLine(
         },
       },
     });
+
+    // v1.0.3 M2 financial-integrity checkpoint — write-time Layer 1. Deleting a line usually only
+    // ever lowers the aggregate, but it can also remove the specific line providing the entry's
+    // most generous `cycleDays` basis, which can retroactively push the *remaining* lines' own
+    // aggregate over the new (lower) MAX — e.g. a 2-day-line at cycleDays 30 plus a 28-day-line at
+    // cycleDays 26 (aggregate 30 <= max 30, valid); deleting the first line leaves 28 > 26. Checked
+    // against `fresh`'s post-delete state, same transaction/version-guard reasoning as every other
+    // write path here.
+    assertWorkingDaysWithinCycleDays(fresh.workLines);
+
+    return fresh;
   });
   return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
@@ -1176,7 +1246,11 @@ export async function bulkUpdatePayrollEntries(
         payoutOutcome: true,
         leaveRate: true,
         eobiAmount: true,
-        workLines: { orderBy: { sortOrder: 'asc' }, take: 1, select: { id: true, cycleDays: true, otRate: true } },
+        // v1.0.3 M2 checkpoint — every line (not just the primary one, and now including `days`)
+        // is needed to evaluate the `workingDaysExceedCycleDays` invariant below for the
+        // `cycleDays` branch; harmless extra data for the `leaveRate`/`eobiAmount` branches, which
+        // don't touch `days`/`cycleDays` at all and simply ignore it.
+        workLines: { orderBy: { sortOrder: 'asc' }, select: { id: true, days: true, cycleDays: true, otRate: true } },
       },
     });
     matchedCount = matched.length;
@@ -1217,6 +1291,34 @@ export async function bulkUpdatePayrollEntries(
       // Guaranteed by the architecture — every PayrollEntry always has at least one WorkLine
       // (database/payroll-entry.md §12a) — so `workLines[0]` is always the primary line here.
       const primaryLineIds = editable.map((entry) => entry.workLines[0]!.id);
+
+      // v1.0.3 M2 financial-integrity checkpoint — write-time Layer 1 for the bulk `cycleDays`
+      // path specifically: lowering the primary line's `cycleDays` across many entries at once
+      // (e.g. a statutory change) can retroactively turn an already-valid aggregate invalid for
+      // any entry whose `days` was entered against the old, higher basis — with none of the
+      // per-entry write paths' own guards in the way, since this bypasses them entirely via a
+      // direct `updateMany`. Validated against every *editable* entry's authoritative, just-read
+      // `workLines` (this transaction's own read above, not a caller-supplied value), for the
+      // state each entry would have *after* this bulk write — atomically: if even one would
+      // become invalid, the whole operation is rejected before any row is written, never a
+      // partial apply (this bulk action's own existing all-editable-or-none-for-this-field
+      // contract, just extended to this one new invariant).
+      if (input.field === 'cycleDays') {
+        const wouldBeInvalid = editable.filter((entry) => {
+          const primaryLineId = entry.workLines[0]!.id;
+          const projectedLines = entry.workLines.map((line) => ({
+            days: line.days.toString(),
+            cycleDays: line.id === primaryLineId ? input.value : line.cycleDays,
+          }));
+          return workingDaysExceedCycleDays(projectedLines);
+        });
+        if (wouldBeInvalid.length > 0) {
+          throw badRequest(
+            `This Cycle Days change would leave ${wouldBeInvalid.length} ${wouldBeInvalid.length === 1 ? 'entry' : 'entries'} with Working Days exceeding Cycle Days — no changes were made. Resolve the affected entries' attendance first.`,
+          );
+        }
+      }
+
       await tx.payrollEntryWorkLine.updateMany({
         where: { id: { in: primaryLineIds } },
         data: input.field === 'cycleDays' ? { cycleDays: input.value } : { otRate: input.value },

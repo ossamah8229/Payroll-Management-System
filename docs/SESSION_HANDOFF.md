@@ -17,8 +17,29 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-26 (latest) — H3 Employee Identity Completeness Audit CLOSED, AMBER, with an
-> owner clarification that Employee Code incompleteness is expected current state.** Employee Codes
+> **Update, 2026-08-26 (latest) — v1.0.3 M2 Working Days vs Cycle Days financial-integrity fix
+> IMPLEMENTED on branch `fix/v1.0.3-working-days-cycle-days-guard`, STOP BEFORE MERGE.** Implements
+> the approved invariant `SUM(workLines.days) <= MAX(workLines.cycleDays)` — write-time rejection
+> (`createPayrollEntry`/`addWorkLine`/`updateWorkLine`/`deleteWorkLine`, plus the bulk `cycleDays`
+> Copy-to-All path, atomically) and a release-time `releaseBlockReasons` backstop
+> (`WORKING_DAYS_EXCEED_CYCLE_DAYS`). No financial calculation changed (`calcNet` itself untouched —
+> a pure appended addition to `calc-net.ts`); invalid data is rejected/blocked, never silently
+> clamped. No DB migration (the invariant spans sibling rows). Reuses the existing version-guarded
+> CAS transaction pattern unchanged for concurrency safety — proven, not just argued, with a real
+> concurrent-request test. **24 new tests** (15 integration + 9 pure-unit), full backend suite
+> **1,876/1,876** (sharded, matching this repo's own CI convention), frontend **1,070/1,070**
+> (unaffected, zero frontend files touched), both workspaces' typecheck/lint/build clean. Zero
+> production access this checkpoint (local/disposable only). **Approved classification carried
+> forward: attendance-entry NOT blocked (September attendance entry may proceed); Salary Release
+> IS blocked until this ships.** Full record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.3 M2 — Working
+> Days vs Cycle Days Financial-Integrity Fix" entry (immediately above its own §2) and this file's
+> own §68 — not duplicated here in full.
+>
+> ---
+>
+> **Update, 2026-08-26 (superseded by the entry above for status purposes) — H3 Employee Identity
+> Completeness Audit CLOSED, AMBER, with an owner clarification that Employee Code incompleteness is
+> expected current state.** Employee Codes
 > have not yet been generated for the full workforce (a dedicated future phase) — missing Employee
 > Code (850/1,247 active employees, 68.2%) is therefore explicitly **not** an August
 > payroll-readiness defect/risk and must not move any classification toward AMBER/RED by itself.
@@ -6950,4 +6971,81 @@ mutation, no repository change beyond these two docs files.
 EmployeeLookup UX change, no Father Name search change, no Reliability Phase 5 resumption, no other
 H3-adjacent item authorized by this closeout. M2 (Working Days vs Cycle Days) begins next, as its
 own separate, strictly read-only audit.
+
+---
+
+## 68. Addendum, 2026-08-26 — v1.0.3 M2 Working Days vs Cycle Days financial-integrity fix
+IMPLEMENTED, full local validation GREEN, STOP BEFORE MERGE
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.3 M2 — Working Days vs Cycle Days
+Financial-Integrity Fix" entry, directly above its own "§2. Remaining work" heading. This addendum
+is the session-chronology summary. Continues directly from the M2 audit checkpoint (this file's own
+prior addendum), whose approved classification — RED financial-integrity defect, attendance-entry
+NOT blocked, Salary Release IS blocked until fixed — is implemented here exactly as approved.
+
+**Invariant**: `SUM(workLines.days) <= MAX(workLines.cycleDays)`, implemented as a new pure,
+decimal-safe function (`workingDaysExceedCycleDays`, `shared/src/lib/calc-net.ts`) — `calcNet`
+itself untouched (confirmed by diff: a pure appended addition). Invalid data is rejected/blocked at
+the boundary; no financial formula was changed, and no silent clamping was introduced.
+
+**Layer 1 (write-time, backend-authoritative)**: `createPayrollEntry`, `addWorkLine`,
+`updateWorkLine`, `deleteWorkLine` — each validated against a fresh, authoritative re-read of
+sibling work lines from inside the same version-guarded transaction as the write, immediately
+before returning; a violation rolls back the whole transaction. `bulkUpdatePayrollEntries`'s
+`cycleDays` (Copy to All) path — the one path that bypasses the four functions above — validates
+every affected entry's projected post-write state before any write, rejecting the whole operation
+atomically if even one would become invalid (zero partial mutation). Clear `badRequest` (400)
+messages, distinguished by single-line vs. split wording; zero frontend changes needed — the
+existing generic API-error-display paths (inline save, Split modal, Copy to All) already surface
+any backend message.
+
+**Layer 2 (release-time backstop)**: new `RELEASE_BLOCK_REASONS.WORKING_DAYS_EXCEED_CYCLE_DAYS`,
+checked in the one canonical `evaluatePayrollEntryReleaseReadiness` function every release path and
+both Payroll Entry display paths already share — a pure, no-query check. Zero frontend changes
+needed — the "Needs Attention" badge already renders any `releaseBlockReasons` string generically.
+
+**Split-unit semantics**: `MAX` (not per-line) correctly allows legitimate multi-site deputation
+with different `cycleDays` bases while still catching a same-basis split where every individual
+line looks valid but the combined total isn't — both proven empirically, not just designed.
+
+**Concurrency**: no new locking model — reuses the existing proven version-guarded CAS pattern
+(same mechanism as the Advances module's own `assertOutstandingBalanceWithinBounds` from the
+Sharafat checkpoint); the aggregate check always runs against a fresh re-read inside the same
+transaction, after the version guard already succeeded, so a concurrent sibling-line edit is
+already serialized behind it — proven with a real `Promise.all` concurrent-request test, not just
+argued. No DB migration — the invariant spans sibling rows, inexpressible as a single-row `CHECK`.
+
+**Testing**: 24 new tests — 15 integration (`backend/tests/working-days-cycle-days-guard.test.ts`,
+covering all 16 approved cases against a real HTTP API on disposable local Postgres, including the
+release backstop proven via a direct-DB test-fixture-only legacy-invalid record and a real Salary
+Release attempt against it) + 9 pure-unit (`backend/tests/calc-net.test.ts`, extending the existing
+suite, no database). All 24 passing, no existing test weakened.
+
+**Regression evidence**: full backend suite, sharded 1–6 (matching this repo's own CI convention —
+discovered the un-sharded run OOMs on this sandbox regardless of these changes, a resource limit,
+not a regression) — **1,876/1,876 passing** (two spurious failures traced to leftover `Bank` test
+fixtures from earlier interrupted local runs this session, cleaned up, both shards re-ran clean; one
+further failure was this repo's own long-documented pre-existing Statements query-count flake,
+confirmed non-deterministic by an immediate clean re-run). Frontend **1,070/1,070** (zero frontend
+files touched). Both workspaces' typecheck, lint, and build all clean.
+
+**E2E finding, corrected**: a first full local E2E run surfaced 4 pre-existing failures, all
+multi-unit report specs whose fixtures combined two full-month work lines (e.g. 30+30, or a full
+month plus a flat `+5`) — a total that cannot represent real calendar attendance and was only ever
+reachable because no guard existed before. Not a business-rule contradiction — confirmed each
+test's actual assertions (row count, per-line OT independence, export headers, release status) never
+depend on the specific days values, only on the split existing. Minimal fixture correction in all 4
+tests (headroom left on the primary line so the combined total lands at/under Cycle Days), zero
+assertion changed, one new optional parameter added to a shared test helper (default behavior
+unchanged for every other caller). All 33 tests in the 3 affected files, and the full 31-file E2E
+suite, re-ran clean afterward. Full detail: `docs/PROJECT_PROGRESS.md`'s own entry.
+
+**Production**: zero access this checkpoint — implementation, all 24 new tests, and typecheck/lint/
+build were entirely local/disposable. No production mutation, no production read.
+
+**Branch**: `fix/v1.0.3-working-days-cycle-days-guard`, cut from `main` at `9be4f9e` (the H3 closeout
+commit). **Per explicit instruction: STOP BEFORE MERGE.** No merge, no deploy, no `v1.0.3` tag, no
+GitHub Release, no Salary Release, no Reliability Phase 5 resumption, no other checkpoint's scope
+touched (Employee Code, H1/H2, M3, EmployeeLookup UX, Father Name search, Advances, Sharafat Masih —
+all explicitly untouched).
 
