@@ -1,4 +1,5 @@
 import type { PrismaTransactionClient } from '../../lib/prisma';
+import { workingDaysExceedCycleDays, type WorkingDaysCeilingInput } from '@payroll/shared';
 import {
   findEmployeeByAccountNumber,
   findEmployeeByCnic,
@@ -40,6 +41,12 @@ export const RELEASE_BLOCK_REASONS = {
   MISSING_ACCOUNT_NUMBER: 'Missing Account Number',
   DUPLICATE_ACCOUNT_NUMBER: 'Duplicate Account Number',
   DUPLICATE_IBAN: 'Duplicate IBAN',
+  /** v1.0.3 M2 financial-integrity checkpoint (2026-08-26) — the release-time backstop for
+   * `shared`'s `workingDaysExceedCycleDays`. The final safety net: even if a legacy record, a
+   * future import, an unknown write path, or a bug in the write-time guards below somehow left an
+   * entry with `SUM(workLines.days) > MAX(workLines.cycleDays)`, this refuses to release it rather
+   * than paying an inflated `netSalary`. */
+  WORKING_DAYS_EXCEED_CYCLE_DAYS: 'Working Days Exceed Cycle Days',
 } as const;
 
 export type EntryPayoutClassification = 'PAID' | 'NO_PAY_DUE' | 'RECOVERY_DUE';
@@ -59,6 +66,10 @@ export interface ReleaseReadinessEntry {
   bankId: string | null;
   accountNumber: string | null;
   iban: string | null;
+  /** v1.0.3 M2 checkpoint — the entry's own work lines' `days`/`cycleDays`, straight from
+   * authoritative persisted data (never a caller-computed aggregate), for the
+   * `WORKING_DAYS_EXCEED_CYCLE_DAYS` backstop below. */
+  workLines: WorkingDaysCeilingInput[];
 }
 
 export interface ReleaseReadinessEmployee {
@@ -108,6 +119,13 @@ export async function evaluatePayrollEntryReleaseReadiness(
   if (entry.iban) {
     const duplicate = await findEmployeeByIban(entry.iban, { excludeEmployeeId: entry.employeeId, client });
     if (duplicate) blockReasons.push(RELEASE_BLOCK_REASONS.DUPLICATE_IBAN);
+  }
+
+  // v1.0.3 M2 financial-integrity checkpoint — see `RELEASE_BLOCK_REASONS.WORKING_DAYS_EXCEED_CYCLE_DAYS`'s
+  // own doc comment. A pure, no-query check against `entry.workLines` (already-loaded authoritative
+  // data), so it costs nothing extra here.
+  if (workingDaysExceedCycleDays(entry.workLines)) {
+    blockReasons.push(RELEASE_BLOCK_REASONS.WORKING_DAYS_EXCEED_CYCLE_DAYS);
   }
 
   const net = Number(netSalary);

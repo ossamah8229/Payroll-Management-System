@@ -1,4 +1,4 @@
-import { calcNet, type PayrollEntryCalcInput } from '@payroll/shared';
+import { calcNet, workingDaysExceedCycleDays, type PayrollEntryCalcInput } from '@payroll/shared';
 
 /**
  * Pure unit tests, no database involved — `calcNet` (shared/src/lib/calc-net.ts) is the single
@@ -321,5 +321,71 @@ describe('calcNet — invariants', () => {
     // 3 lines of exactly one full dailyRate (10000/3) each = exactly grossPay (10000.00), not
     // 9999.99 or 10000.01 as float accumulation error could produce.
     expect(result.earnedAmount).toBe('10000.00');
+  });
+});
+
+describe('workingDaysExceedCycleDays — v1.0.3 M2 financial-integrity invariant (pure unit, no database)', () => {
+  it('single line: days == cycleDays does not exceed', () => {
+    expect(workingDaysExceedCycleDays([{ days: '26', cycleDays: 26 }])).toBe(false);
+  });
+
+  it('single line: days > cycleDays exceeds', () => {
+    expect(workingDaysExceedCycleDays([{ days: '27', cycleDays: 26 }])).toBe(true);
+  });
+
+  it('single line: days == 0 does not exceed', () => {
+    expect(workingDaysExceedCycleDays([{ days: '0', cycleDays: 30 }])).toBe(false);
+  });
+
+  it('split: 13 + 13 against max cycleDays 26 does not exceed', () => {
+    expect(
+      workingDaysExceedCycleDays([
+        { days: '13', cycleDays: 26 },
+        { days: '13', cycleDays: 26 },
+      ]),
+    ).toBe(false);
+  });
+
+  it('split: 13 + 14 against max cycleDays 26 exceeds, even though every individual line is <= its own cycleDays', () => {
+    expect(
+      workingDaysExceedCycleDays([
+        { days: '13', cycleDays: 26 },
+        { days: '14', cycleDays: 26 },
+      ]),
+    ).toBe(true);
+  });
+
+  it('split with different cycleDays bases: 10/26 + 15/30 = 25 <= max(30) does not exceed (legitimate deputation)', () => {
+    expect(
+      workingDaysExceedCycleDays([
+        { days: '10', cycleDays: 26 },
+        { days: '15', cycleDays: 30 },
+      ]),
+    ).toBe(false);
+  });
+
+  it('split with different cycleDays bases: aggregate exceeding even the most generous basis exceeds', () => {
+    expect(
+      workingDaysExceedCycleDays([
+        { days: '10', cycleDays: 26 },
+        { days: '25', cycleDays: 30 }, // 35 > 30
+      ]),
+    ).toBe(true);
+  });
+
+  it('an empty work-line list never exceeds (defensive — a real PayrollEntry always has at least one, §12a)', () => {
+    expect(workingDaysExceedCycleDays([])).toBe(false);
+  });
+
+  it('is decimal-safe, not native-float-safe, at a classic repeating-decimal boundary', () => {
+    // 26.01 + 0.01 must not sum to something like 26.019999999999996 due to float drift and
+    // incorrectly compare as <= 26 (or > 26) at the wrong boundary.
+    expect(
+      workingDaysExceedCycleDays([
+        { days: '26.01', cycleDays: 26 },
+        { days: '0.01', cycleDays: 26 },
+      ]),
+    ).toBe(true); // 26.02 > 26
+    expect(workingDaysExceedCycleDays([{ days: '25.99', cycleDays: 26 }])).toBe(false);
   });
 });
