@@ -278,10 +278,15 @@ test.describe('Project Site Payroll Report — Unit filtering', () => {
     });
 
     let entry = await getEntryForEmployee(context, cycle.id, employee.employee.id);
-    await fillDays(context, entry);
-    // `fillDays` bumped the entry's own `version` via the work-line PATCH — re-fetch before the
-    // next mutation rather than reuse the now-stale value (a stale `version` 409s as "changed by
-    // someone else").
+    // v1.0.3 M2 checkpoint — a genuine multi-unit split's combined Working Days can never exceed
+    // the applicable Cycle Days (`workingDaysExceedCycleDays`), so this leaves 5 days of headroom
+    // on the primary line for the second line below, rather than `fillDays`'s usual "full month on
+    // one line" convention — no assertion in this test depends on the exact days split.
+    const primaryCycleDays = entry.workLines[0]!.cycleDays;
+    await apiPatch(context, `/api/v1/work-lines/${entry.workLines[0]!.id}`, {
+      version: entry.version,
+      days: String(primaryCycleDays - 5),
+    });
     entry = await getEntryForEmployee(context, cycle.id, employee.employee.id);
     // Split into a second work line at Unit Two — a genuine multi-unit deputation within one Site
     // (Principle 7: work lines can never span more than one Site, but can span Units).

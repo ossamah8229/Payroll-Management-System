@@ -7029,6 +7029,17 @@ further failure was this repo's own long-documented pre-existing Statements quer
 confirmed non-deterministic by an immediate clean re-run). Frontend **1,070/1,070** (zero frontend
 files touched). Both workspaces' typecheck, lint, and build all clean.
 
+**E2E finding, corrected**: a first full local E2E run surfaced 4 pre-existing failures, all
+multi-unit report specs whose fixtures combined two full-month work lines (e.g. 30+30, or a full
+month plus a flat `+5`) — a total that cannot represent real calendar attendance and was only ever
+reachable because no guard existed before. Not a business-rule contradiction — confirmed each
+test's actual assertions (row count, per-line OT independence, export headers, release status) never
+depend on the specific days values, only on the split existing. Minimal fixture correction in all 4
+tests (headroom left on the primary line so the combined total lands at/under Cycle Days), zero
+assertion changed, one new optional parameter added to a shared test helper (default behavior
+unchanged for every other caller). All 33 tests in the 3 affected files, and the full 31-file E2E
+suite, re-ran clean afterward. Full detail: `docs/PROJECT_PROGRESS.md`'s own entry.
+
 **Production**: zero access this checkpoint — implementation, all 24 new tests, and typecheck/lint/
 build were entirely local/disposable. No production mutation, no production read.
 

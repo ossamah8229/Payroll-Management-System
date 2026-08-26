@@ -14268,6 +14268,31 @@ Frontend suite unaffected (no frontend file touched): **1,070/1,070**. Both work
 lint (0 errors, only pre-existing unrelated warnings), and build (`shared`/`backend`/`frontend`) all
 clean.
 
+**E2E finding, corrected — a genuine discovery, not a false alarm**: the first full local E2E run
+(31 spec files) surfaced 4 pre-existing failures, all in multi-unit report specs
+(`20-project-site-payroll-report.spec.ts`, `22-overtime-report.spec.ts` ×2,
+`26-salary-release-report.spec.ts`). Root cause traced precisely: each fixture used the existing
+shared `fillDays`/`fillDaysAndOvertime` helper convention ("fill the primary line to a full month")
+on the primary line, then added a second work line at *also* a full month's worth of days (or, in
+one case, a flat `+5` on top of an already-full primary line) — a combined attendance total that
+**cannot represent real calendar days** (e.g. 30 + 30 = 60 days of attendance inside one ~30-day
+cycle) and was only ever reachable because no guard existed before this checkpoint. **This is not a
+documented business rule contradicting the approved invariant** — no doc anywhere sanctions Working
+Days exceeding Cycle Days; these fixtures simply predate the invariant and picked convenient round
+numbers without it in mind, exactly the class of gap this checkpoint closes. Every one of the 4
+tests' actual assertions (row count/collapsing, per-line OT independence, export headers, release-
+until-both-Units status) was confirmed to depend on none of the specific days values, only on the
+*split existing at all* — so the fix was a minimal, surgical fixture correction in all 4 tests
+(reduce the primary line's days to leave headroom, matching the second line's own days, so the
+combined total lands at or under Cycle Days) with **zero assertion changed** in any of the 4 tests —
+`fillDaysAndOvertime` gained one new optional `days` override parameter (default behavior for every
+other existing caller unchanged). All 33 tests in the 3 affected spec files re-ran clean immediately
+after (including the 4 previously-failing ones), and the full 31-file E2E suite was re-run in full
+afterward for complete confirmation (result recorded separately below/in the PR). Precedent for this
+exact kind of correction already exists in this codebase (the v1.0.1 Identity checkpoint updating
+`payroll-entry-alignment.test.tsx`'s hardcoded column-count assertions; the Sharafat checkpoint
+correcting one pre-existing RESERVED-editing assertion) — not a new practice.
+
 **Branch**: `fix/v1.0.3-working-days-cycle-days-guard`, cut from `main` at
 `9be4f9e0922e46aa3f68b937ecf203a7c75d5c54` (the H3 closeout commit). **Per explicit instruction: STOP
 BEFORE MERGE.** No merge, no deploy, no `v1.0.3` tag, no GitHub Release, no Salary Release, no
