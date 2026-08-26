@@ -14110,6 +14110,59 @@ release.
 
 ---
 
+## H3 CLOSEOUT — Employee Identity Completeness & Duplicate-Identity Risk Audit, corrected and
+closed with the owner's Employee Code clarification (2026-08-26)
+
+Full technical record (production population, missing-identity statistics, the 138 duplicate-name
+groups, LEVEL 0–3 classification methodology, the Muhammad Tariq detail, identifier uniqueness
+results, schema/validation guarantees, and the workflow-by-workflow identity-visibility trace) was
+produced by the H3 audit checkpoint immediately preceding this one, delivered directly to the owner
+in that checkpoint's own final report — not duplicated here. This entry records the corrected
+interpretation and formal closeout only.
+
+**Owner clarification, supersedes the prior report's Employee Code framing**: Employee Codes have
+not yet been generated for the full workforce — a dedicated future implementation phase, not this
+checkpoint's concern. **Missing Employee Code (850 of 1,247 active employees, 68.2%) is expected
+current state, not an August payroll-readiness defect, warning, or remediation item, and must not
+by itself move any readiness classification toward AMBER or RED.** No mass Employee Code cleanup,
+no mandatory-Code policy, no Code-generation implementation, and no "new employees must have Code"
+rule are in scope of this or any near-term checkpoint. Employee Code remains displayed/used
+wherever already present.
+
+**Corrected H3 classification: AMBER (unchanged from the original report, now on corrected
+grounds)** — Employee Code's absence is explicitly excluded as a factor. The classification rests
+instead on: (1) CNIC missing for 103/1,247 (8.3%) and Father Name for 95/1,247 (7.6%) — both
+already well-populated and not itself alarming; (2) the "Muhammad Tariq" case — five active
+employees sharing that exact name, three with neither Father Name nor CNIC populated (up from one
+confirmed indistinguishable pair at the prior, now-stale audit) — genuinely indistinguishable by any
+populated identity field from each other, but **currently still operationally distinguishable**
+because those three sit at three different Site/Unit combinations, which the app's existing
+employee pickers do display. **September attendance entry may proceed.**
+
+**Targeted data remediation, narrowly scoped** (Employee Code deliberately excluded): (1) HR/Payroll
+should populate Father Name and/or CNIC for the three fully-blank Muhammad Tariq records first —
+the one case with a real, non-hypothetical indistinguishability risk should another same-named,
+same-Site/Unit hire ever occur; (2) then, as a lower priority, other duplicate-name employees
+missing *both* Father Name and CNIC simultaneously (the LEVEL 2 groups from the full report).
+Missing Employee Code is explicitly not part of this remediation request.
+
+**Software UX finding, recorded but explicitly deferred, not implemented**: the shared
+`EmployeeLookup` component (`frontend/src/components/ui/employee-lookup.tsx`) used by both
+Advances' Record Advance modal and Corrections' Request Correction modal renders only Name +
+Employee Code + Site + Unit at the actual employee-selection point — never Father Name or CNIC,
+even where already loaded. Given Employee Code is now confirmed intentionally incomplete workforce-
+wide, this finding becomes *more* relevant, not less — the picker cannot safely assume Employee Code
+is universally available as the human-readable disambiguator it was implicitly designed around.
+**This does not currently justify emergency v1.0.3 work before payroll** — recorded as a future
+small UX-hardening candidate only. Father Name search in Employee Registry likewise remains
+deferred, unchanged from the original report.
+
+**Final H3 classification, formally closed: AMBER.** No Employee Code work, no EmployeeLookup UX
+change, no Father Name search change, and no other H3-adjacent item is authorized by this closeout —
+each remains a separately trackable, non-urgent item.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

@@ -17,8 +17,27 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-26 (latest) — Sharafat Masih legacy Advance inconsistency REPAIRED in
-> production.** Business confirmed PKR 10,000 was the actual authorized/disbursed amount — the
+> **Update, 2026-08-26 (latest) — H3 Employee Identity Completeness Audit CLOSED, AMBER, with an
+> owner clarification that Employee Code incompleteness is expected current state.** Employee Codes
+> have not yet been generated for the full workforce (a dedicated future phase) — missing Employee
+> Code (850/1,247 active employees, 68.2%) is therefore explicitly **not** an August
+> payroll-readiness defect/risk and must not move any classification toward AMBER/RED by itself.
+> **H3 remains AMBER** on corrected grounds: the "Muhammad Tariq" case (5 same-named active
+> employees, 3 with neither Father Name nor CNIC — worse than the 1 pair the prior, now-stale audit
+> found) is currently still operationally distinguishable only because those three sit at three
+> different Site/Unit combinations. **September attendance entry may proceed.** Targeted remediation
+> (Father Name/CNIC for the 3 blank Muhammad Tariq records, then other duplicate-name employees
+> missing both fields) explicitly excludes Employee Code. The shared `EmployeeLookup` component's
+> failure to show Father Name/CNIC at the selection point (Advances/Corrections creation) is recorded
+> as a deferred, non-urgent UX-hardening candidate — not implemented, not an emergency v1.0.3 item.
+> Full record: `docs/PROJECT_PROGRESS.md`'s own "H3 CLOSEOUT" entry (immediately above its own §2)
+> and this file's own §67 — not duplicated here in full.
+>
+> ---
+>
+> **Update, 2026-08-26 (superseded by the entry above for status purposes) — Sharafat Masih legacy
+> Advance inconsistency REPAIRED in production.** Business confirmed PKR 10,000 was the actual
+> authorized/disbursed amount — the
 > Advance's own `totalAmount` (PKR 5,000) had under-recorded it; the linked Payroll Entry's
 > `advanceDeduction` (PKR 10,000) was already correct. Repaired via a one-time, engineer-executed
 > production transaction: rehearsed empirically against a local disposable Postgres first, then a
@@ -6884,4 +6903,51 @@ never committed to any branch or ref; working tree confirmed fully clean, still 
 its linked August 2026 Draft Payroll Entry now reconciled at PKR 10,000.** Per explicit instruction:
 no further production mutation, no Reliability Phase 5 resumption, no H1/H2/H3/M2/M3 work, no new
 release. STOP.
+
+---
+
+## 67. Addendum, 2026-08-26 — H3 Employee Identity Completeness Audit CLOSED (AMBER), corrected for
+the owner's Employee Code clarification
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "H3 CLOSEOUT" entry, directly above its own
+"§2. Remaining work" heading. This addendum is the session-chronology summary. The full H3 audit
+itself (production population, missing-identity statistics, the 138 duplicate-name groups and their
+LEVEL 0–3 classification, identifier-uniqueness results, schema/validation guarantees, and the
+workflow-by-workflow employee-picker trace) was delivered directly to the owner in the immediately
+preceding checkpoint and is not re-recorded here.
+
+**Owner clarification, supersedes the prior report's framing**: Employee Codes have not yet been
+generated for the full workforce — planned for a later dedicated implementation phase. **Missing
+Employee Code (850/1,247 active employees, 68.2%) is expected current state, not an August
+payroll-readiness defect, warning, or remediation item — it must not by itself move any
+classification toward AMBER or RED.** No mass Employee Code cleanup, no mandatory-Code policy, no
+Code-generation work, and no "new employees must have Code" rule are in scope now or in any near-
+term checkpoint.
+
+**H3 classification, corrected grounds: AMBER (unchanged conclusion, corrected reasoning)** — rests
+on CNIC (103/1,247 missing, 8.3%) and Father Name (95/1,247 missing, 7.6%) completeness, and
+specifically the "Muhammad Tariq" case: five active employees sharing that exact name, three with
+neither Father Name nor CNIC populated — worse than the single confirmed pair the prior, now-stale
+audit found. Those three remain currently distinguishable only because they sit at three different
+Site/Unit combinations, which the app's existing employee pickers do display. **September attendance
+entry may proceed.**
+
+**Remediation, narrowly scoped**: (1) HR/Payroll populates Father Name and/or CNIC for the three
+blank Muhammad Tariq records first; (2) then other duplicate-name employees missing both fields
+simultaneously. Employee Code explicitly excluded from this remediation request.
+
+**Software UX finding, recorded, deliberately not implemented**: the shared `EmployeeLookup`
+component (Advances' Record Advance, Corrections' Request Correction) shows only Name + Employee
+Code + Site + Unit at the selection point, never Father Name/CNIC. Now confirmed more relevant given
+Employee Code's intentional incompleteness — the picker cannot safely assume Code is universally
+available. Recorded as a future small UX-hardening candidate only; does not justify emergency
+v1.0.3 work before payroll. Father Name search in Employee Registry remains deferred, unchanged.
+
+**Production**: read-only throughout this closeout (documentation only) — no code, no production
+mutation, no repository change beyond these two docs files.
+
+**Final classification: H3 CLOSED — AMBER.** Per explicit instruction: no Employee Code work, no
+EmployeeLookup UX change, no Father Name search change, no Reliability Phase 5 resumption, no other
+H3-adjacent item authorized by this closeout. M2 (Working Days vs Cycle Days) begins next, as its
+own separate, strictly read-only audit.
 
