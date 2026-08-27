@@ -60,10 +60,14 @@ export interface PayrollEntry {
   /** Phase 4 Checkpoint 5 (Advances) — the linked Advance, when materialized/manually linked. A
    * light projection (id/outstandingBalance/status), not the full Advance record. */
   advanceId: string | null;
-  advance: { id: string; outstandingBalance: string; status: 'ACTIVE' | 'RESERVED' | 'PAID_OFF' } | null;
+  // 'CANCELLED' added (v1.0.4) — a RELEASED entry's advanceId/link is never cleared by
+  // cancelAdvance (Principle 9: released deductions are immutable), so a historical/released
+  // entry can genuinely still link to an Advance that was cancelled afterward — the type was
+  // previously missing this real, reachable case.
+  advance: { id: string; outstandingBalance: string; status: 'ACTIVE' | 'RESERVED' | 'PAID_OFF' | 'CANCELLED' } | null;
   eidAdvanceDeduction: string;
   eidAdvanceId: string | null;
-  eidAdvance: { id: string; outstandingBalance: string; status: 'ACTIVE' | 'RESERVED' | 'PAID_OFF' } | null;
+  eidAdvance: { id: string; outstandingBalance: string; status: 'ACTIVE' | 'RESERVED' | 'PAID_OFF' | 'CANCELLED' } | null;
   fine: string;
   hold: boolean;
   released: boolean;

@@ -557,6 +557,19 @@ function buildAdvanceItems(advance: AdvanceForStatement, allEntries: PayrollEntr
     // — the one period anchor an Advance always retains, even after `currentScheduledPeriodId` is
     // cleared on cancellation — anchors its *period* attribution, for the same reason a schedule
     // change is anchored to `fromPeriod` above.
+    //
+    // v1.0.4 Cancel Business Semantics fix: cancelling waives whatever remained unrecovered — this
+    // ledger's own running `advanceOutstanding` must reflect that, exactly like every other
+    // Advance/BalanceAdjustment movement here. `cancelAdvance` (`advances.service.ts`) already
+    // reverses any live unreleased Draft deduction back into `outstandingBalance` before this query
+    // ever runs, so the value read here is precisely the true waived remainder — never zeroed by
+    // `cancelAdvance` itself (that would have made the `ADVANCE_GIVEN` increase and every real
+    // released-deduction decrease disagree with the true recovered history), so this DECREASE is
+    // this ledger's own, one-time "waived" event, mirroring `BALANCE_ADJUSTMENT_SETTLED`'s identical
+    // `movement: null` only when there is truly nothing left to move (`ba.type === 'NONE'`) pattern
+    // just above. No new field, no schema change — `outstandingBalance` was already fetched.
+    const waivedRemainder = new Decimal(advance.outstandingBalance.toString());
+    const hasWaivedRemainder = waivedRemainder.greaterThan(0);
     items.push({
       id: `advance-cancelled:${advance.id}`,
       date: advance.updatedAt,
@@ -566,9 +579,11 @@ function buildAdvanceItems(advance: AdvanceForStatement, allEntries: PayrollEntr
       kindPriority: KIND_SEQUENCE_PRIORITY.ADVANCE_CANCELLED,
       category: 'ADVANCE',
       kind: 'ADVANCE_CANCELLED',
-      isInformational: true,
-      movement: null,
-      description: `${label} Cancelled`,
+      isInformational: !hasWaivedRemainder,
+      movement: hasWaivedRemainder ? { balance: 'ADVANCE', direction: 'DECREASE', amount: waivedRemainder } : null,
+      description: hasWaivedRemainder
+        ? `${label} Cancelled — PKR ${waivedRemainder.toFixed(2)} waived`
+        : `${label} Cancelled`,
       cycle: null,
       reference: { advanceId: advance.id },
     });
