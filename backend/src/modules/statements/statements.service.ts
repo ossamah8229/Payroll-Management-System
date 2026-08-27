@@ -178,6 +178,23 @@ interface RawLedgerItem {
  *    the same period and kind.
  * 4. The row's own id, lexicographically — the final, always-available tie-break guaranteeing a
  *    strict total order even if two rows of the same kind share the exact same timestamp.
+ *
+ * **`ADVANCE_CANCELLED` is deliberately its own, strictly-higher priority than `ADVANCE_GIVEN`
+ * (v1.0.4 Cancel Business Semantics fix — root-caused during that checkpoint's own E2E
+ * verification), not merely grouped alongside it:** `ADVANCE_CANCELLED` almost always shares the
+ * exact same `periodKey` as its own `ADVANCE_GIVEN` (both attributed to the Advance's
+ * `originalScheduledPeriod`), so step 3's `date` comparison is what actually decides their relative
+ * order in the common case — but `ADVANCE_GIVEN.date` is the user-editable, purely descriptive
+ * `dateGiven` field (editable at any lifecycle stage, per `advances.service.ts`), while
+ * `ADVANCE_CANCELLED.date` is the real `updatedAt` timestamp of the cancel action itself. Those two
+ * are not reliably comparable — a `dateGiven` set later in its own calendar period than the exact
+ * moment cancellation happened would let `ADVANCE_CANCELLED` sort *before* the very `ADVANCE_GIVEN`
+ * it cancels. That ordering inversion was harmless while `ADVANCE_CANCELLED` carried `movement:
+ * null` (sum is commutative), but became directly consequential once it started carrying a real
+ * DECREASE (this same checkpoint) — replaying the waiver before the Advance was even recorded as
+ * given would show `ADVANCE_GIVEN`'s own running Advance Outstanding as already-waived. A same-kind
+ * `date` tie-break can never fix an ordering requirement *between* two different kinds; only a
+ * strictly distinct `kindPriority` can guarantee it, for every advance, unconditionally.
  */
 const KIND_SEQUENCE_PRIORITY: Record<StatementLedgerEventKind, number> = {
   CYCLE_PAID: 1,
@@ -193,8 +210,8 @@ const KIND_SEQUENCE_PRIORITY: Record<StatementLedgerEventKind, number> = {
   BALANCE_ADJUSTMENT_SETTLED: 6,
   ADVANCE_GIVEN: 7,
   ADVANCE_SCHEDULE_CHANGED: 7,
-  ADVANCE_CANCELLED: 7,
   CORRECTION_PAYMENT: 7,
+  ADVANCE_CANCELLED: 8,
 };
 
 function sortRawItems(items: RawLedgerItem[]): RawLedgerItem[] {
@@ -557,6 +574,19 @@ function buildAdvanceItems(advance: AdvanceForStatement, allEntries: PayrollEntr
     // — the one period anchor an Advance always retains, even after `currentScheduledPeriodId` is
     // cleared on cancellation — anchors its *period* attribution, for the same reason a schedule
     // change is anchored to `fromPeriod` above.
+    //
+    // v1.0.4 Cancel Business Semantics fix: cancelling waives whatever remained unrecovered — this
+    // ledger's own running `advanceOutstanding` must reflect that, exactly like every other
+    // Advance/BalanceAdjustment movement here. `cancelAdvance` (`advances.service.ts`) already
+    // reverses any live unreleased Draft deduction back into `outstandingBalance` before this query
+    // ever runs, so the value read here is precisely the true waived remainder — never zeroed by
+    // `cancelAdvance` itself (that would have made the `ADVANCE_GIVEN` increase and every real
+    // released-deduction decrease disagree with the true recovered history), so this DECREASE is
+    // this ledger's own, one-time "waived" event, mirroring `BALANCE_ADJUSTMENT_SETTLED`'s identical
+    // `movement: null` only when there is truly nothing left to move (`ba.type === 'NONE'`) pattern
+    // just above. No new field, no schema change — `outstandingBalance` was already fetched.
+    const waivedRemainder = new Decimal(advance.outstandingBalance.toString());
+    const hasWaivedRemainder = waivedRemainder.greaterThan(0);
     items.push({
       id: `advance-cancelled:${advance.id}`,
       date: advance.updatedAt,
@@ -566,9 +596,11 @@ function buildAdvanceItems(advance: AdvanceForStatement, allEntries: PayrollEntr
       kindPriority: KIND_SEQUENCE_PRIORITY.ADVANCE_CANCELLED,
       category: 'ADVANCE',
       kind: 'ADVANCE_CANCELLED',
-      isInformational: true,
-      movement: null,
-      description: `${label} Cancelled`,
+      isInformational: !hasWaivedRemainder,
+      movement: hasWaivedRemainder ? { balance: 'ADVANCE', direction: 'DECREASE', amount: waivedRemainder } : null,
+      description: hasWaivedRemainder
+        ? `${label} Cancelled — PKR ${waivedRemainder.toFixed(2)} waived`
+        : `${label} Cancelled`,
       cycle: null,
       reference: { advanceId: advance.id },
     });

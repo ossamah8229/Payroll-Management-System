@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
-import { formatMoney, pluralize } from '@payroll/shared';
+import { formatMoney, isOutstandingWaived, pluralize } from '@payroll/shared';
 import { cn } from '@/lib/cn';
 import { ToggleSwitch } from '@/components/ui/toggle-switch';
 import { Badge } from '@/components/ui/badge';
@@ -518,7 +518,13 @@ function PayrollEntryRowImpl({
             the parent row's own `items-center` (Advance Balance presentation fix, 2026-07-30) is
             what keeps the balance line clear of the row's bottom border without growing
             `ROW_HEIGHT`. */}
-        {entry.advance && <BalanceLabel amount={entry.advance.outstandingBalance} />}
+        {/* v1.0.4 Cancel Business Semantics — a RELEASED entry's link is never cleared by
+            cancelAdvance, so this can still show a since-cancelled Advance's stored balance (the
+            true waived remainder, never zeroed) when viewing a historical released cycle; masked
+            to 0 here exactly like every other Outstanding-Balance surface. */}
+        {entry.advance && (
+          <BalanceLabel amount={isOutstandingWaived(entry.advance.status) ? '0' : entry.advance.outstandingBalance} />
+        )}
       </div>
     ),
     eidAdvanceDeduction: (
@@ -533,7 +539,9 @@ function PayrollEntryRowImpl({
           nav={nav('eidAdvanceDeduction')}
           ariaLabel={`Eid advance deduction for ${entry.employee.name}`}
         />
-        {entry.eidAdvance && <BalanceLabel amount={entry.eidAdvance.outstandingBalance} />}
+        {entry.eidAdvance && (
+          <BalanceLabel amount={isOutstandingWaived(entry.eidAdvance.status) ? '0' : entry.eidAdvance.outstandingBalance} />
+        )}
       </div>
     ),
     fine: (

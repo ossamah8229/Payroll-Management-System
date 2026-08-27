@@ -1337,6 +1337,13 @@ model Advance {
   // Prisma-DSL-inexpressible and added by raw SQL in the migration.
   @@index([employeeId])
   @@index([currentScheduledPeriodId])
+  // v1.0.4 Advances Scalability checkpoint — the Advances list now paginates server-side, filtered
+  // by `status` and always sorted `createdAt desc`; at ~80 new Advances/month this table was never
+  // going to stay small. `[status, createdAt desc]` serves the common "one status filter, newest
+  // first" case directly; the plain `[createdAt desc]` index serves the unfiltered "All statuses"
+  // default view. Purely additive — no data/behavior change, index-only.
+  @@index([status, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
 }
 
 /// The append-only history of every change made to an Advance's scheduled deduction period (Phase 4

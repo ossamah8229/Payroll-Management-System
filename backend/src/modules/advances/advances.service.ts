@@ -39,6 +39,16 @@ const advanceWithEmployeeInclude = { employee: true } as const;
 
 type AdvanceWithEmployee = Prisma.AdvanceGetPayload<{ include: typeof advanceWithEmployeeInclude }>;
 
+/** v1.0.4 Deputation Visibility checkpoint — the Employee's own current `site`/`unit` (a direct,
+ * required FK each, never a historical join) joined in the SAME query as the Advance/Employee fetch
+ * itself, so the Advances list can show where an employee is currently deputed without a second
+ * round-trip per row. */
+const advanceListInclude = {
+  employee: { include: { site: true, unit: true } },
+  originalScheduledPeriod: true,
+  currentScheduledPeriod: true,
+} satisfies Prisma.AdvanceInclude;
+
 /**
  * Defensive backstop (v1.0.2 Advance Edit/Cancel checkpoint, 2026-08-25) for the DB-level
  * `Advance_outstandingBalance_check` CHECK constraint (`outstandingBalance >= 0 AND
@@ -70,13 +80,39 @@ async function getAdvanceOrThrow(id: string, client: PrismaTransactionClient = p
   return advance;
 }
 
-export async function listAdvances(currentUser: SessionUser, filters: ListAdvancesQuery) {
-  if (filters.siteId) {
-    assertSiteAccess(currentUser, filters.siteId);
+export interface ListAdvancesResult {
+  advances: Prisma.AdvanceGetPayload<{ include: typeof advanceListInclude }>[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * v1.0.4 Advances Scalability/Deputation checkpoint. Server-side pagination (`skip`/`take` pushed
+ * into the query, mirroring `listPayrollEntries`/the Advance Recovery Report's own proven
+ * `Promise.all([count, findMany])` pattern — see `reports-pagination.ts`'s normative rule this
+ * follows) — replaces the prior unbounded `findMany` that returned every matching Advance in one
+ * response regardless of history size. Deterministic `createdAt desc, id asc` ordering (the `id`
+ * tie-break guarantees no row is ever skipped or duplicated across pages even if two Advances share
+ * the exact same `createdAt` timestamp).
+ *
+ * Site filtering now accepts more than one site (`filters.siteIds`) — previously only a single
+ * `siteId` could be pushed server-side; the page's own multi-site selector filtered the rest
+ * client-side over what was, at the time, always the complete unbounded list. That client-side
+ * fallback is no longer correct once results are paginated (a multi-site filter must be applied
+ * before pagination, not after), so every selected site is now passed through and access-checked
+ * here, exactly like the Advance Recovery Report's own `resolveSiteIdFilter`.
+ *
+ * `employee: { include: { site: true, unit: true } }` (Deputation Visibility) is a single joined
+ * query, not a second per-row fetch — no N+1 risk.
+ */
+export async function listAdvances(currentUser: SessionUser, filters: ListAdvancesQuery): Promise<ListAdvancesResult> {
+  if (filters.siteIds) {
+    for (const siteId of filters.siteIds) assertSiteAccess(currentUser, siteId);
   }
 
-  const siteIdFilter = filters.siteId
-    ? [filters.siteId]
+  const siteIdFilter = filters.siteIds && filters.siteIds.length > 0
+    ? filters.siteIds
     : !isMasterAdmin(currentUser)
       ? currentUser.siteIds
       : undefined;
@@ -88,18 +124,25 @@ export async function listAdvances(currentUser: SessionUser, filters: ListAdvanc
     ...(siteIdFilter && { employee: { siteId: { in: siteIdFilter } } }),
   };
 
-  return prisma.advance.findMany({
-    where,
-    include: { employee: true, originalScheduledPeriod: true, currentScheduledPeriod: true },
-    orderBy: { createdAt: 'desc' },
-  });
+  const [total, advances] = await Promise.all([
+    prisma.advance.count({ where }),
+    prisma.advance.findMany({
+      where,
+      include: advanceListInclude,
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      skip: (filters.page - 1) * filters.pageSize,
+      take: filters.pageSize,
+    }),
+  ]);
+
+  return { advances, total, page: filters.page, pageSize: filters.pageSize };
 }
 
 export async function getAdvance(currentUser: SessionUser, id: string) {
   const advance = await prisma.advance.findUnique({
     where: { id },
     include: {
-      employee: true,
+      employee: { include: { site: true, unit: true } },
       originalScheduledPeriod: true,
       currentScheduledPeriod: true,
       scheduleChanges: { orderBy: { changedAt: 'desc' }, include: { fromPeriod: true, toPeriod: true, changedBy: true } },

@@ -750,12 +750,20 @@ describe('Phase 7 Reports — Advance Recovery Report (Checkpoint 1A)', () => {
       await makeAdvance(employee.id, 'LOAN', { totalAmount: '10000', outstandingBalance: '4000' });
       // CANCELLED — a second ACTIVE/RESERVED LOAN for the same employee would violate the
       // partial unique index; this test only needs a second LOAN row to sum, not a second live one.
+      // v1.0.4 Cancel Business Semantics: its stored outstandingBalance (5000, the true
+      // never-recovered/now-waived remainder) is deliberately left unzeroed by `cancelAdvance` —
+      // that is what keeps `recoveredToDateTotal` correct below — but it must NOT contribute to
+      // `currentOutstandingBalanceTotal` (a cancelled Advance's remaining balance is waived, not
+      // still owed/outstanding).
       await makeAdvance(employee.id, 'LOAN', { totalAmount: '5000', outstandingBalance: '5000', status: 'CANCELLED' });
       await makeAdvance(employee.id, 'EID_ADVANCE', { totalAmount: '2000', outstandingBalance: '500' });
 
       const res = await admin.agent.get(listUrl({ employeeId: employee.id }));
       expect(res.body.totals.loan.originalAmountTotal).toBe('15000.00');
-      expect(res.body.totals.loan.currentOutstandingBalanceTotal).toBe('9000.00');
+      // Only the non-cancelled LOAN's 4000 contributes — the cancelled one's 5000 is excluded.
+      expect(res.body.totals.loan.currentOutstandingBalanceTotal).toBe('4000.00');
+      // Unaffected by the cancel carve-out: totalAmount(15000) - rawOutstanding(4000+5000=9000) = 6000,
+      // still the true amount actually recovered across both LOAN Advances.
       expect(res.body.totals.loan.recoveredToDateTotal).toBe('6000.00');
       expect(res.body.totals.eidAdvance.originalAmountTotal).toBe('2000.00');
       expect(res.body.totals.eidAdvance.currentOutstandingBalanceTotal).toBe('500.00');
@@ -909,6 +917,14 @@ describe('Phase 7 Reports — Advance Recovery Report (Checkpoint 1A)', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('CANCELLED');
       expect(res.body.recoveryHistory).toHaveLength(1);
+      // v1.0.4 Cancel Business Semantics: the stored outstandingBalance (4000, the true waived
+      // remainder — never zeroed by cancelAdvance) must NOT display as still-owed Outstanding...
+      expect(res.body.currentOutstandingBalance).toBe('0.00');
+      // ...but Recovered To Date must still correctly reflect the real, unmasked history
+      // (totalAmount 10000 - outstandingBalance 4000 = 6000 actually recovered before cancellation)
+      // — it must NOT report the full 10000 as recovered just because Outstanding now reads 0.
+      expect(res.body.recoveredToDate).toBe('6000.00');
+      expect(res.body.originalAmount).toBe('10000.00');
     });
 
     it('a PAID_OFF Advance is viewable with paidOffAt populated and outstanding balance zero', async () => {

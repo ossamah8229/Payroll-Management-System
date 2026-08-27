@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
-import { formatMoney, toIsoDateOnly } from '@payroll/shared';
+import { formatMoney, isOutstandingWaived, toIsoDateOnly } from '@payroll/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -17,11 +17,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
 import { FilterField } from '@/components/ui/filter-field';
 import { EmployeeLookup } from '@/components/ui/employee-lookup';
+import { ReportPagination } from '@/components/reports/report-pagination';
 import { ApiError } from '@/lib/api-client';
 import { useAccessibleProjectSites } from '@/hooks/use-project-sites';
 import { useCurrentPayrollCycle } from '@/hooks/use-payroll-cycles';
 import { apiRequest } from '@/lib/api-client';
 import {
+  ADVANCES_PAGE_SIZE,
   type Advance,
   useAdvances,
   useCancelAdvance,
@@ -456,9 +458,9 @@ function CancelAdvanceModal({
         <ModalContent title={`Cancel ${typeLabel(advance.type)} — ${advance.employee.name}`} widthClassName="max-w-[480px]">
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
             <p className="text-xs text-text-muted">
-              This stops any further deduction and marks the Advance Cancelled. Any deduction still
-              sitting in the current Draft cycle is reversed automatically. Any deduction already paid
-              through released payroll is preserved and never modified.
+              Cancelling this Advance stops all further recovery — any remaining balance is waived, not
+              still owed. Any unreleased Draft payroll deduction will be reversed automatically. Amounts
+              already recovered through released payroll remain part of history and are never modified.
             </p>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="cancel-advance-reason">Reason</Label>
@@ -607,27 +609,51 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  // v1.0.4 Advances Scalability checkpoint — server-side pagination (25/page, newest first). The
+  // default status filter stays "All" (empty), matching this page's own pre-existing default —
+  // Cancelled/Paid Off history was already reachable without any filter change before this
+  // checkpoint, and Part A's own audit found no existing expectation to disturb by narrowing it.
+  const [page, setPage] = useState(1);
+
   const [isRecordOpen, setIsRecordOpen] = useState(false);
   const [editingAdvance, setEditingAdvance] = useState<Advance | undefined>(undefined);
   const [deferringAdvance, setDeferringAdvance] = useState<Advance | undefined>(undefined);
   const [cancellingAdvance, setCancellingAdvance] = useState<Advance | undefined>(undefined);
 
+  // A filter change invalidates whichever page was previously being viewed — never silently keep
+  // showing "page 3" of a now-different filtered result (mirrors the Advance Recovery Report page's
+  // own identical page-reset effect).
+  const selectedSiteIdsKey = selectedSiteIds.join(',');
+  useEffect(() => {
+    setPage(1);
+  }, [selectedSiteIdsKey, typeFilter, statusFilter]);
+
   const advances = useAdvances({
-    siteId: selectedSiteIds.length === 1 ? selectedSiteIds[0] : undefined,
+    siteIds: selectedSiteIds.length ? selectedSiteIds : undefined,
     type: (typeFilter || undefined) as 'LOAN' | 'EID_ADVANCE' | undefined,
     status: (statusFilter || undefined) as 'ACTIVE' | 'RESERVED' | 'PAID_OFF' | 'CANCELLED' | undefined,
+    page,
+    pageSize: ADVANCES_PAGE_SIZE,
   });
+
+  // Narrow safeguard, independent of the filter-change page-reset effect above: clamp down to the
+  // new last valid page if the backend total for the currently requested page shrinks (e.g. the
+  // last Advance on the last page gets cancelled by someone else and no longer matches a status
+  // filter — an edge case, but one that must never leave the page requesting rows past the end).
+  useEffect(() => {
+    if (!advances.data) return;
+    const lastValidPage = Math.max(1, Math.ceil(advances.data.total / advances.data.pageSize));
+    if (page > 1 && page > lastValidPage) {
+      setPage(lastValidPage);
+    }
+  }, [advances.data, page]);
 
   const siteOptions = useMemo(
     () => (sites.data ?? []).map((site) => ({ id: site.id, label: site.name })),
     [sites.data],
   );
 
-  const rows = useMemo(() => {
-    const list = advances.data ?? [];
-    if (selectedSiteIds.length <= 1) return list;
-    return list.filter((advance) => selectedSiteIds.includes(advance.employee.siteId));
-  }, [advances.data, selectedSiteIds]);
+  const rows = advances.data?.advances ?? [];
 
   return (
     <AppShell user={user} title="Advances" subtitle="Record and track Advance / Eid Advance balances">
@@ -729,6 +755,15 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                     <TableHead className="whitespace-nowrap">Employee</TableHead>
                     <TableHead className="whitespace-nowrap">Father Name</TableHead>
                     <TableHead className="whitespace-nowrap">CNIC</TableHead>
+                    {/* Deputation Visibility (v1.0.4 checkpoint) — Site/Unit join the identity block
+                        so two same-named employees deputed to different sites/units are
+                        distinguishable directly here, and staff can see where an employee is
+                        currently deputed without opening Employee Registry. Already present on
+                        every loaded row (`advance.employee.site`/`.unit`,
+                        `advances.service.ts`'s `advanceListInclude` — a single joined query, no
+                        N+1). */}
+                    <TableHead className="whitespace-nowrap">Site</TableHead>
+                    <TableHead className="whitespace-nowrap">Unit</TableHead>
                     <TableHead className="whitespace-nowrap">Type</TableHead>
                     <TableHead className="whitespace-nowrap text-right">Total Amount</TableHead>
                     <TableHead className="whitespace-nowrap text-right">Outstanding Balance</TableHead>
@@ -749,10 +784,17 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                       <TableCell className="whitespace-nowrap font-medium">{advance.employee.name}</TableCell>
                       <TableCell className="whitespace-nowrap">{advance.employee.fatherName ?? '—'}</TableCell>
                       <TableCell className="whitespace-nowrap">{advance.employee.cnic ?? '—'}</TableCell>
+                      <TableCell className="whitespace-nowrap">{advance.employee.site.name}</TableCell>
+                      <TableCell className="whitespace-nowrap">{advance.employee.unit.name}</TableCell>
                       <TableCell className="whitespace-nowrap">{typeLabel(advance.type)}</TableCell>
                       <TableCell className="whitespace-nowrap text-right tabular-nums">{formatMoney(advance.totalAmount)}</TableCell>
+                      {/* Cancel Business Semantics (v1.0.4 checkpoint) — a Cancelled Advance's
+                          remaining balance is waived, never still owed; `isOutstandingWaived` masks
+                          it to 0.00 here without touching the underlying stored `outstandingBalance`
+                          (which the backend still needs, unmasked, to keep Recovered-To-Date figures
+                          correct — see `shared/src/schemas/advance.ts`'s doc comment). */}
                       <TableCell className="whitespace-nowrap text-right tabular-nums">
-                        {formatMoney(advance.outstandingBalance)}
+                        {formatMoney(isOutstandingWaived(advance.status) ? '0' : advance.outstandingBalance)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {advance.repaymentType === 'FULL_DEDUCTION' ? 'Full Deduction' : 'Installment'}
@@ -791,6 +833,16 @@ export function AdvancesPage({ user }: { user: SessionUser }) {
                   ))}
                 </TableBody>
               </Table>
+              {advances.data && (
+                <ReportPagination
+                  page={advances.data.page}
+                  pageSize={advances.data.pageSize}
+                  total={advances.data.total}
+                  onPageChange={setPage}
+                  disabled={advances.isFetching}
+                  itemLabelPlural="advances"
+                />
+              )}
             </div>
           )}
         </CardContent>

@@ -318,6 +318,19 @@ describe('Advance Balance presentation — compact, vertically centered, without
     expect(cell.querySelector('p')).toBeNull();
   });
 
+  it('v1.0.4: a since-Cancelled linked Advance shows Bal: PKR 0.00, never the raw stored (waived) remainder — reachable when viewing a historical released cycle whose link cancelAdvance never clears', () => {
+    const entry = makeEntry({
+      advanceDeduction: '500',
+      advance: { id: 'adv-1', outstandingBalance: '4500', status: 'CANCELLED' },
+    });
+    const { container } = renderRow(entry);
+    const cell = container.querySelector('[data-col-id="advanceDeduction"]') as HTMLElement;
+    const balanceLabel = cell.querySelector('p') as HTMLElement;
+    expect(balanceLabel.textContent).toContain('Bal:');
+    expect(balanceLabel.textContent).toContain('0.00');
+    expect(balanceLabel.textContent).not.toContain('4,500');
+  });
+
   it('the eid advance cell follows the identical compact/centered pattern', () => {
     const entry = makeEntry({
       eidAdvanceDeduction: '200',

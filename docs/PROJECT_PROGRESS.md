@@ -14546,6 +14546,199 @@ Reliability Phase 5, v1.0.4, branch cleanup) was started.
 
 ---
 
+## v1.0.4 — Advances Usability, Employee Deputation & Cancel Semantics (2026-08-27) — IMPLEMENTED,
+STOP BEFORE MERGE
+
+**Trigger**: three related Advances problems surfaced from real operational use, ~80 Advances/month:
+(1) the list has no pagination — the backend returns every matching Advance in one unbounded query,
+the frontend renders the full result; (2) the page doesn't show where an employee is currently
+deputed (Site/Unit); (3) a Cancelled Advance's `outstandingBalance` was never zeroed, so it still
+displayed as a positive "Outstanding" figure — implying money still owed on an Advance the company
+had explicitly waived.
+
+**Part A — Scalability audit and fix.** `listAdvances` (`advances.service.ts`) ran a plain unbounded
+`findMany`, no `skip`/`take`, no `page`/`pageSize` in `listAdvancesQuerySchema` at all — not
+"supported but unused," genuinely absent. Filters (`type`/`status`/`siteId`) already existed
+server-side; default order was already `createdAt desc` (already the desired newest-first default).
+The frontend's own Site multi-select only forwarded `siteId` server-side when exactly one site was
+selected — with 0 or 2+ selected, it silently fell back to filtering client-side over what was, at
+the time, the complete unbounded fetch; pagination would have made that silently wrong (only
+filtering within whatever page happened to load) had it not also been fixed. A proven pattern
+already existed to mirror, not invent: the Advance Recovery Report's own `Promise.all([count,
+findMany({skip,take})])`, its `[..., {id:'asc'}]` deterministic tie-break, and
+`reports-pagination.ts`'s own explicit normative rule naming exactly this shape as mandatory for any
+row-level list whose count scales with history. Implemented: `listAdvancesQuerySchema` gained
+`page`/`pageSize` (default 25, max 100, same `z.preprocess` shape as the Report's own
+`pageQueryParam`/`pageSizeQueryParam`) and `siteIds` (plural — accepts one or several repeated
+`siteId=` query values, closing the multi-site gap above); `listAdvances` now runs the identical
+`Promise.all([count, findMany({skip,take,orderBy:[{createdAt:'desc'},{id:'asc'}]})])` shape and
+returns `{advances,total,page,pageSize}`. Two new indexes, purely additive
+(`Advance_status_createdAt_idx` on `[status, createdAt desc]`, `Advance_createdAt_idx` on
+`[createdAt desc]`) — migration `20260827083815_advances_status_createdat_indexes`, no data/column
+change. Default status filter was deliberately left as "All" (empty) — Part A's own audit confirmed
+Cancelled/Paid-Off Advances were already visible by default before this checkpoint and no existing
+test/expectation assumed otherwise, so the least-surprising choice was to preserve it, not narrow it;
+the pre-existing status filter select (All/Active/Reserved/Paid Off/Cancelled) already covers the
+"emphasize actionable Advances" use case without a default change. Frontend: `ReportPagination`
+gained an optional `itemLabelPlural` prop (default `'sites'`, so its one existing caller's rendered
+text is byte-for-byte unchanged) so the Advances page's own footer correctly reads "... of N
+advances" instead of "... of N sites"; the Advances page now drives `page`/`pageSize` state with the
+same filter-change-resets-page-to-1 and total-shrinks-clamps-page-down effects the Advance Recovery
+Report page already established.
+
+**Part B — Deputation visibility.** `Employee.siteId`/`.unitId` are direct, required (non-nullable)
+FKs to `ProjectSite`/`ProjectUnit` — current assignment only, no history join needed for "where are
+they now." `listAdvances`'s `include: { employee: true }` only pulled Employee's own scalar columns;
+widened to `employee: { include: { site: true, unit: true } }` (`advanceListInclude` — one joined
+query, confirmed by a new test that fetches identical page sizes of 1 vs. 25 rows and asserts an
+*identical* query count, proving no N+1). Table gained Site/Unit columns after the existing v1.0.1
+identity block (Code/Name/Father Name/CNIC), matching the "Employee Code intentionally incomplete,
+never required" convention already established there (`?? '—'`). Two employees sharing the exact
+same name, deputed to different sites/units, are now independently distinguishable directly in the
+grid — proven live in local UAT (two "Muhammad Talha"s) and by a new backend test and a new frontend
+test. No employees-page.tsx change — out of scope, Advances is the only surface this checkpoint
+touches.
+
+**Part C/D — Cancel Business Semantics (the most important part; audited before any implementation,
+per instruction).** Approved business rule: cancelling an Advance waives whatever remained
+unrecovered — the Payroll system must not present a positive "Outstanding" for a Cancelled Advance,
+while the original `totalAmount`, real recovered-to-date history, and released payroll history must
+stay accurate and untouched. Root cause of the reported bug, traced exactly:
+`cancelAdvance` (`advances.service.ts`) already correctly reverses any live, unreleased Draft
+deduction (restoring it into `outstandingBalance`) and never touches a RELEASED one — but the
+resulting `outstandingBalance` is then persisted as-is on the CANCELLED row; **it is never zeroed**.
+The schema's own doc comment states "Amount recovered" (`totalAmount - outstandingBalance`) is
+calculated on read, never stored — which is exactly what makes a naive "just zero it on cancel" fix
+dangerous: it would make a partially-recovered, then-cancelled Advance's full `totalAmount` misreport
+as fully recovered. **Audit finding, independently confirmed twice: no migration is required.**
+Because `cancelAdvance` already leaves `outstandingBalance` holding precisely "the amount that was
+never recovered" (untouched beyond the existing Draft-reversal step), that same stored value is
+simultaneously exactly right for `recoveredToDate` (`totalAmount - outstandingBalance`, unmasked) —
+and exactly wrong to show as-is under the label "Outstanding." The fix is therefore a pure
+presentation-layer gate, not a data change: a new shared helper, `isOutstandingWaived(status)`
+(`shared/src/schemas/advance.ts`, exported from `@payroll/shared`), returns `true` for `CANCELLED`;
+every place that surfaces "Outstanding"/"Recoverable" masks to `0`/`0.00` when it's true, while every
+place computing "Recovered To Date" keeps reading the real, unmasked `outstandingBalance`. Applied
+at: the Advances page's own Outstanding Balance column (frontend-only mask — `cancelAdvance`'s own
+stored-value computation is completely unchanged, so the three pre-existing v1.0.2 cancel tests
+asserting the raw restored/preserved balance continue to pass, unmodified); the Advance Recovery
+Report's row-level `currentOutstandingBalance` and its `getAdvanceRecoveryReportDetail` counterpart;
+the Advance Recovery Report's `typeTotals`/`computeAdvanceRecoveryReportTotals` aggregate — which
+needed a genuine second finding, not just the row-level mask: its `currentOutstandingBalanceTotal`
+was a raw Prisma `_sum(outstandingBalance)` over every matching row *including Cancelled ones*, so a
+cancelled Advance's stale balance was silently polluting the aggregate "Outstanding" total (Part J's
+own explicit requirement: Cancelled must not contribute to Outstanding totals) — fixed with a second,
+CANCELLED-excluding aggregate query for that one figure only, while `recoveredToDateTotal` keeps
+summing the full, unmasked set (already correct, confirmed by a corrected pre-existing test — see
+below); its `hasOutstandingBalance` tri-state filter had the identical latent bug (`{gt:0}` alone
+would surface a cancelled Advance under "Has Outstanding: Yes") — fixed to also require `status !=
+CANCELLED`. Employee Payroll History's `mapAdvanceSummary` got the identical row-level mask on its
+own `outstandingBalance` field. `cancelAdvance` itself, the Cancel state-transition rules (only
+ACTIVE/RESERVED cancellable, PAID_OFF/already-CANCELLED correctly rejected), the Draft-reversal math,
+and the audit-log metadata were all found already correct on inspection and are completely
+unchanged.
+
+**Part E — Cancel UI.** The Cancel confirmation dialog's copy was rewritten to match the rule
+exactly, never implying the remainder is still owed: *"Cancelling this Advance stops all further
+recovery — any remaining balance is waived, not still owed. Any unreleased Draft payroll deduction
+will be reversed automatically. Amounts already recovered through released payroll remain part of
+history and are never modified."* Verified rendering live in local UAT. No separate "Waived" figure
+was added — the existing Outstanding/Original Amount pair, correctly masked, already communicates
+the rule without a new domain concept the schema doesn't otherwise need.
+
+**Local UAT (disposable `payroll_manual`, never production)**: synthetic dataset — 2 sites (differing
+`unitLabel`, "Branch"/"Department"), 3 units, 30 employees (including two same-named "Muhammad
+Talha"s at different sites/units), 32 seeded Advances spanning ACTIVE/PAID_OFF/CANCELLED across both
+types, deliberately > 25 to exercise a second page. Verified in a real running app (backend +
+Vite dev server) via browser automation: pagination footer/controls, newest-first default order,
+Site/Unit columns with real joined data, same-name disambiguation, every seeded Cancelled row showing
+`PKR 0.00` Outstanding despite a nonzero seeded raw balance, multi-status filtering. Performed one
+**live** Cancel workflow end to end on a real ACTIVE Advance (PKR 12,500 total / PKR 8,750
+outstanding, no live Draft deduction): confirmed dialog copy, confirmed the row immediately displays
+`Cancelled` / `PKR 0.00` Outstanding / `PKR 12,500.00` unchanged Original Amount, independently
+queried the raw database afterward and confirmed `outstandingBalance` is still exactly `8750.00`
+(untouched, as designed — the audit trail is real, not simulated), confirmed the audit log entry
+(`advance.cancelled`, reason recorded, `outstandingBalanceAfter: "8750.00"`), and cross-checked the
+Advance Recovery Report for the same Advance: `Current Outstanding Balance = PKR 0.00`, `Recovered To
+Date = PKR 3,750.00` (`12500 - 8750`, correct), `Original Amount = PKR 12,500.00` (unchanged) — the
+full Part C/D/E/H/J chain verified live against a real backend and a real Postgres row, not just
+unit-tested. One incidental finding during UAT, fixed and unrelated to product logic: the frontend
+dev server's Vite dependency cache had pre-bundled an older copy of the `@payroll/shared` workspace
+package before the new `isOutstandingWaived` export existed, throwing `isOutstandingWaived is not a
+function` at runtime despite passing typecheck/build — cleared via `rm -rf node_modules/.vite` and a
+restart; not a code defect, and confirmed not reachable via a normal `npm run dev` once the shared
+package has actually been rebuilt first.
+
+**Tests — all new, all passing.** Backend `advances.test.ts` (+7): server-side pagination
+(count/order/no-dupes-across-pages on a 30-row synthetic set with a deliberately staggered
+`createdAt`), status filter composed with pagination, type filter composed with pagination, Cancelled
+history reachable under the pre-existing "All" default, multi-site `siteIds` filtering server-side,
+the two new index migrations exist (`pg_indexes` query, mirroring the precedent already set by
+Employee Payroll History's own `[siteId, cycleId]` index test), and the N+1 proof described in Part B
+above. `advance-recovery-report.test.ts`: one pre-existing test's assertion corrected from
+`currentOutstandingBalanceTotal: '9000.00'` to `'4000.00'` (it had literally been asserting the exact
+bug this checkpoint fixes — a seeded Cancelled Advance's stale balance inflating the aggregate;
+`recoveredToDateTotal` needed no change, already correct) plus new assertions on the existing
+"Cancelled Advance still viewable" detail test (`currentOutstandingBalance: '0.00'`,
+`recoveredToDate` correctly unmasked). `employee-payroll-history.test.ts` (+1): a Cancelled linked
+Advance's summary shows masked Outstanding. Frontend: new `advances-page.test.tsx` (9 tests) —
+Site/Unit columns render, same-name disambiguation, Outstanding masking on/off, Cancel dialog copy,
+pagination request wiring (page/pageSize, Next-button page-advance, backend-total-driven footer
+text), default status filter stays "All," multi-site filter sends `siteIds` server-side.
+
+**Full regression evidence.** Backend, sharded 1–6 exactly matching this repo's own CI convention
+(the same un-sharded-run-OOMs finding as the v1.0.3 M2 checkpoint reconfirmed on this sandbox,
+unrelated to these changes) — **1,893/1,893 passing** across all six shards on a clean run. This
+session's local test database was interrupted/reset several times while establishing this baseline;
+every resulting symptom (stale `Bank` rows from an earlier interrupted run — the exact same class of
+artifact the v1.0.3 M2 checkpoint's own entry documents and is the established precedent for cleaning
+up directly; two roles missing their bootstrap-default `RolePermission` grants after a `--skip-seed`
+reset) was root-caused to this session's own repeated local database resets, reproduced as identical
+on 100%-pristine `origin/main` code via `git stash` before being fixed, and is not a defect in this
+checkpoint's code or a pre-existing repo flake — a final clean `prisma migrate reset --force`
+(auto-seeding) resolved every one of them, and the full six-shard suite then passed twice in a row
+with zero exceptions. Frontend **1,079/1,079** (1,070 pre-existing + 9 new). Both workspaces'
+typecheck (shared/backend/frontend/e2e), lint (0 errors, only pre-existing unrelated warnings), and
+build all clean. `git diff --check` clean.
+
+**E2E**: full 31-spec-file Playwright suite, real disposable `payroll_e2e` database (fully isolated
+from the local database issues above) — **189 passed, 8 skipped** (pre-existing conditional skips,
+unrelated), zero failures, including the pre-existing `31-employee-identity-visibility.spec.ts` which
+already exercises the Advances page's own identity block end to end — confirms no regression there.
+No new E2E spec was added this checkpoint (local UAT above covers the new pagination/deputation/
+cancel-semantics surface directly; a dedicated spec was judged unnecessary scope beyond what Part I
+already required).
+
+**Migration**: one, purely additive (`20260827083815_advances_status_createdat_indexes` — two new
+indexes on `Advance`, no column/table/data change), applied to both local disposable databases
+(`payroll_dev` test DB, `payroll_manual` local dev DB) — never to production, which was not accessed
+at all this checkpoint (implementation, tests, and UAT were entirely local/disposable, matching this
+checkpoint's own explicit production-safety instruction).
+
+**Files changed**: `shared/src/schemas/advance.ts` (+`isOutstandingWaived`, `page`/`pageSize`/
+`siteIds` on `listAdvancesQuerySchema`), `shared/src/index.ts` (new exports), `backend/prisma/
+schema.prisma` (+2 indexes), `backend/prisma/migrations/20260827083815_advances_status_createdat_
+indexes/` (new), `backend/src/modules/advances/advances.service.ts` (pagination + deputation
+include), `backend/src/modules/advances/advances.routes.ts` (query parsing + response shape),
+`backend/src/modules/reports/advance-recovery-report.service.ts` (Cancel masking + totals fix +
+`hasOutstandingBalance` fix), `backend/src/modules/reports/employee-payroll-history.service.ts`
+(Cancel masking), `backend/tests/advances.test.ts`, `backend/tests/advance-recovery-report.test.ts`,
+`backend/tests/employee-payroll-history.test.ts`, `frontend/src/components/reports/
+report-pagination.tsx` (+`itemLabelPlural` prop), `frontend/src/hooks/use-advances.ts` (pagination +
+`siteIds` + Site/Unit typing), `frontend/src/routes/advances-page.tsx` (pagination UI, Site/Unit
+columns, Outstanding masking, Cancel copy), `frontend/src/routes/advances-page.test.tsx` (new).
+
+**Branch**: `fix/v1.0.4-advances-usability-cancel-semantics`, cut from `origin/main` at `bdd98bc`
+(the v1.0.3 RELEASED commit — confirmed `main`/`origin/main` identical and clean before branching, no
+open PR/branch already touching Advances). **Per explicit instruction: STOP BEFORE MERGE.** No merge,
+no deploy, no `v1.0.4` tag, no GitHub Release, no Salary Release, no Reliability Phase 5 resumption,
+no production access of any kind this checkpoint, and no other checkpoint's own scope touched
+(attendance entry, Salary Release, H1/H2/M3, Employee Code generation, EmployeeLookup Father Name/
+CNIC hardening beyond the shared identity-block pattern already established, Father Name search,
+blank IBAN cleanup, `otHours`, Reliability Phase 5, unrelated warning cleanup — all untouched).
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

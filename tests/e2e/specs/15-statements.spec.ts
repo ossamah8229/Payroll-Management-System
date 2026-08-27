@@ -114,24 +114,30 @@ test.describe('Statements — Employee Statement of Account', () => {
     // plain divs without it, so this reliably selects the whole Closing Balances card (title +
     // figures together), not just whichever nested div happens to contain the title text.
     const closingCard = page.locator('.rounded-lg', { hasText: 'Closing Balances' });
-    // Cancelling an Advance with nothing live to reverse does not zero `outstandingBalance`
-    // (documented behavior, `statements-ledger.md §4`) — Closing Advance Outstanding is still the
-    // full given amount.
-    await expect(closingCard.getByText('PKR 15,000.00')).toBeVisible();
+    // v1.0.4 Cancel Business Semantics fix — cancelling an Advance waives whatever remained
+    // unrecovered; this ledger's ADVANCE_CANCELLED event now carries a real DECREASE movement of
+    // the true waived remainder (here, the full 15,000 — nothing was ever recovered), so Closing
+    // Advance Outstanding correctly reads 0.00, never the stale full given amount. Scoped to the
+    // specific "Advance Outstanding" figure — Payable/Recovery are also legitimately 0.00 here for
+    // this freshly created employee, so a bare card-wide text match would be ambiguous.
+    const closingAdvanceFigure = closingCard.getByText('Advance Outstanding', { exact: true }).locator('..');
+    await expect(closingAdvanceFigure.getByText('PKR 0.00')).toBeVisible();
 
-    // --- Ledger: a real financial movement row and a real informational row ---------------
+    // --- Ledger: two real financial movement rows (Given, then Cancelled) -------------------
     const givenRow = page.getByRole('row', { name: /Advance Given/ });
     await expect(givenRow).toBeVisible();
     await expect(givenRow.getByText(/\+\s*PKR 15,000\.00/)).toBeVisible();
 
     const cancelledRow = page.getByRole('row', { name: /Advance Cancelled/ });
     await expect(cancelledRow).toBeVisible();
-    await expect(cancelledRow.getByText('Informational')).toBeVisible();
+    // No longer "Informational" — the waived remainder is a real ledger movement now.
+    await expect(cancelledRow.getByText(/[-−]\s*PKR 15,000\.00/)).toBeVisible();
 
     // Running balances come straight from the backend DTO, per row — the ledger's column order is
     // Date/Period, Category, Description, Movement, Running Payable, Running Recovery, Running
-    // Advance, so the Advance Given row's own *last* cell is its running Advance Outstanding.
+    // Advance, so each row's own *last* cell is its running Advance Outstanding at that point.
     await expect(givenRow.locator('td').last()).toHaveText('PKR 15,000.00');
+    await expect(cancelledRow.locator('td').last()).toHaveText('PKR 0.00');
 
     // Master Admin is always unrestricted — no Advance-restriction notice for this session.
     await expect(page.getByText(/advance history restricted/i)).toHaveCount(0);

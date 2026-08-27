@@ -20,21 +20,30 @@ export function ReportPagination({
   total,
   onPageChange,
   disabled = false,
+  // v1.0.4 Advances Scalability checkpoint — this control's row-count label was hardcoded to "site(s)"
+  // (Payroll Summary was its only caller, whose pagination unit genuinely is Project Site). A second
+  // caller (the Advances page, whose rows are Advances) needs its own noun. `itemLabelPlural` is
+  // always the plural form (e.g. "sites"/"advances") — the singular is derived by stripping the
+  // trailing "s", matching the original hardcoded "site"/"sites" split exactly, so the default
+  // preserves every existing caller's rendered text byte-for-byte.
+  itemLabelPlural = 'sites',
 }: {
   page: number;
   pageSize: number;
   total: number;
   onPageChange: (page: number) => void;
   disabled?: boolean;
+  itemLabelPlural?: string;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = Math.min(total, page * pageSize);
+  const itemLabel = total === 1 ? itemLabelPlural.slice(0, -1) : itemLabelPlural;
 
   return (
     <div className="flex items-center justify-between gap-3 border-t border-border px-[18px] py-2.5 print:hidden">
       <p className="text-[11px] text-text-muted">
-        {total === 0 ? 'No sites' : `Showing ${rangeStart}–${rangeEnd} of ${total} site${total === 1 ? '' : 's'}`}
+        {total === 0 ? `No ${itemLabelPlural}` : `Showing ${rangeStart}–${rangeEnd} of ${total} ${itemLabel}`}
       </p>
       <div className="flex items-center gap-2">
         <Button

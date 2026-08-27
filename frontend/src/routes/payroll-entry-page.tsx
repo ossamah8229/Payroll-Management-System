@@ -4,7 +4,7 @@ import { useBlocker } from 'react-router-dom';
 import { Download, FileEdit, Lock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SessionUser } from '@payroll/shared';
-import { calcNet, formatMoney, PERMISSIONS } from '@payroll/shared';
+import { calcNet, formatMoney, isOutstandingWaived, PERMISSIONS } from '@payroll/shared';
 import { buildCalcInput } from '@/components/payroll-entry/calc-input';
 import { AppShell } from '@/components/layout/app-shell';
 import { PayrollPageToolbar } from '@/components/layout/payroll-page-toolbar';
@@ -485,9 +485,13 @@ export function PayrollEntryPage({ user }: { user: SessionUser }) {
                                     `BalanceLabel`, just print-typography-scaled here. */}
                                 {(entry.advance || entry.eidAdvance) && (
                                   <div className="whitespace-nowrap text-[7.5px] font-normal text-text-faint">
-                                    {entry.advance && `Adv Bal: ${formatMoney(entry.advance.outstandingBalance)}`}
+                                    {/* v1.0.4 Cancel Business Semantics — same mask as the on-screen
+                                        BalanceLabel (payroll-entry-row.tsx): a released entry's link
+                                        is never cleared by cancelAdvance, so this can still reference
+                                        a since-cancelled Advance when printing a historical cycle. */}
+                                    {entry.advance && `Adv Bal: ${formatMoney(isOutstandingWaived(entry.advance.status) ? '0' : entry.advance.outstandingBalance)}`}
                                     {entry.advance && entry.eidAdvance && ' · '}
-                                    {entry.eidAdvance && `Eid Bal: ${formatMoney(entry.eidAdvance.outstandingBalance)}`}
+                                    {entry.eidAdvance && `Eid Bal: ${formatMoney(isOutstandingWaived(entry.eidAdvance.status) ? '0' : entry.eidAdvance.outstandingBalance)}`}
                                   </div>
                                 )}
                               </TableCell>

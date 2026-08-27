@@ -658,11 +658,88 @@ describe('Employee Statement of Account — canonical ledger (Phase 7A Checkpoin
     expect(res.body.entries.filter((e: { kind: string }) => e.kind.startsWith('ADVANCE_DEDUCTION'))).toHaveLength(0);
     const cancelled = res.body.entries.find((e: { kind: string }) => e.kind === 'ADVANCE_CANCELLED');
     expect(cancelled).toBeDefined();
-    expect(cancelled.isInformational).toBe(true);
-    expect(cancelled.movement).toBeNull();
-    // Faithfully mirrors the live canonical record — see the checkpoint report's documented
-    // discrepancy: a cancellation with nothing live to reverse does not zero `outstandingBalance`.
-    expect(res.body.closingBalances.advanceOutstanding).toBe(afterCancel.outstandingBalance.toFixed(2));
+    // v1.0.4 Cancel Business Semantics fix: the reversed Draft deduction restored
+    // `outstandingBalance` to the full 1000.00 (nothing was ever released) — this Cancelled event
+    // now carries a real DECREASE movement of that same amount, so the ledger's own running
+    // `advanceOutstanding` correctly zeroes out (waived, not still owed), instead of staying stuck
+    // at the stale figure this test previously asserted as a documented discrepancy.
+    expect(cancelled.isInformational).toBe(false);
+    expect(cancelled.movement).toEqual({ balance: 'ADVANCE', direction: 'DECREASE', amount: '1000.00' });
+    expect(afterCancel.outstandingBalance.toFixed(2)).toBe('1000.00');
+    expect(res.body.closingBalances.advanceOutstanding).toBe('0.00');
+  });
+
+  it('J2: Advance — cancelling AFTER a partial release leaves the released recovery in the ledger and waives only the true remainder', async () => {
+    const admin = await masterAdminAgent('stmt-advance-cancel-partial-admin@test.local');
+    const { site, unit } = await makeSiteWithUnit('Test Site Stmt Advance Cancel Partial Site');
+    const employee = await prisma.employee.create({
+      data: { name: 'Advance Cancel Partial Employee', designation: 'Guard', siteId: site.id, unitId: unit.id, grossPay: '30000' },
+    });
+    const cycle1 = await makeDraftCycle(admin);
+
+    // 900 total, INSTALLMENT at 300/cycle — an entirely real, app-driven flow (no direct-DB
+    // fixture manipulation): cycle1's 300 installment materializes and releases for real (a
+    // genuine, permanent recovered event), cycle2's next 300 installment auto-materializes at
+    // rollover but is cancelled while still Draft/unreleased — leaving a true remaining
+    // recoverable of 600 (900 - 300 released) at the moment of cancellation.
+    const createRes = await admin.agent
+      .post('/api/v1/advances')
+      .set('x-csrf-token', admin.csrfToken)
+      .send({
+        employeeId: employee.id,
+        type: 'EID_ADVANCE',
+        totalAmount: '900',
+        dateGiven: `${cycle1.year}-${String(cycle1.month).padStart(2, '0')}-01`,
+        repaymentType: 'INSTALLMENT',
+        scheduledInstallmentAmount: '300',
+        originalPeriod: { year: cycle1.year, month: cycle1.month },
+      });
+    expect(createRes.status).toBe(201);
+    const advance = createRes.body.advance as { id: string };
+
+    const afterCycle1Materialize = await prisma.advance.findUniqueOrThrow({ where: { id: advance.id } });
+    expect(afterCycle1Materialize.outstandingBalance.toFixed(2)).toBe('600.00'); // 900 - first 300
+
+    // A genuine release (not a RECOVERY_DUE/NO_PAY_DUE resolution) requires a positive net salary —
+    // matching this suite's own established pattern elsewhere in this file.
+    const entry1 = await getEntry(admin, cycle1.id, employee.id);
+    await setNetSalary(admin, entry1.id, entry1.version, '5000');
+    await releaseUnit(admin, cycle1.id, unit.id); // the first 300 installment releases — permanent
+    await finalizeCycle(admin, cycle1.id);
+    await rollover(admin, cycle1.id); // bootstraps cycle2, auto-materializes the next 300 installment
+
+    const afterCycle2Materialize = await prisma.advance.findUniqueOrThrow({ where: { id: advance.id } });
+    expect(afterCycle2Materialize.status).toBe('ACTIVE');
+    expect(afterCycle2Materialize.outstandingBalance.toFixed(2)).toBe('300.00'); // 600 - second 300, still Draft/unreleased
+
+    const cancelRes = await admin.agent
+      .post(`/api/v1/advances/${advance.id}/cancel`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ reason: 'Remaining balance waived' });
+    expect(cancelRes.status).toBe(200);
+    const afterCancel = await prisma.advance.findUniqueOrThrow({ where: { id: advance.id } });
+    expect(afterCancel.status).toBe('CANCELLED');
+    // The live cycle2 Draft deduction (300) is reversed back onto the balance — 300 + 300 = 600,
+    // the true remaining recoverable at the moment of cancellation (900 - the 300 actually released).
+    expect(afterCancel.outstandingBalance.toFixed(2)).toBe('600.00');
+
+    const res = await getStatement(admin, employee.id);
+    const given = res.body.entries.find((e: { kind: string }) => e.kind === 'ADVANCE_GIVEN');
+    expect(given.movement).toEqual({ balance: 'ADVANCE', direction: 'INCREASE', amount: '900.00' });
+    const deductions = res.body.entries.filter((e: { kind: string }) => e.kind.startsWith('ADVANCE_DEDUCTION'));
+    // Only the cycle1 (released, final) deduction ever became a ledger event — the cycle2 Draft
+    // deduction was reversed by cancel before it could ever be released, so it never appears here
+    // (module doc comment: a deduction reversed before release produces no event at all).
+    expect(deductions).toHaveLength(1);
+    expect(deductions[0].movement).toEqual({ balance: 'ADVANCE', direction: 'DECREASE', amount: '300.00' });
+    const cancelled = res.body.entries.find((e: { kind: string }) => e.kind === 'ADVANCE_CANCELLED');
+    // The waived DECREASE is exactly the true remainder (600), never the full original 900 — the
+    // already-released 300 stays in the ledger as real, permanent recovered history.
+    expect(cancelled.movement).toEqual({ balance: 'ADVANCE', direction: 'DECREASE', amount: '600.00' });
+    expect(cancelled.isInformational).toBe(false);
+    // Net: 900 (given) - 300 (released recovery) - 600 (waived on cancel) = 0 — never negative,
+    // never still showing 600/900 as outstanding.
+    expect(res.body.closingBalances.advanceOutstanding).toBe('0.00');
   });
 
   // ============================================================================================

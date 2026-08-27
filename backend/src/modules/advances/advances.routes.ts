@@ -34,14 +34,29 @@ advancesRouter.use(requirePermission(PERMISSIONS.ADVANCES_MANAGE));
 
 advancesRouter.get('/', async (req, res, next) => {
   try {
+    // `siteId` may arrive as a single string or, when the caller selects more than one site,
+    // repeated `siteId=` query values that Express parses into an array (v1.0.4 checkpoint — see
+    // `listAdvancesQuerySchema`'s own doc comment).
+    const rawSiteId = req.query.siteId;
+    const siteIds =
+      rawSiteId === undefined
+        ? undefined
+        : Array.isArray(rawSiteId)
+          ? rawSiteId.filter((value): value is string => typeof value === 'string')
+          : typeof rawSiteId === 'string'
+            ? [rawSiteId]
+            : undefined;
+
     const query = listAdvancesQuerySchema.parse({
       employeeId: typeof req.query.employeeId === 'string' ? req.query.employeeId : undefined,
-      siteId: typeof req.query.siteId === 'string' ? req.query.siteId : undefined,
+      siteIds,
       type: typeof req.query.type === 'string' ? req.query.type : undefined,
       status: typeof req.query.status === 'string' ? req.query.status : undefined,
+      page: typeof req.query.page === 'string' ? req.query.page : undefined,
+      pageSize: typeof req.query.pageSize === 'string' ? req.query.pageSize : undefined,
     });
-    const advances = await listAdvances(req.currentUser!, query);
-    res.status(200).json({ advances });
+    const result = await listAdvances(req.currentUser!, query);
+    res.status(200).json(result);
   } catch (error) {
     next(error);
   }

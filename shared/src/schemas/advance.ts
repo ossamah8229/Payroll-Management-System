@@ -28,6 +28,27 @@ export const advanceStatusSchema = z.enum(['ACTIVE', 'RESERVED', 'PAID_OFF', 'CA
 export type AdvanceStatus = z.infer<typeof advanceStatusSchema>;
 
 /**
+ * v1.0.4 Advances Scalability/Deputation/Cancel-Semantics checkpoint — the single business-rule gate
+ * every surface that presents an Advance's "Outstanding"/"recoverable" figure to a user must apply.
+ *
+ * **Why this exists (Part C/D audit finding):** Cancelling an Advance means the company has
+ * waived/written off whatever remained unrecovered — nothing further is owed. `Advance.outstandingBalance`
+ * itself is deliberately left UNCHANGED by `cancelAdvance` (`advances.service.ts`) beyond reversing any
+ * still-Draft, unreleased deduction — it is NOT zeroed at cancellation. That is what makes this a
+ * presentation-layer gate rather than a schema change: the stored `outstandingBalance` remains the
+ * exact "amount that was never recovered," which is also exactly what `recoveredToDate`
+ * (`totalAmount - outstandingBalance`) needs to keep reading, unmasked, to stay correct — masking the
+ * stored value itself would make a cancelled Advance's full `totalAmount` misreport as "recovered."
+ *
+ * Apply this ONLY to whatever a UI/report labels "Outstanding"/"Recoverable" — never to `totalAmount`
+ * (always the original, unaffected) and never to `recoveredToDate`/"Amount Recovered" (always
+ * `totalAmount - outstandingBalance`, computed from the real, unmasked `outstandingBalance`).
+ */
+export function isOutstandingWaived(status: AdvanceStatus): boolean {
+  return status === 'CANCELLED';
+}
+
+/**
  * Records a new Advance (Phase 4 Checkpoint 5). `originalPeriod` is the calendar month the first
  * deduction should be scheduled against — resolved server-side into a `ScheduledPayrollPeriod` via
  * Payroll Processing's own find-or-create function, never written to directly by this module.
@@ -134,11 +155,41 @@ export const deferAdvanceScheduleSchema = z.object({
 
 export type DeferAdvanceScheduleInput = z.infer<typeof deferAdvanceScheduleSchema>;
 
+/** Mirrors `advance-recovery-report.ts`'s own `pageQueryParam`/`pageSizeQueryParam` shape verbatim
+ * (v1.0.4 checkpoint) — the same numeric-string-from-query-params parsing every other paginated
+ * endpoint in this codebase already uses. */
+const advancesPageQueryParam = z.preprocess(
+  (raw) => (raw === undefined || raw === '' ? undefined : Number(raw)),
+  z.number().int().min(1).optional().default(1),
+);
+
+export const ADVANCES_DEFAULT_PAGE_SIZE = 25;
+export const ADVANCES_MAX_PAGE_SIZE = 100;
+
+const advancesPageSizeQueryParam = z.preprocess(
+  (raw) => (raw === undefined || raw === '' ? undefined : Number(raw)),
+  z.number().int().min(1).max(ADVANCES_MAX_PAGE_SIZE).optional().default(ADVANCES_DEFAULT_PAGE_SIZE),
+);
+
+/** Accepts either one `siteId=` query value or several repeated `siteId=` values (Express parses a
+ * repeated key into an array) — v1.0.4 checkpoint, closing the gap where the Advances page's own
+ * multi-site filter previously had to be applied client-side over an unbounded fetch. `undefined`
+ * (no `siteId` at all) means "no explicit site filter" — the service layer then falls back to the
+ * caller's own accessible-site scope, exactly as before. */
+const advancesSiteIdsQueryParam = z.preprocess((raw) => {
+  if (raw === undefined) return undefined;
+  const values = Array.isArray(raw) ? raw : [raw];
+  const flattened = values.filter((value): value is string => typeof value === 'string' && value.length > 0);
+  return flattened.length === 0 ? undefined : flattened;
+}, z.array(z.string().uuid()).optional());
+
 export const listAdvancesQuerySchema = z.object({
   employeeId: z.string().uuid().optional(),
-  siteId: z.string().uuid().optional(),
+  siteIds: advancesSiteIdsQueryParam,
   type: advanceTypeSchema.optional(),
   status: advanceStatusSchema.optional(),
+  page: advancesPageQueryParam,
+  pageSize: advancesPageSizeQueryParam,
 });
 
 export type ListAdvancesQuery = z.infer<typeof listAdvancesQuerySchema>;
