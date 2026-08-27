@@ -178,6 +178,23 @@ interface RawLedgerItem {
  *    the same period and kind.
  * 4. The row's own id, lexicographically — the final, always-available tie-break guaranteeing a
  *    strict total order even if two rows of the same kind share the exact same timestamp.
+ *
+ * **`ADVANCE_CANCELLED` is deliberately its own, strictly-higher priority than `ADVANCE_GIVEN`
+ * (v1.0.4 Cancel Business Semantics fix — root-caused during that checkpoint's own E2E
+ * verification), not merely grouped alongside it:** `ADVANCE_CANCELLED` almost always shares the
+ * exact same `periodKey` as its own `ADVANCE_GIVEN` (both attributed to the Advance's
+ * `originalScheduledPeriod`), so step 3's `date` comparison is what actually decides their relative
+ * order in the common case — but `ADVANCE_GIVEN.date` is the user-editable, purely descriptive
+ * `dateGiven` field (editable at any lifecycle stage, per `advances.service.ts`), while
+ * `ADVANCE_CANCELLED.date` is the real `updatedAt` timestamp of the cancel action itself. Those two
+ * are not reliably comparable — a `dateGiven` set later in its own calendar period than the exact
+ * moment cancellation happened would let `ADVANCE_CANCELLED` sort *before* the very `ADVANCE_GIVEN`
+ * it cancels. That ordering inversion was harmless while `ADVANCE_CANCELLED` carried `movement:
+ * null` (sum is commutative), but became directly consequential once it started carrying a real
+ * DECREASE (this same checkpoint) — replaying the waiver before the Advance was even recorded as
+ * given would show `ADVANCE_GIVEN`'s own running Advance Outstanding as already-waived. A same-kind
+ * `date` tie-break can never fix an ordering requirement *between* two different kinds; only a
+ * strictly distinct `kindPriority` can guarantee it, for every advance, unconditionally.
  */
 const KIND_SEQUENCE_PRIORITY: Record<StatementLedgerEventKind, number> = {
   CYCLE_PAID: 1,
@@ -193,8 +210,8 @@ const KIND_SEQUENCE_PRIORITY: Record<StatementLedgerEventKind, number> = {
   BALANCE_ADJUSTMENT_SETTLED: 6,
   ADVANCE_GIVEN: 7,
   ADVANCE_SCHEDULE_CHANGED: 7,
-  ADVANCE_CANCELLED: 7,
   CORRECTION_PAYMENT: 7,
+  ADVANCE_CANCELLED: 8,
 };
 
 function sortRawItems(items: RawLedgerItem[]): RawLedgerItem[] {
