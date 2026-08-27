@@ -38,7 +38,18 @@ export interface Advance {
   // fatherName added (Employee Identity Visibility, v1.0.1 Checkpoint 1, 2026-08-25) — already
   // present on every row the backend returns (`advances.service.ts`'s `include: { employee: true,
   // ... }`), just not previously typed/rendered here. No backend change.
-  employee: { id: string; name: string; employeeCode: string | null; cnic: string | null; fatherName: string | null; siteId: string };
+  // site/unit added (v1.0.4 Deputation Visibility checkpoint) — joined server-side in the same
+  // query (`advanceListInclude`, advances.service.ts), never a second per-row fetch.
+  employee: {
+    id: string;
+    name: string;
+    employeeCode: string | null;
+    cnic: string | null;
+    fatherName: string | null;
+    siteId: string;
+    site: { id: string; name: string; unitLabel: string };
+    unit: { id: string; name: string; code: string | null };
+  };
   type: AdvanceType;
   totalAmount: string;
   outstandingBalance: string;
@@ -63,27 +74,41 @@ export interface Advance {
 // fix, same root cause: a mutation elsewhere in the app changing state this query reads).
 export const ADVANCES_QUERY_KEY = ['advances'] as const;
 
+// v1.0.4 Advances Scalability checkpoint — the established server-side pagination page size
+// (mirrors the Advance Recovery Report's own `ADVANCE_RECOVERY_REPORT_DEFAULT_PAGE_SIZE`).
+export const ADVANCES_PAGE_SIZE = 25;
+
 export interface AdvancesFilters {
   employeeId?: string;
-  siteId?: string;
+  // siteIds (plural) replaces the old single siteId (v1.0.4) — multiple selected sites are now
+  // filtered server-side (repeated `siteId=` query values), not client-side over a partial page.
+  siteIds?: string[];
   type?: AdvanceType;
   status?: AdvanceStatus;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AdvancesListResult {
+  advances: Advance[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 export function useAdvances(filters: AdvancesFilters = {}) {
   const params = new URLSearchParams();
   if (filters.employeeId) params.set('employeeId', filters.employeeId);
-  if (filters.siteId) params.set('siteId', filters.siteId);
+  for (const siteId of filters.siteIds ?? []) params.append('siteId', siteId);
   if (filters.type) params.set('type', filters.type);
   if (filters.status) params.set('status', filters.status);
+  params.set('page', String(filters.page ?? 1));
+  params.set('pageSize', String(filters.pageSize ?? ADVANCES_PAGE_SIZE));
   const queryString = params.toString();
 
   return useQuery({
     queryKey: [...ADVANCES_QUERY_KEY, filters],
-    queryFn: () =>
-      apiRequest<{ advances: Advance[] }>(`/api/v1/advances${queryString ? `?${queryString}` : ''}`).then(
-        (res) => res.advances,
-      ),
+    queryFn: () => apiRequest<AdvancesListResult>(`/api/v1/advances?${queryString}`),
   });
 }
 

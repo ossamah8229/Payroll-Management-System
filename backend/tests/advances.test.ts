@@ -1595,4 +1595,192 @@ describe('Phase 4 Checkpoint 5 — Advances', () => {
     expect(sumFromAudit).toBeCloseTo(releasedTotal, 2);
     expect(originalAmount - sumFromAudit).toBeCloseTo(Number(final.outstandingBalance), 2);
   });
+
+  // ================================================================================================
+  // v1.0.4 — Pagination, Filters, Deputation (Advances Usability + Employee Deputation checkpoint)
+  // ================================================================================================
+
+  describe('v1.0.4 — Pagination, Filters, Deputation', () => {
+    /** Bulk-seeds Advance rows directly (bypassing `createAdvance`'s HTTP flow and its
+     * one-ACTIVE/RESERVED-per-employee-per-type constraint) — CANCELLED by default, exactly the
+     * same bulk-seeding convention `advance-recovery-report.test.ts`'s own pagination test already
+     * uses, since these tests only need many distinct rows to page/filter over, not a particular
+     * live lifecycle state. */
+    async function makeAdvanceDirect(
+      employeeId: string,
+      type: 'LOAN' | 'EID_ADVANCE',
+      overrides: { totalAmount?: string; outstandingBalance?: string; status?: 'ACTIVE' | 'RESERVED' | 'PAID_OFF' | 'CANCELLED'; createdAt?: Date } = {},
+    ) {
+      const totalAmount = overrides.totalAmount ?? '1000';
+      return prisma.advance.create({
+        data: {
+          employeeId,
+          type,
+          totalAmount,
+          outstandingBalance: overrides.outstandingBalance ?? totalAmount,
+          dateGiven: new Date('2026-01-01'),
+          repaymentType: 'FULL_DEDUCTION',
+          status: overrides.status ?? 'CANCELLED',
+          ...(overrides.createdAt && { createdAt: overrides.createdAt }),
+        },
+      });
+    }
+
+    it('paginates server-side: correct count/order per page, no duplicate/missing rows across pages, newest-first default', async () => {
+      const admin = await masterAdminAgent('adv-page-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site ADV Page');
+      const employee = await makeEmployee(site.id, unit.id, 'Page Employee');
+
+      // 30 distinct Advances — materially larger than one 25-row page — each with a distinct,
+      // strictly increasing createdAt so "newest first" is meaningfully exercised, not a same-
+      // instant tie broken only by the id tie-break.
+      const createdIds: string[] = [];
+      const base = Date.now();
+      for (let i = 0; i < 30; i += 1) {
+        const advance = await makeAdvanceDirect(employee.id, i % 2 === 0 ? 'LOAN' : 'EID_ADVANCE', {
+          totalAmount: `${1000 + i}`,
+          createdAt: new Date(base + i * 1000),
+        });
+        createdIds.push(advance.id);
+      }
+
+      const page1 = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&pageSize=25&page=1`);
+      const page2 = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&pageSize=25&page=2`);
+
+      expect(page1.status).toBe(200);
+      expect(page1.body.total).toBe(30);
+      expect(page1.body.page).toBe(1);
+      expect(page1.body.pageSize).toBe(25);
+      expect(page1.body.advances).toHaveLength(25);
+      expect(page2.body.page).toBe(2);
+      expect(page2.body.advances).toHaveLength(5);
+
+      const page1Ids = page1.body.advances.map((a: { id: string }) => a.id);
+      const page2Ids = page2.body.advances.map((a: { id: string }) => a.id);
+      // Deterministic sort (createdAt desc, id asc tie-break) — no row ever duplicated or skipped
+      // across pages.
+      expect(page1Ids.filter((id: string) => page2Ids.includes(id))).toHaveLength(0);
+      expect(new Set([...page1Ids, ...page2Ids]).size).toBe(30);
+
+      // Newest-first default: the last-seeded row (i=29, latest createdAt) is first on page 1.
+      expect(page1Ids[0]).toBe(createdIds[29]);
+      expect(page2Ids[4]).toBe(createdIds[0]);
+    });
+
+    it('composes a status filter with pagination correctly', async () => {
+      const admin = await masterAdminAgent('adv-page-status-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site ADV Page Status');
+      const employee = await makeEmployee(site.id, unit.id, 'Page Status Employee');
+
+      for (let i = 0; i < 6; i += 1) {
+        await makeAdvanceDirect(employee.id, 'LOAN', { status: i < 4 ? 'CANCELLED' : 'PAID_OFF', createdAt: new Date(Date.now() + i * 1000) });
+      }
+
+      const cancelledRes = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&status=CANCELLED&pageSize=25&page=1`);
+      expect(cancelledRes.body.total).toBe(4);
+      expect(cancelledRes.body.advances.every((a: { status: string }) => a.status === 'CANCELLED')).toBe(true);
+
+      const paidOffRes = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&status=PAID_OFF&pageSize=25&page=1`);
+      expect(paidOffRes.body.total).toBe(2);
+    });
+
+    it('the existing Advance type filter composes with pagination unchanged', async () => {
+      const admin = await masterAdminAgent('adv-page-type-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site ADV Page Type');
+      const employee = await makeEmployee(site.id, unit.id, 'Page Type Employee');
+
+      for (let i = 0; i < 3; i += 1) await makeAdvanceDirect(employee.id, 'LOAN');
+      for (let i = 0; i < 2; i += 1) await makeAdvanceDirect(employee.id, 'EID_ADVANCE');
+
+      const loanRes = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&type=LOAN&pageSize=25&page=1`);
+      expect(loanRes.body.total).toBe(3);
+      const eidRes = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&type=EID_ADVANCE&pageSize=25&page=1`);
+      expect(eidRes.body.total).toBe(2);
+    });
+
+    it('Cancelled history remains fully reachable — never hidden, just one filter selection away', async () => {
+      const admin = await masterAdminAgent('adv-page-cancelled-visible-admin@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site ADV Page Cancelled Visible');
+      const employee = await makeEmployee(site.id, unit.id, 'Cancelled Visible Employee');
+      await makeAdvanceDirect(employee.id, 'LOAN', { status: 'CANCELLED' });
+
+      // No status filter at all ("All") — the pre-existing default this page has always used —
+      // still surfaces the Cancelled row; the checkpoint must not narrow this default.
+      const allRes = await admin.agent.get(`/api/v1/advances?employeeId=${employee.id}&pageSize=25&page=1`);
+      expect(allRes.body.total).toBe(1);
+      expect(allRes.body.advances[0].status).toBe('CANCELLED');
+    });
+
+    it('filters by multiple selected sites server-side — no longer requires an unbounded client-side fetch', async () => {
+      const admin = await masterAdminAgent('adv-page-multisite-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site ADV MultiSite A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site ADV MultiSite B');
+      const { site: siteC, unit: unitC } = await makeSiteWithUnit('Test Site ADV MultiSite C');
+      const empA = await makeEmployee(siteA.id, unitA.id, 'MultiSite Employee A');
+      const empB = await makeEmployee(siteB.id, unitB.id, 'MultiSite Employee B');
+      const empC = await makeEmployee(siteC.id, unitC.id, 'MultiSite Employee C');
+      await makeAdvanceDirect(empA.id, 'LOAN');
+      await makeAdvanceDirect(empB.id, 'LOAN');
+      await makeAdvanceDirect(empC.id, 'LOAN');
+
+      const res = await admin.agent.get(`/api/v1/advances?siteId=${siteA.id}&siteId=${siteB.id}&pageSize=25&page=1`);
+      expect(res.body.total).toBe(2);
+      const returnedSiteIds = res.body.advances.map((a: { employee: { siteId: string } }) => a.employee.siteId).sort();
+      expect(returnedSiteIds).toEqual([siteA.id, siteB.id].sort());
+    });
+
+    it('the new [status, createdAt] and [createdAt] indexes exist on Advance', async () => {
+      const rows = await prisma.$queryRaw<Array<{ indexname: string }>>`
+        SELECT indexname FROM pg_indexes WHERE tablename = 'Advance' AND indexname IN ('Advance_status_createdAt_idx', 'Advance_createdAt_idx')
+      `;
+      expect(rows.map((r) => r.indexname).sort()).toEqual(['Advance_createdAt_idx', 'Advance_status_createdAt_idx']);
+    });
+
+    it('includes current Site/Unit deputation on every row and distinguishes same-named employees, with no N+1 query growth as row count increases', async () => {
+      const admin = await masterAdminAgent('adv-deputation-admin@test.local');
+      const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site ADV Deputation A');
+      const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site ADV Deputation B');
+      // Two employees sharing the exact same name, deputed to different sites/units — only
+      // Code/Father Name/CNIC/Site/Unit context (v1.0.1 + v1.0.4 identity blocks combined) can tell
+      // them apart in a flat grid.
+      const empA = await makeEmployee(siteA.id, unitA.id, 'Muhammad Talha');
+      const empB = await makeEmployee(siteB.id, unitB.id, 'Muhammad Talha');
+      await makeAdvanceDirect(empA.id, 'LOAN');
+      await makeAdvanceDirect(empB.id, 'LOAN');
+
+      const res = await admin.agent.get('/api/v1/advances?pageSize=25&page=1');
+      expect(res.status).toBe(200);
+      const rowA = res.body.advances.find((a: { employeeId: string }) => a.employeeId === empA.id);
+      const rowB = res.body.advances.find((a: { employeeId: string }) => a.employeeId === empB.id);
+      expect(rowA.employee.site.name).toBe(siteA.name);
+      expect(rowA.employee.unit.name).toBe(unitA.name);
+      expect(rowB.employee.site.name).toBe(siteB.name);
+      expect(rowB.employee.unit.name).toBe(unitB.name);
+      // Same name, genuinely distinguishable only via Site/Unit (Code/CNIC/FatherName are all null
+      // here, exactly the "Employee Code remains intentionally incomplete" case).
+      expect(rowA.employee.name).toBe(rowB.employee.name);
+      expect(rowA.employee.site.name).not.toBe(rowB.employee.site.name);
+
+      // No N+1: the joined `employee`/`site`/`unit` include (all to-one relations) must issue a
+      // constant number of queries regardless of how many rows are actually returned — a real N+1
+      // would show query count growing with page size, not staying flat.
+      const queries: string[] = [];
+      const listener = (e: { query: string }) => queries.push(e.query);
+      prisma.$on('query', listener);
+      try {
+        const before1 = queries.length;
+        await admin.agent.get('/api/v1/advances?pageSize=1&page=1');
+        const queriesForOneRow = queries.length - before1;
+
+        const before2 = queries.length;
+        await admin.agent.get('/api/v1/advances?pageSize=25&page=1');
+        const queriesForManyRows = queries.length - before2;
+
+        expect(queriesForManyRows).toBe(queriesForOneRow);
+      } finally {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (prisma as any).$off?.('query', listener);
+      }
+    });
+  });
 });

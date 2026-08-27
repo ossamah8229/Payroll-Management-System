@@ -74,12 +74,15 @@ export { releaseProjectUnitSchema, releaseAllSchema } from './schemas/payroll-re
 export type { ReleaseProjectUnitInput, ReleaseAllInput } from './schemas/payroll-release';
 
 export {
+  ADVANCES_DEFAULT_PAGE_SIZE,
+  ADVANCES_MAX_PAGE_SIZE,
   advanceRepaymentTypeSchema,
   advanceStatusSchema,
   advanceTypeSchema,
   cancelAdvanceSchema,
   createAdvanceSchema,
   deferAdvanceScheduleSchema,
+  isOutstandingWaived,
   listAdvancesQuerySchema,
   updateAdvanceSchema,
 } from './schemas/advance';

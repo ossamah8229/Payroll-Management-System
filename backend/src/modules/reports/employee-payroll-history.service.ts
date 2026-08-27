@@ -1,8 +1,9 @@
 import ExcelJS from 'exceljs';
 import type { Prisma } from '@prisma/client';
-import type { SessionUser } from '@payroll/shared';
+import type { AdvanceStatus, SessionUser } from '@payroll/shared';
 import {
   calcNet,
+  isOutstandingWaived,
   sumMoney,
   type CalcNetResult,
   EMPLOYEE_PAYROLL_HISTORY_EXPORT_MAX_ROWS,
@@ -778,8 +779,16 @@ const DETAIL_SELECT = {
 
 type DetailEntry = Prisma.PayrollEntryGetPayload<{ select: typeof DETAIL_SELECT }>;
 
+/**
+ * v1.0.4 Cancel Business Semantics amendment: `outstandingBalance` here is masked to `0.00`
+ * whenever the Advance is CANCELLED (`isOutstandingWaived`) — a cancelled Advance's remaining
+ * balance is waived, never still owed, so this history view must not present it as outstanding.
+ * The underlying stored value is left untouched by `cancelAdvance` itself (`advances.service.ts`)
+ * — only this display-layer read is masked; no other field here derives a "recovered" figure from
+ * it, so there is nothing else in this function that could be thrown off by the mask.
+ */
 function mapAdvanceSummary(
-  advance: { id: string; type: 'LOAN' | 'EID_ADVANCE'; totalAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; status: string; dateGiven: Date } | null,
+  advance: { id: string; type: 'LOAN' | 'EID_ADVANCE'; totalAmount: Prisma.Decimal; outstandingBalance: Prisma.Decimal; status: AdvanceStatus; dateGiven: Date } | null,
   deductionThisEntry: Prisma.Decimal,
 ): EmployeePayrollHistoryAdvanceSummary | null {
   if (!advance) return null;
@@ -787,7 +796,7 @@ function mapAdvanceSummary(
     advanceId: advance.id,
     type: advance.type,
     totalAmount: advance.totalAmount.toFixed(2),
-    outstandingBalance: advance.outstandingBalance.toFixed(2),
+    outstandingBalance: isOutstandingWaived(advance.status) ? '0.00' : advance.outstandingBalance.toFixed(2),
     status: advance.status,
     dateGiven: advance.dateGiven.toISOString().slice(0, 10),
     deductionThisEntry: deductionThisEntry.toFixed(2),

@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
-import { normalizeCnic } from '@payroll/shared';
+import { isOutstandingWaived, normalizeCnic } from '@payroll/shared';
 import {
   ADVANCE_RECOVERY_REPORT_EXPORT_MAX_ROWS,
   type AdvanceRecoveryReportDetail,
@@ -75,8 +75,13 @@ async function resolveAdvanceRecoveryReportFilters(
     ...(query.employeeId && { employeeId: query.employeeId }),
     ...(query.advanceType && { type: query.advanceType }),
     ...(query.status && { status: query.status }),
-    ...(query.hasOutstandingBalance === true && { outstandingBalance: { gt: 0 } }),
-    ...(query.hasOutstandingBalance === false && { outstandingBalance: { lte: 0 } }),
+    // v1.0.4 Cancel Business Semantics amendment — a CANCELLED Advance's raw `outstandingBalance`
+    // is deliberately left unzeroed (see `isOutstandingWaived`'s own doc comment), so filtering on
+    // the raw column alone would wrongly surface a cancelled Advance under "Has Outstanding
+    // Balance: Yes" even though its true recoverable is 0. `true` now also requires `status !=
+    // CANCELLED`; `false` now also matches every CANCELLED row regardless of its stored balance.
+    ...(query.hasOutstandingBalance === true && { status: { not: 'CANCELLED' }, outstandingBalance: { gt: 0 } }),
+    ...(query.hasOutstandingBalance === false && { OR: [{ status: 'CANCELLED' }, { outstandingBalance: { lte: 0 } }] }),
   };
 
   return { where, cycle: cycle ? { id: cycle.id, year: cycle.year, month: cycle.month, status: cycle.status } : null };
@@ -101,13 +106,23 @@ type RowAdvance = Prisma.AdvanceGetPayload<{ select: typeof ROW_SELECT }>;
 /**
  * The one canonical financial-value mapping (frozen decision — Canonical Financial Values
  * section): Original Amount = `totalAmount` verbatim, Current Outstanding Balance =
- * `outstandingBalance` verbatim (never replayed from `PayrollEntry` history), Recovered To Date =
- * `totalAmount - outstandingBalance` — the only derived figure this report computes for the roster.
- * `recoveredThisCycle` is passed in already-resolved (`null` when no Cycle is selected; a real,
- * possibly-zero string when one is) — see `fetchRecoveryThisCycle` below for why a `"0.00"` string
- * and a `null` are deliberately never conflated.
+ * `outstandingBalance` verbatim (never replayed from `PayrollEntry` history) UNLESS the Advance is
+ * CANCELLED, Recovered To Date = `totalAmount - outstandingBalance` — the only derived figure this
+ * report computes for the roster. `recoveredThisCycle` is passed in already-resolved (`null` when no
+ * Cycle is selected; a real, possibly-zero string when one is) — see `fetchRecoveryThisCycle` below
+ * for why a `"0.00"` string and a `null` are deliberately never conflated.
+ *
+ * **v1.0.4 Cancel Business Semantics amendment (documented exception to the frozen decision above,
+ * not a reversal of it):** Cancelling an Advance waives whatever remained unrecovered — nothing
+ * further is owed, so "Current Outstanding Balance" must read 0 for a CANCELLED row
+ * (`isOutstandingWaived`, `shared/src/schemas/advance.ts`). `outstandingBalance` itself is
+ * deliberately NOT masked here for `recoveredToDate` — `cancelAdvance` (`advances.service.ts`)
+ * never zeroes the stored column, only reverses an unreleased Draft deduction, so the real stored
+ * value is exactly what "Recovered To Date" needs to stay correct; masking it would make a
+ * cancelled Advance's full `totalAmount` misreport as recovered.
  */
 function mapAdvanceToRow(advance: RowAdvance, recoveredThisCycle: string | null): AdvanceRecoveryReportRow {
+  const displayOutstandingBalance = isOutstandingWaived(advance.status) ? new Prisma.Decimal(0) : advance.outstandingBalance;
   return {
     advanceId: advance.id,
     employeeId: advance.employeeId,
@@ -118,7 +133,7 @@ function mapAdvanceToRow(advance: RowAdvance, recoveredThisCycle: string | null)
     advanceType: advance.type,
     originalAmount: advance.totalAmount.toFixed(2),
     recoveredToDate: advance.totalAmount.minus(advance.outstandingBalance).toFixed(2),
-    currentOutstandingBalance: advance.outstandingBalance.toFixed(2),
+    currentOutstandingBalance: displayOutstandingBalance.toFixed(2),
     status: advance.status,
     repaymentType: advance.repaymentType,
     dateGiven: advance.dateGiven.toISOString().slice(0, 10),
@@ -206,13 +221,26 @@ function decimalOrZero(value: Prisma.Decimal | null): Prisma.Decimal {
   return value ?? new Prisma.Decimal(0);
 }
 
-function typeTotals(agg: { _sum: { totalAmount: Prisma.Decimal | null; outstandingBalance: Prisma.Decimal | null } }): AdvanceRecoveryReportTypeTotals {
-  const totalAmount = decimalOrZero(agg._sum.totalAmount);
-  const outstanding = decimalOrZero(agg._sum.outstandingBalance);
+/**
+ * `fullAgg` sums the raw `totalAmount`/`outstandingBalance` columns over EVERY matching row
+ * (including CANCELLED ones) — required for `recoveredToDateTotal`, since a CANCELLED Advance's
+ * unmasked `outstandingBalance` is exactly what keeps that figure correct (see `mapAdvanceToRow`'s
+ * doc comment). `nonCancelledOutstandingAgg` sums `outstandingBalance` over the SAME matching rows
+ * MINUS any CANCELLED ones — v1.0.4 Cancel Business Semantics amendment: a cancelled Advance's
+ * waived remainder must not inflate "Current Outstanding Balance" totals (Part J: Cancelled
+ * Advances must not contribute to Outstanding totals).
+ */
+function typeTotals(
+  fullAgg: { _sum: { totalAmount: Prisma.Decimal | null; outstandingBalance: Prisma.Decimal | null } },
+  nonCancelledOutstandingAgg: { _sum: { outstandingBalance: Prisma.Decimal | null } },
+): AdvanceRecoveryReportTypeTotals {
+  const totalAmount = decimalOrZero(fullAgg._sum.totalAmount);
+  const outstanding = decimalOrZero(fullAgg._sum.outstandingBalance);
+  const nonCancelledOutstanding = decimalOrZero(nonCancelledOutstandingAgg._sum.outstandingBalance);
   return {
     originalAmountTotal: totalAmount.toFixed(2),
     recoveredToDateTotal: totalAmount.minus(outstanding).toFixed(2),
-    currentOutstandingBalanceTotal: outstanding.toFixed(2),
+    currentOutstandingBalanceTotal: nonCancelledOutstanding.toFixed(2),
   };
 }
 
@@ -236,14 +264,21 @@ async function computeAdvanceRecoveryReportTotals(
 ): Promise<AdvanceRecoveryReportTotals> {
   const loanWhere: Prisma.AdvanceWhereInput = { AND: [where, { type: 'LOAN' }] };
   const eidWhere: Prisma.AdvanceWhereInput = { AND: [where, { type: 'EID_ADVANCE' }] };
+  // v1.0.4 Cancel Business Semantics amendment — see `typeTotals`'s own doc comment for why
+  // "Current Outstanding Balance" totals need this separate, CANCELLED-excluding sum.
+  const loanNonCancelledWhere: Prisma.AdvanceWhereInput = { AND: [loanWhere, { status: { not: 'CANCELLED' } }] };
+  const eidNonCancelledWhere: Prisma.AdvanceWhereInput = { AND: [eidWhere, { status: { not: 'CANCELLED' } }] };
 
-  const [matchingAdvanceCount, distinctEmployees, loanAgg, eidAgg, statusGroups] = await Promise.all([
-    prisma.advance.count({ where }),
-    prisma.advance.groupBy({ by: ['employeeId'], where }),
-    prisma.advance.aggregate({ where: loanWhere, _sum: { totalAmount: true, outstandingBalance: true } }),
-    prisma.advance.aggregate({ where: eidWhere, _sum: { totalAmount: true, outstandingBalance: true } }),
-    prisma.advance.groupBy({ by: ['status'], where, _count: { _all: true } }),
-  ]);
+  const [matchingAdvanceCount, distinctEmployees, loanAgg, eidAgg, loanOutstandingAgg, eidOutstandingAgg, statusGroups] =
+    await Promise.all([
+      prisma.advance.count({ where }),
+      prisma.advance.groupBy({ by: ['employeeId'], where }),
+      prisma.advance.aggregate({ where: loanWhere, _sum: { totalAmount: true, outstandingBalance: true } }),
+      prisma.advance.aggregate({ where: eidWhere, _sum: { totalAmount: true, outstandingBalance: true } }),
+      prisma.advance.aggregate({ where: loanNonCancelledWhere, _sum: { outstandingBalance: true } }),
+      prisma.advance.aggregate({ where: eidNonCancelledWhere, _sum: { outstandingBalance: true } }),
+      prisma.advance.groupBy({ by: ['status'], where, _count: { _all: true } }),
+    ]);
 
   const statusCounts: Record<'ACTIVE' | 'RESERVED' | 'PAID_OFF' | 'CANCELLED', number> = {
     ACTIVE: 0,
@@ -278,8 +313,8 @@ async function computeAdvanceRecoveryReportTotals(
   return {
     matchingAdvanceCount,
     employeesWithAdvanceCount: distinctEmployees.length,
-    loan: typeTotals(loanAgg),
-    eidAdvance: typeTotals(eidAgg),
+    loan: typeTotals(loanAgg, loanOutstandingAgg),
+    eidAdvance: typeTotals(eidAgg, eidOutstandingAgg),
     activeCount: statusCounts.ACTIVE,
     reservedCount: statusCounts.RESERVED,
     paidOffCount: statusCounts.PAID_OFF,
@@ -413,6 +448,9 @@ export async function getAdvanceRecoveryReportDetail(currentUser: SessionUser, a
   assertSiteAccess(currentUser, advance.employee.siteId);
 
   const isLoan = advance.type === 'LOAN';
+  // v1.0.4 Cancel Business Semantics amendment — see `mapAdvanceToRow`'s doc comment; the same
+  // display-only mask applies here, `recoveredToDate` below stays unmasked/raw.
+  const displayOutstandingBalance = isOutstandingWaived(advance.status) ? new Prisma.Decimal(0) : advance.outstandingBalance;
 
   const [recoveryEntries, scheduleChanges] = await Promise.all([
     prisma.payrollEntry.findMany({
@@ -461,7 +499,7 @@ export async function getAdvanceRecoveryReportDetail(currentUser: SessionUser, a
     advanceType: advance.type,
     originalAmount: advance.totalAmount.toFixed(2),
     recoveredToDate: advance.totalAmount.minus(advance.outstandingBalance).toFixed(2),
-    currentOutstandingBalance: advance.outstandingBalance.toFixed(2),
+    currentOutstandingBalance: displayOutstandingBalance.toFixed(2),
     status: advance.status,
     repaymentType: advance.repaymentType,
     scheduledInstallmentAmount: advance.scheduledInstallmentAmount?.toFixed(2) ?? null,

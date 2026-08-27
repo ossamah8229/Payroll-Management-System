@@ -1124,6 +1124,25 @@ describe('Phase 7 Reports — Employee Payroll History (Checkpoint 1A)', () => {
       expect(res.body.advances[0].outstandingBalance).toBe('8000.00');
     });
 
+    it('a CANCELLED linked Advance shows its Outstanding as waived (0.00), not the raw stored remainder — v1.0.4 Cancel Business Semantics', async () => {
+      const admin = await masterAdminAgent('eph-detail-admin2b@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site EPH Detail Advance Cancelled');
+      const cycle = await makeCycle(admin.userId);
+      const employee = await makeEmployee(site.id, unit.id, 'Detail Advance Cancelled Employee');
+      // outstandingBalance left at 8000 — cancelAdvance never zeroes the stored column (it's the
+      // true waived remainder), only this display-layer read must mask it to 0.00.
+      const advance = await prisma.advance.create({
+        data: { employeeId: employee.id, type: 'LOAN', totalAmount: '10000', outstandingBalance: '8000', dateGiven: new Date(), repaymentType: 'INSTALLMENT', status: 'CANCELLED' },
+      });
+      const entry = await makeEntry(cycle.id, employee.id, site.id, unit.id, { advanceDeduction: '2000', advanceId: advance.id });
+
+      const res = await admin.agent.get(detailUrl(entry.id));
+      expect(res.status).toBe(200);
+      expect(res.body.advances[0].status).toBe('CANCELLED');
+      expect(res.body.advances[0].outstandingBalance).toBe('0.00');
+      expect(res.body.advances[0].totalAmount).toBe('10000.00');
+    });
+
     it('inaccessible detail still returns 404 even for a user with statements:view at a different site', async () => {
       const admin = await masterAdminAgent('eph-detail-admin3@test.local');
       const { site: siteA } = await makeSiteWithUnit('Test Site EPH Detail Scope A');

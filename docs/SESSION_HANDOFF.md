@@ -7124,3 +7124,59 @@ August attendance and the final, separate, pre-release payroll audit. No further
 was started per instruction (H1, H2, M3, Employee Code, EmployeeLookup UX, Father Name search, IBAN
 cleanup, `otHours`, Reliability Phase 5, v1.0.4, branch cleanup all remain untouched).
 
+---
+
+## 71. Addendum, 2026-08-27 — v1.0.4 Advances Usability, Employee Deputation & Cancel Semantics —
+IMPLEMENTED, STOP BEFORE MERGE
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.4 — Advances Usability, Employee
+Deputation & Cancel Semantics" entry, directly above its own "§2. Remaining work" heading. This
+addendum is the session-chronology summary.
+
+Three related Advances problems from real operational use (~80 Advances/month): no pagination (the
+list was a plain unbounded query, frontend rendered every row), no employee deputation (Site/Unit)
+visible on the grid, and a Cancelled Advance's Outstanding Balance never zeroed — implying money
+still owed on an Advance the company had explicitly waived.
+
+**Pagination**: server-side, mirroring the Advance Recovery Report's own already-proven
+`count`+`findMany({skip,take})` pattern and its `reports-pagination.ts` normative rule — 25/page,
+newest-first, deterministic `id` tie-break, two new purely-additive indexes on `Advance`. Closed a
+correctness gap pagination would otherwise have introduced: the page's own multi-site filter
+previously worked by filtering client-side over an always-unbounded fetch; now `siteIds` (plural) is
+filtered server-side. Default status filter deliberately left as "All," unchanged.
+
+**Deputation**: `Employee.site`/`.unit` (both required, direct FKs) joined into the existing Advance
+list query — one query, proven no-N+1 by a new identical-query-count-at-different-page-sizes test.
+Site/Unit columns added after the existing v1.0.1 identity block.
+
+**Cancel semantics (the important part)**: audited before any implementation, exactly as instructed.
+Root cause: `cancelAdvance` already correctly reverses an unreleased Draft deduction but never zeroes
+the resulting `outstandingBalance` on the CANCELLED row. **No migration needed** — that same
+unmasked stored value is simultaneously exactly right for "Recovered To Date" and exactly wrong to
+show as "Outstanding," so the fix is a pure presentation-layer gate (`isOutstandingWaived(status)`,
+new shared helper), applied at the Advances page, the Advance Recovery Report (row + a genuinely
+separate aggregate-total bug, plus its `hasOutstandingBalance` filter), and Employee Payroll History
+— never touching the stored value `cancelAdvance` itself computes. Cancel dialog copy rewritten to
+state the remainder is waived, never still owed.
+
+**Local UAT** (disposable `payroll_manual`, zero production access): 32 synthetic Advances across 2
+sites/3 units/30 employees (including two same-named "Muhammad Talha"s), verified live in a running
+browser — pagination, Site/Unit columns, disambiguation, Cancelled rows at PKR 0.00 Outstanding — and
+one real, live Cancel workflow performed end to end, independently re-verified against the raw
+database (`outstandingBalance` correctly left at 8750.00, untouched) and the Advance Recovery Report
+(Outstanding 0.00, Recovered To Date correctly 3750.00). One incidental Vite dependency-cache issue
+found and cleared during UAT — not a code defect.
+
+**Regression evidence**: backend sharded 1–6 (this repo's own established CI convention) —
+**1,893/1,893** on a clean run, after this session's own repeated local-database resets produced (and
+this checkpoint root-caused, reproduced on pristine `origin/main`, and cleanly fixed) the same class
+of interrupted-run artifact the v1.0.3 M2 checkpoint's own entry already documents — not a defect in
+this checkpoint's code. Frontend **1,079/1,079** (9 new). Full 31-file E2E suite (isolated disposable
+database) — **189 passed, 8 skipped**, zero failures. Typecheck/lint/build all clean across every
+workspace. One purely additive migration, applied only to local disposable databases.
+
+**Branch**: `fix/v1.0.4-advances-usability-cancel-semantics`, cut from `main` at `bdd98bc` (the
+v1.0.3 RELEASED commit). **Per explicit instruction: STOP BEFORE MERGE.** No merge, no deploy, no
+`v1.0.4` tag, no GitHub Release, no Salary Release, no Reliability Phase 5 resumption, no production
+access of any kind, no other checkpoint's scope touched.
+
