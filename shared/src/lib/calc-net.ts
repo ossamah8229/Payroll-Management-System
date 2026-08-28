@@ -4,20 +4,29 @@
  * backend Payroll Processing, the frontend's live grid totals, import/export, reports, and
  * (Phase 6) correction preview — there must never be a second implementation of this formula.
  *
- * Rounding policy (Phase 3 Checkpoint 0 decision): all arithmetic uses `decimal.js`, never native
- * JS floats. Every intermediate value that feeds a further multiplication/division — the per-line
- * daily rate, effective OT rate, and effective leave rate — is carried at full decimal precision
- * and is NEVER rounded before being used in the next step; rounding a rate first and then
- * multiplying would silently corrupt the result (e.g. grossPay/cycleDays is frequently a
- * repeating decimal). Only once a figure is done being multiplied/divided — earnedAmount,
- * otEarned, leaveEarned — is it rounded to 2 decimal places (`ROUND_HALF_UP`), matching the
- * `numeric(12,2)` precision every stored PKR figure in this system uses. totalEarning,
- * totalDeduction, and netSalary are then pure addition/subtraction of already-2dp-safe values, so
- * no further rounding drift is possible and netSalary always reconciles exactly with
- * totalEarning - totalDeduction as displayed. Per-line breakdown figures returned for transparency
- * are independently rounded for display; the authoritative entry-level totals are always summed
- * from the unrounded per-line values, never from the rounded per-line display figures, to avoid
- * "sum of rounded parts" drift.
+ * Rounding policy (Phase 3 Checkpoint 0 decision; corrected 2026-08-28, CalcNet Precision Rounding
+ * Fix — see docs/PROJECT_PROGRESS.md for the full proof): all arithmetic uses `decimal.js`, never
+ * native JS floats. `decimal.js` division is not exact — it rounds its result to `Decimal.precision`
+ * significant digits (this codebase never overrides the library default of 20), so an earlier claim
+ * here that every intermediate rate is carried at "full," unrounded precision was not actually true
+ * for a value obtained by division. **Every monetary figure that would otherwise be computed as
+ * `(A / B) * C` is instead computed as the algebraically equivalent `(A * C) / B`** — multiplying
+ * first (an exact operation for two already-finite decimals whose product doesn't exceed
+ * `Decimal.precision` significant digits) defers the one unavoidable, precision-limited division to
+ * last, rather than rounding a repeating-decimal intermediate rate (e.g. `grossPay/cycleDays`, often
+ * a repeating decimal) *before* a second operand (e.g. `days`) that may have exactly cancelled the
+ * problematic factor had the two been combined first. `dailyRate`/`effectiveOtRate`/
+ * `effectiveLeaveRate` are still computed and returned exactly as before (full `A/B` precision, for
+ * transparency/display and as a Corrections fallback rate, §12) — they are simply no longer what
+ * `earnedAmount`/`otEarned`/`leaveEarned` are directly derived from. Only once a figure is done being
+ * multiplied/divided — earnedAmount, otEarned, leaveEarned — is it rounded to 2 decimal places
+ * (`ROUND_HALF_UP`), matching the `numeric(12,2)` precision every stored PKR figure in this system
+ * uses. totalEarning, totalDeduction, and netSalary are then pure addition/subtraction of already-
+ * 2dp-safe values, so no further rounding drift is possible and netSalary always reconciles exactly
+ * with totalEarning - totalDeduction as displayed. Per-line breakdown figures returned for
+ * transparency are independently rounded for display; the authoritative entry-level totals are
+ * always summed from the unrounded per-line values, never from the rounded per-line display figures,
+ * to avoid "sum of rounded parts" drift.
  */
 
 import { Decimal } from 'decimal.js';
@@ -165,14 +174,26 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
     const otHours = toDecimal(line.otHours);
     totalWorkingDaysFull = totalWorkingDaysFull.plus(days);
 
-    // Full precision — never rounded before being used in the next multiplication (this file's
-    // rounding policy). grossPay/cycleDays is frequently a repeating decimal (e.g. 40000/27).
+    // Full precision, for display/transparency and as a Corrections fallback rate only (§12) — see
+    // this file's own top-of-file rounding-policy comment for why `earnedAmount`/`otEarned` below are
+    // NOT actually derived from these anymore. grossPay/cycleDays is frequently a repeating decimal
+    // (e.g. 40000/27).
     const dailyRate = grossPay.dividedBy(cycleDays);
     const effectiveOtRate =
       line.otRate !== null && line.otRate !== undefined ? toDecimal(line.otRate) : dailyRate.dividedBy(8);
 
-    const lineEarnedAmount = dailyRate.times(days);
-    const lineOtEarned = otHours.times(effectiveOtRate);
+    // Precision fix (2026-08-28): `grossPay.times(days).dividedBy(cycleDays)`, NOT
+    // `dailyRate.times(days)` — the fused multiply-then-divide defers the one unavoidable lossy
+    // division to last instead of rounding `dailyRate` to `Decimal.precision` significant digits
+    // first, which could otherwise land a hair under an exact half-cent boundary and round the wrong
+    // way (docs/PROJECT_PROGRESS.md's "CalcNet Precision Rounding Fix" has the full numeric proof).
+    // Same reasoning for the derived (`otRate` null) OT branch below; an explicit `otRate` involves no
+    // division at all, so `otHours.times(effectiveOtRate)` there was already exact and is unchanged.
+    const lineEarnedAmount = grossPay.times(days).dividedBy(cycleDays);
+    const lineOtEarned =
+      line.otRate !== null && line.otRate !== undefined
+        ? otHours.times(effectiveOtRate)
+        : otHours.times(grossPay).dividedBy(cycleDays.times(8));
 
     earnedAmountFull = earnedAmountFull.plus(lineEarnedAmount);
     otEarnedFull = otEarnedFull.plus(lineOtEarned);
@@ -186,11 +207,20 @@ export function calcNet(entry: PayrollEntryCalcInput): CalcNetResult {
     });
   }
 
+  // Full precision, for display/transparency and as a Corrections fallback rate only (§12) — same
+  // caveat as `dailyRate`/`effectiveOtRate` above.
   const effectiveLeaveRate =
     entry.leaveRate !== null && entry.leaveRate !== undefined
       ? toDecimal(entry.leaveRate)
       : grossPay.dividedBy(primaryLine.cycleDays);
-  const leaveEarnedFull = effectiveLeaveRate.times(toDecimal(entry.leaveDays));
+  const leaveDays = toDecimal(entry.leaveDays);
+  // Precision fix (2026-08-28) — same reasoning as `lineEarnedAmount` above: an explicit `leaveRate`
+  // involves no division and was already exact; the derived (`leaveRate` null) case is fused as a
+  // single division, not `effectiveLeaveRate.times(leaveDays)`.
+  const leaveEarnedFull =
+    entry.leaveRate !== null && entry.leaveRate !== undefined
+      ? effectiveLeaveRate.times(leaveDays)
+      : leaveDays.times(grossPay).dividedBy(primaryLine.cycleDays);
 
   // From here on, every figure is a final, "done being multiplied/divided" monetary value —
   // rounded once, then only added/subtracted, which introduces no further precision drift.
