@@ -17,7 +17,32 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-08-26 (latest) — v1.0.3 M2 Working Days vs Cycle Days financial-integrity fix
+> **Update, 2026-08-28 (latest) — PR #21 (Payroll Financial Integrity: CalcNet V2 precision fix +
+> immutable release-time snapshots) MERGED AND DEPLOYED TO PRODUCTION. Salary Release still NOT
+> authorized.** Qualified candidate `28614a7`; pre-merge CI caught a genuine query-count CI failure
+> in `employee-payroll-history.test.ts` (independently investigated and classified as a pre-existing
+> environmental flake in code this PR never touched — `historical-payroll-employee-lookup.ts`, zero
+> diff against base — not a regression; three new DB-backed CalcNet-routing tests added for that
+> report's own surface as a genuine coverage gap found along the way). Merge commit
+> `f1cdcbb81699ed6a7fc0fc22665097ed1e359b54` (parents `05977c4`/`28614a7`), PR #20 closed as
+> superseded. Post-merge CI green (Backend 6/6 + build, Frontend, E2E all SUCCESS). Render
+> auto-deployed the merge SHA to both `payroll-management-api` and `payroll-management-app`
+> (confirmed live via the Render CLI, not assumed); startup log confirms the new
+> `20260828140000_payroll_entry_release_snapshot` migration applied cleanly (additive only) and the
+> backend started healthy. Read-only production `psql` confirms `PayrollEntryReleaseSnapshot` has
+> **zero rows** across all 1,306 `PayrollEntry` rows (59 released, 1,247 Draft) — no fabricated
+> backfill, every currently-released production entry still serving under `LEGACY_V1`. Authenticated
+> in-app smoke NOT DIRECTLY VERIFIED (no production login credentials available) — disclosed, not
+> worked around; the DB-level check above already answers the questions that smoke check would have.
+> **Zero payroll mutations performed (no Release/Release All/Finalize/Hold/edit of any kind); no tag
+> created.** Software deployment does NOT constitute authorization for August Salary Release — that
+> remains a separate, not-yet-made business decision. Full record: `docs/PROJECT_PROGRESS.md`'s own
+> "Payroll Financial Integrity — PR #21 Merge, Employee Payroll History Query-Count Investigation,
+> and Production Cutover" entry (end of file) — not duplicated here in full.
+>
+> ---
+>
+> **Update, 2026-08-26 (superseded by the entry above for status purposes) — v1.0.3 M2 Working Days vs Cycle Days financial-integrity fix
 > IMPLEMENTED on branch `fix/v1.0.3-working-days-cycle-days-guard`, STOP BEFORE MERGE.** Implements
 > the approved invariant `SUM(workLines.days) <= MAX(workLines.cycleDays)` — write-time rejection
 > (`createPayrollEntry`/`addWorkLine`/`updateWorkLine`/`deleteWorkLine`, plus the bulk `cycleDays`

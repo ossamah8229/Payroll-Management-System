@@ -17026,3 +17026,122 @@ Zero production mutations; all work against local Postgres only (`payroll_manual
 exactly as every prior checkpoint. Branch `fix/released-payroll-financial-snapshots`, head `d16595f`.
 **Draft PR #21**: https://github.com/ossamah8229/Payroll-Management-System/pull/21 — supersedes PR
 #20 (not merged independently). **Not merged, not deployed, not tagged.**
+
+---
+
+## Payroll Financial Integrity — PR #21 Merge, Employee Payroll History Query-Count Investigation, and Production Cutover (2026-08-28, later same day)
+
+**MERGED AND DEPLOYED to production. Salary Release NOT authorized/performed.**
+
+### Candidate qualification and a genuine pre-merge CI failure
+
+The docs-only commit above (`93cfa13`) moved PR #21's HEAD one commit past `d16595f` — the SHA the
+"Real CI confirmation" entry actually qualified. Re-verifying against the true HEAD surfaced a fresh,
+mandatory CI run (`33161415836`) that was **not** green: Backend shard 2/6 failed
+`employee-payroll-history.test.ts` › "the historical employee lookup issues a fixed query count
+regardless of match count (no N+1)" (expected 9, received 8), cascading to skip shards 3–6, backend
+build, and E2E. Per this checkpoint's own gate rules, this was treated as a hard STOP — no merge on
+an unqualified SHA, no rerun-for-reassurance.
+
+**Root-cause investigation** (not inferred from the diff alone — independently reproduced):
+`searchEmployeesByHistoricalPayroll` (`backend/src/common/historical-payroll-employee-lookup.ts`),
+the function this test actually exercises, has a **zero diff** against the PR base — this PR never
+touched it. That function's own doc comment already documents "a fixed query cost, never N+1" via
+`Promise.all([count, findMany])` plus a Prisma-batched relation fetch for `site.name` — the same
+Prisma/Postgres connection-pool-contention query-count sensitivity this exact test has shown under
+full-suite/full-shard load since at least 2026-08-07 (this file, "Correction, 2026-08-07" entry:
+same test, "expected 8, received 10," passed clean in isolation immediately after). Reproduced 6×
+locally against a disposable Postgres matching CI (3× isolated, 3× chained after its exact
+CI-adjacent predecessor `advances.test.ts`, matching CI's real shard-2 ordering) — always `9 = 9`,
+never reproduced `8`. **Classification: known pre-existing environmental flake, not a PR #21
+regression.**
+
+The investigation also surfaced a real, legitimate gap: Employee Payroll History's `calcEntryRow`
+now routes through `computeEntryCalc` (the CalcNet V2/snapshot cutover above), but no test proved
+this report's own list/detail surface actually returns live V2_PRECISE, LEGACY_V1, or the immutable
+snapshot verbatim — only `computeEntryCalc`'s generic unit-level behavior was proven elsewhere
+(`payroll-financial-integrity-snapshot.test.ts`). Added three DB-backed tests to
+`employee-payroll-history.test.ts` (state A: Draft/V2_PRECISE; state B: released-no-snapshot/
+LEGACY_V1; state C: released-with-a-poisoned-snapshot returned verbatim at both the detail and list
+endpoints — mirroring that file's own Part 1 poisoned-snapshot proof). Test-only change, no
+production code touched, no change to the query-count test's own invariant (already the "counts
+must not scale with match count" shape, not a hardcoded literal). All 67/67 tests in that file pass,
+plus 349/349 across the full CalcNet/financial-integrity/PayrollEntry/Salary Release Report/
+Payslips/Project Site Payroll/Employee Payroll History suite set; typecheck/lint clean.
+
+**Qualified candidate**: `28614a779581a4f3c485a71341e8c28df1f10a0e`. Fresh CI run `33162577663`:
+Backend all 6 shards + build **SUCCESS**, Frontend **SUCCESS**, E2E **SUCCESS** — overall SUCCESS,
+including the previously-failing query-count test passing clean.
+
+### Merge
+
+Normal merge commit (no squash, no rebase, no admin bypass): **`f1cdcbb81699ed6a7fc0fc22665097ed1e359b54`**,
+parents `05977c4145415fb6bb794ecc2417ebcf4f86ebb7` (previous `main`) and
+`28614a779581a4f3c485a71341e8c28df1f10a0e` (the exact qualified PR HEAD — confirmed as the merge
+commit's second parent). PR #20 closed as superseded by #21, not merged independently. No tag
+created.
+
+### Post-merge CI and production deployment
+
+Fresh CI against the actual merge commit (run `33163962968`): Backend all 6 shards + build
+**SUCCESS**, Frontend **SUCCESS**, E2E **SUCCESS** — overall SUCCESS. Render `autoDeploy` (branch
+`main`, trigger `commit`) then deployed automatically — confirmed via the Render CLI (authenticated,
+read/deploy-status access only), not assumed from elapsed time:
+
+- **Backend** (`payroll-management-api`): deploy `dep-da8m926417fc73dgl6s0`, status **live**, commit
+  `f1cdcbb81699ed6a7fc0fc22665097ed1e359b54` — matches the merge SHA exactly. Build log: "Checking
+  out commit f1cdcbb... in branch main" → "Build successful". Startup log:
+  `npx prisma migrate deploy` → "29 migrations found in prisma/migrations" → "Applying migration
+  `20260828140000_payroll_entry_release_snapshot`" → "All migrations have been successfully
+  applied." → "Backend listening on port 4000 (production)" → `/health` 200 → "Available at your
+  primary URL https://payroll-api.brooms.com.pk".
+- **Frontend** (`payroll-management-app`): deploy `dep-da8m926417fc73dgl750`, status **live**, same
+  commit `f1cdcbb...`. Build log: "✓ built in 4.86s" (includes a fresh
+  `reports-employee-payroll-history-page` chunk) → "Your site is live 🎉".
+- Both `https://payroll-api.brooms.com.pk/health` and `https://payroll.brooms.com.pk/` independently
+  curled 200 after deploy.
+
+### Production migration/structural verification — READ-ONLY, via Render's authenticated `psql`
+
+- `PayrollEntryReleaseSnapshot` table exists with exactly the 10 expected columns/types (`id`,
+  `payrollEntryId`, `calculationVersion`, `earnedAmount`/`otEarned`/`leaveEarned`/`netSalary` as
+  `numeric`, `resolvedAt`, `resolvedByUserId`, `createdAt`), plus the expected `pkey` and unique
+  `payrollEntryId` indexes.
+- `SELECT COUNT(*) FROM "PayrollEntryReleaseSnapshot"` → **0** — zero snapshot rows of any kind,
+  historical or otherwise. No fabricated backfill.
+- `PayrollEntry`: 1,306 total rows (59 released, 1,247 Draft) — real production data, untouched by
+  the migration (purely additive: one `CREATE TYPE`, one `CREATE TABLE`, one index, two FKs; no
+  `ALTER`/`DROP`/`INSERT` anywhere in `20260828140000_payroll_entry_release_snapshot/migration.sql`,
+  confirmed by direct read).
+- Combined with the already-proven `computeEntryCalc` routing invariant (a resolved entry with no
+  snapshot deterministically reconstructs under `LEGACY_V1`, never live `calcNet`), a snapshot count
+  of exactly 0 is itself conclusive proof that **all 59 currently-released production entries are
+  serving under LEGACY_V1 right now**, with zero exceptions — no per-entry manual spot check needed
+  to establish this.
+
+### Production application smoke — partial, honestly disclosed
+
+Unauthenticated reachability confirmed for both the backend and frontend (health check, root
+response, deploy logs above). **Authenticated in-app smoke of Payroll Entry / Payroll Summary /
+Payslip / Salary Release Report / Employee Payroll History / Project Site Payroll / Bank Sheet /
+Advances / Corrections / Salary Release screen: NOT DIRECTLY VERIFIED — no production login
+credentials available in this environment.** This gap is disclosed, not worked around (no attempt
+was made to guess/obtain credentials). The LEGACY_V1-display and no-fabricated-snapshot questions
+Step 6 of the authorization asked this check to answer are already conclusively answered above by
+the read-only DB verification + the pre-existing routing-invariant proof, independent of any
+application-level login.
+
+### Zero payroll mutations
+
+No Release, Release All, Finalize, Hold/unhold, attendance edit, PayrollEntry edit, Advance/
+Correction change, or manual snapshot creation was performed against production at any point in this
+checkpoint. Software deployment does **not** constitute authorization for August Salary Release —
+that remains a separate, not-yet-made business decision. No tag was created.
+
+### Final state
+
+`main` == `origin/main` at `f1cdcbb81699ed6a7fc0fc22665097ed1e359b54`. PR #21 merged; PR #20 closed,
+unmerged, superseded. Production healthy (backend + frontend both live at the merge SHA, migration
+applied cleanly, zero fabricated snapshots). Salary Release and Finalize both untouched — the first
+genuine production `PayrollEntryReleaseSnapshot` row will be created the moment a real Salary
+Release is eventually authorized and performed, not before.
