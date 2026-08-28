@@ -17011,8 +17011,18 @@ payroll-release-negative-salary/payroll-schema/working-days-cycle-days-guard (14
 snapshot suite (1/6) — every suite touching a surface this checkpoint could affect is green. `git diff
 --check` clean. **Real GitHub Actions CI not yet run this checkpoint** — pending push/Draft PR.
 
+### Real CI confirmation (PR #21, run `33160083993`, head `d16595f`)
+
+**Frontend PASS** (1m30s): typecheck, lint, `vitest run` (1080 tests), build. **Backend PASS**
+(9m34s): typecheck (shared+backend), lint, `prisma migrate deploy` (the new migration applied
+cleanly against CI's own fresh Postgres), all six sharded test jobs green, build. **E2E PASS**.
+Clean on the first CI attempt, no reruns needed — the authoritative full-suite confirmation this
+checkpoint's own local sweep (Steps 17/18 above) could only approximate given this sandbox's
+single-process OOM limitation.
+
 ### Step 19/20 — Production and git workflow
 
 Zero production mutations; all work against local Postgres only (`payroll_manual`/`payroll_dev`),
-exactly as every prior checkpoint. Branch `fix/released-payroll-financial-snapshots`, head to be
-recorded once committed; **Draft PR, not merged, not deployed, not tagged, pending real CI**.
+exactly as every prior checkpoint. Branch `fix/released-payroll-financial-snapshots`, head `d16595f`.
+**Draft PR #21**: https://github.com/ossamah8229/Payroll-Management-System/pull/21 — supersedes PR
+#20 (not merged independently). **Not merged, not deployed, not tagged.**
