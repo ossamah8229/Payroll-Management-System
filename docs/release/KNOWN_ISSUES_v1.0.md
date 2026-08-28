@@ -490,11 +490,13 @@ during RC1 preparation (2026-07-19/20), not assumed.
   result still cannot be recorded without the client's choice. The dead error code was removed
   end-to-end (`corrections.types.ts`, `error-handler.ts`); no frontend/shared-package code depended
   on it. Not a retry, sleep, or timeout change anywhere.
-- **Status: RESOLVED** (root-caused and fixed on `reliability/ki-15-corrections-concurrency`, pending
-  a real CI confirmation run on that branch's PR — not yet merged, deployed, or tagged). Local
-  evidence: 60/60 clean runs of the `Concurrent approval` suite, 5/5 clean full-file runs, a new
-  deterministic regression test (forces the exact race window every run rather than relying on
-  `Promise.all` timing), and a clean full six-shard backend suite (97 suites / 1,895 tests).
+- **Status: RESOLVED** — root-caused and fixed on `reliability/ki-15-corrections-concurrency` (Draft
+  PR #19; not yet merged, deployed, or tagged). Local evidence: 60/60 clean runs of the `Concurrent
+  approval` suite, 5/5 clean full-file runs, a new deterministic regression test (forces the exact
+  race window every run rather than relying on `Promise.all` timing), and a clean full six-shard
+  backend suite (97 suites / 1,895 tests). **Confirmed on real GitHub Actions CI**, run `33143110316`:
+  Backend PASS (12m45s, all six shards), Frontend PASS (1m31s), E2E PASS (7m25s, 189 passed/8
+  skipped/0 failed) — clean on the first CI attempt, no reruns.
 
 ---
 
@@ -516,7 +518,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
 | KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |
 | KI-14 | Roles & Permissions dialog footer still overlapped final content (KI-9 follow-up) | No — **RESOLVED** 2026-07-23 |
-| KI-15 | `corrections-service.test.ts` concurrent-approval race — TOCTOU `paymentTiming` validation gap | No — **RESOLVED** 2026-08-28 (root-caused and fixed on `reliability/ki-15-corrections-concurrency`; pending CI confirmation, not yet merged) |
+| KI-15 | `corrections-service.test.ts` concurrent-approval race — TOCTOU `paymentTiming` validation gap | No — **RESOLVED** 2026-08-28 (root-caused, fixed, confirmed on real CI — PR #19; not yet merged) |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

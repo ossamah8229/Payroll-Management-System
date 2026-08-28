@@ -7319,10 +7319,13 @@ instant validation error, never a timeout/OOM), re-confirmed green across all si
 Entries, attendance, Advances, and Salary Release were never touched. Draft PR only — **not merged,
 not deployed, not tagged.**
 
-**Classification: KI-15 status updated to RESOLVED** in `docs/release/KNOWN_ISSUES_v1.0.md` (root
-cause fixed; pending a real CI confirmation run on this branch's PR before being considered fully
-closed). Reliability Phase 5's own three still-open, unrelated items
-(`employee-payroll-history.test.ts`, `statements.test.ts` query-count flakes) remain untouched, out
-of this checkpoint's explicit scope. **STOP BEFORE MERGE** — awaiting real CI confirmation and the
-user's own separate go-ahead.
+**Real CI confirmation**: Draft PR #19, run `33143110316`, head `6a784c8` — **Backend PASS (12m45s,
+all six shards)**, **Frontend PASS (1m31s)**, **E2E PASS (7m25s, 189 passed/8 skipped/0 failed,
+matching the local run exactly)**. Clean on the first CI attempt, no reruns needed.
+
+**Classification: KI-15 status updated to RESOLVED** in `docs/release/KNOWN_ISSUES_v1.0.md` — root
+cause fixed and confirmed green on real GitHub Actions CI. Reliability Phase 5's own three
+still-open, unrelated items (`employee-payroll-history.test.ts`, `statements.test.ts` query-count
+flakes) remain untouched, out of this checkpoint's explicit scope. **STOP BEFORE MERGE** — Draft PR
+only, awaiting the user's own separate go-ahead to merge.
 

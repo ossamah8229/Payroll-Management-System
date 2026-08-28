@@ -15103,14 +15103,22 @@ custom `testSequencer`), and no new cross-test shared state was introduced (the 
    `statements.test.ts` query-count flakes.
 3. This checkpoint's local reproduction used `payroll_dev` (PostgreSQL 16.15) rather than GitHub
    Actions' own `postgres:16-alpine` runner — same major version, same isolation defaults, same
-   advisory-lock semantics, but a real-CI confirmation (a green post-fix `Backend` job on the eventual
-   PR) is the final piece of evidence this checkpoint could not generate itself from a local sandbox.
+   advisory-lock semantics. **Real-CI confirmation obtained** (below) — this is no longer an open
+   gap.
+
+### Real CI confirmation (PR #19, run `33143110316`, head `6a784c8`)
+
+`gh pr checks 19` after all three jobs completed: **Backend PASS (12m45s, all six shards, including
+`corrections-service.test.ts`'s "Concurrent approval" suite on real `postgres:16-alpine`)**,
+**Frontend PASS (1m31s)**, **E2E PASS (7m25s, the same 189-passed/8-skipped/0-failed result as the
+local run)**. No reruns were needed — clean on the first CI attempt.
 
 ### KI-15 status
 
-`docs/release/KNOWN_ISSUES_v1.0.md`'s KI-15 entry updated to **RESOLVED (root cause fixed, pending a
-real CI confirmation run on this branch's PR)** — see that file for the canonical status line. **Not
-merged, not deployed, not tagged** — Draft PR only, per this checkpoint's own instructions.
+`docs/release/KNOWN_ISSUES_v1.0.md`'s KI-15 entry updated to **RESOLVED — root-caused, fixed, and
+confirmed green on real GitHub Actions CI** (PR #19, run `33143110316`). **Not merged, not deployed,
+not tagged** — Draft PR only, per this checkpoint's own instructions; merge requires the user's own
+separate go-ahead.
 
 ---
 
