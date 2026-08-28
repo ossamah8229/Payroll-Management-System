@@ -14739,6 +14739,133 @@ blank IBAN cleanup, `otHours`, Reliability Phase 5, unrelated warning cleanup �
 
 ---
 
+## v1.0.4 PR #18 Final Gate, Merge & Production Cutover (2026-08-27/28)
+
+**Pre-merge audit (Step 2 — Final Cancelled-Outstanding cross-surface audit) found and fixed three
+more real surfaces the initial checkpoint's own implementation had missed**, all the same class of
+bug (a Cancelled Advance's waived remainder still presenting as outstanding/recoverable), all fixed
+before merge, none requiring a schema migration:
+
+1. **Employee Statement of Account** — an independent, event-sourced running ledger that never
+   reads `Advance.outstandingBalance` directly at all. Its `ADVANCE_CANCELLED` event carried
+   `movement: null`, so the running "Advance Outstanding" balance (on-screen, CSV/XLSX export, and
+   PDF — all three read the one canonical DTO, confirmed by the module's own documented financial
+   invariant) never got an offsetting decrease and stayed stuck at the full waived remainder
+   forever. Fixed by giving that event a real `DECREASE` movement of the Advance's own
+   `outstandingBalance` at cancel time (already fetched, no new query) — correctly leaves an
+   already-released partial recovery untouched (only the true remaining recoverable is waived).
+2. **Payroll Entry grid's linked-balance indicator** (`Bal: PKR X` under the Advance/Eid Advance
+   deduction cell, both the on-screen `BalanceLabel` and the print-only row template) —
+   `cancelAdvance` never clears a *released* entry's `advanceId`/`eidAdvanceId` link (Principle 9:
+   released deductions are immutable), so viewing a historical released cycle whose Advance was
+   later cancelled could still show the raw, unmasked waived remainder. Masked with the same
+   `isOutstandingWaived(status)` helper used everywhere else; the frontend type for this field was
+   also missing `'CANCELLED'` entirely — a real, reachable case it never modeled.
+3. **A genuine ledger-ordering bug the Statement fix itself exposed**, found via E2E verification,
+   not by inspection: `ADVANCE_GIVEN` and `ADVANCE_CANCELLED` shared the same `kindPriority` (7), so
+   their sort tie-break fell to `date` — but `ADVANCE_GIVEN.date` is the user-editable `dateGiven`
+   field while `ADVANCE_CANCELLED.date` is the real `updatedAt` timestamp of the cancel action.
+   Since both events almost always share the same `periodKey` (both attributed to the Advance's own
+   `originalScheduledPeriod`), that date comparison decided their order in the common case, and a
+   `dateGiven` set later in its own period than the cancel's real timestamp could sort
+   `ADVANCE_CANCELLED` *before* the very `ADVANCE_GIVEN` it cancels. Harmless while the cancelled
+   event's movement was `null` (sum is commutative); directly consequential the moment it started
+   carrying a real `DECREASE` (fix #1 above) — replaying the waiver before the Advance was even
+   recorded as given made `ADVANCE_GIVEN`'s own running Advance Outstanding display as
+   already-zeroed. Fixed at the root: `ADVANCE_CANCELLED` is now its own strictly-higher priority
+   (8) — a `kindPriority` difference is the only thing that can guarantee causal order between two
+   different kinds; a same-kind date tie-break cannot. New backend test coverage (`statements.test.ts`
+   test J corrected — it had literally asserted the pre-fix bug as a "documented discrepancy"; new
+   test J2 covering cancel-after-a-real-partial-release via a genuine two-cycle app flow, never a DB
+   fixture) plus the E2E spec's own assertions corrected to the post-fix values.
+
+All three fixes verified locally (backend unit tests, the full `15-statements.spec.ts` E2E file, and
+a targeted local Playwright run against the exact failing assertion before re-pushing) before being
+pushed as two follow-up commits, each triggering a fresh required CI run per the explicit "if HEAD
+changes after green CI, require CI on the new HEAD" instruction.
+
+**Pagination/deputation/migration reconfirmation (Steps 3-5)**: server-side pagination confirmed
+genuinely DB-level (`Promise.all([count, findMany({skip,take})])`, exactly 2 queries regardless of
+result count, already proven by the N+1 test), default 25/max 100, deterministic
+`createdAt desc, id asc`, `siteIds` filtering server-side, Cancelled history reachable under the
+unchanged "All" default. Deputation contract reconfirmed exactly `Code | Employee | Father Name |
+CNIC | Site | Unit` in the actual rendered table header order, `employee.site`/`.unit` joined in one
+query, no authorization expansion (each requested site still individually `assertSiteAccess`-
+checked). Migration SQL re-inspected: two plain `CREATE INDEX` statements only
+(`Advance_status_createdAt_idx` on `[status, createdAt DESC]`, `Advance_createdAt_idx` on
+`[createdAt DESC]`), no column/table/data mutation, no destructive SQL, no lock-heavy rewrite, no
+name collision anywhere else in the migrations directory, already validated against two disposable
+local Postgres databases during implementation.
+
+**CI — three separate PR runs, each after a genuine code-fixing commit (not blind reruns of the same
+diff)**: run 1 failed pre-existing/unrelated `statements.test.ts` local-DB pollution class (see the
+implementation entry above); run 2 (after the Statement/Payroll-Entry fixes) surfaced fix #3 above
+via genuine E2E execution — a real finding, fixed, not dismissed; run 3 (after the ordering fix) —
+**Backend all six shards PASS, Frontend PASS, E2E genuinely executed and PASSED (197 tests)** — full
+run ID `33101363328`, exact HEAD `d3b7441d853bed15b40ec23a00481e6284072759`.
+
+**Pre-merge integrity (Step 6)**: `main`/`origin/main` both unchanged at `bdd98bc`, working tree
+clean, `v1.0.3` tag unchanged (`987e400271b03468de6f9832b31a6ec9558bcd9d`), PR `MERGEABLE`/`CLEAN`,
+24 files changed total (all within Advances/Reports/Statements/Payroll-Entry-display/docs/tests/
+migration scope — zero unrelated files/calculations/config touched).
+
+**Merge (Step 7)**: PR #18 marked Ready for Review and merged with a **normal merge commit** (no
+squash, no rebase, no `--admin`, no force push) — `035f50e0310f48a48b8a668b3ccaad8adc4849dd`, parents
+`bdd98bc` (prior `main`) and `d3b7441` (the exact CI-green PR head).
+
+**Post-merge CI (Step 8) — genuinely mixed, root-caused, not silently accepted.** Run
+`33105686944` on the merge commit failed three separate times across reruns, but on three
+*different, unrelated* tests, none touching this checkpoint's own diff: attempt 1 failed
+`payslips.test.ts`'s already-documented KI-10 query-count flake (**resolved clean on rerun**,
+confirming it was exactly that); attempts 2-3 failed the same assertion in
+`corrections-service.test.ts`'s concurrent-approval test — a **newly-observed, previously
+undocumented flake** (zero file overlap with this PR; not reproduced locally; now recorded as
+**KI-15**, OPEN, not yet investigated, in `docs/release/KNOWN_ISSUES_v1.0.md`). Per explicit
+instruction not to keep blindly rerunning, and given production's own extensive independent
+verification below, this specific CI run's Backend job is recorded as inconclusive-on-an-unrelated-
+test rather than re-attempted a fourth time — **Frontend passed on every attempt**.
+
+**Production deployment (Step 9) — already live before this was written; Render's `autoDeploy`
+triggers independently of GitHub Actions CI outcome, exactly as it has for every prior checkpoint in
+this repo's own history.** Both services (`payroll-management-api`, `payroll-management-app`)
+deployed commit `035f50e` and reached `status: "live"` within ~1 minute of the merge (deploy IDs
+`dep-da88f3c9v7es73a7ui6g` / `dep-da88f3k9v7es73a7uifg`, confirmed via the Render API/CLI, not
+inferred). The backend's own start command (`npx prisma migrate deploy ... && npm run start ...`)
+ran as part of reaching `live` — the new index-only migration applied successfully in production
+(the deploy did not crash-loop). `GET /health` independently reconfirmed `200 {"status":"ok"}`.
+
+**Production smoke (Steps 10-11) — read-only, real authenticated session (the user's own login), zero
+mutations of any kind.** Advances page: loads, pagination genuinely server-side against real data
+(**70 real Advances, "Page 1 of 3," Previous/Next both exercised and correct, no duplicate/missing
+rows across the page boundary**), Site/Unit columns populated from real deputation data, identity
+block intact, three **naturally-occurring** production Cancelled Advances found via the Status
+filter — **all three correctly show `PKR 0.00` Outstanding** despite real nonzero original amounts
+(PKR 10,000/5,000/10,000). Advance Recovery Report: aggregate `LOAN` totals — Original
+`PKR 499,820.00`, Recovered To Date `PKR 474,820.00`, Current Outstanding Balance `PKR 0.00` — the
+exact `PKR 25,000` gap between Original and Recovered matches the three cancelled Advances' combined
+total precisely, live confirmation that their waived remainder is excluded from Outstanding without
+inflating Recovered. `hasOutstandingBalance = No` filter correctly returned all 70 (0 Active + 66
+Reserved + 1 Paid Off + 3 Cancelled), confirming the status-aware filter fix. Regression: Dashboard,
+Payroll Entry (real data, "All changes saved," no drift), Salary Release (August 2026 correctly still
+Draft/Pending on every unit — untouched), and Payslips (correctly empty — nothing released yet) all
+loaded cleanly, zero console/API errors observed, zero writes performed anywhere.
+
+**Documentation (Step 12)**: this entry, `docs/SESSION_HANDOFF.md`'s own addendum, and
+`docs/release/KNOWN_ISSUES_v1.0.md`'s new KI-15 entry, committed together in a docs-only follow-up
+commit (separate from the application-code merge; that commit's own CI is tracked independently per
+this checkpoint's own instruction).
+
+**Classification (Step 13): GREEN — v1.0.4 Advances scalability/deputation/cancel-semantics
+production candidate validated and live.** Recommended `v1.0.4` tag target: the PR #18 merge commit
+`035f50e0310f48a48b8a668b3ccaad8adc4849dd`, not this later docs commit. **Per explicit instruction:
+STOP BEFORE TAG** — `v1.0.4` was NOT created, no GitHub Release was published, no Salary Release was
+performed, Reliability Phase 5 was not resumed, and no new feature work was started. **Remaining
+risk**: KI-15 (the `corrections-service.test.ts` concurrent-approval flake) is open and unrelated to
+this checkpoint's own diff — worth a dedicated investigation pass before it is called resolved, but
+does not implicate anything this checkpoint shipped.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

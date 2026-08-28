@@ -449,6 +449,35 @@ during RC1 preparation (2026-07-19/20), not assumed.
 
 ---
 
+## KI-15 — `corrections-service.test.ts`'s concurrent-approval race frequently fails under real GitHub
+Actions CI (v1.0.4 checkpoint, found on PR #18's post-merge CI)
+
+- **Description**: `Phase 6 Checkpoint 3... › Concurrent approval › two different requests on the
+  same PayrollEntry serialize — the second recalculates after the first commits` fires two real
+  concurrent approval requests via `Promise.all` and asserts both resolve `200`. Observed across
+  four independent GitHub Actions CI runs on PR #18/its post-merge `main` run (three separate merge/
+  rerun attempts, zero code changes to `corrections-service.ts`/`corrections.repository.ts` between
+  them, one run entirely pre-dating the PR's own commits): **3 of 4 failed** on the identical
+  assertion (`resA.status` expected `200`, received `400`, always the same line), 1 of 4 passed
+  clean. Not reproduced locally in this session (every local run of this file passed). This is a
+  *different* test from KI-10's still-open query-count flake — no file/domain overlap with the
+  Advances v1.0.4 checkpoint that surfaced it (zero lines of `corrections-service.ts`/
+  `corrections.repository.ts` touched by that PR).
+- **Impact**: Spurious CI `Backend` job failures under real GitHub Actions runner conditions,
+  unrelated to whatever change triggered the run. No evidence of an actual application defect —
+  every reproduction was the same lock-contention assertion, never a data-integrity failure, and
+  the underlying `PayrollEntry`-version-guarded serialization this test exercises has extensive
+  other passing coverage (`corrections-service.test.ts`'s own remaining suite, `advances.test.ts`'s
+  identical `updateMany({ where: { id, version } })` pattern, etc.).
+- **Status: OPEN, not investigated.** Frequency (3/4 in this session) is high enough that this is
+  not a rare edge case — worth a dedicated investigation pass (real concurrent-timing reproduction,
+  as KI-10's Puppeteer portion received) before being called resolved. Until investigated, do not
+  treat a single green run of this specific test as proof a nearby change fixed something, and do
+  not treat a single red run as proof a nearby change broke something — this test's own base rate
+  needs establishing first.
+
+---
+
 ## Summary
 
 | ID | Issue | Blocking? |
@@ -467,6 +496,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
 | KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |
 | KI-14 | Roles & Permissions dialog footer still overlapped final content (KI-9 follow-up) | No — **RESOLVED** 2026-07-23 |
+| KI-15 | `corrections-service.test.ts` concurrent-approval race frequently fails under real CI (3/4 observed) | No (test-only, unrelated domain to the PR that found it) — **OPEN, not investigated** |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

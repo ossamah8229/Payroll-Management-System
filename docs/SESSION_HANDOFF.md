@@ -7180,3 +7180,54 @@ v1.0.3 RELEASED commit). **Per explicit instruction: STOP BEFORE MERGE.** No mer
 `v1.0.4` tag, no GitHub Release, no Salary Release, no Reliability Phase 5 resumption, no production
 access of any kind, no other checkpoint's scope touched.
 
+---
+
+## 72. Addendum, 2026-08-27/28 — v1.0.4 PR #18 Final Gate, Merge & Production Cutover
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.4 PR #18 Final Gate, Merge & Production
+Cutover" entry, directly above its own "§2. Remaining work" heading. This addendum is the
+session-chronology summary. Continues directly from addendum #71 — approval was given for the full
+gate-through-merge-through-production-verification workflow, explicitly stopping before tagging.
+
+**Pre-merge audit found three more real Cancelled-Outstanding bugs, all fixed, none needing a
+migration**: the Employee Statement's own independent ledger never offset a cancelled Advance's
+balance at all (its `ADVANCE_CANCELLED` event carried no movement); the Payroll Entry grid's linked-
+balance indicator (on-screen and print) could still show a since-cancelled Advance's raw waived
+remainder on a historical released cycle; and — found only through genuine E2E execution, not
+inspection — fixing the Statement ledger exposed a real ordering bug (`ADVANCE_GIVEN`/
+`ADVANCE_CANCELLED` shared a sort priority, tie-broken by an unreliable date comparison), fixed by
+giving `ADVANCE_CANCELLED` its own strictly-higher priority.
+
+**CI**: three PR runs, each after a real fixing commit — the third, on HEAD `d3b7441`, went fully
+green: Backend all six shards, Frontend, and a genuinely-executed 197-test E2E suite, run
+`33101363328`.
+
+**Merge**: PR #18 merged with a normal merge commit `035f50e`, parents `bdd98bc` (prior `main`) and
+`d3b7441` (the CI-green head). No squash, no rebase, no `--admin`, no force push.
+
+**Post-merge CI on the merge commit failed three times across reruns, on two different unrelated
+tests, neither touching this PR's own diff**: `payslips.test.ts`'s already-known KI-10 flake
+(resolved clean on rerun, confirming it), then twice on the same assertion in
+`corrections-service.test.ts`'s concurrent-approval test — a newly-observed, previously-undocumented
+flake, now recorded as **KI-15** (OPEN, unrelated, not yet investigated). Per instruction not to
+blindly keep rerunning, and given production's own independent verification, this was accepted as
+inconclusive-on-an-unrelated-test rather than re-attempted further.
+
+**Production**: Render's `autoDeploy` had already deployed the merge commit to both services within
+about a minute of the merge — independent of CI outcome, exactly as it always has for this repo.
+`/health` confirmed `200`, and the deploy reaching `live` (rather than crash-looping) confirms the
+new index-only migration applied successfully. **Read-only production smoke, performed live in the
+user's own authenticated session, zero mutations**: Advances page — real server-side pagination (70
+Advances, 3 pages, Previous/Next both exercised), Site/Unit columns populated, three real
+naturally-occurring Cancelled Advances all correctly showing PKR 0.00 Outstanding. Advance Recovery
+Report — aggregate Outstanding correctly excludes the same three Advances' PKR 25,000 combined total
+without inflating Recovered (PKR 499,820 Original − PKR 474,820 Recovered = the exact PKR 25,000 gap,
+Outstanding correctly PKR 0.00), and the `hasOutstandingBalance=No` filter correctly returns all 70.
+Dashboard, Payroll Entry, Salary Release (August 2026 confirmed still Draft/Pending, untouched), and
+Payslips (correctly empty) all loaded cleanly.
+
+**Classification: GREEN — v1.0.4 production candidate validated and live.** Recommended tag target:
+merge commit `035f50e0310f48a48b8a668b3ccaad8adc4849dd`. **STOP BEFORE TAG** — not created, no
+Release published, no Salary Release, Reliability Phase 5 not resumed, no new feature work started.
+KI-15 remains open as the one recorded risk, unrelated to this checkpoint's own shipped diff.
+
