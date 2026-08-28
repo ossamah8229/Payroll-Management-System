@@ -86,17 +86,17 @@ enum PayType {
 /// pre-dating this phase (docs/architecture/authentication.md's "Post-Phase-5 Stabilization
 /// Checkpoint 4B" section), deliberately left in place rather than migrated in this phase.
 model Role {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code        String   @unique @db.VarChar(40)
-  name        String   @db.VarChar(80)
-  description String?
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code         String   @unique @db.VarChar(40)
+  name         String   @db.VarChar(80)
+  description  String?
   /// Gates *new* assignment only (create-user, reassign-role) — matches this schema's own
   /// existing `Bank.isActive`/`ProjectSite.isActive` convention of "blocks new links, never
   /// severs an existing one" — **except** that here it also strips a currently-assigned user's
   /// effective access (`auth.service.ts`'s `loadSessionUser` treats `!role.isActive` exactly like
   /// `!user.isActive`), a deliberate, documented deviation from that convention: an inactive Role
   /// must be able to immediately end a security-sensitive grant, not just stop new sign-ups to it.
-  isActive Boolean @default(true)
+  isActive     Boolean  @default(true)
   /// True only for the three seeded roles (Master Admin, Payroll Staff, Finance) — the sole
   /// authoritative signal for "this role cannot be deleted, and its name cannot be reused by (or
   /// renamed away from being recognized as) a protected role." Never inferred from `name` or
@@ -153,28 +153,29 @@ model User {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  role                        Role                      @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  siteAssignments             UserSiteAssignment[]
-  projectSitesCreated         ProjectSite[]             @relation("ProjectSiteCreatedBy")
-  auditLogEntries             AuditLog[]
-  companySettingsUpdates      CompanySettings[]
-  employeeTransfers           EmployeeTransferHistory[]
-  payrollCyclesCreated        PayrollCycle[]            @relation("PayrollCycleCreatedBy")
-  payrollCyclesReleased       PayrollCycle[]            @relation("PayrollCycleReleasedBy")
-  payrollCyclesArchived       PayrollCycle[]            @relation("PayrollCycleArchivedBy")
-  payrollEntriesReleased      PayrollEntry[]            @relation("PayrollEntryReleasedBy")
-  payrollUnitReleases         PayrollUnitRelease[]      @relation("PayrollUnitReleaseReleasedBy")
-  tasksAssignedToMe           Task[]                    @relation("TaskAssignedTo")
-  tasksAssignedByMe           Task[]                    @relation("TaskAssignedBy")
-  taskNotifications           TaskNotification[]
-  advanceScheduleChanges      AdvanceScheduleChange[]
-  backupPackagesGenerated     BackupPackage[]           @relation("BackupPackageGeneratedBy")
+  role                                 Role                          @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  siteAssignments                      UserSiteAssignment[]
+  projectSitesCreated                  ProjectSite[]                 @relation("ProjectSiteCreatedBy")
+  auditLogEntries                      AuditLog[]
+  companySettingsUpdates               CompanySettings[]
+  employeeTransfers                    EmployeeTransferHistory[]
+  payrollCyclesCreated                 PayrollCycle[]                @relation("PayrollCycleCreatedBy")
+  payrollCyclesReleased                PayrollCycle[]                @relation("PayrollCycleReleasedBy")
+  payrollCyclesArchived                PayrollCycle[]                @relation("PayrollCycleArchivedBy")
+  payrollEntriesReleased               PayrollEntry[]                @relation("PayrollEntryReleasedBy")
+  payrollUnitReleases                  PayrollUnitRelease[]          @relation("PayrollUnitReleaseReleasedBy")
+  payrollEntryReleaseSnapshotsResolved PayrollEntryReleaseSnapshot[] @relation("PayrollEntryReleaseSnapshotResolvedBy")
+  tasksAssignedToMe                    Task[]                        @relation("TaskAssignedTo")
+  tasksAssignedByMe                    Task[]                        @relation("TaskAssignedBy")
+  taskNotifications                    TaskNotification[]
+  advanceScheduleChanges               AdvanceScheduleChange[]
+  backupPackagesGenerated              BackupPackage[]               @relation("BackupPackageGeneratedBy")
   /// Phase 6 Checkpoint 1 — schema/domain foundation only, see `Correction`/`CorrectionRequest`/
   /// `CorrectionPayment`'s own comments.
-  correctionRequestsRequested CorrectionRequest[]       @relation("CorrectionRequestRequestedBy")
-  correctionRequestsReviewed  CorrectionRequest[]       @relation("CorrectionRequestReviewedBy")
-  correctionsApproved         Correction[]              @relation("CorrectionApprovedBy")
-  correctionPaymentsPaid      CorrectionPayment[]       @relation("CorrectionPaymentPaidBy")
+  correctionRequestsRequested          CorrectionRequest[]           @relation("CorrectionRequestRequestedBy")
+  correctionRequestsReviewed           CorrectionRequest[]           @relation("CorrectionRequestReviewedBy")
+  correctionsApproved                  Correction[]                  @relation("CorrectionApprovedBy")
+  correctionPaymentsPaid               CorrectionPayment[]           @relation("CorrectionPaymentPaidBy")
 
   @@index([roleId])
 }
@@ -204,16 +205,16 @@ model Bank {
 /// it (checked before delete), with `Employee.siteId`/`ProjectUnit.siteId` as ON DELETE RESTRICT
 /// database-level backstops.
 model ProjectSite {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name      String   @unique @db.VarChar(160)
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique @db.VarChar(160)
   /// Physical work-location address (2026-07-02 addition — see docs/architecture/database/sites-and-units.md §8 revision note).
-  address   String?  @db.VarChar(300)
+  address     String?  @db.VarChar(300)
   /// The term this site's own business uses for its operational sub-divisions (e.g. "Branch",
   /// "Department", "Section") — drives every place the UI names a ProjectUnit for this site; free
   /// text, not an enum, so a client's own vocabulary is never blocked by a missing picklist value
   /// (Principle 8). Added 2026-07-03 — see docs/architecture/database/sites-and-units.md §8.
-  unitLabel String   @default("Branch") @db.VarChar(40)
-  isActive  Boolean  @default(true)
+  unitLabel   String   @default("Branch") @db.VarChar(40)
+  isActive    Boolean  @default(true)
   /// Who created this site — nullable because every site created before this column existed has
   /// no recoverable creator identity (see docs/architecture/rbac-creator-access.md's existing-data
   /// finding; `AuditLog` entries for `project-site.created` are the only trace for those rows, and
@@ -281,24 +282,24 @@ model ProjectUnit {
 /// application-layer check. Changing `siteId` and/or `unitId` on an existing Employee is a
 /// *transfer* (see `EmployeeTransferHistory`, below), never an incidental field edit.
 model Employee {
-  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeCode          String?   @db.VarChar(30)
-  cnic                  String?   @db.VarChar(15)
-  name                  String    @db.VarChar(160)
-  fatherName            String?   @db.VarChar(160)
-  religion              String?   @db.VarChar(40)
-  dateOfBirth           DateTime? @db.Date
-  mobileNumber          String?   @db.VarChar(20)
-  designation           String    @db.VarChar(80)
-  siteId                String    @db.Uuid
-  unitId                String    @db.Uuid
-  dateOfJoining         DateTime? @db.Date
-  dateOfLeaving         DateTime? @db.Date
-  payType               PayType   @default(DAILY_WAGE)
-  grossPay              Decimal   @db.Decimal(12, 2)
-  bankId                String?   @db.Uuid
-  branchCode            String?   @db.VarChar(20)
-  accountNumber         String?   @db.VarChar(40)
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeCode           String?   @db.VarChar(30)
+  cnic                   String?   @db.VarChar(15)
+  name                   String    @db.VarChar(160)
+  fatherName             String?   @db.VarChar(160)
+  religion               String?   @db.VarChar(40)
+  dateOfBirth            DateTime? @db.Date
+  mobileNumber           String?   @db.VarChar(20)
+  designation            String    @db.VarChar(80)
+  siteId                 String    @db.Uuid
+  unitId                 String    @db.Uuid
+  dateOfJoining          DateTime? @db.Date
+  dateOfLeaving          DateTime? @db.Date
+  payType                PayType   @default(DAILY_WAGE)
+  grossPay               Decimal   @db.Decimal(12, 2)
+  bankId                 String?   @db.Uuid
+  branchCode             String?   @db.VarChar(20)
+  accountNumber          String?   @db.VarChar(40)
   /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** `normalizeAccountNumber(accountNumber)`
   /// (shared/src/lib/banking.ts) — uppercased, non-alphanumeric characters stripped. App-maintained
   /// (not a Postgres `GENERATED` column, matching this schema's existing derived-column convention,
@@ -306,19 +307,19 @@ model Employee {
   /// flow shares (`employees.service.ts`). Never displayed; exists solely so a partial unique index
   /// (raw SQL, `docs/architecture/database/employee.md §9`) can enforce uniqueness on the *canonical*
   /// account number while `accountNumber` itself keeps whatever formatting was entered.
-  accountNumberCanonical String?  @db.VarChar(40)
+  accountNumberCanonical String?   @db.VarChar(40)
   /// **Added Phase 4 banking refinement (2026-07-11).** Optional; stored trimmed and uppercase.
   /// Replaces `accountTitle` (removed the same pass) — the account holder is now always the
   /// employee's own legal `name`, never a separately entered/stored string. VARCHAR(34) is the
   /// ISO 13616 international maximum (a Pakistani IBAN is 24 characters).
-  iban                  String?   @db.VarChar(34)
+  iban                   String?   @db.VarChar(34)
   /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** `normalizeIban(iban)` — same
   /// convention as `accountNumberCanonical` immediately above.
-  ibanCanonical         String?   @db.VarChar(34)
-  defaultEobiAmount     Decimal   @default(400.00) @db.Decimal(10, 2)
-  defaultEobiApplicable Boolean   @default(true)
-  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
+  ibanCanonical          String?   @db.VarChar(34)
+  defaultEobiAmount      Decimal   @default(400.00) @db.Decimal(10, 2)
+  defaultEobiApplicable  Boolean   @default(true)
+  createdAt              DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime  @updatedAt @db.Timestamptz(6)
 
   site ProjectSite @relation(fields: [siteId], references: [id], onDelete: Restrict)
   unit ProjectUnit @relation(fields: [unitId, siteId], references: [id, siteId], onDelete: Restrict)
@@ -567,10 +568,10 @@ enum PayrollEntryPayoutOutcome {
 }
 
 model PayrollEntry {
-  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cycleId                   String    @db.Uuid
-  employeeId                String    @db.Uuid
-  siteId                    String    @db.Uuid
+  id                        String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId                   String                     @db.Uuid
+  employeeId                String                     @db.Uuid
+  siteId                    String                     @db.Uuid
   /// **Added Phase 4 Checkpoint 6.1 (Payslips backend foundation, 2026-07-12).** Frozen copy of
   /// `Employee.name`/`.fatherName` at this entry's creation, closing the historical-correctness gap
   /// `bank-sheets.service.ts`'s `buildRow` comment and `PROJECT_PROGRESS.md`'s "Snapshot-name
@@ -580,49 +581,49 @@ model PayrollEntry {
   /// columns. Nullable because pre-existing rows are backfilled best-effort from current `Employee`
   /// data (see this migration's own header comment), not because a newly created entry may
   /// legitimately omit them — `createPayrollEntry`/`createPayrollCycle` always populate both.
-  employeeNameSnapshot      String?   @db.VarChar(160)
-  fatherNameSnapshot        String?   @db.VarChar(160)
-  designation               String    @db.VarChar(80)
-  bankId                    String?   @db.Uuid
-  branchCode                String?   @db.VarChar(20)
-  accountNumber             String?   @db.VarChar(40)
+  employeeNameSnapshot      String?                    @db.VarChar(160)
+  fatherNameSnapshot        String?                    @db.VarChar(160)
+  designation               String                     @db.VarChar(80)
+  bankId                    String?                    @db.Uuid
+  branchCode                String?                    @db.VarChar(20)
+  accountNumber             String?                    @db.VarChar(40)
   /// **Added Phase 4 banking refinement (2026-07-11).** Copied from `Employee` at entry creation
   /// (or carried forward at new-cycle creation), then ordinarily Draft-editable — same "copied,
   /// not linked" convention as every other field in this group. Replaces `accountTitle` (removed
   /// the same pass); the account holder is always the entry's own `Employee.name` snapshot.
-  iban                      String?   @db.VarChar(34)
-  grossPay                  Decimal   @db.Decimal(12, 2)
-  allowance                 Decimal   @default(0) @db.Decimal(12, 2)
-  leaveDays                 Decimal   @default(0) @db.Decimal(5, 2)
-  leaveRate                 Decimal?  @db.Decimal(10, 2)
-  eobiAmount                Decimal   @default(400.00) @db.Decimal(10, 2)
-  eobiApplicable            Boolean   @default(true)
-  advanceDeduction          Decimal   @default(0) @db.Decimal(12, 2)
+  iban                      String?                    @db.VarChar(34)
+  grossPay                  Decimal                    @db.Decimal(12, 2)
+  allowance                 Decimal                    @default(0) @db.Decimal(12, 2)
+  leaveDays                 Decimal                    @default(0) @db.Decimal(5, 2)
+  leaveRate                 Decimal?                   @db.Decimal(10, 2)
+  eobiAmount                Decimal                    @default(400.00) @db.Decimal(10, 2)
+  eobiApplicable            Boolean                    @default(true)
+  advanceDeduction          Decimal                    @default(0) @db.Decimal(12, 2)
   /// **Added Phase 4 Checkpoint 5.** The specific `LOAN`-type Advance this cycle's
   /// `advanceDeduction` reduces — recorded at the moment the deduction is entered/materialized,
   /// never re-inferred later from "whichever advance is currently active" (docs/architecture/
   /// database/advances.md §15). Frozen once the entry releases, exactly like every other field here.
-  advanceId                 String?   @db.Uuid
-  eidAdvanceDeduction       Decimal   @default(0) @db.Decimal(12, 2)
+  advanceId                 String?                    @db.Uuid
+  eidAdvanceDeduction       Decimal                    @default(0) @db.Decimal(12, 2)
   /// **Added Phase 4 Checkpoint 5.** Same as `advanceId`, for the `EID_ADVANCE`-type Advance this
   /// cycle's `eidAdvanceDeduction` reduces.
-  eidAdvanceId              String?   @db.Uuid
-  fine                      Decimal   @default(0) @db.Decimal(12, 2)
+  eidAdvanceId              String?                    @db.Uuid
+  fine                      Decimal                    @default(0) @db.Decimal(12, 2)
   /// Phase 6 Checkpoint 5 — sum of this entry's own `BalanceAdjustmentMaterialization` rows whose
   /// `BalanceAdjustment.type = PAYABLE` (always a single, full `DEFERRED` reservation — no partial
   /// PAYABLE materialization exists, mirroring `CorrectionPayment`'s own "no partial" rule).
   /// Recomputed by full re-sum, not incremented, every time a materialization is created for this
   /// entry — always independently reproducible from those rows, never an independent source of
   /// truth. Added to `totalEarning` by `calcNet`.
-  correctionBalancePayable  Decimal   @default(0) @db.Decimal(12, 2)
+  correctionBalancePayable  Decimal                    @default(0) @db.Decimal(12, 2)
   /// Phase 6 Checkpoint 5 — same convention as `correctionBalancePayable`, for
   /// `BalanceAdjustment.type = RECOVERY` materializations (one or more installment reservations).
   /// Added to `totalDeduction` by `calcNet`.
-  correctionBalanceRecovery Decimal   @default(0) @db.Decimal(12, 2)
-  hold                      Boolean   @default(false)
-  released                  Boolean   @default(false)
-  releasedAt                DateTime? @db.Timestamptz(6)
-  releasedBy                String?   @db.Uuid
+  correctionBalanceRecovery Decimal                    @default(0) @db.Decimal(12, 2)
+  hold                      Boolean                    @default(false)
+  released                  Boolean                    @default(false)
+  releasedAt                DateTime?                  @db.Timestamptz(6)
+  releasedBy                String?                    @db.Uuid
   /// Negative Payroll Recovery checkpoint (2026-07-26). `NULL` for an ordinary Draft entry or one
   /// released for payment (`released = true`); set to `NO_PAY_DUE`/`RECOVERY_DUE` exactly once,
   /// by the same release sweep that would otherwise flip `released`, when this entry's own
@@ -636,11 +637,11 @@ model PayrollEntry {
   remarks                   String?
   /// User-controlled drag-to-reorder position within the cycle. Assigned by the application at
   /// entry-creation time (Checkpoint 1), not a database sequence.
-  sortOrder                 Int       @default(0)
+  sortOrder                 Int                        @default(0)
   /// Optimistic-locking token — incremented on every update (Checkpoint 1).
-  version                   Int       @default(1)
-  createdAt                 DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt                 DateTime  @updatedAt @db.Timestamptz(6)
+  version                   Int                        @default(1)
+  createdAt                 DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                   @updatedAt @db.Timestamptz(6)
 
   cycle                             PayrollCycle                       @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   employee                          Employee                           @relation(fields: [employeeId], references: [id], onDelete: Restrict)
@@ -660,6 +661,12 @@ model PayrollEntry {
   /// created a `RECOVERY` `BalanceAdjustment` directly (`payoutOutcome = RECOVERY_DUE`), never for
   /// a Correction-originated one (see `BalanceAdjustment.originPayrollEntryId`).
   originatedBalanceAdjustment       BalanceAdjustment?
+  /// Payroll Financial Integrity checkpoint (2026-08-28) — the immutable, authoritative financial
+  /// snapshot captured the moment this entry was resolved by its own Unit release sweep. `null` for
+  /// every Draft/Held/unreleased entry, and for a released-before-this-checkpoint entry that
+  /// predates snapshotting (`resolveEntryCalc`, `payroll-entry.service.ts`, falls back to
+  /// `LEGACY_V1` reconstruction for that case — never fabricated here).
+  releaseSnapshot                   PayrollEntryReleaseSnapshot?
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
@@ -743,6 +750,84 @@ model PayrollUnitRelease {
   @@unique([cycleId, unitId])
   @@index([cycleId])
   @@index([unitId])
+}
+
+/// Payroll Financial Integrity — Released-Value Immutability (2026-08-28 checkpoint). Mirrors
+/// `shared`'s own `CalcNetVersion` union (`shared/src/lib/calc-net-version.ts`) exactly — the two
+/// must never drift, since a snapshot's `calculationVersion` is read back to pick which shared
+/// calculator (`calcNetForVersion`) can reproduce its own non-authoritative display fields (per-line
+/// breakdown, rates, totalWorkingDays; the authoritative monetary fields below are never
+/// recomputed). `LEGACY_V1` = the divide-before-multiply arithmetic every `PayrollEntry` in this
+/// codebase's history was computed under, from `calcNet`'s introduction (`aefa64f`, 2026-07-07)
+/// through the precision fix (`9fdb0f6`, 2026-08-28) — confirmed by git archaeology to be the only
+/// formula ever used in that entire window, never varying mid-history (docs/PROJECT_PROGRESS.md has
+/// the full timeline). `V2_PRECISE` = the corrected multiply-before-divide arithmetic, canonical from
+/// this checkpoint's own cutover onward.
+enum CalcNetVersion {
+  LEGACY_V1
+  V2_PRECISE
+}
+
+/// The minimal authoritative financial snapshot captured at the moment a `PayrollEntry` is resolved
+/// by its own Unit release sweep (`PAID`, `NO_PAY_DUE`, or `RECOVERY_DUE` — i.e. `released = true` or
+/// `payoutOutcome != null`, the same two conditions `assertEntryEditable` already treats as
+/// permanently locked). Exists so a future correction to `calcNet` (a hypothetical V3, exactly like
+/// the 2026-08-28 V2 fix before it) can never retroactively change what an already-resolved entry is
+/// shown to have been authorized for — the central defect this checkpoint's own investigation found:
+/// `PayrollEntry` stores no calculated figure at all, so every historical surface was, before this
+/// model existed, silently re-deriving "what was paid" from whatever `calcNet` means today.
+///
+/// **Deliberately minimal** (Step 3 of the checkpoint's own design) — captures only the monetary
+/// figures that are actually `calcNet`-division-derived and therefore version-sensitive:
+/// `earnedAmount`, `otEarned`, `leaveEarned`, and the final authorized `netSalary`. Every other
+/// `CalcNetResult` field is either a raw, already-immutable `PayrollEntry`/`PayrollEntryWorkLine`
+/// column (`allowance`, `correctionBalancePayable`/`Recovery`, EOBI/Advance/Eid Advance/Fine inputs),
+/// or a value proven version-independent (no division involved — `eobiDeduction`, `totalDeduction`;
+/// see the original fix's own Step 3/Step 7 audit) and therefore safe to re-derive at read time from
+/// those frozen inputs plus this snapshot's four fields, without needing its own column here.
+/// `totalEarning` is likewise re-derived (a pure sum of already-frozen/snapshotted 2dp values, never
+/// itself a division result) rather than duplicated.
+///
+/// `netSalary` here is the *authorized* figure — for a `RECOVERY_DUE` entry this is
+/// `computeReleaseRecoveryAdjustment`'s own `adjustedNetSalary`, not necessarily the raw
+/// `calcNet(...).netSalary`, since that adjustment (capping a same-cycle negative against an
+/// already-materialized `correctionBalanceRecovery`) is itself part of what this release actually
+/// authorized (`payroll-release.service.ts`). Identical to `calcNet(...).netSalary` in the ordinary
+/// `PAID` case, where no such adjustment applies.
+///
+/// One row per `PayrollEntry`, ever (`@unique` on `payrollEntryId`) — enforced by the DB unique
+/// index, not merely application logic, and safe under concurrency because every release transaction
+/// that could create one already holds `lockPayrollCycleForUpdate`'s cycle-level lock as the first
+/// lock it acquires (Phase 6 Checkpoint 7's documented lock order), so two release sweeps for the
+/// same cycle — and therefore the same entry — can never run concurrently in the first place. No
+/// application code path ever issues an `update` or `delete` against this model (verified by this
+/// checkpoint's own audit of every `prisma.payrollEntryReleaseSnapshot.*` call site) — immutability is
+/// enforced by that absence, not by a database trigger, matching this codebase's existing preference
+/// for "no unnecessary triggers" (`PayrollUnitRelease`'s own insert-once convention is enforced the
+/// same way).
+model PayrollEntryReleaseSnapshot {
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payrollEntryId     String         @unique @db.Uuid
+  calculationVersion CalcNetVersion
+  earnedAmount       Decimal        @db.Decimal(12, 2)
+  otEarned           Decimal        @db.Decimal(12, 2)
+  leaveEarned        Decimal        @db.Decimal(12, 2)
+  /// The authorized figure — see this model's own doc comment for why this can differ from a raw
+  /// `calcNet(...).netSalary` in the `RECOVERY_DUE` case.
+  netSalary          Decimal        @db.Decimal(12, 2)
+  /// The moment this entry was actually resolved by its Unit release sweep — deliberately this
+  /// model's own column, not a read of `PayrollEntry.releasedAt` (which stays `null` for
+  /// `NO_PAY_DUE`/`RECOVERY_DUE` outcomes, docs/architecture/database/release.md), so every snapshot
+  /// carries a real resolution timestamp regardless of payout outcome.
+  resolvedAt         DateTime       @db.Timestamptz(6)
+  /// The user whose `releaseProjectUnit`/`releaseAllEligible` call produced this resolution —
+  /// deliberately this model's own column for the same reason as `resolvedAt` above
+  /// (`PayrollEntry.releasedBy` is likewise `null` for `NO_PAY_DUE`/`RECOVERY_DUE`).
+  resolvedByUserId   String         @db.Uuid
+  createdAt          DateTime       @default(now()) @db.Timestamptz(6)
+
+  payrollEntry   PayrollEntry @relation(fields: [payrollEntryId], references: [id], onDelete: Restrict)
+  resolvedByUser User         @relation("PayrollEntryReleaseSnapshotResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: Restrict)
 }
 
 /// Phase 6, Checkpoint 1 (Corrections & Balance Adjustments — domain and schema foundation only).
@@ -978,19 +1063,19 @@ model BalanceAdjustment {
   settledAt                 DateTime?                       @db.Timestamptz(6)
   createdAt                 DateTime                        @default(now()) @db.Timestamptz(6)
 
-  correction        Correction?                        @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  correction         Correction?                        @relation(fields: [correctionId], references: [id], onDelete: Restrict)
   /// **Added Negative Payroll Recovery checkpoint (2026-07-26).** The still-Draft-at-the-time
   /// `PayrollEntry` whose own negative `netSalary` created this row (mutually exclusive with
   /// `correction`, see `correctionId`/`originPayrollEntryId` comments above).
   originPayrollEntry PayrollEntry?                      @relation(fields: [originPayrollEntryId], references: [id], onDelete: Restrict)
-  employee          Employee                           @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  sourceCycle       PayrollCycle                       @relation("BalanceAdjustmentSourceCycle", fields: [sourceCycleId], references: [id], onDelete: Restrict)
-  adjustmentType    AdjustmentType                     @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
-  settledInCycle    PayrollCycle?                      @relation("BalanceAdjustmentSettledInCycle", fields: [settledInCycleId], references: [id], onDelete: Restrict)
-  correctionPayment CorrectionPayment?
-  settlements       BalanceAdjustmentSettlement[]
+  employee           Employee                           @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  sourceCycle        PayrollCycle                       @relation("BalanceAdjustmentSourceCycle", fields: [sourceCycleId], references: [id], onDelete: Restrict)
+  adjustmentType     AdjustmentType                     @relation(fields: [adjustmentTypeId], references: [id], onDelete: Restrict)
+  settledInCycle     PayrollCycle?                      @relation("BalanceAdjustmentSettledInCycle", fields: [settledInCycleId], references: [id], onDelete: Restrict)
+  correctionPayment  CorrectionPayment?
+  settlements        BalanceAdjustmentSettlement[]
   /// Phase 6 Checkpoint 5 — schema/domain foundation only (Draft-cycle projection reservations).
-  materializations  BalanceAdjustmentMaterialization[]
+  materializations   BalanceAdjustmentMaterialization[]
 
   @@index([employeeId, status])
   @@index([status])

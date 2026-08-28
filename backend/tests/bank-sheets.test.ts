@@ -558,6 +558,7 @@ describe('Phase 4 Checkpoint 3 — Bank Sheets', () => {
     // after every RESTRICT reference to it (the PayrollEntry snapshot and the Employee's own
     // current bankId) is gone.
     await prisma.payrollUnitRelease.deleteMany({ where: { cycleId: cycle.id } });
+    await prisma.payrollEntryReleaseSnapshot.deleteMany({ where: { payrollEntry: { cycleId: cycle.id } } });
     await prisma.payrollEntry.deleteMany({ where: { cycleId: cycle.id } });
     await prisma.employee.delete({ where: { id: employee.id } });
     await prisma.bank.delete({ where: { id: bank.id } });

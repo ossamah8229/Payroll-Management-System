@@ -93,7 +93,7 @@ async function resolveBankFilter(
 }
 
 type EntryForSheet = Prisma.PayrollEntryGetPayload<{
-  include: { employee: true; site: true; workLines: true };
+  include: { employee: true; site: true; workLines: true; releaseSnapshot: true };
 }>;
 
 function buildRow(entry: EntryForSheet, bankCode: string | null): BankSheetRow {
@@ -169,7 +169,7 @@ export async function getBankSheet(
       bankId,
       ...(siteIdFilter && { siteId: { in: siteIdFilter } }),
     },
-    include: { employee: true, site: true, workLines: { orderBy: { sortOrder: 'asc' } } },
+    include: { employee: true, site: true, workLines: { orderBy: { sortOrder: 'asc' } }, releaseSnapshot: true },
     orderBy: [{ site: { name: 'asc' } }, { sortOrder: 'asc' }],
   });
 

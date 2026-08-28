@@ -1,7 +1,8 @@
 import ExcelJS from 'exceljs';
 import type { SessionUser } from '@payroll/shared';
-import { calcNet, sumMoney, type CalcNetResult } from '@payroll/shared';
+import { sumMoney, type CalcNetResult } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import { computeEntryCalc, RELEASE_SNAPSHOT_CALC_SELECT } from '../payroll-entry/payroll-entry.service';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
 import { assertSiteAccess, getAccessibleSiteIds } from '../../common/authz-policy';
@@ -65,6 +66,7 @@ const PAYROLL_SUMMARY_ENTRY_SELECT = {
   hold: true,
   released: true,
   payoutOutcome: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   site: { select: { id: true, name: true } },
   workLines: {
     select: { sortOrder: true, days: true, otHours: true, otRate: true, cycleDays: true },
@@ -75,12 +77,12 @@ type PayrollSummaryEntry = Awaited<
   ReturnType<typeof prisma.payrollEntry.findMany<{ where: object; select: typeof PAYROLL_SUMMARY_ENTRY_SELECT }>>
 >[number];
 
-/** Adapts one narrowly-`select`ed `PayrollEntry` row into `calcNet`'s string-based input contract —
- * the report-query analogue of `payroll-entry.service.ts`'s `computeEntryCalc`, calling the exact
- * same shared `calcNet` (never a second net-salary formula), just accepting this module's own
- * `select`-shaped row rather than a full Prisma `PayrollEntry` entity. */
+/** Routes through `computeEntryCalc` (Payroll Financial Integrity checkpoint, 2026-08-28) — Payroll
+ * Summary aggregates figures across an entire cycle, which may already be `RELEASED`, so this must
+ * never silently re-derive a historical figure under whatever `calcNet` means today. */
 function calcEntry(entry: PayrollSummaryEntry): CalcNetResult {
-  return calcNet({
+  return computeEntryCalc({
+    ...entry,
     grossPay: entry.grossPay.toString(),
     allowance: entry.allowance.toString(),
     leaveDays: entry.leaveDays.toString(),

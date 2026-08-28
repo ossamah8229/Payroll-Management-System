@@ -1,4 +1,4 @@
-import type { Prisma, PayrollEntry, PayrollEntryWorkLine, PayrollCycleStatus } from '@prisma/client';
+import type { Prisma, PayrollEntry, PayrollEntryWorkLine, PayrollCycleStatus, PayrollEntryPayoutOutcome } from '@prisma/client';
 import type {
   AddWorkLineInput,
   BulkUpdatePayrollEntriesInput,
@@ -8,11 +8,13 @@ import type {
   UpdateWorkLineInput,
 } from '@payroll/shared';
 import {
-  calcNet,
+  calcNetForVersion,
   normalizeAccountNumber,
   normalizeIban,
+  sumMoney,
   workingDaysExceedCycleDays,
   type CalcNetResult,
+  type CalcNetVersion,
   type PayrollEntryCalcInput,
 } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
@@ -58,16 +60,57 @@ function assertWorkingDaysWithinCycleDays(workLines: { days: Prisma.Decimal | st
   );
 }
 
-export type EntryWithWorkLines = PayrollEntry & { workLines: PayrollEntryWorkLine[] };
+export type EntryWithWorkLines = PayrollEntry & {
+  workLines: PayrollEntryWorkLine[];
+  releaseSnapshot: PayrollEntryReleaseSnapshotCalcFields | null;
+};
 
-/**
- * Adapts stored `PayrollEntry`/`PayrollEntryWorkLine` (Prisma `Decimal` fields) into shared
- * `calcNet`'s string-based input contract and returns its result — the single computation path
- * every read of a Payroll Entry's net salary goes through (Principle 5/6). Never reimplemented
- * inline; every route below that returns an entry calls this rather than computing anything itself.
- */
-export function computeEntryCalc(entry: EntryWithWorkLines): CalcNetResult {
-  const input: PayrollEntryCalcInput = {
+/** The four authoritative fields `resolveEntryCalc` reads off a loaded `PayrollEntryReleaseSnapshot`
+ * — deliberately narrower than the full Prisma model (no `id`/`payrollEntryId`/`resolvedByUserId`
+ * needed here), so any caller's own narrower `select` still satisfies this structurally. */
+export interface PayrollEntryReleaseSnapshotCalcFields {
+  calculationVersion: CalcNetVersion;
+  earnedAmount: Prisma.Decimal;
+  otEarned: Prisma.Decimal;
+  leaveEarned: Prisma.Decimal;
+  netSalary: Prisma.Decimal;
+}
+
+/** The minimal structural shape `computeEntryCalc`/`resolveEntryCalc` need — generic, not fixed to
+ * `EntryWithWorkLines`, so a report's own narrow Prisma `select` (never the full `PayrollEntry`
+ * columns) can call it directly without an intermediate adapter. `released`/`payoutOutcome`/
+ * `releaseSnapshot` are required (not optional) so a caller whose `select` forgot to fetch
+ * `releaseSnapshot` gets a compile error, never a silently-wrong "must be Legacy reconstruction"
+ * fallback for an entry that actually has a real snapshot (Payroll Financial Integrity checkpoint,
+ * 2026-08-28 — financial-correctness code must fail loud, not permissive, on an omitted field). */
+export interface PayrollEntryCalcRoutable {
+  released: boolean;
+  payoutOutcome: PayrollEntryPayoutOutcome | null;
+  releaseSnapshot: PayrollEntryReleaseSnapshotCalcFields | null;
+  grossPay: Prisma.Decimal | string;
+  allowance: Prisma.Decimal | string;
+  leaveDays: Prisma.Decimal | string;
+  leaveRate: Prisma.Decimal | string | null;
+  eobiAmount: Prisma.Decimal | string;
+  eobiApplicable: boolean;
+  advanceDeduction: Prisma.Decimal | string;
+  eidAdvanceDeduction: Prisma.Decimal | string;
+  fine: Prisma.Decimal | string;
+  correctionBalancePayable: Prisma.Decimal | string;
+  correctionBalanceRecovery: Prisma.Decimal | string;
+  workLines: Array<{
+    sortOrder: number;
+    days: Prisma.Decimal | string;
+    otHours: Prisma.Decimal | string;
+    otRate: Prisma.Decimal | string | null;
+    cycleDays: number;
+  }>;
+}
+
+/** Adapts stored `PayrollEntry`/`PayrollEntryWorkLine` (Prisma `Decimal` fields) into shared
+ * `calcNet`'s string-based input contract — pure mapping, no version decision. */
+function toCalcInput(entry: PayrollEntryCalcRoutable): PayrollEntryCalcInput {
+  return {
     grossPay: entry.grossPay.toString(),
     allowance: entry.allowance.toString(),
     leaveDays: entry.leaveDays.toString(),
@@ -79,8 +122,8 @@ export function computeEntryCalc(entry: EntryWithWorkLines): CalcNetResult {
     fine: entry.fine.toString(),
     // Phase 6 Checkpoint 5 — passed through so a materialized correction obligation
     // (BalanceAdjustmentMaterialization, backend/src/modules/corrections/) is reflected in this
-    // entry's own calculated net salary everywhere computeEntryCalc is the single computation
-    // path (the grid, entry detail, exports) — not just at materialization-creation time.
+    // entry's own calculated net salary everywhere this is the single computation path (the grid,
+    // entry detail, exports) — not just at materialization-creation time.
     correctionBalancePayable: entry.correctionBalancePayable.toString(),
     correctionBalanceRecovery: entry.correctionBalanceRecovery.toString(),
     workLines: entry.workLines.map((line) => ({
@@ -91,8 +134,103 @@ export function computeEntryCalc(entry: EntryWithWorkLines): CalcNetResult {
       cycleDays: line.cycleDays,
     })),
   };
-  return calcNet(input);
 }
+
+/**
+ * **The single computation path every read of a Payroll Entry's net salary goes through**
+ * (Principle 5/6) — never reimplemented inline, and never bypassed by a report/surface computing
+ * `calcNet` on its own. Extended by the Payroll Financial Integrity checkpoint (2026-08-28) to route
+ * an already-resolved entry (`released` or `payoutOutcome != null` — the same two conditions
+ * `assertEntryEditable` already treats as permanently locked) away from whatever `calcNet` means
+ * today:
+ *
+ * - **Unresolved (Draft/Held) entry** — always the current, canonical `calcNet` (today: V2_PRECISE).
+ *   This is the one branch release-readiness evaluation (`payroll-release.service.ts`, called before
+ *   `released`/`payoutOutcome` are set) relies on landing on — it must always reflect what today's
+ *   corrected math would actually pay.
+ * - **Resolved, with a `releaseSnapshot`** — the snapshot's own `earnedAmount`/`otEarned`/
+ *   `leaveEarned`/`netSalary` are authoritative and never recomputed; every other `CalcNetResult`
+ *   field (per-line breakdown, rates, `totalWorkingDays`, `eobiDeduction`/`totalDeduction` — proven
+ *   version-independent, no division involved) is reconstructed via the snapshot's own pinned
+ *   `calculationVersion`, purely for display completeness. `totalEarning` is re-derived as a plain
+ *   sum of the now-authoritative components (`sumMoney`, never itself a division result).
+ * - **Resolved, no `releaseSnapshot`** — a pre-cutover entry (released before this checkpoint
+ *   existed). Reconstructed via `LEGACY_V1` — the sole formula every entry in this codebase's history
+ *   was computed under until the 2026-08-28 precision fix (confirmed by git archaeology, see
+ *   docs/PROJECT_PROGRESS.md) — never via current `calcNet`. This is a deterministic reconstruction
+ *   under historical semantics, explicitly not represented anywhere as a captured release-time value.
+ */
+/** The version decision alone, factored out of `computeEntryCalc` for callers that need a
+ * version-pinned reconstruction WITHOUT the entry-aggregate snapshot override — see
+ * `computeVersionedCalcForWorkLines` below for why that distinction matters. An unresolved
+ * (Draft/Held) entry is always `V2_PRECISE` — today's canonical `calcNet` — which is exactly what
+ * `calcNetForVersion` dispatches to, so this never risks drifting from "whatever calcNet means
+ * today" for that branch. */
+export function resolveEntryCalcVersion(
+  entry: Pick<PayrollEntryCalcRoutable, 'released' | 'payoutOutcome' | 'releaseSnapshot'>,
+): CalcNetVersion {
+  const isResolved = entry.released || entry.payoutOutcome != null;
+  return isResolved ? (entry.releaseSnapshot?.calculationVersion ?? 'LEGACY_V1') : 'V2_PRECISE';
+}
+
+/**
+ * For a report that needs a *per-line* figure (e.g. Overtime Report's own `otEarned` for one work
+ * line in isolation) rather than the entry-level aggregate — deliberately bypasses
+ * `computeEntryCalc`'s snapshot override, because `PayrollEntryReleaseSnapshot` only ever captures
+ * the whole entry's aggregate `otEarned`/`earnedAmount`/`leaveEarned` (Step 3 of the Payroll
+ * Financial Integrity checkpoint's own "minimal snapshot" design), never a per-line breakdown — for
+ * a genuinely multi-line (split-unit) entry, substituting the snapshot's entry-wide total in place
+ * of one line's own share would silently overstate that one line's figure. Still fully
+ * version-correct: the *version itself* (`resolveEntryCalcVersion`) is pinned from the entry's own
+ * resolution/snapshot state exactly as `computeEntryCalc` does, so a `LEGACY_V1` entry's per-line OT
+ * is reconstructed under `LEGACY_V1` semantics, never under whatever `calcNet` means today.
+ */
+export function computeVersionedCalcForWorkLines(
+  entry: Omit<PayrollEntryCalcRoutable, 'workLines'>,
+  workLines: PayrollEntryCalcRoutable['workLines'],
+): CalcNetResult {
+  const version = resolveEntryCalcVersion(entry);
+  return calcNetForVersion(version, toCalcInput({ ...entry, workLines }));
+}
+
+export function computeEntryCalc<T extends PayrollEntryCalcRoutable>(entry: T): CalcNetResult {
+  const version = resolveEntryCalcVersion(entry);
+  const reconstructed = calcNetForVersion(version, toCalcInput(entry));
+  if (!entry.releaseSnapshot) {
+    return reconstructed;
+  }
+
+  const snapshot = entry.releaseSnapshot;
+  const earnedAmount = snapshot.earnedAmount.toFixed(2);
+  const otEarned = snapshot.otEarned.toFixed(2);
+  const leaveEarned = snapshot.leaveEarned.toFixed(2);
+  const totalEarning = sumMoney([
+    earnedAmount,
+    otEarned,
+    entry.allowance.toString(),
+    leaveEarned,
+    entry.correctionBalancePayable.toString(),
+  ]);
+
+  return {
+    ...reconstructed,
+    earnedAmount,
+    otEarned,
+    leaveEarned,
+    totalEarning,
+    // The authorized figure captured at release — see `PayrollEntryReleaseSnapshot`'s own schema
+    // doc comment for why this can differ from a raw `calcNet(...).netSalary` (RECOVERY_DUE case).
+    netSalary: snapshot.netSalary.toFixed(2),
+  };
+}
+
+/** Every `PayrollEntry` read that includes `releaseSnapshot` should select exactly these fields —
+ * the minimal set `computeEntryCalc` actually reads (see `PayrollEntryReleaseSnapshotCalcFields`).
+ * One shared `select` object so every caller's Prisma query and this file's own routing type stay
+ * structurally in lockstep. */
+export const RELEASE_SNAPSHOT_CALC_SELECT = {
+  select: { calculationVersion: true, earnedAmount: true, otEarned: true, leaveEarned: true, netSalary: true },
+} satisfies { select: Record<keyof PayrollEntryReleaseSnapshotCalcFields, true> };
 
 // Generic over the caller's actual fetched shape (not fixed to `EntryWithWorkLines`) so a caller
 // that included `unit` on its `workLines` (via `WORK_LINES_INCLUDE`, above) gets that field back on
@@ -397,7 +535,7 @@ export function assertEntryEditable(entry: {
 async function getEntryForMutation(id: string) {
   const entry = await prisma.payrollEntry.findUnique({
     where: { id },
-    include: { cycle: true, workLines: WORK_LINES_INCLUDE },
+    include: { cycle: true, workLines: WORK_LINES_INCLUDE, releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT },
   });
   if (!entry) {
     throw notFound('Payroll entry not found');
@@ -408,7 +546,11 @@ async function getEntryForMutation(id: string) {
 async function getWorkLineForMutation(workLineId: string) {
   const line = await prisma.payrollEntryWorkLine.findUnique({
     where: { id: workLineId },
-    include: { payrollEntry: { include: { cycle: true, workLines: WORK_LINES_INCLUDE } } },
+    include: {
+      payrollEntry: {
+        include: { cycle: true, workLines: WORK_LINES_INCLUDE, releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT },
+      },
+    },
   });
   if (!line) {
     throw notFound('Payroll entry work line not found');
@@ -460,6 +602,7 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
         advance: { select: { id: true, outstandingBalance: true, status: true } },
         eidAdvance: { select: { id: true, outstandingBalance: true, status: true } },
         workLines: WORK_LINES_INCLUDE,
+        releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
       },
       orderBy: { sortOrder: 'asc' },
       skip: (page - 1) * pageSize,
@@ -487,6 +630,7 @@ export async function getPayrollEntry(currentUser: SessionUser, id: string) {
       advance: { select: { id: true, outstandingBalance: true, status: true } },
       eidAdvance: { select: { id: true, outstandingBalance: true, status: true } },
       workLines: WORK_LINES_INCLUDE,
+      releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
     },
   });
   if (!entry) {
@@ -595,7 +739,7 @@ export async function createPayrollEntry(
           })),
         },
       },
-      include: { workLines: WORK_LINES_INCLUDE },
+      include: { workLines: WORK_LINES_INCLUDE, releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT },
     });
 
     await recordAuditLog(
@@ -790,6 +934,7 @@ export async function updatePayrollEntry(
       where: { id },
       include: {
         workLines: WORK_LINES_INCLUDE,
+        releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
         employee: {
           select: {
             cnic: true,
@@ -912,6 +1057,7 @@ export async function addWorkLine(
       where: { id: entryId },
       include: {
         workLines: WORK_LINES_INCLUDE,
+        releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
         employee: {
           select: {
             cnic: true,
@@ -1014,6 +1160,7 @@ export async function updateWorkLine(
       where: { id: entry.id },
       include: {
         workLines: WORK_LINES_INCLUDE,
+        releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
         employee: {
           select: {
             cnic: true,
@@ -1093,6 +1240,7 @@ export async function deleteWorkLine(
       where: { id: entry.id },
       include: {
         workLines: WORK_LINES_INCLUDE,
+        releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
         employee: {
           select: {
             cnic: true,

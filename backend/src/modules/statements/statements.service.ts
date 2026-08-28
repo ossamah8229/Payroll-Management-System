@@ -8,7 +8,7 @@ import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
 import { getAccessibleSiteIds } from '../../common/authz-policy';
 import { searchEmployeesByHistoricalPayroll } from '../../common/historical-payroll-employee-lookup';
-import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
+import { computeEntryCalc, RELEASE_SNAPSHOT_CALC_SELECT, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
 import { getCompanySettings } from '../settings/settings.service';
 import { getCompanyLogoDataUri } from '../settings/company-logo.service';
 import { renderHtmlToPdf } from '../../lib/pdf/render-pdf';
@@ -106,6 +106,7 @@ function humanizeCorrectionField(field: string): string {
 const payrollEntryInclude = {
   workLines: WORK_LINES_INCLUDE,
   cycle: { select: { id: true, year: true, month: true } },
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
 } satisfies Prisma.PayrollEntryInclude;
 
 type PayrollEntryForStatement = Prisma.PayrollEntryGetPayload<{ include: typeof payrollEntryInclude }>;

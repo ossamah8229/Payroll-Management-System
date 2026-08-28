@@ -32,7 +32,7 @@ export async function getEntryForCorrection(
 ): Promise<EntryWithWorkLines> {
   const entry = await client.payrollEntry.findUnique({
     where: { id: payrollEntryId },
-    include: { workLines: { orderBy: { sortOrder: 'asc' } } },
+    include: { workLines: { orderBy: { sortOrder: 'asc' } }, releaseSnapshot: true },
   });
   if (!entry) {
     throw new CorrectionValidationError({

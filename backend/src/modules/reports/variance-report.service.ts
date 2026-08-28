@@ -3,7 +3,6 @@ import { Decimal } from 'decimal.js';
 import type { Prisma } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
 import {
-  calcNet,
   type CalcNetResult,
   VARIANCE_REPORT_BOUNDED_SORT_FIELDS,
   VARIANCE_REPORT_EXPORT_MAX_ROWS,
@@ -21,6 +20,7 @@ import {
   type VarianceReportEmployeeSearchResponse,
 } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import { computeEntryCalc, RELEASE_SNAPSHOT_CALC_SELECT } from '../payroll-entry/payroll-entry.service';
 import { badRequest, notFound } from '../../common/http-error';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
@@ -167,6 +167,9 @@ const ROW_SELECT = {
   fine: true,
   correctionBalancePayable: true,
   correctionBalanceRecovery: true,
+  released: true,
+  payoutOutcome: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   site: { select: { name: true } },
   employee: { select: { employeeCode: true, name: true } },
   workLines: {
@@ -187,30 +190,12 @@ const ROW_SELECT = {
 
 type RowEntry = Prisma.PayrollEntryGetPayload<{ select: typeof ROW_SELECT }>;
 
-/** The adapter from this module's own narrowly-`select`ed row to shared `calcNet`'s string-based
- * input contract — the exact same canonical `calcNet` every sibling report calls (never a second
- * net-salary formula, and never a second SQL-expressed version of it). */
+/** Routes through `computeEntryCalc` (Payroll Financial Integrity checkpoint, 2026-08-28) rather
+ * than calling `calcNet` directly — a Variance Report comparison spans two cycles, either of which
+ * may already be `RELEASED`, so this must never silently re-derive a historical side's `netSalary`
+ * under whatever `calcNet` means today. */
 function calcEntryRow(entry: RowEntry): CalcNetResult {
-  return calcNet({
-    grossPay: entry.grossPay.toString(),
-    allowance: entry.allowance.toString(),
-    leaveDays: entry.leaveDays.toString(),
-    leaveRate: entry.leaveRate?.toString() ?? null,
-    eobiAmount: entry.eobiAmount.toString(),
-    eobiApplicable: entry.eobiApplicable,
-    advanceDeduction: entry.advanceDeduction.toString(),
-    eidAdvanceDeduction: entry.eidAdvanceDeduction.toString(),
-    fine: entry.fine.toString(),
-    correctionBalancePayable: entry.correctionBalancePayable.toString(),
-    correctionBalanceRecovery: entry.correctionBalanceRecovery.toString(),
-    workLines: entry.workLines.map((line) => ({
-      sortOrder: line.sortOrder,
-      days: line.days.toString(),
-      otHours: line.otHours.toString(),
-      otRate: line.otRate?.toString() ?? null,
-      cycleDays: line.cycleDays,
-    })),
-  });
+  return computeEntryCalc(entry);
 }
 
 /**
