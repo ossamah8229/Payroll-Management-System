@@ -490,13 +490,23 @@ during RC1 preparation (2026-07-19/20), not assumed.
   result still cannot be recorded without the client's choice. The dead error code was removed
   end-to-end (`corrections.types.ts`, `error-handler.ts`); no frontend/shared-package code depended
   on it. Not a retry, sleep, or timeout change anywhere.
-- **Status: RESOLVED** — root-caused and fixed on `reliability/ki-15-corrections-concurrency` (Draft
-  PR #19; not yet merged, deployed, or tagged). Local evidence: 60/60 clean runs of the `Concurrent
-  approval` suite, 5/5 clean full-file runs, a new deterministic regression test (forces the exact
-  race window every run rather than relying on `Promise.all` timing), and a clean full six-shard
-  backend suite (97 suites / 1,895 tests). **Confirmed on real GitHub Actions CI**, run `33143110316`:
-  Backend PASS (12m45s, all six shards), Frontend PASS (1m31s), E2E PASS (7m25s, 189 passed/8
-  skipped/0 failed) — clean on the first CI attempt, no reruns.
+- **Status: RESOLVED and MERGED.** Root-caused and fixed on `reliability/ki-15-corrections-concurrency`,
+  merged to `main` via PR #19 as a normal merge commit
+  `48a7242ca17f52c6ea1027e9767aaf5428e10041` (parents `0adeaf609254036695b9495dda07522894defc61` and
+  `ae42cf3381899f6590a7333c3747274274dd6d0a`; no squash, no rebase). Local evidence: 60/60 clean runs
+  of the `Concurrent approval` suite, 5/5 clean full-file runs, a new deterministic regression test
+  (forces the exact race window every run rather than relying on `Promise.all` timing), and a clean
+  full six-shard backend suite (97 suites / 1,895 tests). **Confirmed on real GitHub Actions CI
+  twice**: pre-merge PR run `33144923473` on the exact merged HEAD (Backend PASS 12m58s all six
+  shards, Frontend PASS 1m26s, E2E PASS 7m28s), and **post-merge run `33149935185` on the merge
+  commit itself** — Backend PASS (all six shards; `corrections-service.test.ts` confirmed passing at
+  20.474s in shard 1/6's own log; 97 suites / 1,895 tests, exactly matching pre-merge), Frontend
+  PASS, E2E PASS. Deployed to production automatically via Render `autoDeploy`; `/health` 200; no
+  migration. Zero production mutations were performed at any point in this checkpoint. **No new
+  version tag** — this is a reliability patch on the already-released `v1.0.4` baseline. The
+  2026-08-19 CI Reliability Phase watch item this issue traces back to is now closed. The symmetric
+  `RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE` validation remains a documented watch item only
+  (structurally similar latent shape, no evidence it has ever fired) — deliberately not fixed here.
 
 ---
 
@@ -518,7 +528,7 @@ during RC1 preparation (2026-07-19/20), not assumed.
 | KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
 | KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |
 | KI-14 | Roles & Permissions dialog footer still overlapped final content (KI-9 follow-up) | No — **RESOLVED** 2026-07-23 |
-| KI-15 | `corrections-service.test.ts` concurrent-approval race — TOCTOU `paymentTiming` validation gap | No — **RESOLVED** 2026-08-28 (root-caused, fixed, confirmed on real CI — PR #19; not yet merged) |
+| KI-15 | `corrections-service.test.ts` concurrent-approval race — TOCTOU `paymentTiming` validation gap | No — **RESOLVED AND MERGED** 2026-08-28 (PR #19, merge commit `48a7242`; confirmed on real pre- and post-merge CI; live in production) |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

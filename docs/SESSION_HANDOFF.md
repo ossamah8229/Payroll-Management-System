@@ -7329,3 +7329,48 @@ still-open, unrelated items (`employee-payroll-history.test.ts`, `statements.tes
 flakes) remain untouched, out of this checkpoint's explicit scope. **STOP BEFORE MERGE** — Draft PR
 only, awaiting the user's own separate go-ahead to merge.
 
+---
+
+## 75. Addendum, 2026-08-28 — KI-15 PR #19 Final Gate, Merge & Production Cutover
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s "Reliability Checkpoint — KI-15 PR #19 Final
+Gate, Merge & Production Cutover" entry. Proceeds on the user's own explicit go-ahead.
+
+**Pre-merge re-verification** (Steps 1-5): candidate integrity, root-cause semantics, and the
+deterministic regression test were all independently re-confirmed clean by re-reading the final diff
+directly, not from memory — advisory-lock serialization, transaction boundaries, and
+`PAYMENT_TIMING_REQUIRED` all untouched; no retries/sleeps/timeout changes/test skips/CI relaxation
+anywhere in the diff. **One correction**: the qualifying CI run for the actual final PR HEAD
+(`ae42cf3`, after a docs-only follow-up commit) is `33144923473`, not `33143110316` (which qualified
+the prior commit `6a784c8`) — `33144923473` is itself fully green (Backend/Frontend/E2E all PASS), so
+the candidate was validly qualified throughout.
+
+**Merge**: normal merge commit `48a7242ca17f52c6ea1027e9767aaf5428e10041`, parents `0adeaf609...`
+(prior `main`) and `ae42cf338...` (PR #19 HEAD) — two parents confirm a real merge, no squash/rebase.
+No new tag created.
+
+**Post-merge CI**: fresh run `33149935185` on the merge commit — Backend PASS (all six shards,
+`corrections-service.test.ts` confirmed passing at 20.474s in shard 1/6's own log; 97 suites/1,895
+tests total, matching pre-merge exactly), Frontend PASS, E2E PASS. Clean on the first attempt.
+
+**Production**: Render `autoDeploy` picked up `48a7242` on both services automatically (observed
+only, never forced) — Frontend live ~1 minute after merge, Backend live shortly after (confirmed via
+`render` CLI `deploys list`, commit field cross-checked). `/health` 200 throughout. No migration (zero
+files changed under `backend/prisma/migrations/` by this PR).
+
+**Production validation — read-only, and genuinely limited to what's checkable without
+authentication**: no production login credentials were available or used (no pre-existing
+authenticated browser session either). Verified: backend `/health` 200; frontend SPA shell reachable
+at `/`, `/login`, `/corrections`, `/dashboard` (200 each — shell only, not authenticated content);
+backend API auth-gating correct (`/api/v1/correction-requests`, `/payroll-entries`,
+`/salary-release`, `/advances` each a clean `401`, not a `500`). **Does not verify authenticated page
+content** — that needs the user's own session. The deterministic local + real post-merge-CI
+regression suite is the authoritative evidence for the fix itself, not this smoke check.
+
+**Zero production mutations. Salary Release untouched/unauthorized.**
+
+**Classification: GREEN — KI-15 root-caused, fixed, merged, confirmed on real post-merge CI, live in
+production.** The 2026-08-19 CI Reliability Phase watch item is now closed. Not started: `v1.0.5`,
+general Reliability Phase 5, the symmetric `RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE` case, Salary
+Release. No new version tag.
+

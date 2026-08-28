@@ -15113,12 +15113,113 @@ custom `testSequencer`), and no new cross-test shared state was introduced (the 
 **Frontend PASS (1m31s)**, **E2E PASS (7m25s, the same 189-passed/8-skipped/0-failed result as the
 local run)**. No reruns were needed — clean on the first CI attempt.
 
-### KI-15 status
+### KI-15 status (superseded by the merge checkpoint immediately below)
 
 `docs/release/KNOWN_ISSUES_v1.0.md`'s KI-15 entry updated to **RESOLVED — root-caused, fixed, and
-confirmed green on real GitHub Actions CI** (PR #19, run `33143110316`). **Not merged, not deployed,
-not tagged** — Draft PR only, per this checkpoint's own instructions; merge requires the user's own
-separate go-ahead.
+confirmed green on real GitHub Actions CI** (PR #19). **Not merged, not deployed, not tagged** —
+Draft PR only, per this checkpoint's own instructions; merge requires the user's own separate
+go-ahead.
+
+---
+
+## Reliability Checkpoint — KI-15 PR #19 Final Gate, Merge & Production Cutover (2026-08-28, later same day)
+
+Continues directly from the entry above, on the user's own explicit go-ahead to proceed with final
+gate and merge.
+
+**Final candidate integrity, reconfirmed before merge**: `origin/main` unchanged since branch
+creation (`0adeaf6`), working tree clean, PR #19 diff still narrowly scoped to exactly 4 backend
+files (`corrections.service.ts`, `corrections.types.ts`, `error-handler.ts`,
+`corrections-service.test.ts`) plus the 3 doc files — no unrelated changes, `v1.0.4` unchanged
+(`v1.0.4^{}` = `035f50e0310f48a48b8a668b3ccaad8adc4849dd`), `mergeStateStatus: CLEAN`,
+`mergeable: MERGEABLE`. **One correction to the qualifying-CI reference carried over from the prior
+entry**: run `33143110316` qualified commit `6a784c8` (the code fix alone) — a docs-only follow-up
+commit (`ae42cf3`, recording the earlier CI confirmation) was pushed afterward, which is the actual
+final PR HEAD. That HEAD has its own separate, independent, fully green CI run — **`33144923473`**
+(Backend PASS 12m58s all six shards, Frontend PASS 1m26s, E2E PASS 7m28s) — with zero commits added
+after it. The candidate was therefore validly qualified throughout; only the specific run ID cited
+needed correcting.
+
+**Root-cause semantics independently re-confirmed** by re-reading the final diff directly (not from
+memory): `corrections.lock.ts` (the `pg_advisory_xact_lock` advisory-lock helper) — **untouched**;
+`.github/workflows/ci.yml` — **untouched**; no isolation-level change, no retry/sleep/timeout code
+anywhere in the diff (only prose in the new doc sections *describing* their absence). The
+`PAYMENT_TIMING_REQUIRED` branch (a genuinely PAYABLE result still requires the client's timing
+choice) is completely unmodified — a required payment timing cannot silently disappear. The only
+behavioral change is the removed `else if (input.paymentTiming) throw PAYMENT_TIMING_NOT_APPLICABLE`
+branch — a stale, inapplicable `paymentTiming` is now unused rather than rejected.
+
+**Deterministic regression test independently re-verified** (`'KI-15 — a stale paymentTiming...'`,
+`corrections-service.test.ts`): uses an explicit sequential barrier (probe → a *different* request's
+full approval commits → stale resubmit), not `Promise.all` timing, and asserts every required
+property — both requests end `APPROVED` with their own `resultingCorrectionId`; exactly one
+`Correction`/`BalanceAdjustment` pair each (no duplicated financial effect); exactly one
+`correction.approved` audit entry each (no partial/duplicate audit trail); the source `PayrollEntry`
+itself unmutated. Not weakened before merge.
+
+**Historical documentation re-confirmed accurate**: the entry above already states the 2026-08-19
+diagnostic episode, that no root-cause fix was made then, that it survived as a watch item through
+three closeout docs, that KI-15 is the same historical issue rather than a new v1.0.4 regression, and
+explicitly separates the six-shard CI architecture (single-process memory accumulation only) from
+this domain-level race (advisory locking itself was never defective). No changes needed.
+
+**Symmetric `RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE` case**: confirmed still documented only as a
+watch item (this entry's own "Residual reliability risks" list) — not fixed, no new checkpoint
+opened, PR #19 not expanded to cover it, per explicit instruction.
+
+**Merge**: PR #19 marked Ready for Review, then merged with a **normal merge commit** (no squash, no
+rebase, no `--admin`, no force push) — `gh pr merge 19 --merge`. Merge commit
+**`48a7242ca17f52c6ea1027e9767aaf5428e10041`**, parents **`0adeaf609254036695b9495dda07522894defc61`**
+(prior `main`) and **`ae42cf3381899f6590a7333c3747274274dd6d0a`** (PR #19's HEAD) — two distinct
+parents, confirming a real merge commit, not a squash/rebase. **No new version tag was created** —
+this is a reliability patch on the already-released `v1.0.4` baseline, not a new release.
+
+**Post-merge CI**: fresh run **`33149935185`** on the merge commit, triggered automatically by the
+push to `main`. **Backend PASS** (all six shards; shard 1/6 log line confirms
+`PASS tests/corrections-service.test.ts (20.474 s)` specifically, in the real post-merge environment
+against CI's own `postgres:16-alpine`; combined total across all six shards **97 suites / 1,895
+tests, 0 failures — exactly matching the pre-merge local and CI totals**). **Frontend PASS**. **E2E
+PASS**. Overall workflow conclusion: `success`. No reruns needed.
+
+**Production deployment** (Render `autoDeploy`, observed only — never manually forced): both services
+picked up `48a7242` automatically. Frontend (`payroll-management-app`, `srv-d9fg41jrjlhs73dqiq7g`)
+deploy `dep-da8j4f3rjlhs73d3he8g` reached `live` at `07:02:11Z`, ~1 minute after the `07:01:14Z`
+merge. Backend (`payroll-management-api`, `srv-d9euhnjtqb8s73b8f1s0`) deploy
+`dep-da8j4f3rjlhs73d3hdvg` reached `live` shortly after (confirmed via the Render CLI's own
+`deploys list`, commit field cross-checked against `48a7242` on both). `/health` →
+`{"status":"ok"}` / HTTP 200 on the production API domain (`https://payroll-api.brooms.com.pk`)
+before and after the backend deploy completed — no crash/restart loop. **No migration** — confirmed
+by diffing `backend/prisma/migrations/` across the merge (zero files changed by PR #19), and no
+migration step appears anywhere in this checkpoint's diff; the deploy's own build/start succeeded
+cleanly regardless, consistent with there being none to run.
+
+**Production validation — genuinely read-only, no authenticated session available or fabricated**:
+this checkpoint had no production login credentials and did not attempt to obtain, guess, or use any
+— browser automation's own `tabs_context_mcp` confirmed no pre-existing authenticated session either.
+Verification was therefore limited to what is checkable without authentication: backend `/health` →
+`200`/`{"status":"ok"}`; frontend SPA shell reachable at `/`, `/login`, `/corrections`, `/dashboard`
+(all `200` — client-side routing serves the app shell; real page content requires a login this
+checkpoint never performed); backend API auth-gating verified functioning correctly rather than
+crashing — `GET /api/v1/correction-requests`, `/api/v1/payroll-entries`, `/api/v1/salary-release`,
+`/api/v1/advances` each returned a clean `401` (properly gated, not a `500`/timeout). **This does not
+constitute verification that Corrections/Payroll Entry/Dashboard/Salary Release/Advances/Reports
+*content* actually renders correctly for a logged-in user** — that would require the user's own
+authenticated session. The deterministic local + real-CI regression suite (post-merge run
+`33149935185`, above) remains the authoritative evidence for the concurrency fix itself, exactly as
+intended — production smoke here confirms deployment health, not the fix's correctness.
+
+**Zero production mutations at any point in this checkpoint**: no Correction Request created,
+approved, or rejected; no Payroll Entry edited; no attendance touched; no Advance touched; no
+Hold/Release/Finalize action; no SQL write of any kind against production. Salary Release remains
+untouched/unauthorized, same as every prior checkpoint.
+
+**Classification: GREEN — KI-15 root-caused, fixed, merged, confirmed on real post-merge CI, and
+live in production.** The historical CI Reliability Phase watch item first seen 2026-08-19 is now
+closed. Reliability Phase 5's own three still-open, unrelated items
+(`employee-payroll-history.test.ts`, `statements.test.ts` query-count flakes) and the symmetric
+`RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE` watch item remain open, out of scope, not started. No
+new version tag created; `v1.0.5` not started; general Reliability Phase 5 not resumed; Salary
+Release not performed.
 
 ---
 
