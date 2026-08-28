@@ -741,6 +741,113 @@ describe('Phase 7 Reports — Employee Payroll History (Checkpoint 1A)', () => {
   });
 
   // ================================================================================================
+  // CalcNet version routing (Payroll Financial Integrity checkpoint, 2026-08-28)
+  // ================================================================================================
+
+  /**
+   * This report now routes every entry's financial figures through `computeEntryCalc`
+   * (`calcEntryRow`, `employee-payroll-history.service.ts`) instead of calling `calcNet` directly —
+   * proves the three CalcNetVersion states specifically at this report's own list/detail surface,
+   * not just at `computeEntryCalc`'s own unit level (`payroll-financial-integrity-snapshot.test.ts`)
+   * or the generic Payroll Entry detail endpoint. Reuses that same test's known divide-vs-multiply
+   * precision boundary (`grossPay=190221.91`, 14/28 days) so V2_PRECISE and LEGACY_V1 provably
+   * disagree on `earnedAmount` for identical stored inputs.
+   */
+  describe('CalcNet version routing (Payroll Financial Integrity checkpoint, 2026-08-28)', () => {
+    const KNOWN_BOUNDARY_GROSS_PAY = '190221.91';
+    const V2_EARNED_AMOUNT = '95110.96'; // multiply-before-divide (current, correct)
+    const LEGACY_EARNED_AMOUNT = '95110.95'; // divide-before-multiply (pre-2026-08-28)
+
+    it('state A — a Draft (unreleased) entry reflects live V2_PRECISE math', async () => {
+      const admin = await masterAdminAgent('eph-routing-admin-draft@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site EPH Routing Draft');
+      const cycle = await makeCycle(admin.userId);
+      const employee = await makeEmployee(site.id, unit.id, 'Routing Draft Employee');
+      const entry = await makeEntry(cycle.id, employee.id, site.id, unit.id, {
+        grossPay: KNOWN_BOUNDARY_GROSS_PAY,
+        days: '14',
+        cycleDays: 28,
+      });
+
+      const res = await admin.agent.get(detailUrl(entry.id)).set('x-csrf-token', admin.csrfToken);
+      expect(res.status).toBe(200);
+      expect(res.body.calculation.earnedAmount).toBe(V2_EARNED_AMOUNT);
+      expect(res.body.calculation.earnedAmount).not.toBe(LEGACY_EARNED_AMOUNT);
+    });
+
+    it('state B — a released entry with no snapshot (pre-cutover historical shape) reconstructs under LEGACY_V1, never current calcNet', async () => {
+      const admin = await masterAdminAgent('eph-routing-admin-legacy@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site EPH Routing Legacy');
+      const cycle = await makeCycle(admin.userId);
+      const employee = await makeEmployee(site.id, unit.id, 'Routing Legacy Employee');
+      // Directly inserted as already-`released`, no `PayrollEntryReleaseSnapshot` — bypasses the
+      // release HTTP path (which would create one) to simulate a genuine pre-cutover historical row.
+      const entry = await makeEntry(cycle.id, employee.id, site.id, unit.id, {
+        grossPay: KNOWN_BOUNDARY_GROSS_PAY,
+        days: '14',
+        cycleDays: 28,
+        released: true,
+        releasedAt: new Date('2026-01-05T00:00:00Z'),
+        releasedBy: admin.userId,
+      });
+
+      const res = await admin.agent.get(detailUrl(entry.id)).set('x-csrf-token', admin.csrfToken);
+      expect(res.status).toBe(200);
+      expect(res.body.calculation.earnedAmount).toBe(LEGACY_EARNED_AMOUNT);
+      expect(res.body.calculation.earnedAmount).not.toBe(V2_EARNED_AMOUNT);
+
+      const snapshot = await prisma.payrollEntryReleaseSnapshot.findUnique({ where: { payrollEntryId: entry.id } });
+      expect(snapshot).toBeNull(); // no fabricated snapshot for this historical row
+    });
+
+    it('state C — a released entry WITH a snapshot returns the snapshot value verbatim, at both the detail and list surfaces — never recomputed', async () => {
+      const admin = await masterAdminAgent('eph-routing-admin-snapshot@test.local');
+      const { site, unit } = await makeSiteWithUnit('Test Site EPH Routing Snapshot');
+      const cycle = await makeCycle(admin.userId);
+      const employee = await makeEmployee(site.id, unit.id, 'Routing Snapshot Employee');
+      const entry = await makeEntry(cycle.id, employee.id, site.id, unit.id, {
+        grossPay: KNOWN_BOUNDARY_GROSS_PAY,
+        days: '14',
+        cycleDays: 28,
+        released: true,
+        releasedAt: new Date(),
+        releasedBy: admin.userId,
+      });
+
+      // Deliberately a "poisoned" sentinel that neither LEGACY_V1 nor V2_PRECISE would ever produce
+      // from these inputs — the strongest possible proof that this report reads the snapshot, not
+      // any calculator, for the authoritative fields. Mirrors
+      // `payroll-financial-integrity-snapshot.test.ts`'s own Part 1 poisoned-snapshot proof.
+      await prisma.payrollEntryReleaseSnapshot.create({
+        data: {
+          payrollEntryId: entry.id,
+          calculationVersion: 'V2_PRECISE',
+          earnedAmount: '12345.67',
+          otEarned: '111.11',
+          leaveEarned: '22.22',
+          netSalary: '11999.00',
+          resolvedAt: new Date(),
+          resolvedByUserId: admin.userId,
+        },
+      });
+
+      const detail = await admin.agent.get(detailUrl(entry.id)).set('x-csrf-token', admin.csrfToken);
+      expect(detail.status).toBe(200);
+      expect(detail.body.calculation.earnedAmount).toBe('12345.67');
+      expect(detail.body.calculation.otEarned).toBe('111.11');
+      expect(detail.body.calculation.leaveEarned).toBe('22.22');
+      expect(detail.body.calculation.netSalary).toBe('11999.00');
+      expect(detail.body.calculation.earnedAmount).not.toBe(V2_EARNED_AMOUNT);
+      expect(detail.body.calculation.earnedAmount).not.toBe(LEGACY_EARNED_AMOUNT);
+
+      const list = await admin.agent.get(listUrl({ employeeId: employee.id }));
+      expect(list.status).toBe(200);
+      const row = list.body.rows.find((r: { payrollEntryId: string }) => r.payrollEntryId === entry.id);
+      expect(row.netSalary).toBe('11999.00');
+    });
+  });
+
+  // ================================================================================================
   // Corrections
   // ================================================================================================
 
