@@ -14911,6 +14911,217 @@ this checkpoint.
 
 ---
 
+## Reliability Checkpoint — KI-15 Corrections Concurrency Root-Cause & Fix, and CI Reliability Phase Retrospective (2026-08-28)
+
+Branch `reliability/ki-15-corrections-concurrency`, off `main` at `0adeaf6`. Development/reliability
+checkpoint only — no production access of any kind was used or needed (root-caused and reproduced
+entirely against local disposable PostgreSQL 16.15, matching CI's `postgres:16-alpine`; no
+Correction Requests, Payroll Entries, Advances, attendance, or Salary Release touched in production).
+
+### CI Reliability Phase Retrospective vs KI-15
+
+**What the earlier Reliability Phase (Phase 4, `de82bf2`→`17dfa97`, and Phase 5,
+`9f11ced`→`44c1dbe`) actually solved**, reconstructed from `git log`/`gh pr view` evidence, not from
+memory:
+- **Root-caused**: stale planner statistics after bulk fixture seeds (missing `ANALYZE`, `7734bb6`/
+  `4d083da`); brittle `EXPLAIN`-text plan-shape assertions replaced with a catalog-metadata
+  `expectIndexColumns()` helper (`bbf54b3`); a leaked `sessionPool`/`PgSession` prune-timer pair that
+  outlived process teardown (`4f204d4`, `5b6b9b8`); a Jest module-cache bug that gave PDF-worker
+  tests the wrong socket (`69f66e9`); a Payslip-batch-ZIP audit-ordering race, `'finish'` firing
+  before `recordAuditLog` (`8d83e27`); a stale Node 20 runtime silently failing Puppeteer's engine
+  check (`9f11ced`/`d6eb83c`).
+- **CI architecture change, not a leak fix**: the backend suite's single `--runInBand` Jest process
+  was split into **six sequential, process-isolated shards** (`f08d78c`,
+  `.github/workflows/ci.yml`'s six `--shard=N/6` steps) after diagnostics (local-only PR #8) measured
+  a monolithic run trending toward the 3072MB `--max-old-space-size` ceiling, vs. ≈1,458MB max
+  observed per shard after the split. This resets accumulated JS heap between processes; it was never
+  presented as, and is not, a fix for a specific memory leak — no leak was ever identified.
+- **Explicitly NOT solved, and explicitly documented as such at the time**: `44c1dbe` (2026-08-24,
+  Phase 5 pause) lists three intermittent failures "not investigated as part of pausing Phase 5" —
+  `employee-payroll-history.test.ts` query counts, `statements.test.ts` query counts, and
+  **`corrections-service.test.ts` concurrent-approval behavior**. Phase 5 was paused for the v1.0.0
+  Payroll Entry correctness issue and never resumed before v1.0.4 shipped.
+
+**Historical Corrections-concurrency evidence — this is not a new failure.** `corrections-service.test.ts`
+and its "Concurrent approval" scenarios existed unchanged since Phase 6 Checkpoint 3 (`6189ba9`,
+2026-07-18). On 2026-08-19 — three days before the six-shard split even merged, and five days before
+Phase 5 paused — `f047fd0` added temporary diagnostic logging to this exact "two different requests
+on the same PayrollEntry serialize" test for a failure already under live investigation; `bc48fda`
+triggered a second CI evidence-gathering run; `4d083da` removed the logging the same day, citing
+"runs #82-#84" as the evidence gathered — **no commit or doc anywhere records what those runs
+actually captured; the diagnostic pass was pulled with no documented conclusion.** The same day's own
+closeout doc (`de82bf2`) already flags it: *"Historical Statements/Corrections intermittent
+anomalies — separately recorded, not proven permanently resolved."* That caveat is carried forward
+near-verbatim through `17dfa97` (2026-08-21) and `44c1dbe` (2026-08-24) — three separate documented
+sightings across five days, every one deferred, none investigated to a conclusion.
+
+**KI-15, written 2026-08-28 in `docs/release/KNOWN_ISSUES_v1.0.md` under PR #18's post-merge CI, does
+not cross-reference the 2026-08-19 diagnostic episode** — it frames the failure as newly found on
+PR #18, and its own text states it was "not reproduced locally in this session." This checkpoint's
+own local reproduction (below) succeeded on the first extended run, at roughly the same ~25% rate
+KI-15's own CI observation (3 of 4) implies, using nothing beyond the already-migrated local
+`payroll_dev` database and the test file exactly as it stood on `main`.
+
+**Verdict: same historical flake, never root-caused — not a new defect, and not a regression of a
+prior fix (no fix for this scenario was ever implemented, so there was nothing to regress).** The
+2026-08-19 diagnostic pass generated CI evidence but no documented root cause and no code change to
+`corrections.service.ts`/`corrections.repository.ts`/`corrections.lock.ts`; the six-shard
+architecture (Phase 4) and the Node 24 gate/Payslips N+1 guard (Phase 5) never touched the Corrections
+module at all — confirmed by diffing every merged reliability PR (#9, #10, #11, #13) against
+`backend/src/modules/corrections/` and `backend/tests/corrections-service.test.ts` (zero overlap).
+KI-15 is this same long-standing, three-times-deferred flake finally given a formal KI number, not a
+fresh regression.
+
+### Root cause
+
+`corrections.service.ts`'s `approveCorrectionRequest` already had the correct core concurrency
+control from Phase 6 Checkpoint 2/3 and it is **not** what KI-15 was hitting: a `pg_advisory_xact_lock`
+keyed on the `PayrollEntry` id (`corrections.lock.ts`), acquired inside the approval transaction,
+followed by a **fresh re-read** of the request and its already-approved corrections once the lock is
+held — genuinely correct serialization under Postgres's default `READ COMMITTED` isolation (no
+isolation level is overridden anywhere in this codebase), verified by direct code reading (Step 5/7
+of the investigation) and never implicated by any of the ~100 local repro runs below (never a
+deadlock, a serialization-failure SQLSTATE `40001`, a Prisma transaction timeout, or any 5xx).
+
+The actual defect is a **TOCTOU (time-of-check-time-of-use) validation gap**, real for genuine users,
+not a test artifact: a client (the real `approve-request-modal.tsx`, and this test's own
+`approveAdaptive`/discovery-probe helper alike) can only learn whether a `CorrectionRequest` will
+require `paymentTiming` from a read taken **before** the approval transaction acquires its lock — an
+unlocked `previewCorrectionForEntry` call in production, or an earlier `PAYMENT_TIMING_REQUIRED`
+probe in the test. If a *different* concurrent approval against the same `PayrollEntry` commits in
+the window between that read and the client's actual submission, the classification the client
+learned can legitimately flip (this codebase's own absolute-value-correction design already treats
+that reclassification as correct and expected — see `corrections.lock.ts`'s and the test's own design
+comments). `approveCorrectionRequest` recalculates correctly against the new baseline, but then threw
+`PAYMENT_TIMING_NOT_APPLICABLE` (400) whenever a now-stale-but-honest `paymentTiming` was supplied for
+a request that had — through no fault of the client — stopped being `PAYABLE`. `paymentTiming` has no
+functional effect once a correction isn't `PAYABLE` (never read, never persisted, outside that
+branch), so nothing was ever protected by hard-rejecting it; the validation simply didn't account for
+its own advisory-lock design allowing the classification it depends on to change between when a
+client observes it and when it submits.
+
+**Classification: (C) error-classification defect, with a real production/UX footprint (a blend of A
+and C)** — state always stayed safe (no corruption, no duplicate financial effect, the rejected
+request simply stayed `PENDING`), but a legitimate, expected concurrency outcome was surfaced as a
+flat client-input 400 instead of the successful, correctly-recalculated approval it should have been.
+Not (B) — the test's expectation (`resA`/`resB` both `200`) matches the domain's own stated intent
+that both corrections should serialize and both succeed. Not (D) — no PostgreSQL/environment
+divergence was implicated at any point (local Postgres 16.15 vs. CI's `postgres:16-alpine`, same major
+version, identical result shape every time).
+
+### Deterministic reproduction
+
+Local disposable `payroll_dev` (PostgreSQL 16.15, Homebrew, 28/28 migrations applied — not
+production; production access was never used). Focused test alone (`-t "Concurrent approval"`,
+`--runInBand`, matching `backend/package.json`'s own `test` script):
+
+| Run set | Iterations | Failures | Failure body captured |
+|---|---|---|---|
+| Baseline, no instrumentation (pre-fix) | 15 | 4 (runs 5, 10, 12, 14) | assertion only: `resA.status` expected `200`, got `400` |
+| Diagnostic (temporary `console.log` of `resA`/`resB` bodies on non-200, reverted before commit — same technique, same discipline, as the 2026-08-19 `f047fd0` diagnostic) | 25 | 2 (runs 15, 16) | **both**: `resA.status = 400`, `error.code = 'PAYMENT_TIMING_NOT_APPLICABLE'`; `resB.status = 200` |
+| Second diagnostic batch | 40 | 2 (runs 7, 27) | **both**: identical `PAYMENT_TIMING_NOT_APPLICABLE` shape — 4/4 observed failures, same code, same side (the request that had already been told `PAYMENT_TIMING_REQUIRED`) |
+| Full `corrections-service.test.ts` file, post-fix | 5 full runs | 0/5 | 53→54 tests (new regression test added), all passing every run |
+| `Concurrent approval` describe block, post-fix | 60 | 0/60 | — |
+| Full six-shard backend suite, post-fix | 6/6 shards | 0 failures | 97 suites / 1,895 tests, all green (see gates below) |
+
+No sleeps, no retries, no timeout increases were used to reproduce or to "fix" the flakiness — the
+100% consistent `PAYMENT_TIMING_NOT_APPLICABLE` shape across every one of the 4 observed pre-fix
+failures is what identified the root cause, not a change in timing.
+
+### Fix — why this is root-cause, not a retry or workaround
+
+`backend/src/modules/corrections/corrections.service.ts`'s `approveCorrectionRequest`: the
+`PAYMENT_TIMING_NOT_APPLICABLE` throw is removed. A `paymentTiming` supplied for a request that
+recalculates (under the lock, against the live baseline) as not `PAYABLE` is now silently unused —
+exactly as if it had never been sent — rather than rejected. `PAYMENT_TIMING_REQUIRED` is
+**unchanged and still a hard failure**: a genuinely `PAYABLE` result cannot be recorded without the
+client's `IMMEDIATE`/`DEFERRED` choice, and that direction of the race (a request that looked
+non-`PAYABLE` becoming `PAYABLE`) already resolves correctly today — the client's own blank probe
+simply receives `PAYMENT_TIMING_REQUIRED` and knows to ask again, which is the intended discovery
+signal working as designed. The now-dead `PAYMENT_TIMING_NOT_APPLICABLE` code was removed end-to-end
+(`corrections.types.ts`'s `CorrectionValidationErrorCode` union, `error-handler.ts`'s status map) —
+confirmed via repo-wide grep that no frontend or shared-package code ever depended on that specific
+code (the real frontend derives whether to send `paymentTiming` from its own `preview` call's
+classification, never from this error code).
+
+This is a transaction-semantics correction, not a retry: no code path retries, sleeps, or increases a
+timeout anywhere; no test timeout was raised; no assertion was weakened to pass — the one pre-existing
+test that exercised the old behavior (`'approves a negative-delta request... rejects paymentTiming'`)
+was deliberately renamed and its assertion changed to expect `200`/ignored-timing, with a documented
+reason, because that behavior was itself the bug's other face, not because the new behavior was
+inconvenient for a test. The sibling `RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE` validation has the
+identical latent shape (same function, same race pattern) but was deliberately left untouched — no
+test or reproduction ever exercised it, and fixing an un-evidenced, un-requested second validation
+would be scope creep beyond KI-15; it is recorded below as a residual risk instead.
+
+### New/changed tests
+
+- `backend/tests/corrections-service.test.ts`, `'Concurrent approval'` describe block: added
+  `'KI-15 — a stale paymentTiming, learned before a concurrent approval shifted the baseline, is
+  honored not rejected'` — deterministically sequenced (probe → a *different* request's full
+  concurrent approval commits → stale resubmit), reproducing the exact critical window on every run
+  instead of the ~25%-of-the-time `Promise.all` race, per this checkpoint's own preference for
+  synchronization over hoping the scheduler cooperates. Asserts: both requests end `APPROVED` with
+  their own `resultingCorrectionId`; exactly 2 `Correction`/`BalanceAdjustment` rows (no duplicate
+  financial effect); exactly 2 `correction.approved` audit entries (no partial audit trail from the
+  now-successful retry); the source `PayrollEntry` itself untouched.
+- The existing `'approves a negative-delta request...'` test (line ~353) was updated: the second half
+  now asserts `200`/ignored `paymentTiming` instead of `400`/`PAYMENT_TIMING_NOT_APPLICABLE`, per the
+  root-cause fix above.
+
+### Validation gates (all run against local disposable PostgreSQL; no production access)
+
+| Gate | Result |
+|---|---|
+| Focused `Concurrent approval` suite | 60/60 clean runs, 0 failures |
+| Full `corrections-service.test.ts` | 5/5 full runs, 54/54 tests passing every run |
+| `corrections-*` + `audit-log.test.ts` + `payroll-entry.test.ts` | 310/310 passing |
+| Backend typecheck (`tsc --noEmit`) | clean |
+| Backend lint (`eslint .`) | 0 errors (10 pre-existing warnings, unrelated scripts, out of scope) |
+| Backend build (`tsc -p tsconfig.build.json`) | clean |
+| Full six-shard backend suite (`--shard=1/6` … `6/6`, matching CI exactly) | 6/6 shards green — 97 suites / 1,895 tests, 0 failures |
+| `git diff --check` | clean |
+| E2E (`playwright test`, full 31-spec suite, disposable embedded Postgres) | **189 passed, 8 skipped (pre-existing data-availability skips), 0 failed** (3.2 min). No Corrections E2E spec exercises `paymentTiming` at all (confirmed via grep), so this is a no-regression check, not new coverage — no collateral breakage |
+
+### Six-shard CI architecture — validated unchanged, not touched
+
+Per this checkpoint's own scope discipline: the six-shard split was not implicated by KI-15 (no
+memory/heap signature in any reproduction — every failure was an instant `PAYMENT_TIMING_NOT_APPLICABLE`
+validation error, not a timeout or OOM) and was left exactly as `f08d78c` (PR #9) left it. Re-running
+all six shards locally (above) confirms `corrections-service.test.ts` now passes deterministically
+within its assigned shard, shard assignment is unchanged (Jest's own default `--shard` sequencer, no
+custom `testSequencer`), and no new cross-test shared state was introduced (the new test uses the same
+`makeFixtures`/`cleanTestData` isolation as every other test in the file).
+
+### Residual reliability risks (explicitly not addressed by this checkpoint)
+
+1. `RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE` has the identical latent TOCTOU shape as the fixed
+   `PAYMENT_TIMING_NOT_APPLICABLE` — no evidence it has ever fired in practice, not fixed here
+   (out of KI-15's own scope), worth a symmetric look if it is ever observed.
+2. The three still-open Phase 5 items from `44c1dbe` remain untouched and out of this checkpoint's
+   scope, per its own explicit exclusions: `employee-payroll-history.test.ts` and
+   `statements.test.ts` query-count flakes.
+3. This checkpoint's local reproduction used `payroll_dev` (PostgreSQL 16.15) rather than GitHub
+   Actions' own `postgres:16-alpine` runner — same major version, same isolation defaults, same
+   advisory-lock semantics. **Real-CI confirmation obtained** (below) — this is no longer an open
+   gap.
+
+### Real CI confirmation (PR #19, run `33143110316`, head `6a784c8`)
+
+`gh pr checks 19` after all three jobs completed: **Backend PASS (12m45s, all six shards, including
+`corrections-service.test.ts`'s "Concurrent approval" suite on real `postgres:16-alpine`)**,
+**Frontend PASS (1m31s)**, **E2E PASS (7m25s, the same 189-passed/8-skipped/0-failed result as the
+local run)**. No reruns were needed — clean on the first CI attempt.
+
+### KI-15 status
+
+`docs/release/KNOWN_ISSUES_v1.0.md`'s KI-15 entry updated to **RESOLVED — root-caused, fixed, and
+confirmed green on real GitHub Actions CI** (PR #19, run `33143110316`). **Not merged, not deployed,
+not tagged** — Draft PR only, per this checkpoint's own instructions; merge requires the user's own
+separate go-ahead.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
