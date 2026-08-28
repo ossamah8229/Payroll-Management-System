@@ -2,7 +2,6 @@ import ExcelJS from 'exceljs';
 import type { Prisma } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
 import {
-  calcNet,
   sumMoney,
   OVERTIME_REPORT_EXPORT_MAX_ROWS,
   type OvertimeReportExportQuery,
@@ -14,6 +13,7 @@ import {
   type OvertimeReportTotals,
 } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import { computeVersionedCalcForWorkLines, RELEASE_SNAPSHOT_CALC_SELECT } from '../payroll-entry/payroll-entry.service';
 import { badRequest, notFound } from '../../common/http-error';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
@@ -153,9 +153,11 @@ const ROW_SELECT = {
       eidAdvanceDeduction: true,
       fine: true,
       correctionBalanceRecovery: true,
+      correctionBalancePayable: true,
       hold: true,
       released: true,
       payoutOutcome: true,
+      releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
       site: { select: { name: true } },
       employee: { select: { employeeCode: true, name: true } },
     },
@@ -181,27 +183,15 @@ type RowWorkLine = Prisma.PayrollEntryWorkLineGetPayload<{ select: typeof ROW_SE
  * canonical formula, not a partial/synthetic one.
  */
 function calcWorkLineRow(line: RowWorkLine) {
-  return calcNet({
-    grossPay: line.payrollEntry.grossPay.toString(),
-    allowance: line.payrollEntry.allowance.toString(),
-    leaveDays: line.payrollEntry.leaveDays.toString(),
-    leaveRate: line.payrollEntry.leaveRate?.toString() ?? null,
-    eobiAmount: line.payrollEntry.eobiAmount.toString(),
-    eobiApplicable: line.payrollEntry.eobiApplicable,
-    advanceDeduction: line.payrollEntry.advanceDeduction.toString(),
-    eidAdvanceDeduction: line.payrollEntry.eidAdvanceDeduction.toString(),
-    fine: line.payrollEntry.fine.toString(),
-    correctionBalanceRecovery: line.payrollEntry.correctionBalanceRecovery.toString(),
-    workLines: [
-      {
-        sortOrder: line.sortOrder,
-        days: line.days.toString(),
-        otHours: line.otHours.toString(),
-        otRate: line.otRate?.toString() ?? null,
-        cycleDays: line.cycleDays,
-      },
-    ],
-  });
+  return computeVersionedCalcForWorkLines(line.payrollEntry, [
+    {
+      sortOrder: line.sortOrder,
+      days: line.days.toString(),
+      otHours: line.otHours.toString(),
+      otRate: line.otRate?.toString() ?? null,
+      cycleDays: line.cycleDays,
+    },
+  ]);
 }
 
 // --- Batched correction lookup (never per-row) --------------------------------------------------
@@ -297,6 +287,10 @@ const CALC_INPUT_SELECT = {
       eidAdvanceDeduction: true,
       fine: true,
       correctionBalanceRecovery: true,
+      correctionBalancePayable: true,
+      released: true,
+      payoutOutcome: true,
+      releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
     },
   },
 } satisfies Prisma.PayrollEntryWorkLineSelect;
@@ -304,19 +298,9 @@ const CALC_INPUT_SELECT = {
 type CalcInputWorkLine = Prisma.PayrollEntryWorkLineGetPayload<{ select: typeof CALC_INPUT_SELECT }>;
 
 function calcInputRow(line: CalcInputWorkLine) {
-  return calcNet({
-    grossPay: line.payrollEntry.grossPay.toString(),
-    allowance: line.payrollEntry.allowance.toString(),
-    leaveDays: line.payrollEntry.leaveDays.toString(),
-    leaveRate: line.payrollEntry.leaveRate?.toString() ?? null,
-    eobiAmount: line.payrollEntry.eobiAmount.toString(),
-    eobiApplicable: line.payrollEntry.eobiApplicable,
-    advanceDeduction: line.payrollEntry.advanceDeduction.toString(),
-    eidAdvanceDeduction: line.payrollEntry.eidAdvanceDeduction.toString(),
-    fine: line.payrollEntry.fine.toString(),
-    correctionBalanceRecovery: line.payrollEntry.correctionBalanceRecovery.toString(),
-    workLines: [{ sortOrder: line.sortOrder, days: line.days.toString(), otHours: line.otHours.toString(), otRate: line.otRate?.toString() ?? null, cycleDays: line.cycleDays }],
-  });
+  return computeVersionedCalcForWorkLines(line.payrollEntry, [
+    { sortOrder: line.sortOrder, days: line.days.toString(), otHours: line.otHours.toString(), otRate: line.otRate?.toString() ?? null, cycleDays: line.cycleDays },
+  ]);
 }
 
 /**

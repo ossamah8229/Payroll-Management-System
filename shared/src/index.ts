@@ -407,3 +407,6 @@ export type {
   PayrollWorkLineCalcResult,
   WorkingDaysCeilingInput,
 } from './lib/calc-net';
+export { calcNetLegacyV1 } from './lib/calc-net-legacy-v1';
+export { calcNetForVersion } from './lib/calc-net-version';
+export type { CalcNetVersion } from './lib/calc-net-version';

@@ -16848,3 +16848,171 @@ test-count/database figures are stale — use the baseline above instead.
 5. Decide the two Company Bank Account sub-questions (§3 item 7) — still open, unrelated to
    Payslips, relevant whenever Company Bank Account management is scheduled (not yet part of any
    phase's frozen scope).
+
+---
+
+## Payroll Financial Integrity — Released-Value Immutability + CalcNet V2 Cutover (2026-08-28)
+
+Approved business decision (Option D, minimal snapshot) resolving the historical-display gap the
+CalcNet Precision Rounding Fix checkpoint (immediately above) identified but explicitly declined to
+decide unilaterally. Implemented on a dedicated branch, `fix/released-payroll-financial-snapshots`,
+created from `main` with the CalcNet fix (`9fdb0f6`) cherry-picked on as its first commit — one
+atomic branch/PR carries both the corrected math and the mechanism that protects already-released
+history from ever being silently rewritten by it (or by any future correction). PR #20 itself is
+superseded by this branch, not merged independently, exactly per the checkpoint's own instruction.
+
+### Step 1/2 — Legacy git archaeology (historical compatibility strategy)
+
+`git log --follow -- shared/src/lib/calc-net.ts` plus `git show <commit> -- shared/src/lib/calc-net.ts`
+for every touching commit: the divide-before-multiply formula was introduced in the exact commit that
+created `calcNet`/`PayrollEntry` themselves (`aefa64f`, 2026-07-07, Phase 3 Checkpoint 0) and was
+**never modified** by any intervening commit (`cfc4ef4` doc-only, `86f1095` only appended `sumMoney`,
+`3bab54a` only added a new `totalEarning` term unrelated to the earned/OT/leave arithmetic, `774f8d7`/
+`ac2ea7b` touched Working Days aggregation/guard only) until the fix itself (`9fdb0f6`, 2026-08-28).
+**Conclusion: exactly one legacy calculation version (`LEGACY_V1`) has ever existed in this
+codebase's production history — a single, well-defined historical formula, not an approximation of
+several.** This makes a `LEGACY_V1` versioned-compatibility calculator historically defensible with
+no "unidentifiable version" gap, and closes Step 2's own "STOP if the exact applicable version cannot
+be established" contingency — it can be established, exactly.
+
+### Step 3 — Minimal snapshot design
+
+Deliberately captures only the four fields that are actually `calcNet`-division-derived and therefore
+version-sensitive: `earnedAmount`, `otEarned`, `leaveEarned`, and the final authorized `netSalary`
+(the `RECOVERY_DUE`-adjusted figure, not necessarily a raw `calcNet(...).netSalary` — see the model's
+own schema comment). Everything else is either a raw, already-immutable input column (`allowance`,
+`correctionBalancePayable`/`Recovery`, EOBI/Advance/Eid Advance/Fine) or proven version-independent
+(no division — `eobiDeduction`, `totalDeduction`, confirmed by the original fix's own Step 3/Step 7
+audit) and is re-derived at read time rather than duplicated.
+
+### Step 4/5 — Schema
+
+New Prisma enum `CalcNetVersion` (`LEGACY_V1` | `V2_PRECISE`, mirroring `shared`'s own
+`calc-net-version.ts` union exactly) and new model `PayrollEntryReleaseSnapshot` (`payrollEntryId`
+`@unique`, `calculationVersion`, `earnedAmount`/`otEarned`/`leaveEarned`/`netSalary`, `resolvedAt`,
+`resolvedByUserId`) — a dedicated model rather than nullable columns on `PayrollEntry` directly, since
+`resolvedAt`/`resolvedByUserId` need their own values distinct from `PayrollEntry.releasedAt`/
+`releasedBy` (both stay `null` for `NO_PAY_DUE`/`RECOVERY_DUE` outcomes). New relation
+`PayrollEntry.releaseSnapshot`. Migration `20260828140000_payroll_entry_release_snapshot` is purely
+additive (one `CREATE TYPE`, one `CREATE TABLE`, two FKs, one unique index) — generated via
+`prisma migrate diff --from-url ... --to-schema-datamodel` (no shadow DB / non-interactive `migrate
+dev` available in this sandbox) and hand-edited to strip an unrelated `DROP TABLE "session"` the diff
+surfaced (a pre-existing local-sandbox-only schema drift, out of scope, not a production-safe
+inference). Applied via `prisma migrate deploy` against both local Postgres databases this sandbox
+uses (`payroll_manual`, the app's own `.env`; `payroll_dev`, the Jest test default) — no shadow/
+disposable Postgres container was available, so these two real local databases served that role.
+
+### Step 6 — Immutability enforcement
+
+No `update`/`delete` is ever issued against `PayrollEntryReleaseSnapshot` anywhere in the codebase
+(verified by grep — only one `create` call site, inside `releaseProjectUnit`'s own transaction).
+Duplicate-creation is prevented by the DB's own `@unique` index on `payrollEntryId`, backed by the
+same `lockPayrollCycleForUpdate` cycle-level lock every release transaction already acquires first
+(Phase 6 Checkpoint 7's documented lock order) — two release sweeps for the same cycle, and therefore
+the same entry, can never run concurrently, so no application-level idempotency check was added on
+top of that existing guarantee. No trigger — consistent with `PayrollUnitRelease`'s own existing
+insert-once convention, enforced the identical way.
+
+### Step 7/8 — Version routing (`resolveEntryCalcVersion`/`computeEntryCalc`, `payroll-entry.service.ts`)
+
+`computeEntryCalc` (the pre-existing single canonical computation path every surface was already
+supposed to share) is now itself the router: unresolved (`released = false && payoutOutcome = null`)
+→ current canonical `calcNet` (`V2_PRECISE`); resolved with a snapshot → the snapshot's own
+`earnedAmount`/`otEarned`/`leaveEarned`/`netSalary` verbatim (never recomputed), `totalEarning`
+re-derived as a plain sum, every other field (per-line breakdown, rates, `totalWorkingDays`)
+reconstructed via the snapshot's own pinned `calculationVersion` for display only; resolved with no
+snapshot (pre-cutover legacy data) → full `LEGACY_V1` reconstruction. A new
+`computeVersionedCalcForWorkLines` helper serves Overtime Report's own single-work-line `calcNet`
+trick without misapplying an entry-wide snapshot total to one line's own share (the snapshot has no
+per-line breakdown by design — Step 3).
+
+**Real, pre-existing gap found while wiring this in**: `salary-release-report.service.ts`,
+`deduction-report.service.ts` (deliberately left unchanged — deduction-only, division-free, proven
+version-invariant), `overtime-report.service.ts`, `variance-report.service.ts`, `reports.service.ts`
+(Payroll Summary), `project-site-payroll.service.ts`, and `employee-payroll-history.service.ts` each
+had their own hand-rolled `calcEntryRow`/`calcEntry` adapter calling `calcNet` **directly**, bypassing
+`computeEntryCalc` entirely — contradicting the prior checkpoint's own (incorrect, now corrected)
+claim that "every one of these reads through `computeEntryCalc`." All seven were audited by grepping
+every real `calcNet(` call site in `backend/src`; the six version-sensitive ones now route through
+`computeEntryCalc`/`computeVersionedCalcForWorkLines` instead of duplicating the adapter. `PayrollEntry`
+reads that need `computeEntryCalc` now require `releaseSnapshot` in their own `select`/`include`
+(a new required, non-optional field on `PayrollEntryCalcRoutable`) — deliberately fail-strict: a
+caller that forgets to select it is a compile error, never a silent "must be legacy" misroute for an
+entry that actually has a real snapshot. `corrections.calculation.ts`'s own two `calcNet` calls
+(correction preview/baseline reconstruction) were deliberately left untouched — a self-consistent
+old-vs-new delta computed under the same formula for both sides, never a redisplay of "what actually
+happened," and per Step 8's own trace, a materialization can only ever land on a later, still-Draft
+target entry, never rewrite the entry that originated the obligation (already proven by the prior
+Salary Release Report checkpoint's own write-path trace).
+
+### Step 9 — Release transaction
+
+Snapshot creation lives inside `releaseProjectUnit`'s existing single `prisma.$transaction`, right
+after `resolvedEntryIds` is computed — one `payrollEntryReleaseSnapshot.create` per entry this sweep
+just resolved (`PAID`/`NO_PAY_DUE`/`RECOVERY_DUE` all equally, matching `assertEntryEditable`'s own
+"equally locked" treatment), reusing the exact `calc`/`adjustedNetSalary` already computed earlier in
+the same loop for the PAID/NO_PAY_DUE/RECOVERY_DUE classification decision (`calcByEntryId` map) —
+never a second, independently re-derived computation that could in principle disagree with the one the
+release decision was actually based on. A failure anywhere later in the transaction rolls the snapshot
+back with everything else. `releaseAllEligible` needed no changes — it purely loops
+`releaseProjectUnit` unmodified, so it inherits snapshot creation automatically; both are covered by
+the existing `payroll-release-all.test.ts`/`payroll-release.test.ts` suites (still green) plus the new
+dedicated suite below.
+
+### Step 11 — CalcNet V2 integration
+
+The already-reviewed PR #20 fix (`9fdb0f6`) cherry-picked onto this branch unmodified. Independent
+10,000-case and 100,000-case oracle suites re-run on this branch: still 0/10,000 and 0/100,000
+mismatches (the fix itself is untouched by this checkpoint; only its integration/consumption changed).
+
+### Step 12 — Critical cutover invariant (new suite:
+`backend/tests/payroll-financial-integrity-snapshot.test.ts`, 6/6 passing)
+
+Part 1 (pure, no DB): a Draft entry always resolves to `V2_PRECISE`; a resolved entry with no
+snapshot reconstructs under `LEGACY_V1` for the identical boundary inputs (`95110.95`, not
+`95110.96`); a resolved entry *with* a snapshot returns a deliberately "poisoned" sentinel value
+verbatim — neither the LEGACY nor the V2 result for the same inputs — the strongest possible proof
+that `computeEntryCalc` never recomputes the authoritative fields once a snapshot exists, regardless
+of what any calculator (old, new, or a hypothetical future one) would otherwise say. Part 2 (real
+HTTP + Postgres): an actual release via `POST .../units/:unitId/release` captures the exact
+`V2_PRECISE` boundary figures into a real snapshot row; a directly-inserted, already-`released` entry
+with no snapshot (simulating genuine pre-cutover historical data) reads back under `LEGACY_V1` through
+the real `GET /api/v1/payroll-entries/:id` endpoint, and no snapshot is ever fabricated for it.
+
+### Step 16 — Migration/backfill safety
+
+No backfill of any kind was performed or attempted for historical released entries — per the
+checkpoint's own explicit "no fake backfill" instruction, confirmed structurally: the migration
+creates an empty table; every entry released before this checkpoint simply has no
+`PayrollEntryReleaseSnapshot` row and is routed to `LEGACY_V1` reconstruction, never a fabricated
+snapshot. Existing released/Draft rows are untouched (no `UPDATE` anywhere in the migration).
+
+### Steps 17/18 — Tests and full local gate
+
+New: `payroll-financial-integrity-snapshot.test.ts` (6 tests, above). Modified for the new required
+`releaseSnapshot` field: `helpers.ts`'s shared `cleanTestData()` (added a
+`payrollEntryReleaseSnapshot.deleteMany` before its existing `payrollEntry.deleteMany`, mirroring the
+already-established `correction`/`correctionRequest` pre-clear pattern for a new `Restrict`-FK'd child
+table), `bank-sheets.test.ts`'s own manual cleanup (same reason), `corrections-calculation.test.ts`'s
+fixture builder, `corrections-materialization.test.ts`'s one direct `findUniqueOrThrow`. Full local
+gate, this branch: `shared`/`backend`/`frontend` typecheck clean; `backend`/`frontend` lint clean (0
+errors; the frontend's 6 pre-existing `react-refresh` warnings unchanged); `backend`/`frontend` build
+clean; `frontend` `vitest run` 72 files/1080 tests passing (unchanged); `backend` full targeted sweep
+run in batches (this sandbox's own established single-process OOM limitation, same as every prior
+checkpoint) covering every touched/could-be-affected suite — calc-net (4 suites/64 tests),
+payroll-release + salary-release-report (8/118), employee-payroll-history + project-site-payroll +
+overtime + variance + reports (10/274), payslips + cash-receiving + statements (3/126),
+corrections-*/payroll-entry* (20/394, two pre-existing order-dependent flakes reconfirmed passing in
+isolation — a concurrency-timing test and a cross-file fixture-pollution artifact, neither touching
+code this checkpoint changed), bank-sheets + corrections-calculation (2/55), dashboard (2/33),
+deduction-report + advance-recovery-report (6/157, confirming both are correctly left unaffected),
+advances/payroll-cycle*/payroll-hold-workflow/payroll-lifecycle-response-security/payroll-release-all/
+payroll-release-negative-salary/payroll-schema/working-days-cycle-days-guard (14/212), the new
+snapshot suite (1/6) — every suite touching a surface this checkpoint could affect is green. `git diff
+--check` clean. **Real GitHub Actions CI not yet run this checkpoint** — pending push/Draft PR.
+
+### Step 19/20 — Production and git workflow
+
+Zero production mutations; all work against local Postgres only (`payroll_manual`/`payroll_dev`),
+exactly as every prior checkpoint. Branch `fix/released-payroll-financial-snapshots`, head to be
+recorded once committed; **Draft PR, not merged, not deployed, not tagged, pending real CI**.

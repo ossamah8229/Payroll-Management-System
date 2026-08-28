@@ -408,7 +408,10 @@ describe('Phase 6 Checkpoint 5 — Draft-cycle materialization of outstanding Ba
       const { balanceAdjustment, admin, draftCycle, draftEntry } = await makeFixtures('payable-recalc');
       await materialize(admin, balanceAdjustment.id, draftCycle.id);
 
-      const entry = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: draftEntry.id }, include: { workLines: true } });
+      const entry = await prisma.payrollEntry.findUniqueOrThrow({
+        where: { id: draftEntry.id },
+        include: { workLines: true, releaseSnapshot: true },
+      });
       const { computeEntryCalc } = await import('../src/modules/payroll-entry/payroll-entry.service');
       const first = computeEntryCalc(entry);
       const second = computeEntryCalc(entry);

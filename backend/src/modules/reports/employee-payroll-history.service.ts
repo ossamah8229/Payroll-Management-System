@@ -1,8 +1,7 @@
 import ExcelJS from 'exceljs';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, PayrollEntryPayoutOutcome } from '@prisma/client';
 import type { AdvanceStatus, SessionUser } from '@payroll/shared';
 import {
-  calcNet,
   isOutstandingWaived,
   sumMoney,
   type CalcNetResult,
@@ -25,6 +24,11 @@ import {
   type EmployeePayrollHistoryUnitRef,
 } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import {
+  computeEntryCalc,
+  RELEASE_SNAPSHOT_CALC_SELECT,
+  type PayrollEntryReleaseSnapshotCalcFields,
+} from '../payroll-entry/payroll-entry.service';
 import { badRequest, notFound } from '../../common/http-error';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
@@ -201,6 +205,7 @@ const ROW_SELECT = {
   released: true,
   payoutOutcome: true,
   releasedAt: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   cycle: { select: { id: true, year: true, month: true, status: true } },
   site: { select: { name: true } },
   employee: { select: { employeeCode: true, name: true, dateOfLeaving: true } },
@@ -224,11 +229,13 @@ const ROW_SELECT = {
 
 type RowEntry = Prisma.PayrollEntryGetPayload<{ select: typeof ROW_SELECT }>;
 
-/** The adapter from this module's own narrowly-`select`ed row to shared `calcNet`'s string-based
- * input contract — the report-query analogue of `payroll-entry.service.ts`'s `computeEntryCalc`
- * and `reports.service.ts`'s own `calcEntry`, calling the exact same canonical `calcNet` (never a
- * second net-salary formula) against this module's own row shape. */
+/** Routes through `computeEntryCalc` (Payroll Financial Integrity checkpoint, 2026-08-28) — an
+ * employee's payroll history spans every cycle status, so this must never silently re-derive a
+ * `RELEASED` entry's figures under whatever `calcNet` means today. */
 function calcEntryRow(entry: {
+  released: boolean;
+  payoutOutcome: PayrollEntryPayoutOutcome | null;
+  releaseSnapshot: PayrollEntryReleaseSnapshotCalcFields | null;
   grossPay: Prisma.Decimal;
   allowance: Prisma.Decimal;
   leaveDays: Prisma.Decimal;
@@ -242,7 +249,8 @@ function calcEntryRow(entry: {
   correctionBalanceRecovery: Prisma.Decimal;
   workLines: Array<{ sortOrder: number; days: Prisma.Decimal; otHours: Prisma.Decimal; otRate: Prisma.Decimal | null; cycleDays: number }>;
 }): CalcNetResult {
-  return calcNet({
+  return computeEntryCalc({
+    ...entry,
     grossPay: entry.grossPay.toString(),
     allowance: entry.allowance.toString(),
     leaveDays: entry.leaveDays.toString(),
@@ -436,6 +444,9 @@ const CALC_INPUT_SELECT = {
   fine: true,
   correctionBalancePayable: true,
   correctionBalanceRecovery: true,
+  released: true,
+  payoutOutcome: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   workLines: { select: { sortOrder: true, days: true, otHours: true, otRate: true, cycleDays: true } },
 } satisfies Prisma.PayrollEntrySelect;
 
@@ -722,6 +733,7 @@ const DETAIL_SELECT = {
   released: true,
   payoutOutcome: true,
   releasedAt: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   lateReason: true,
   cycle: { select: { id: true, year: true, month: true, status: true } },
   site: { select: { name: true } },

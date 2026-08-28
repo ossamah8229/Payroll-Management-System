@@ -1,8 +1,7 @@
 import ExcelJS from 'exceljs';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, PayrollEntryPayoutOutcome } from '@prisma/client';
 import type { SessionUser } from '@payroll/shared';
 import {
-  calcNet,
   sumMoney,
   type CalcNetResult,
   SALARY_RELEASE_REPORT_EXPORT_MAX_ROWS,
@@ -16,6 +15,11 @@ import {
   type SalaryReleaseReportUnitRef,
 } from '@payroll/shared';
 import { prisma } from '../../lib/prisma';
+import {
+  computeEntryCalc,
+  RELEASE_SNAPSHOT_CALC_SELECT,
+  type PayrollEntryReleaseSnapshotCalcFields,
+} from '../payroll-entry/payroll-entry.service';
 import { badRequest, notFound } from '../../common/http-error';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { excelColumnWidth } from '../../common/excel-utils';
@@ -175,6 +179,7 @@ const ROW_SELECT = {
   released: true,
   payoutOutcome: true,
   releasedAt: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   site: { select: { name: true } },
   employee: { select: { employeeCode: true, name: true } },
   workLines: {
@@ -194,12 +199,17 @@ const ROW_SELECT = {
 
 type RowEntry = Prisma.PayrollEntryGetPayload<{ select: typeof ROW_SELECT }>;
 
-/** The adapter from this module's own narrowly-`select`ed row to shared `calcNet`'s string-based
- * input contract — identical in shape/intent to every sibling report's own `calcEntryRow`, calling
- * the exact same canonical `calcNet` (never a second net-salary formula). Applied to a `RELEASED`
- * entry's own *stored* columns, this is the immutable, as-released figure — see this file's own
- * top-of-module doc comment for the full immutability trace. */
+/** Payroll Financial Integrity checkpoint (2026-08-28) — this module used to hand-roll its own
+ * `calcEntryRow` adapter straight to `calcNet`, which (per that checkpoint's own audit) bypassed
+ * `computeEntryCalc`'s routing entirely and would have kept reading a `RELEASED` row through
+ * whatever `calcNet` means today, defeating the whole point of a release-time snapshot. Replaced by
+ * a thin call into `computeEntryCalc` itself — the one place that decides LIVE vs. snapshot vs.
+ * LEGACY_V1 reconstruction — so this report can never drift from that decision again. Kept as a
+ * named wrapper only for this file's own call-site readability. */
 function calcEntryRow(entry: {
+  released: boolean;
+  payoutOutcome: PayrollEntryPayoutOutcome | null;
+  releaseSnapshot: PayrollEntryReleaseSnapshotCalcFields | null;
   grossPay: Prisma.Decimal;
   allowance: Prisma.Decimal;
   leaveDays: Prisma.Decimal;
@@ -213,7 +223,8 @@ function calcEntryRow(entry: {
   correctionBalanceRecovery: Prisma.Decimal;
   workLines: Array<{ sortOrder: number; days: Prisma.Decimal; otHours: Prisma.Decimal; otRate: Prisma.Decimal | null; cycleDays: number }>;
 }): CalcNetResult {
-  return calcNet({
+  return computeEntryCalc({
+    ...entry,
     grossPay: entry.grossPay.toString(),
     allowance: entry.allowance.toString(),
     leaveDays: entry.leaveDays.toString(),
@@ -345,6 +356,7 @@ const CALC_INPUT_SELECT = {
   hold: true,
   released: true,
   payoutOutcome: true,
+  releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
   workLines: { select: { sortOrder: true, days: true, otHours: true, otRate: true, cycleDays: true } },
 } satisfies Prisma.PayrollEntrySelect;
 

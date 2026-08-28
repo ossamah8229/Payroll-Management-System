@@ -5,7 +5,7 @@ import { prisma } from '../../lib/prisma';
 import { stringifyCsvSafe } from '../../common/import-export';
 import { assertSiteAccess, isMasterAdmin } from '../../common/authz-policy';
 import { getPayrollCycle } from '../payroll-processing/payroll-processing.service';
-import { computeEntryCalc, withLiveMasterData, WORK_LINES_INCLUDE } from './payroll-entry.service';
+import { computeEntryCalc, RELEASE_SNAPSHOT_CALC_SELECT, withLiveMasterData, WORK_LINES_INCLUDE } from './payroll-entry.service';
 
 /**
  * The Payroll Entry export template/header row (Phase 3 Checkpoint 5, `reference/PROJECT_SPEC.md`
@@ -82,7 +82,12 @@ export const PAYROLL_ENTRY_TEMPLATE_HEADERS = [
 ] as const;
 
 type ExportEntry = Prisma.PayrollEntryGetPayload<{
-  include: { employee: true; site: true; workLines: { include: { unit: true } } };
+  include: {
+    employee: true;
+    site: true;
+    workLines: { include: { unit: true } };
+    releaseSnapshot: typeof RELEASE_SNAPSHOT_CALC_SELECT;
+  };
 }>;
 
 /** One line per work line, `"{unit name} ({unit code}): {days}"`, semicolon-joined — the least
@@ -206,7 +211,7 @@ async function resolveExportEntries(
 
   const rawEntries = await prisma.payrollEntry.findMany({
     where: { cycleId, ...(siteIdFilter && { siteId: { in: siteIdFilter } }) },
-    include: { employee: true, site: true, workLines: WORK_LINES_INCLUDE },
+    include: { employee: true, site: true, workLines: WORK_LINES_INCLUDE, releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT },
     orderBy: { sortOrder: 'asc' },
   });
   const entries = rawEntries.map((entry) => withLiveMasterData(entry));

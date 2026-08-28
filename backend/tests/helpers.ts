@@ -97,6 +97,11 @@ export async function cleanTestData(): Promise<void> {
   });
   await prisma.correctionRequest.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
   await prisma.correction.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
+  // Payroll Financial Integrity checkpoint (2026-08-28) — `PayrollEntryReleaseSnapshot` is
+  // deliberately `onDelete: Restrict` against `PayrollEntry` (immutability: a release snapshot must
+  // never disappear as a side effect of some unrelated cascade), so it must be cleared here too or
+  // it blocks `payrollEntry.deleteMany` below, exactly like `correction`/`correctionRequest` above.
+  await prisma.payrollEntryReleaseSnapshot.deleteMany({ where: { payrollEntry: { cycle: { year: { gte: 2900 } } } } });
   await prisma.payrollEntry.deleteMany({ where: { cycle: { year: { gte: 2900 } } } });
   await prisma.advance.deleteMany({ where: { employee: { site: { name: { startsWith: 'Test Site ' } } } } });
   await prisma.scheduledPayrollPeriod.deleteMany({ where: { year: { gte: 2900 } } });

@@ -1,4 +1,4 @@
-import type { SessionUser } from '@payroll/shared';
+import type { SessionUser, CalcNetResult } from '@payroll/shared';
 import { Decimal } from 'decimal.js';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../common/http-error';
@@ -10,7 +10,7 @@ import { computeReleaseRecoveryAdjustment } from '../corrections/corrections.mat
 import { lockPayrollCycleForUpdate } from '../corrections/corrections.repository';
 import { createNegativePayrollRecoveryAdjustment } from '../corrections/corrections.service';
 import { settleAdvancesForReleasedEntries } from '../advances/advances.service';
-import { computeEntryCalc, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
+import { computeEntryCalc, RELEASE_SNAPSHOT_CALC_SELECT, WORK_LINES_INCLUDE } from '../payroll-entry/payroll-entry.service';
 import { evaluatePayrollEntryReleaseReadiness } from './payroll-release-eligibility';
 
 /**
@@ -311,6 +311,7 @@ export async function releaseProjectUnit(
             },
           },
           workLines: WORK_LINES_INCLUDE,
+          releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
         },
       });
 
@@ -418,6 +419,11 @@ export async function releaseProjectUnit(
             fatherNameSnapshot: string | null;
           }
         >();
+        // Payroll Financial Integrity checkpoint (2026-08-28) — the exact `calc`/`adjustedNetSalary`
+        // this sweep used to *decide* PAID/NO_PAY_DUE/RECOVERY_DUE for each entry, retained so the
+        // snapshot created below persists the identical figures the decision was actually made from
+        // — never a second, independently re-derived computation that could in principle disagree.
+        const calcByEntryId = new Map<string, { calc: CalcNetResult; adjustedNetSalary: string }>();
 
         for (const entry of toRelease) {
           const liveMaster = {
@@ -446,6 +452,7 @@ export async function releaseProjectUnit(
           // accounting. Every downstream decision (eligibility classification, and how much of the
           // materialization actually settles) uses this adjusted figure, never the raw one.
           const { adjustedNetSalary } = computeReleaseRecoveryAdjustment(calc);
+          calcByEntryId.set(entry.id, { calc, adjustedNetSalary });
           const readiness = await evaluatePayrollEntryReleaseReadiness(
             {
               employeeId: entry.employeeId,
@@ -588,6 +595,36 @@ export async function releaseProjectUnit(
         noPayDueCount = noPayDueIds.length;
         recoveryDueCount = recoveryEntries.length;
         resolvedEntryIds = [...paidIds, ...noPayDueIds, ...recoveryEntries.map((entry) => entry.id)];
+
+        // Payroll Financial Integrity checkpoint (2026-08-28) — exactly one immutable
+        // `PayrollEntryReleaseSnapshot` per entry this sweep just resolved, in any of the three
+        // outcomes (PAID/NO_PAY_DUE/RECOVERY_DUE are all equally "locked" — `assertEntryEditable`
+        // already treats them identically). Created inside this same transaction, so a failure
+        // anywhere after this point rolls the snapshot back along with the entry update/audit log
+        // that produced it — never an orphaned snapshot for an entry that didn't actually resolve.
+        // `payrollEntryId` is `@unique`, and this whole transaction is already serialized against
+        // any concurrent release of the same cycle by `lockPayrollCycleForUpdate` (this function's
+        // own first lock, above) — so two concurrent releases can never race to create two rows for
+        // the same entry. `calculationVersion: 'V2_PRECISE'` is today's canonical `calcNet` — the
+        // exact formula `calcByEntryId`'s own `calc` was computed with, a few lines above.
+        for (const id of resolvedEntryIds) {
+          const { calc, adjustedNetSalary } = calcByEntryId.get(id)!;
+          await tx.payrollEntryReleaseSnapshot.create({
+            data: {
+              payrollEntryId: id,
+              calculationVersion: 'V2_PRECISE',
+              earnedAmount: calc.earnedAmount,
+              otEarned: calc.otEarned,
+              leaveEarned: calc.leaveEarned,
+              // The authorized figure — `adjustedNetSalary`, not `calc.netSalary` (see
+              // `PayrollEntryReleaseSnapshot`'s own schema doc comment for why these can differ in
+              // the RECOVERY_DUE case).
+              netSalary: adjustedNetSalary,
+              resolvedAt: releasedAt,
+              resolvedByUserId: currentUser.id,
+            },
+          });
+        }
       }
 
       // Phase 6 Checkpoint 7 — second in the lock order, per adjustment, acquired inside

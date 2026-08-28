@@ -276,6 +276,7 @@ type EntryForPayslip = Prisma.PayrollEntryGetPayload<{
     bank: true;
     workLines: { include: { unit: true } };
     cycle: true;
+    releaseSnapshot: true;
   };
 }>;
 
@@ -395,6 +396,7 @@ export async function getPayslip(currentUser: SessionUser, cycleId: string, empl
       bank: true,
       workLines: { include: { unit: true }, orderBy: { sortOrder: 'asc' } },
       cycle: true,
+      releaseSnapshot: true,
     },
   });
 
@@ -480,6 +482,7 @@ export async function getPayslipsBulk(
       bank: true,
       workLines: { include: { unit: true }, orderBy: { sortOrder: 'asc' } },
       cycle: true,
+      releaseSnapshot: true,
     },
     orderBy: [{ site: { name: 'asc' } }, { sortOrder: 'asc' }],
   });
