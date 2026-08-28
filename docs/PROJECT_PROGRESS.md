@@ -14866,6 +14866,51 @@ does not implicate anything this checkpoint shipped.
 
 ---
 
+## v1.0.4 RELEASED — Tag & GitHub Release (2026-08-28)
+
+Continues directly from the entry above. Per its own separate go-ahead ("proceed under a documented
+post-merge CI exception for KI-15" — explicitly **not** a claim that post-merge CI was green), the
+tag and public release were created.
+
+**Tag**: `v1.0.4`, annotated, tag object SHA `af61ccd006adfe2f074e3e9bda8f7ef4e34769ae`, dereferencing
+to commit `035f50e0310f48a48b8a668b3ccaad8adc4849dd` (the PR #18 merge commit — independently
+re-verified via `git rev-parse v1.0.4^{}` before push, and again via `git ls-remote --tags origin`
+after push: `refs/tags/v1.0.4^{}` = `035f50e0310f48a48b8a668b3ccaad8adc4849dd`, exact match). Pushed
+to `origin` as a new tag only — no force, no other ref touched.
+
+**GitHub Release**: <https://github.com/ossamah8229/Payroll-Management-System/releases/tag/v1.0.4>,
+title "Payroll Management System v1.0.4", target `035f50e0310f48a48b8a668b3ccaad8adc4849dd`,
+`isDraft: false`, `isPrerelease: false`, published `2026-08-28T03:16:11Z` — all four fields
+independently re-read via `gh release view v1.0.4 --json` after creation, not assumed from the
+create call's own exit code.
+
+**Historical tag integrity reconfirmed unchanged before and after tagging**: `v1.0.0`, `v1.0.1`,
+`v1.0.2`, `v1.0.3` (`v1.0.3^{}` = `9492fa811956707c57859b72583a4e57d0b15250`, exact match),
+`v1.0.0-rc1`, `backend-live-v1` — local vs. `git ls-remote --tags origin` compared directly, no
+drift. `v1.0.4` confirmed absent both locally and remotely immediately before creation.
+
+**PR #18 qualification and production evidence**: unchanged from the entry above — CI run
+`33101363328` on head `d3b7441d853bed15b40ec23a00481e6284072759` (Backend/Frontend/E2E all PASS, 197
+E2E tests genuinely executed), production deployed from the merge commit, `/health` 200, migration
+applied, read-only smoke (pagination, Site/Unit, three Cancelled Advances at PKR 0.00 Outstanding,
+Advance Recovery Report reconciliation, Statement/cross-surface Cancel semantics) all as already
+recorded. **No production mutation was performed at any point in this tagging/release checkpoint
+either** — only local git operations, a tag push, and a GitHub Release API call.
+
+**Post-merge CI exception — restated explicitly, not softened**: post-merge CI was **not** fully
+green. KI-15 (`corrections-service.test.ts`'s concurrent-approval race, two different Correction
+Requests on the same `PayrollEntry`) remains **OPEN**, outside PR #18's own domain/diff, reruns were
+deliberately stopped rather than chased to a green result, and it is not claimed harmless — a
+dedicated root-cause investigation is still required, tracked separately in
+`docs/release/KNOWN_ISSUES_v1.0.md`.
+
+**Classification: v1.0.4 RELEASED** — Advances scalability, deputation visibility, and correct
+Cancelled-recoverability semantics are now the production baseline. Salary Release remains
+unauthorized/untouched. KI-15 investigation and Reliability Phase 5 remain explicitly not started by
+this checkpoint.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |

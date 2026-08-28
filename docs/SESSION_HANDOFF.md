@@ -7231,3 +7231,41 @@ merge commit `035f50e0310f48a48b8a668b3ccaad8adc4849dd`. **STOP BEFORE TAG** —
 Release published, no Salary Release, Reliability Phase 5 not resumed, no new feature work started.
 KI-15 remains open as the one recorded risk, unrelated to this checkpoint's own shipped diff.
 
+---
+
+## 73. Addendum, 2026-08-28 — v1.0.4 Tag & GitHub Release
+
+Full technical record: `docs/PROJECT_PROGRESS.md`'s own "v1.0.4 RELEASED — Tag & GitHub Release"
+entry. Continues directly from addendum #72 — approval was given to proceed under a documented
+post-merge CI exception for KI-15, explicitly **not** a claim that post-merge CI was green.
+
+**Identity re-verified independently before tagging**: `035f50e0310f48a48b8a668b3ccaad8adc4849dd`
+confirmed as an ancestor of `origin/main`, parents `bdd98bc`/`d3b7441` confirmed, PR #18 confirmed
+`MERGED` with that exact `mergeCommit`, CI run `33101363328` re-confirmed green (Backend/Frontend/E2E)
+on head `d3b7441`. Historical tags (`v1.0.0`–`v1.0.3`, `v1.0.0-rc1`, `backend-live-v1`) reconfirmed
+unchanged, `v1.0.3^{}` still `9492fa811956707c57859b72583a4e57d0b15250`. `v1.0.4` confirmed absent
+before creation.
+
+**Tag**: annotated `v1.0.4` created targeting `035f50e0310f48a48b8a668b3ccaad8adc4849dd` (never
+`d3b7441` or the later `359c7e4` docs commit), tag object `af61ccd006adfe2f074e3e9bda8f7ef4e34769ae`.
+Pushed as a new tag only, then independently re-verified via `git ls-remote --tags origin` —
+`refs/tags/v1.0.4^{}` matched exactly.
+
+**GitHub Release**: published at
+<https://github.com/ossamah8229/Payroll-Management-System/releases/tag/v1.0.4>, title "Payroll
+Management System v1.0.4", target the merge commit, `Draft: false`, `Prerelease: false` — verified by
+reading the release back via `gh release view --json`, not assumed. Notes cover Advances scalability
+(server-side pagination, deterministic ordering, status/type/site + multi-site filtering, supporting
+indexes), Site/Unit deputation visibility, correct Cancel semantics in business language (Cancelled →
+PKR 0 Outstanding, original amount/history preserved, recovered vs. waived kept distinct, released
+payroll history unchanged — explicitly not an accounting/write-off treatment change), cross-surface
+consistency (Advance Recovery Report, Statement of Account, Payroll Entry), and an explicit,
+un-softened CI note: PR #18 fully qualified; KI-15 (Corrections concurrency) remains open and
+unrelated, tracked separately.
+
+**No production mutation performed at any point in this checkpoint** — tagging and release
+publication only. Salary Release remains untouched/unauthorized.
+
+**Classification: v1.0.4 RELEASED.** KI-15 investigation and Reliability Phase 5 explicitly not
+started by this checkpoint; v1.0.5 explicitly not started.
+
