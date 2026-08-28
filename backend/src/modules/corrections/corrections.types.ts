@@ -29,7 +29,6 @@ export type CorrectionValidationErrorCode =
   | 'REQUEST_NOT_FOUND'
   | 'REQUEST_NOT_PENDING'
   | 'PAYMENT_TIMING_REQUIRED'
-  | 'PAYMENT_TIMING_NOT_APPLICABLE'
   | 'RECOVERY_INSTALLMENT_AMOUNT_NOT_APPLICABLE'
   /** Post-Phase-5 Stabilization Checkpoint 4B remediation — requester/reviewer separation.
    * `currentUser.id === request.requestedById`: whoever submitted a `CorrectionRequest` may never

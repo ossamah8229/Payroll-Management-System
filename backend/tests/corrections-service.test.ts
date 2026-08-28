@@ -350,7 +350,7 @@ describe('Phase 6 Checkpoint 3 — Correction request/approval/rejection workflo
       expect(res.body.correctionRequest.resultingCorrectionId).toBe(res.body.correction.id);
     });
 
-    it('approves a negative-delta request: creates a RECOVERY BalanceAdjustment, rejects paymentTiming', async () => {
+    it('approves a negative-delta request: creates a RECOVERY BalanceAdjustment, ignoring an inapplicable paymentTiming', async () => {
       const { site, entry, admin, adjustmentType } = await makeFixtures('approve-negative');
       const staff = await payrollStaffAgent('cp3-approve-negative-staff@test.local', [site.id]);
       const created = await createRequest(staff, entry.id, GROSS_PAY_BODY(adjustmentType.id, '25000'));
@@ -361,10 +361,17 @@ describe('Phase 6 Checkpoint 3 — Correction request/approval/rejection workflo
       expect(res.body.balanceAdjustment.amount).toBe('5000');
       expect(res.body.balanceAdjustment.paymentTiming).toBeNull();
 
+      // KI-15 root-cause fix: paymentTiming is inert (never persisted) once a correction isn't
+      // PAYABLE — a client can only learn the classification from a read taken before this
+      // request's own approval transaction (an unlocked preview, or an earlier
+      // PAYMENT_TIMING_REQUIRED probe), and a concurrent approval against the same PayrollEntry can
+      // legitimately shift that classification in between. Supplying a now-stale paymentTiming is
+      // therefore not rejected — it is silently ignored, same as if it had never been sent.
       const withTiming = await createRequest(staff, entry.id, GROSS_PAY_BODY(adjustmentType.id, '24000'));
-      const badRes = await approveRequest(admin, withTiming.body.correctionRequest.id, { paymentTiming: 'IMMEDIATE' });
-      expect(badRes.status).toBe(400);
-      expect(badRes.body.error.code).toBe('PAYMENT_TIMING_NOT_APPLICABLE');
+      const ignoredRes = await approveRequest(admin, withTiming.body.correctionRequest.id, { paymentTiming: 'IMMEDIATE' });
+      expect(ignoredRes.status).toBe(200);
+      expect(ignoredRes.body.balanceAdjustment.type).toBe('RECOVERY');
+      expect(ignoredRes.body.balanceAdjustment.paymentTiming).toBeNull();
     });
 
     it('rejects a zero-delta approval with ZERO_DELTA — no Correction, no BalanceAdjustment', async () => {
@@ -554,6 +561,78 @@ describe('Phase 6 Checkpoint 3 — Correction request/approval/rejection workflo
 
       const total = await prisma.correction.count({ where: { payrollEntryId: entry.id } });
       expect(total).toBe(2);
+    });
+
+    /**
+     * KI-15 regression — deterministically forces the exact race the test above only hits by
+     * chance (~25% of runs, per the KI-15 investigation): a client learns a request's
+     * classification (PAYABLE, needs paymentTiming) from a `PAYMENT_TIMING_REQUIRED` probe, a
+     * *different* concurrent approval against the same PayrollEntry commits in between and shifts
+     * the baseline, and the client then resubmits its now-stale `paymentTiming`. Uses explicit
+     * sequencing (a barrier: probe, then full commit, then resubmit) instead of `Promise.all` +
+     * hope, so this reproduces the critical window on every run, not just some.
+     */
+    it('KI-15 — a stale paymentTiming, learned before a concurrent approval shifted the baseline, is honored not rejected', async () => {
+      const { site, entry, admin, adjustmentType } = await makeFixtures('concurrent-ki15-deterministic');
+      const staff = await payrollStaffAgent('cp3-concurrent-ki15-staff@test.local', [site.id]);
+      const requestA = await createRequest(staff, entry.id, GROSS_PAY_BODY(adjustmentType.id, '32000'));
+      const requestB = await createRequest(staff, entry.id, GROSS_PAY_BODY(adjustmentType.id, '34000'));
+
+      // 1) A's discovery probe, against the original 30,000 baseline: 32,000 is an increase, so the
+      // service must say PAYABLE and demand paymentTiming.
+      const probeA = await approveRequest(admin, requestA.body.correctionRequest.id, {});
+      expect(probeA.status).toBe(400);
+      expect(probeA.body.error.code).toBe('PAYMENT_TIMING_REQUIRED');
+
+      // 2) B commits fully first (simulating a different admin finishing their own approval in the
+      // window while A is still looking at the payment-timing prompt) — moves the baseline to
+      // 34,000.
+      const resB = await approveRequest(admin, requestB.body.correctionRequest.id, { paymentTiming: 'DEFERRED' });
+      expect(resB.status).toBe(200);
+      expect(resB.body.balanceAdjustment.type).toBe('PAYABLE');
+      expect(resB.body.correction.oldValue).toBe('30000');
+      expect(resB.body.correction.newValue).toBe('34000');
+
+      // 3) A resubmits with the paymentTiming its now-stale probe told it to collect. Recalculated
+      // against the real, current 34,000 baseline, 32,000 is now a *decrease* (RECOVERY) —
+      // paymentTiming no longer applies, and must be silently ignored, not rejected.
+      const resA = await approveRequest(admin, requestA.body.correctionRequest.id, { paymentTiming: 'DEFERRED' });
+      expect(resA.status).toBe(200);
+      expect(resA.body.balanceAdjustment.type).toBe('RECOVERY');
+      expect(resA.body.balanceAdjustment.paymentTiming).toBeNull();
+      expect(resA.body.correction.oldValue).toBe('34000');
+      expect(resA.body.correction.newValue).toBe('32000');
+
+      // Final state is fully deterministic: both requests APPROVED with their own resulting
+      // Correction, exactly one Correction/BalanceAdjustment pair per request (no duplicate
+      // financial effect), and exactly one audit entry per approval (no partial/duplicate audit
+      // trail from A's rejected-then-retried attempt).
+      const [requestARow, requestBRow] = await Promise.all([
+        prisma.correctionRequest.findUniqueOrThrow({ where: { id: requestA.body.correctionRequest.id } }),
+        prisma.correctionRequest.findUniqueOrThrow({ where: { id: requestB.body.correctionRequest.id } }),
+      ]);
+      expect(requestARow.status).toBe('APPROVED');
+      expect(requestARow.resultingCorrectionId).toBe(resA.body.correction.id);
+      expect(requestBRow.status).toBe('APPROVED');
+      expect(requestBRow.resultingCorrectionId).toBe(resB.body.correction.id);
+
+      const correctionCount = await prisma.correction.count({ where: { payrollEntryId: entry.id } });
+      expect(correctionCount).toBe(2);
+      const balanceAdjustmentCount = await prisma.balanceAdjustment.count({
+        where: { correction: { payrollEntryId: entry.id } },
+      });
+      expect(balanceAdjustmentCount).toBe(2);
+
+      const approvedAuditCount = await prisma.auditLog.count({
+        where: { action: 'correction.approved', entityId: { in: [resA.body.correction.id, resB.body.correction.id] } },
+      });
+      expect(approvedAuditCount).toBe(2);
+
+      // The source PayrollEntry itself is never mutated by either approval (Corrections/
+      // BalanceAdjustments are the only financial effect — see the "never mutates the source
+      // PayrollEntry" test above for the single-request version of this same invariant).
+      const reloadedEntry = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+      expect(reloadedEntry.grossPay.toString()).toBe('30000');
     });
 
     it('requests on different PayrollEntries remain independent — neither blocks or corrupts the other', async () => {

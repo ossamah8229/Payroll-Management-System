@@ -329,6 +329,22 @@ export async function approveCorrectionRequest(
       reversalTarget,
     );
 
+    // KI-15 root cause (2026-08-28): a client can only learn this request's classification from a
+    // read taken before this transaction's `acquirePayrollEntryLock` above — either an earlier,
+    // unlocked `previewCorrectionForEntry` call (the real approve-request-modal's own flow) or an
+    // earlier `PAYMENT_TIMING_REQUIRED` probe against this same request. Between that read and this
+    // transaction actually running, a *different* concurrent approval against the same PayrollEntry
+    // can legitimately commit and shift the baseline this request recalculates from — exactly what
+    // `corrections.lock.ts`'s own design comment (and this file's "Concurrent approval" test) says
+    // is a correct, expected outcome of absolute-value corrections, not a client mistake. When that
+    // happens, `preview.delta.classification` here (computed fresh, under the lock, after re-reading
+    // `approvedCorrections`) can come back non-PAYABLE even though the client's now-stale read said
+    // PAYABLE and it supplied `paymentTiming` in good faith accordingly.
+    //
+    // `paymentTiming` has no effect at all once the balance isn't PAYABLE (it is never read outside
+    // the branch below, never persisted otherwise), so there is nothing unsafe about simply not
+    // using it here — unlike `PAYMENT_TIMING_REQUIRED` below, which stays a hard failure because a
+    // PAYABLE balance genuinely cannot be recorded without the client's IMMEDIATE/DEFERRED choice.
     let paymentTiming: 'IMMEDIATE' | 'DEFERRED' | null = null;
     if (preview.delta.classification === 'PAYABLE') {
       if (!input.paymentTiming) {
@@ -339,12 +355,6 @@ export async function approveCorrectionRequest(
         });
       }
       paymentTiming = input.paymentTiming;
-    } else if (input.paymentTiming) {
-      throw new CorrectionValidationError({
-        code: 'PAYMENT_TIMING_NOT_APPLICABLE',
-        field,
-        message: 'paymentTiming only applies when the correction results in a PAYABLE balance.',
-      });
     }
 
     let recoveryInstallmentAmount: string | null = null;

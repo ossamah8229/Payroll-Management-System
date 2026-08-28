@@ -449,32 +449,52 @@ during RC1 preparation (2026-07-19/20), not assumed.
 
 ---
 
-## KI-15 — `corrections-service.test.ts`'s concurrent-approval race frequently fails under real GitHub
-Actions CI (v1.0.4 checkpoint, found on PR #18's post-merge CI)
+## KI-15 — `corrections-service.test.ts`'s concurrent-approval race, root-caused and fixed
+(Reliability Checkpoint, 2026-08-28, branch `reliability/ki-15-corrections-concurrency`)
 
 - **Description**: `Phase 6 Checkpoint 3... › Concurrent approval › two different requests on the
   same PayrollEntry serialize — the second recalculates after the first commits` fires two real
-  concurrent approval requests via `Promise.all` and asserts both resolve `200`. Observed across
-  four independent GitHub Actions CI runs on PR #18/its post-merge `main` run (three separate merge/
-  rerun attempts, zero code changes to `corrections-service.ts`/`corrections.repository.ts` between
-  them, one run entirely pre-dating the PR's own commits): **3 of 4 failed** on the identical
-  assertion (`resA.status` expected `200`, received `400`, always the same line), 1 of 4 passed
-  clean. Not reproduced locally in this session (every local run of this file passed). This is a
-  *different* test from KI-10's still-open query-count flake — no file/domain overlap with the
-  Advances v1.0.4 checkpoint that surfaced it (zero lines of `corrections-service.ts`/
-  `corrections.repository.ts` touched by that PR).
-- **Impact**: Spurious CI `Backend` job failures under real GitHub Actions runner conditions,
-  unrelated to whatever change triggered the run. No evidence of an actual application defect —
-  every reproduction was the same lock-contention assertion, never a data-integrity failure, and
-  the underlying `PayrollEntry`-version-guarded serialization this test exercises has extensive
-  other passing coverage (`corrections-service.test.ts`'s own remaining suite, `advances.test.ts`'s
-  identical `updateMany({ where: { id, version } })` pattern, etc.).
-- **Status: OPEN, not investigated.** Frequency (3/4 in this session) is high enough that this is
-  not a rare edge case — worth a dedicated investigation pass (real concurrent-timing reproduction,
-  as KI-10's Puppeteer portion received) before being called resolved. Until investigated, do not
-  treat a single green run of this specific test as proof a nearby change fixed something, and do
-  not treat a single red run as proof a nearby change broke something — this test's own base rate
-  needs establishing first.
+  concurrent approval requests via `Promise.all` and asserts both resolve `200`. First recorded
+  against real GitHub Actions CI on PR #18's post-merge run (v1.0.4 checkpoint): 3 of 4 observed
+  runs failed on the identical assertion (`resA.status` expected `200`, received `400`).
+  **Correction to that original entry: this was not a fresh discovery.** The identical scenario was
+  already under live CI diagnostic investigation on 2026-08-19 (`f047fd0`/`bc48fda`/`4d083da` — a
+  temporary diagnostic pass whose logging was removed the same day with no documented root cause),
+  and was carried forward as an explicit, unresolved "watch item" through every subsequent CI
+  Reliability Phase closeout doc (`de82bf2` 2026-08-19, `17dfa97` 2026-08-21, `44c1dbe` 2026-08-24) —
+  three separate documented sightings before PR #18 ever existed, none investigated to a conclusion.
+  This checkpoint reproduced it locally on the first extended run (against local disposable
+  PostgreSQL 16.15, matching CI's `postgres:16-alpine`) — the original entry's "not reproduced
+  locally" was a limitation of that session's reproduction attempt, not evidence the failure was
+  CI-environment-specific. See `docs/PROJECT_PROGRESS.md`'s "Reliability Checkpoint — KI-15
+  Corrections Concurrency Root-Cause & Fix" entry for the full investigation, evidence, and fix.
+- **Root cause**: a TOCTOU validation gap in `approveCorrectionRequest`
+  (`backend/src/modules/corrections/corrections.service.ts`) — a client can only learn whether a
+  `CorrectionRequest` will need `paymentTiming` from a read taken *before* the approval transaction's
+  own `PayrollEntry`-scoped advisory lock (an unlocked `previewCorrectionForEntry` call in the real
+  UI, or an earlier `PAYMENT_TIMING_REQUIRED` probe). A concurrent approval against the same
+  `PayrollEntry` can legitimately commit in between and shift the baseline — this codebase's own
+  design already treats that reclassification as correct and expected — but the service then
+  rejected a now-stale-but-honest `paymentTiming` with `PAYMENT_TIMING_NOT_APPLICABLE` (400) instead
+  of completing the (still fully valid) recalculated approval. This is a real production/UX defect,
+  not only a test artifact: the actual `approve-request-modal.tsx` component uses the same
+  preview-then-submit pattern, so a real admin approving one correction while another admin is mid
+  payment-timing-selection on a different correction against the same entry could hit this exact
+  dead-end 400 in production. State was always safe (nothing corrupted, the rejected request simply
+  stayed `PENDING`); the underlying advisory-lock serialization itself (Phase 6 Checkpoint 2/3) was
+  never at fault, and no DB/environment divergence was ever implicated (never a deadlock, a
+  serialization-failure SQLSTATE, or a Prisma transaction timeout in ~100 local repro runs).
+- **Fix**: `PAYMENT_TIMING_NOT_APPLICABLE` no longer rejects the request — a `paymentTiming` supplied
+  for a request that recalculates as not `PAYABLE` is now silently unused, exactly as if it had never
+  been sent. `PAYMENT_TIMING_REQUIRED` (the other direction) is unchanged — a genuinely `PAYABLE`
+  result still cannot be recorded without the client's choice. The dead error code was removed
+  end-to-end (`corrections.types.ts`, `error-handler.ts`); no frontend/shared-package code depended
+  on it. Not a retry, sleep, or timeout change anywhere.
+- **Status: RESOLVED** (root-caused and fixed on `reliability/ki-15-corrections-concurrency`, pending
+  a real CI confirmation run on that branch's PR — not yet merged, deployed, or tagged). Local
+  evidence: 60/60 clean runs of the `Concurrent approval` suite, 5/5 clean full-file runs, a new
+  deterministic regression test (forces the exact race window every run rather than relying on
+  `Promise.all` timing), and a clean full six-shard backend suite (97 suites / 1,895 tests).
 
 ---
 
@@ -496,7 +516,7 @@ Actions CI (v1.0.4 checkpoint, found on PR #18's post-merge CI)
 | KI-12 | Employee Registry empty-state/site-picker inconsistency for a dual-permission role | No — **RESOLVED** 2026-07-23 (partial scope remainder documented in the entry) |
 | KI-13 | Tasks: `tasks:manage` holder could not see a task it created and assigned | No — **RESOLVED** 2026-07-23 |
 | KI-14 | Roles & Permissions dialog footer still overlapped final content (KI-9 follow-up) | No — **RESOLVED** 2026-07-23 |
-| KI-15 | `corrections-service.test.ts` concurrent-approval race frequently fails under real CI (3/4 observed) | No (test-only, unrelated domain to the PR that found it) — **OPEN, not investigated** |
+| KI-15 | `corrections-service.test.ts` concurrent-approval race — TOCTOU `paymentTiming` validation gap | No — **RESOLVED** 2026-08-28 (root-caused and fixed on `reliability/ki-15-corrections-concurrency`; pending CI confirmation, not yet merged) |
 
 **No release-blocking issues were found unresolved as of this register's writing.** Two genuine
 release blockers were found *and fixed* during this checkpoint (missing production `session` table

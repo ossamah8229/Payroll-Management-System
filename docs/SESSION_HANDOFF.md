@@ -7269,3 +7269,60 @@ publication only. Salary Release remains untouched/unauthorized.
 **Classification: v1.0.4 RELEASED.** KI-15 investigation and Reliability Phase 5 explicitly not
 started by this checkpoint; v1.0.5 explicitly not started.
 
+---
+
+## 74. Addendum, 2026-08-28 — Reliability Checkpoint: KI-15 Corrections Concurrency Root-Caused & Fixed
+
+Branch `reliability/ki-15-corrections-concurrency`, off `main` at `0adeaf6`. Full technical record:
+`docs/PROJECT_PROGRESS.md`'s "Reliability Checkpoint — KI-15 Corrections Concurrency Root-Cause &
+Fix" entry. Development/reliability only — no production access used, all reproduction against local
+disposable PostgreSQL 16.15 (matching CI's `postgres:16-alpine`).
+
+**KI-15 was not new.** Before diagnosing anything, this checkpoint reconstructed the earlier CI
+Reliability Phase (Phase 4/5, PRs #8/#9/#10/#11/#12/#13) and found the identical
+`corrections-service.test.ts` concurrent-approval scenario already under live CI investigation on
+2026-08-19 (`f047fd0`/`bc48fda`/`4d083da` — diagnostic logging added, then removed the same day with
+no documented conclusion), then carried forward as an explicit, unresolved "watch item" through three
+separate Reliability Phase closeout docs (2026-08-19, 2026-08-21, 2026-08-24) — all before PR #18 or
+KI-15's own text ever existed. KI-15's original entry ("not reproduced locally") reflected a
+limitation of that session's own attempt, not the failure being CI-specific: this checkpoint
+reproduced it on the first extended local run.
+
+**Root cause**: a TOCTOU validation gap, not the advisory-lock serialization (Phase 6 Checkpoint 2/3
+is, and always was, correct). A client can only learn a `CorrectionRequest`'s classification
+(PAYABLE/RECOVERY) from a read taken before the approval transaction's own lock — the real
+`approve-request-modal.tsx`'s preview call, or an earlier `PAYMENT_TIMING_REQUIRED` probe. A
+concurrent approval against the same `PayrollEntry` can legitimately shift that classification in the
+gap between that read and submission — this codebase's own design already treats that reclassification
+as correct — but `approveCorrectionRequest` then rejected a now-stale-but-honest `paymentTiming` with
+`PAYMENT_TIMING_NOT_APPLICABLE` (400) instead of completing the still-valid recalculated approval.
+Real production defect, not just a test artifact — the real approve modal uses the identical
+preview-then-submit pattern. State was always safe; nothing corrupted.
+
+**Fix**: `PAYMENT_TIMING_NOT_APPLICABLE` no longer rejects — a stale/inapplicable `paymentTiming` is
+now silently unused, not an error. `PAYMENT_TIMING_REQUIRED` unchanged (still hard-required when
+genuinely PAYABLE). Dead error code removed end-to-end. No retries, no sleeps, no timeout changes.
+
+**Evidence**: pre-fix, 4/4 observed local failures were the identical `PAYMENT_TIMING_NOT_APPLICABLE`
+shape (never a DB timeout/deadlock/500) — matching KI-15's own "3/4" CI-observed rate. Post-fix: 60/60
+clean runs of the focused suite, 5/5 clean full-file runs (54/54 tests, including one new
+deterministic regression test that forces the exact race window every run), and a clean full
+six-shard backend suite (97 suites / 1,895 tests). Backend typecheck/lint/build all clean;
+`git diff --check` clean. Full 31-spec E2E suite: **189 passed, 8 pre-existing skipped, 0 failed**
+(3.2 min) — no Corrections E2E spec exercises `paymentTiming`, so this added no new coverage for this
+specific fix, but confirms zero collateral breakage.
+
+**Six-shard CI architecture left untouched** — not implicated by any evidence (every failure was an
+instant validation error, never a timeout/OOM), re-confirmed green across all six shards locally.
+
+**No production mutation performed at any point in this checkpoint.** Correction Requests, Payroll
+Entries, attendance, Advances, and Salary Release were never touched. Draft PR only — **not merged,
+not deployed, not tagged.**
+
+**Classification: KI-15 status updated to RESOLVED** in `docs/release/KNOWN_ISSUES_v1.0.md` (root
+cause fixed; pending a real CI confirmation run on this branch's PR before being considered fully
+closed). Reliability Phase 5's own three still-open, unrelated items
+(`employee-payroll-history.test.ts`, `statements.test.ts` query-count flakes) remain untouched, out
+of this checkpoint's explicit scope. **STOP BEFORE MERGE** — awaiting real CI confirmation and the
+user's own separate go-ahead.
+
