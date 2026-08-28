@@ -7502,15 +7502,23 @@ access this checkpoint still doesn't have) — this is reported as a policy ques
 owner (accept as a documented display characteristic vs. a future snapshot-on-release schema change vs.
 a targeted Correction reconciliation once affected entries are identified), not decided here.
 
+**Real CI confirmation** (PR #20, run `33154773387`, head `9fdb0f6`): **Backend PASS (12m56s, all six
+shards, 100 suites/1,925 tests, 0 failures)**, **Frontend PASS (1m32s)**, **E2E PASS (7m22s)**. Clean
+on the first attempt, no reruns needed — the authoritative full-suite gate the local single-process
+attempt couldn't provide (that run hit the same pre-existing, already-documented OOM limitation this
+repo's own six-shard CI design already works around, not a code issue).
+
 **Deployment NOT cleared**: two of the checkpoint's own six required gates are unmet — August
 production blast radius is unquantified (no production access) and the historical-display implication
-above has not been decided by the business owner. The code fix itself is complete and independently
-verified correct at 10,000- and 100,000-case scale with zero regression elsewhere.
+above has not been decided by the business owner. The code fix itself is complete, independently
+verified correct at 10,000- and 100,000-case scale with zero regression elsewhere, and now confirmed
+green on real CI.
 
 **Classification: AMBER — code fix root-caused, implemented, and independently verified correct;
 NOT cleared for deployment pending (1) a business decision on historical released-entry display
 semantics and (2) production blast-radius quantification, neither of which this checkpoint could
-resolve.** Branch `fix/calcnet-precision-rounding`, Draft PR only — not merged, not deployed, not
+resolve.** Branch `fix/calcnet-precision-rounding` (commit `9fdb0f6`), **Draft PR #20**
+(https://github.com/ossamah8229/Payroll-Management-System/pull/20) — not merged, not deployed, not
 tagged. No production or historical test-DB mutation performed. Salary Release remains blocked, same
 as before this checkpoint — now for a more specific, narrower reason (a correct fix awaiting a policy
 decision and production data access, not an unfixed defect).

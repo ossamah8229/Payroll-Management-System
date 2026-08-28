@@ -15821,13 +15821,33 @@ reports/payslip/dashboard 15 suites/435 tests; Advances/Corrections/Cycle/Releas
 tests). `frontend` typecheck: clean. `frontend` lint: 0 errors (6 pre-existing, unrelated
 `react-refresh` warnings, unchanged from before this checkpoint). `frontend` test (`vitest run`): 72
 files/1080 tests passing. `frontend` build: clean. `git diff --check`: clean (no whitespace errors).
-[Full six-shard-equivalent single-process backend suite and real GitHub Actions CI: see the immediately
-following update once available.]
+A full single-process (unsharded) local run of the entire backend suite was attempted for extra
+assurance beyond the targeted runs above, and hit a V8 `JavaScript heap out of memory` crash partway
+through — this is the same pre-existing, already-documented "single-process memory accumulation"
+reliability limitation this repo's own CI already works around by splitting into six process-isolated
+shards (`.github/workflows/ci.yml`'s "Reliability Checkpoint 2" comment); it is not a signal about this
+change's correctness, and this checkpoint did not attempt to force a local unsharded run through it.
+The real, properly-sharded six-shard GitHub Actions CI run (below) is the authoritative full-suite gate,
+exactly as this repo's own established practice already treats it (see every prior checkpoint's own
+"Real CI confirmation" section).
+
+### Real CI confirmation (Step 15/U, PR #20, run `33154773387`, head `9fdb0f6`)
+
+**Backend PASS** — all six shards, 12m56s: shard totals 17+17+17+17+16+16 = **100 suites**,
+417+319+202+374+269+344 = **1,925 tests, 0 failures**. **Frontend PASS**, 1m32s. **E2E PASS**, 7m22s.
+Clean on the first CI attempt, no reruns needed. This is the authoritative full-suite confirmation the
+local single-process attempt above could not provide (OOM, a pre-existing environment limitation, not
+a code issue) — every one of the 100 suites includes every file this checkpoint touched or could have
+affected (the three new `calc-net-*` test files, `calc-net.test.ts`, and the full report/payslip/
+advances/corrections/release domain already spot-checked locally), now confirmed green under the exact
+same sharded, process-isolated conditions real merges to `main` are gated on.
 
 ### Git workflow (Step 16)
 
 Branch: `fix/calcnet-precision-rounding`, created from `main` at `05977c4` (unchanged since the prior
-checkpoint). Draft PR only — **not merged, not deployed, not tagged.**
+checkpoint), commit `9fdb0f6`. **Draft PR #20**:
+https://github.com/ossamah8229/Payroll-Management-System/pull/20 — **not merged, not deployed, not
+tagged.**
 
 ### Documentation (Step 17)
 
