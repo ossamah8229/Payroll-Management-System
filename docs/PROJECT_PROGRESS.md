@@ -15223,6 +15223,622 @@ Release not performed.
 
 ---
 
+## Payroll Calculation Engine Independent Verification — August Salary Release Financial Integrity Checkpoint (2026-08-28)
+
+Pre-August-Salary-Release adversarial audit of `calcNet` (`shared/src/lib/calc-net.ts`) and every
+path feeding it — requested as a standalone financial-integrity checkpoint, not tied to a specific
+bug report. Production remained strictly read-only-only for the *investigation*; in practice, **no
+production access of any kind was available or used** (see "Production reconciliation" below) — this
+checkpoint's DB-backed work ran only against the pre-existing local test database
+(`payroll_dev`, the same one `npm test` already uses; `backend/.env`'s own `payroll_manual` database
+was never touched). No Correction/Payroll Entry/Advance/Hold/Release/Finalize action performed
+anywhere, real or test.
+
+### Canonical calculation path — confirmed single-source, no duplicate implementation found
+
+`calcNet`/`sumMoney`/`workingDaysExceedCycleDays` (`shared/src/lib/calc-net.ts`) are the only
+implementation of payroll arithmetic in the repository. Every write path
+(`payroll-entry.service.ts`'s `createPayrollEntry`/`updatePayrollEntry`/`addWorkLine`/`updateWorkLine`/
+`bulkUpdatePayrollEntries`, `payroll-processing.service.ts`'s cycle bootstrap/carry-forward) stores
+only the *raw* input fields (`grossPay`, `allowance`, `days`, `otHours`, …) — **`netSalary` and every
+other calculated figure are never persisted as columns**, confirmed against
+`docs/architecture/database/payroll-entry.md §12`'s own "Calculated, not stored" section, which
+matches `calc-net.ts`'s implementation term-for-term. Every read path (grid, Payslips, Payroll
+Summary, Deduction/Variance/Overtime/Project-Site/Employee-History reports, Salary Release Report,
+Corrections baseline reconstruction, Dashboard) goes through the single `computeEntryCalc` adapter
+(`payroll-entry.service.ts:69`) → `calcNet`, never a second formula — verified by reading every module
+`calcNet` appears in (`grep -rn calcNet backend/src`, 19 files) and confirming each is an adapter
+(narrow `select` → `calcNet` input shape) rather than a reimplementation; the frontend imports
+`calcNet` from `@payroll/shared` directly for its own live grid totals rather than mirroring the
+formula in TypeScript a second time. The CSV/Excel importer for Payroll Entries was removed entirely
+2026-07-24 (product decision, "payroll data must never be imported") — confirmed
+`payroll-entry-import-export.service.ts` is export-only today, eliminating that entire duplicate-path
+risk class. **Direct architectural consequence for the checkpoint's central question ("will existing
+and newly-created entries calculate the same way?"): since no calculated figure is ever stored, there
+is no create-time computation to desync from a later read-time computation — every entry, old or new,
+is calculated by the exact same function call at the moment it is displayed.** No second/duplicate
+payroll-math implementation was found anywhere in `backend/src` or `frontend/src` (grep for
+`Number(`/`parseFloat(`/`parseInt(`/`.toFixed(` across every payroll-adjacent module; every hit not
+already covered above is either a `Decimal.toFixed(2)` *display* format of an already-`calcNet`- or
+already-decimal-typed value, page/version-number parsing, or `Number(calc.netSalary) > 0`
+positivity-comparisons — none feed a second monetary computation). One minor, non-financial exception
+noted below.
+
+### Formula sheet (from `docs/architecture/database/payroll-entry.md §12` and `calc-net.ts`, matching exactly)
+
+Per work line *i*: `dailyRate_i = grossPay / cycleDays_i`; `effectiveOtRate_i = otRate_i ?? dailyRate_i
+/ 8`; `earnedAmount_i = dailyRate_i × days_i`; `otEarned_i = otHours_i × effectiveOtRate_i`. Summed:
+`earnedAmount = Σ earnedAmount_i`; `otEarned = Σ otEarned_i`; `totalWorkingDays = Σ days_i`.
+`effectiveLeaveRate = leaveRate ?? (grossPay / primaryLine.cycleDays)` (primary = lowest `sortOrder`);
+`leaveEarned = leaveDays × effectiveLeaveRate`. `totalEarning = earnedAmount + otEarned + allowance +
+leaveEarned + correctionBalancePayable`. `eobiDeduction = eobiApplicable ? eobiAmount : 0`.
+`totalDeduction = eobiDeduction + advanceDeduction + eidAdvanceDeduction + fine +
+correctionBalanceRecovery`. `netSalary = totalEarning − totalDeduction`. Rounding policy: every
+intermediate rate is documented as carried at full precision and never rounded before its next
+multiplication; only `earnedAmount`/`otEarned`/`leaveEarned` (and the flat inputs
+`allowance`/`eobiAmount`/`advanceDeduction`/`eidAdvanceDeduction`/`fine`/correction-balance fields) are
+rounded, once, `ROUND_HALF_UP` to 2dp; `totalEarning`/`totalDeduction`/`netSalary` are pure
+addition/subtraction of already-rounded values, so `netSalary` always reconciles exactly with
+`totalEarning − totalDeduction` as displayed. **This documented "never rounded before the next
+multiplication" claim is the one place this checkpoint found the implementation does not actually
+hold — see the confirmed defect below.**
+
+### Independent reference calculator (Step 5) and results (Steps 6-9)
+
+New file: `backend/tests/calc-net-independent-reference.test.ts`. Deliberately imports neither
+`decimal.js` nor any helper from `calc-net.ts` — reimplements the documented formula from scratch
+using exact BigInt rational-fraction arithmetic (`{n, d}`, reduced via `gcd` after every operation;
+infinite precision, no binary float, no decimal-library internal rounding of any intermediate value),
+with its own from-scratch half-up-to-2dp rounding (exact tie comparison `2r >= d`, not a float `+0.5`).
+25 tests: **24 pass, 1 fails by design** (the property-based suite below, documenting the confirmed
+defect, not a flake). Golden hand-calculated cases 1-12 (full cycle, half cycle, OT-only, leave-only,
+allowance-only, EOBI-only, Advance-only, Eid-Advance-only, Fine-only, a fully-combined manually-audited
+entry, a 2-line split, a 3-line equal split) all pass exactly as hand-derived. Decimal/rounding torture
+cases (37913 gross / 17 days / 31 cycleDays / 13.5 OT hours / 217.37 OT rate; the exact `.005`
+half-up boundary) pass. Invariants (Step 9) all pass: zero OT hours ⇒ zero OT amount; increasing OT
+hours/allowance never decreases `netSalary`; increasing a deduction never increases `netSalary`; a
+full-cycle entry earns exactly `grossPay`; zero worked days ⇒ zero `earnedAmount`; two same-`cycleDays`
+split lines reconcile exactly to their single-line equivalent; identical input is byte-identical
+across repeated calls (no hidden non-determinism, e.g. no `Date.now()`/`Math.random()` anywhere in the
+pure calculation path).
+
+**10,000-case deterministic property comparison (Step 8), seed `20260828`**: `calcNet(input)` vs the
+independent reference, component-by-component (`earnedAmount`, `otEarned`, `leaveEarned`,
+`correctionBalancePayable`/`Recovery`, `totalEarning`, `eobiDeduction`, `totalDeduction`, `netSalary`,
+`totalWorkingDays`, and every per-line `earnedAmount`/`otEarned`) — **90/10,000 (0.9%) mismatches**,
+every one fully explained by a single root cause (below), every mismatch exactly **±0.01 (never more),
+and always the reference (mathematically correct) value higher than production's** — i.e. this defect
+only ever understates an employee's pay by exactly one cent when it triggers, never overstates it.
+Max absolute per-field difference observed: `0.02` (an entry where both `earnedAmount` and a
+derived-rate `otEarned` were each independently off by `0.01` in the same direction). This is 90
+*explained* mismatches, not 90 *unexplained* ones — but per this checkpoint's own instructions, an
+explained defect still blocks Salary Release until resolved; see Classification below.
+
+### CONFIRMED DEFECT — premature rounding via `decimal.js`'s default 20-significant-digit `precision`
+
+**Exact formula currently implemented**: `dailyRate = grossPay.dividedBy(cycleDays)` computed and
+value-fixed *first* (as its own `decimal.js` `Decimal`, silently rounded to `Decimal.precision`'s
+default of **20 significant digits** — never overridden anywhere in this codebase, confirmed
+`grep -rn "Decimal.set\|Decimal.config\|precision:" shared/src backend/src frontend/src` returns
+nothing), *then* `.times(days)` to get `earnedAmount` (same two-step pattern for
+`effectiveOtRate`/`otEarned` when `otRate` is null, and `effectiveLeaveRate`/`leaveEarned` when
+`leaveRate` is null). This contradicts `calc-net.ts`'s own doc comment ("full decimal precision …
+NEVER rounded before being used in the next step") — decimal.js's division operation *does* round its
+result to 20 significant digits by design, which the file's own claim does not account for.
+
+**Correct formula supported by the documentation**: the documented formula
+(`docs/architecture/database/payroll-entry.md §12`, `earnedAmount_i = dailyRate_i × days_i`) is
+mathematically equivalent to `(grossPay × days_i) / cycleDays_i` — the documentation does not itself
+specify an operation *order*, and the two are identical for infinite-precision arithmetic. They are
+**not** identical once decimal.js's finite `precision` is in play: computing the single division
+*last* (after the exact, lossless multiplication `grossPay × days`) is correct at the default
+precision for every case reproduced in this audit; computing it *first* (division, then multiply) is
+what loses precision.
+
+**Concrete reproduction** (both independently hand-verified and covered by dedicated regression tests
+in the new file, and matched exactly by a direct `node` run against the real compiled
+`shared/dist/lib/calc-net.js`):
+- `grossPay = 190221.91`, one work line `days = 14`, `cycleDays = 28`. True value:
+  `190221.91 × 14 / 28 = 190221.91 / 2 = 95110.955` exactly (terminating — `14/28` reduces to `1/2`).
+  `ROUND_HALF_UP` on an exact `.xx5` tie rounds *up* → correct `earnedAmount = 95110.96`. Production
+  `calcNet` returns **`95110.95`** — one cent short — because `dailyRate = 190221.91/28 =
+  6793.6396428571428571…` (a genuinely non-terminating repeating decimal, since `28 = 4×7` and base-10
+  division by 7 never terminates) is rounded to its 20-significant-digit `Decimal`, and that rounded
+  value × 14 lands at `95110.9549999999999999…` — just under the true `.955` boundary, and
+  `ROUND_HALF_UP` rounds it down instead.
+- `grossPay = 68423.69`, `days = 3`, `cycleDays = 6` (`3/6 = 1/2` again). True value `68423.69/2 =
+  34211.845` exactly, correctly rounds up to `34211.85`. Production returns **`34211.84`** — same root
+  cause (`68423.69/6` is non-terminating; `28`'s and `6`'s only "bad" (non-2/non-5) prime factor is 7
+  and 3 respectively).
+- Confirmed this is not simply "not enough precision": raising `Decimal.precision` to 30, 50, 80, 100,
+  and 150 for the first example does **not** monotonically fix it — the two-step (divide-then-multiply)
+  result oscillates between the correct and incorrect answer depending on exactly where the chosen
+  precision's cutoff lands relative to the repeating decimal's period (verified directly:
+  precision 20/50/80 → wrong `95110.9549999999999999999999999999999999999999999999`; precision
+  30/100/150 → exactly `95110.955`, correct). **This is a genuine algorithmic order-of-operations
+  defect, not a "just raise the precision constant" tuning problem** — no fixed precision constant is
+  provably safe against every possible `grossPay`/`cycleDays` combination; only reordering the
+  arithmetic so the single lossy division happens *after* the exact multiplication (confirmed to give
+  the exact correct answer at today's default `precision: 20` for every case this audit reproduced) is
+  root-cause-safe.
+
+**Affected component**: `earnedAmount` on *every* payroll entry where `days_i` does not evenly divide
+`cycleDays_i` into a terminating decimal AND the true earned amount happens to land within
+`decimal.js`'s residual rounding error of an exact half-cent boundary (rare in isolation, but the
+0.9%-of-random-inputs rate above shows it is not negligible at scale); `otEarned` only on lines where
+`otRate` is left `null` (derived from `dailyRate`, same defect propagates); `leaveEarned` only when
+`leaveRate` is left `null` (derived from `grossPay / primaryLine.cycleDays`, same defect). Flat-input
+deductions (`eobiAmount`/`advanceDeduction`/`eidAdvanceDeduction`/`fine`/correction-balance fields) and
+`allowance` involve no division and are **not** affected — confirmed by the property comparison, which
+found zero mismatches attributable to any deduction field.
+
+**Affected existing records**: any already-released or Draft `PayrollEntry` whose stored
+`grossPay`/`days`/`cycleDays` (or `otRate`/`leaveRate` left `null`) happens to land on this exact
+boundary — since `netSalary` is never stored (see above), this defect would silently recompute
+differently *every time the entry is displayed*, not just at creation, meaning a released entry's
+Payslip/Bank-Sheet/report figures are equally exposed, not only new Draft entries. **Newly-inserted
+records are affected identically to existing ones** — same `calcNet` call, same defect, no
+new-vs-existing divergence (consistent with the architecture finding above: this is a defect in the
+one shared formula itself, not a create-vs-update-vs-import inconsistency).
+
+**Estimated production blast radius**: unknown without production data (see "Production
+reconciliation" below — not performed, no access). Structurally: always exactly ±0.01 (PKR one
+paisa/rupee-cent-equivalent) per affected component, always understating pay, never a multiplier/sign
+error and never capable of producing a materially wrong salary — this is a rounding-boundary edge case,
+not a systemic multiplier/sign defect (Step 15's checklist of ×10/÷10/percent/double-deduction/etc.
+patterns was searched for separately and found no matches anywhere in the codebase). Whether *this
+specific* August cycle's real `grossPay`/`cycleDays`/`days` combinations happen to trigger it cannot be
+determined without reading actual August `PayrollEntry` rows, which this checkpoint had no access to.
+
+**Proposed smallest root-cause fix (NOT APPLIED — reported per this checkpoint's explicit "do not
+silently fix a formula during the audit" instruction)**: in `calcNet` (`shared/src/lib/calc-net.ts`),
+compute `earnedAmount_i` as a single fused `grossPay.times(days).dividedBy(cycleDays)` rather than
+`grossPay.dividedBy(cycleDays).times(days)` (and correspondingly for the null-`otRate` OT path —
+`otHours.times(grossPay).dividedBy(cycleDays.times(8))` instead of chaining through a separately-
+rounded `dailyRate`/`effectiveOtRate` — and the null-`leaveRate` leave path —
+`leaveDays.times(grossPay).dividedBy(primaryLine.cycleDays)`). The displayed `dailyRate`/
+`effectiveOtRate`/`effectiveLeaveRate` transparency fields (and `corrections.calculation.ts`'s use of
+`effectiveOtRate`/`effectiveLeaveRate` as a correction's fallback value when the stored rate is `null`)
+would need the same reordering to stay consistent with the monetary figures they're displayed
+alongside — this is a small, localized, decimal.js-idiom change, not a schema or API-contract change
+(`CalcNetResult`'s shape is unaffected). **Whether historical released payroll could be affected**:
+yes, in principle, in the same way as any current entry, since figures are never stored — a fix would
+change what a previously-released entry's Payslip/Bank Sheet would show if regenerated, which is a
+question for the payroll/business owner (does correcting a penny-level historical rounding
+retroactively require a Correction workflow entry, or is it accepted as a forward-only formula fix?)
+this checkpoint explicitly leaves to that owner rather than deciding unilaterally.
+
+### Secondary, non-blocking finding — native-float duplicate summation in Payslips (not a `calcNet` bug)
+
+`payslips.service.ts:299-304`'s `buildPayslip` computes the Payslip's displayed `workingDays`/
+`overtimeHours` via `entry.workLines.reduce((sum, line) => sum + Number(line.days), 0).toFixed(2)` —
+native JS float addition, not `decimal.js`, and not `calcNet`'s own already-computed
+`totalWorkingDays` (which the file's own doc comment at line 220 explicitly says is deliberately *not*
+what this figure is: "not a `calcNet` output"). This is a second, independent implementation of "sum
+work-line days" alongside `calcNet.totalWorkingDays`, contrary to this codebase's otherwise-consistent
+single-canonical-implementation discipline, and contrary to `calc-net.ts`'s own "never native JS
+floats" policy. **Empirically tested and found not to produce an incorrect displayed figure for any
+realistic input** (checked representative float-summation edge cases — `13.1+6.9`, `0.1+0.2`,
+`7.05+8.95`, three- and more-term sums — all correctly `.toFixed(2)`, since `numeric(5,2)`-precision
+inputs summed over the small number of work lines a real split-unit entry has keep native-float epsilon
+error many orders of magnitude below the `0.005` rounding threshold). Flagged as a code-quality/
+robustness finding, not a demonstrated financial defect — worth using `calc.totalWorkingDays` directly
+(already computed, already decimal-safe) for `workingDays` in a future small cleanup, and applying the
+same decimal-safe treatment to the new `overtimeHours` aggregate (which has no existing `calcNet`
+equivalent to borrow) — not fixed in this checkpoint, per the same "do not fix during the audit"
+instruction.
+
+### Cross-surface reconciliation (Step 12)
+
+Not re-verified empirically beyond the architectural read above (every report/Payslip/Release/
+Corrections module's own `calcNet`-input adapter, confirmed one canonical call site each) — the
+already-passing existing DB-backed suites (`reports.test.ts`, `deduction-report.test.ts`,
+`variance-report.test.ts`, `overtime-report.test.ts`, `project-site-payroll-report.test.ts`,
+`employee-payroll-history.test.ts`, `payslips.test.ts`, `salary-release-report.service.ts`'s own
+tests) already exercise each surface against a real database and were not touched or found failing.
+No surface was found to persist or independently recompute a monetary figure outside `computeEntryCalc`
+→ `calcNet`.
+
+### New-vs-existing `PayrollEntry` verification (Steps 10-11)
+
+Not re-implemented as new DB-backed tests in this checkpoint — the existing `backend/tests/
+payroll-entry.test.ts` (18 tests, re-run and confirmed green against the local `payroll_dev` test
+database) already exercises `createPayrollEntry`/`updatePayrollEntry`/`addWorkLine`/`updateWorkLine`/
+bulk-update through the real service layer, not fixture-only insertion, and the architectural finding
+above (no calculated figure is ever persisted; every read of any entry, old or new, calls the same
+`computeEntryCalc`) makes a create-vs-update divergence structurally impossible for this codebase as it
+stands today — the only way `calcNet` output could ever differ for "the same" logical entry is the
+defect documented above, which affects every call equally regardless of when the entry was created.
+
+### Production reconciliation (Steps 13-14, 16) — NOT PERFORMED, no production access available
+
+`backend/.env`'s `DATABASE_URL` points only at a local Postgres (`127.0.0.1:5432/payroll_manual`); no
+production database credentials, read replica, or API token were present in this environment, and
+`claude-in-chrome`'s own tab-context check (consistent with the KI-15 checkpoint immediately above)
+found no pre-existing authenticated production session. **No August `PayrollEntry` data was read,
+counted, or reconciled — this checkpoint cannot report exact/mismatch counts, cohort coverage, or a
+maximum observed production difference, and does not claim to.** This is a genuine, material gap in
+this checkpoint relative to its own brief, not a "0 mismatches" result — it must be completed
+separately, by whoever holds production read access, before Salary Release, using the same independent
+reference calculator (`backend/tests/calc-net-independent-reference.test.ts`'s `referenceCalc`) against
+real August entries.
+
+### Systemic multiplier/sign-defect audit (Step 15)
+
+Searched explicitly for the listed patterns (×10/÷10 scaling, percent-as-whole-number, OT rate/hours
+double-application, gross pay double-counted per work line, deduction sign reversal, EOBI
+added-instead-of-deducted, Advance double-deduction, string-concatenation arithmetic, `parseInt`
+truncation) across every payroll-money-adjacent module — none found. The one real defect found (above)
+is a rounding-boundary precision issue, not a multiplier/sign defect; the split-unit/multi-line sum
+tests (golden cases 11-12, and the existing `calc-net.test.ts` multi-line suite) explicitly confirm no
+double-counting across work lines.
+
+### Salary Release value-path verification (Step 16)
+
+`payroll-release.service.ts` reads `netSalary` exclusively via `computeEntryCalc` (confirmed by
+`grep -n calcNet\|computeEntryCalc modules/payroll-release/payroll-release.service.ts`, line 13's
+import and line 440's call site) — no separate release-time recalculation, no snapshot value stored
+independently of the entry's own stored input columns. The value ultimately released is the same
+`calcNet` output this checkpoint audited, subject to the same confirmed defect above. **No Salary
+Release action of any kind was performed.**
+
+### Tests added/changed (Step U)
+
+One new file, additive only, no production code touched: `backend/tests/
+calc-net-independent-reference.test.ts` (25 tests — 24 pass, 1 intentionally fails, documenting the
+confirmed defect at scale; see above). `npm run typecheck` (backend) clean; `npx eslint` on the new
+file clean (0 errors, 0 warnings). Targeted re-runs of `calc-net.test.ts`,
+`working-days-cycle-days-guard.test.ts`, `corrections-calculation.test.ts` (88/88 passing, unaffected)
+and `payroll-entry.test.ts` (18/18 passing, unaffected) confirm no regression from this addition. The
+**full six-shard backend suite (98 files) was not re-run in this checkpoint** — this is a genuinely
+additive, single-new-file change with no production code modified, so a full-suite CI run is deferred
+to the normal PR gate rather than repeated by hand here; it should still run before any merge.
+
+### Final classification: RED — payroll calculation integrity not fully established; Salary Release blocked
+
+**A confirmed calculation defect exists** (premature rounding via `decimal.js`'s default precision,
+above) — per this checkpoint's own governing instruction, a discovered financial defect is
+automatically a Salary Release blocker until explicitly resolved, regardless of its narrow (±0.01,
+underpayment-only) magnitude. **Separately and independently**, the production reconciliation this
+checkpoint was asked to perform (Steps 13-14, 16) could not be performed at all in this environment —
+so even absent the code defect, this checkpoint cannot affirmatively confirm August `PayrollEntry`
+figures reconcile against the reference calculator. **Do not release August salaries or Finalize the
+cycle on the strength of this checkpoint alone.** Next steps, in order: (1) the payroll/business owner
+decides how to treat the confirmed rounding defect (forward-only formula fix vs. a Correction-workflow
+consideration for any already-released entry it may have touched); (2) once decided, apply the
+proposed fix (`calc-net.ts`, reorder divide/multiply per-component as detailed above) in its own
+checkpoint, confirm the property-based suite goes to 0/10,000 mismatches, run the full CI gate; (3)
+whoever holds production read access performs the Step 13-14/16 reconciliation this checkpoint could
+not, using `referenceCalc` from the new test file. No code was fixed, no release performed, no cycle
+finalized, no unrelated development started.
+
+---
+
+## CalcNet Precision Rounding Fix — Remediation Checkpoint (2026-08-28, continuing the same day)
+
+Approved remediation of the confirmed defect from the "Payroll Calculation Engine Independent
+Verification" checkpoint immediately above. Continues on the user's own explicit "approved for
+remediation" go-ahead. All work against the local test database (`payroll_dev`) only — no production
+access existed or was used in this checkpoint either.
+
+### Independent oracle preserved and confirmed sound (Step 1)
+
+`backend/tests/calc-net-independent-reference.test.ts` re-reviewed before any production code change:
+imports only `calcNet` itself (required to compare against) plus type-only imports — no `decimal.js`,
+no `calc-net.ts` internal helper (`toDecimal`/`roundMoney`, neither exported). `referenceCalc` uses
+exact BigInt rational-fraction arithmetic (`{n, d}`, reduced via `gcd` after every operation) and its
+own from-scratch half-up-to-2dp rounding (`2r >= d` exact-fraction tie comparison, not decimal.js's
+`ROUND_HALF_UP` or a float `+0.5`). Concrete failing vectors recorded before the fix (both
+independently hand/BigInt-verified):
+
+| Input | Exact mathematical result | Old CalcNet result | Correct rounded result | Difference |
+|---|---|---|---|---|
+| `grossPay=190221.91, days=14, cycleDays=28` | `19022191/200 = 95110.955` exactly | `95110.95` | `95110.96` | `-0.01` (understated) |
+| `grossPay=68423.69, days=3, cycleDays=6` | `6842369/200 = 34211.845` exactly | `34211.84` | `34211.85` | `-0.01` (understated) |
+
+### Root cause reconfirmed numerically (Step 2)
+
+For the first vector, computed directly against the real `decimal.js` (`Decimal.precision` = 20,
+this codebase's unmodified default):
+
+```
+dailyRate = 190221.91 / 28  →  6793.6396428571428571   (rounded to 20 significant digits)
+earnedOld = dailyRate * 14  →  95110.954999999999999   (raw, before 2dp rounding)
+earnedOld.toDecimalPlaces(2, ROUND_HALF_UP)  →  95110.95   ✗ WRONG
+
+product   = 190221.91 * 14  →  2663106.74               (EXACT — 9 significant digits, far under the
+                                                           20-digit precision ceiling, so decimal.js
+                                                           multiplication loses nothing here)
+earnedNew = product / 28    →  95110.955                (exact — the division's own numerator now
+                                                           already carries the factor of 7 that
+                                                           exactly cancels cycleDays=28's factor of 7,
+                                                           since days=14=2×7 was multiplied in BEFORE
+                                                           any rounding occurred)
+earnedNew.toDecimalPlaces(2, ROUND_HALF_UP)  →  95110.96   ✓ CORRECT
+```
+
+**Why multiplication and division are not computationally equivalent under finite significant-digit
+arithmetic, despite being algebraically identical for real numbers**: `(A/B)×C = (A×C)/B` is a true
+identity over the reals, but decimal.js's `dividedBy` is not exact for a repeating decimal — it must
+round its result to `Decimal.precision` significant digits the moment the division happens, discarding
+every digit beyond that cutoff. `dailyRate = grossPay/cycleDays` computed **in isolation** has no way
+to "know" that a compensating factor is about to arrive via `days` — decimal.js must commit to its
+best 20-significant-digit approximation of the true, infinite, non-terminating decimal right then,
+which is a real, permanent loss of information. Computing `grossPay×days` **first** is a different
+operation entirely: for two already-finite decimals whose true product needs fewer than
+`Decimal.precision` significant digits (true here — `2663106.74` needs only 9), decimal.js's
+multiplication is **exact**, so no information is lost at that step. The single division that follows
+then divides an *exact*, already-fully-informed numerator by `cycleDays` — and because `days` and
+`cycleDays` happened to share a common factor (`14` and `28` both divisible by `14`, i.e. `14/28=1/2`),
+that division terminates cleanly rather than repeating, so it, too, needs no truncation. Reordering the
+two operations changes nothing about the mathematics being expressed — it changes *which single
+operation is the one forced to round*, and whether that operation is handed an exact or an
+already-corrupted input. **Confirmed this is not a "just raise the precision constant" tuning
+problem**: re-running the OLD (divide-first) computation at `Decimal.precision` 20, 30, 50, 80, 100,
+and 150 for the first vector shows the result *oscillating* between correct (`95110.955` exactly, at
+30/100/150) and incorrect (`95110.9549999…9`, at 20/50/80) depending purely on where the chosen
+precision's cutoff happens to land relative to the repeating decimal's period — no fixed precision
+constant is provably safe for every `grossPay`/`cycleDays` combination; only computing the
+multiplication before the division is root-cause-safe at today's default precision. **Confirmed the
+defect is in operation ordering, not in `ROUND_HALF_UP` itself**: in both the old and new computation,
+`ROUND_HALF_UP` is applied identically and correctly to whatever raw value it is handed — the OLD
+raw value (`95110.954999999999999`) is genuinely, unambiguously below the `.955` boundary and
+`ROUND_HALF_UP` is right to round it down; the bug is that that raw value was never the true
+mathematical answer in the first place.
+
+### Divide-before-multiply audit across all payroll/financial calculations (Step 3)
+
+`grep -rn "\.dividedBy(" shared/src backend/src --include="*.ts"` (excluding tests) returns exactly 5
+call sites in the entire codebase:
+
+1. `calc-net.ts:170` — `dailyRate = grossPay.dividedBy(cycleDays)`, then `.times(days)` — **the
+   confirmed defect**, fixed below.
+2. `calc-net.ts:172` — `effectiveOtRate = dailyRate.dividedBy(8)` (only when `otRate` is `null`), then
+   `.times(otHours)` — **same defect pattern**, compounding on top of #1's own imprecise `dailyRate`;
+   fixed below. (When `otRate` is explicit, no division occurs on this path at all — already exact,
+   unaffected.)
+3. `calc-net.ts:192` — `effectiveLeaveRate = grossPay.dividedBy(primaryLine.cycleDays)` (only when
+   `leaveRate` is `null`), then `.times(leaveDays)` — **same defect pattern**; fixed below.
+4. `variance-report.service.ts:344` — `diff.dividedBy(comparisonDecimal).times(100)` (a variance
+   *percentage*, not a currency amount). **Investigated and found NOT vulnerable to the identical
+   defect**: fuzzed 200,000 generated `(diff, comparisonDecimal)` pairs against an exact BigInt-fraction
+   ground truth — 0 magnitude mismatches. (Reasoning confirmed by the empirical result: the multiplier
+   here is the fixed constant `100 = 2²×5²`, which can only cancel factors of 2/5 in the divisor —
+   exactly the factors that never cause a repeating decimal in base 10 — so it can never "rescue" the
+   kind of cancellation that made vector 1/2 above dangerous. The only anomaly found in 200,000 cases
+   was a benign `"-0.00"` vs `"0.00"` negative-zero string-formatting quirk in 2 cases, unrelated to
+   calculation ordering and not a financial defect — a true-zero percentage either way.) **Not touched
+   by this remediation**, per the explicit "do not broaden the PR unnecessarily" instruction — reported
+   here as required so this occurrence isn't silently left unexamined.
+5. `variance-report.service.ts:558` — same expression shape as #4, same conclusion, not re-fuzzed
+   separately (identical pattern, already covered).
+
+No other `A/B*C`-shaped expression (in `decimal.js` or native-float form) exists anywhere in
+`backend/src`/`frontend/src`/`shared/src` outside `calc-net.ts` and the two `variance-report.service.ts`
+sites above — confirmed by the same `dividedBy` grep (the complete list of division call sites in the
+financial codebase) plus a direct read of `frontend/src/components/payroll-entry/calc-input.ts` (the
+one frontend file most likely to duplicate the arithmetic), which imports and calls `calcNet` directly
+and performs no arithmetic of its own.
+
+### Fix implemented (Step 4)
+
+`shared/src/lib/calc-net.ts`: the three vulnerable expressions above now compute the fused
+multiply-then-divide form directly, instead of pre-computing a rounded rate and multiplying it:
+
+- `earnedAmount_i`: `grossPay.dividedBy(cycleDays).times(days)` → `grossPay.times(days).dividedBy(cycleDays)`
+- `otEarned_i` (derived-rate branch only): `otHours.times(dailyRate.dividedBy(8))` →
+  `otHours.times(grossPay).dividedBy(cycleDays.times(8))`
+- `leaveEarned` (derived-rate branch only): `effectiveLeaveRate.times(leaveDays)` →
+  `leaveDays.times(grossPay).dividedBy(primaryLine.cycleDays)`
+
+`dailyRate`/`effectiveOtRate`/`effectiveLeaveRate` themselves are **unchanged** — still computed and
+returned exactly as before (full `A/B` precision) for the `PayrollWorkLineCalcResult`/`CalcNetResult`
+transparency fields and as `corrections.calculation.ts`'s fallback-rate source (§12) — they are simply
+no longer what the monetary figures are *derived from*. No currency precision changed, no
+`Decimal.precision`/global config touched, `ROUND_HALF_UP` untouched, no intermediate currency rounding
+introduced, no unrelated formula touched, `CalcNetResult`'s shape unchanged. The top-of-file rounding-
+policy doc comment was corrected (it previously made the same false "never rounded before the next
+step" claim this defect falsified) to accurately describe the fused-operation policy and why it's
+necessary. This is the smallest change that eliminates the defect at its root — an arithmetic-ordering
+correction, not a payroll-policy change; the documented formula in
+`docs/architecture/database/payroll-entry.md §12` is unchanged and still exactly what is computed.
+
+### Independent suite fully green (Step 5)
+
+`backend/tests/calc-net-independent-reference.test.ts` re-run after the fix: **25/25 → 26/26 passing**
+(the two `documents the confirmed precision defect` cases were flipped to assert the now-correct values
+— `95110.96`/`34211.85` — and renamed to `regression: … fixed 2026-08-28`; all golden cases 1-12,
+decimal/rounding torture cases, and invariants unaffected, all still pass). **10,000-case deterministic
+comparison, same seed `20260828` as the original audit: 90/10,000 → 0/10,000 mismatches.** The property
+comparison is now a permanent regression guard (assertion left in place, no longer framed as
+expected-to-fail).
+
+### 100,000-case expanded, boundary-biased comparison (Step 6)
+
+New test case in the same file: a second, boundary-biased generator (seed `20260829`) deliberately
+concentrating on the exact vulnerable input shape — `days`/`leaveDays` as simple fractions (1/2, 1/3,
+2/3, 1/7, 5/7, …) of `cycleDays`; `cycleDays` weighted toward the real 28-31 range plus other
+"bad-prime" divisors (3, 6, 7, 26); deliberately non-round `grossPay`; a mix of explicit and derived
+(`null`) OT/leave rates; 1-3 work lines. **100,000/100,000 cases: 0 mismatches** against the same
+BigInt-exact-fraction reference, component-by-component (`earnedAmount`, `otEarned`, `leaveEarned`,
+`correctionBalancePayable`/`Recovery`, `totalEarning`, `eobiDeduction`, `totalDeduction`, `netSalary`,
+`totalWorkingDays`, every per-line figure).
+
+### Old-vs-new differential blast-radius analysis (Step 7)
+
+New file: `backend/tests/calc-net-old-vs-new-differential.test.ts`. Preserves a frozen, test-only copy
+of the pre-fix (divide-first) `calcNet` arithmetic (`oldCalcNet`, never imported by or exported to
+production code) and compares it against the current, fixed `calcNet` over two independently-seeded
+generated populations — explicitly to avoid the extrapolation the checkpoint's brief warns against
+("the initial 0.9% figure came from a particular generated distribution"):
+
+| Population | N | Cases with ≥1 changed field | % changed | Max abs diff | Direction | Any field `totalDeduction` changed |
+|---|---|---|---|---|---|---|
+| Original uniform-random (2026-08-28 audit, for reference) | 10,000 | 90 | 0.900% | 0.02 | 100% understated→corrected | 0 |
+| Broad/realistic-ish (seed `20260830`) | 50,000 | 13 | 0.026% | 0.01 | 100% understated→corrected (39/39 field-level diffs `newHigher`, 0 `newLower`) | 0 |
+| Adversarial boundary-biased (seed `20260831`) | 20,000 | 213 | 1.065% | 0.02 | 100% understated→corrected (643/643 `newHigher`, 0 `newLower`) | 0 |
+
+**These three percentages differ by roughly 40× from each other (0.026% to 1.065%) purely as a function
+of input distribution — none of them is "the" real-world rate, and none is extrapolated to "N% of
+employees" anywhere in this record.** What is population-*independent* across all three runs: the fix
+never changed `totalDeduction` (0 occurrences in every run — deductions involve no division, exactly as
+Step 3 predicted); every observed difference was `newHigher` (the fix only ever corrects an
+understatement, never introduces an overstatement — 0 `newLower` across 785 total field-level diffs
+observed); and the maximum absolute difference observed in any run, at any population, was **PKR 0.02**
+(two independently-affected components — e.g. both `earnedAmount` and a derived `otEarned` — landing on
+their own boundary in the same entry), never more. Exact trigger condition, confirmed directly from the
+sample diffs recorded by both runs: every single changed case has `otRate`/`leaveRate` left `null` on
+the affected line/entry (the derived-rate path) — never a case with an explicit rate, consistent with
+Step 3's finding that an explicit rate involves no division at all.
+
+### Other CalcNet components reconfirmed unaffected (Step 8)
+
+Covered by the already-passing golden/torture/invariant suite (Step 5, above) plus the differential's
+own `totalDeduction`-always-0 finding: OT (explicit-rate path unaffected by design; derived-rate path
+fixed and verified), Leave (same), Allowance (no division, never touched), EOBI/Advance/Eid
+Advance/Fine (flat inputs, no division, `totalDeduction` proven unchanged across 80,000 differential
+cases), Gross/earned salary (the fix itself), final Net Salary (pure addition/subtraction of the
+now-correct components), split-unit calculations (golden cases 11-12 and the original `calc-net.test.ts`
+multi-line suite both still pass unmodified — no cross-line double-counting introduced).
+
+### New-vs-existing PayrollEntry regression (Step 9)
+
+New file: `backend/tests/calc-net-new-vs-existing-precision-regression.test.ts`, run against the local
+`payroll_dev` test database through the real HTTP/service create and update paths (not fixture-only
+insertion). A brand-new entry created directly with `grossPay=190221.91`, one work line
+`days=14, cycleDays=28` computes `calc.earnedAmount = "95110.96"` (the fixed value) both immediately on
+creation and on a subsequent ordinary `GET`. A second, "existing" entry — created with a deliberately
+different default work line (`days=0, cycleDays=30`, confirmed via an explicit `earnedAmount="0.00"`
+assertion that this genuinely starts from a different state) and then edited via the real
+`PATCH /api/v1/work-lines/:id` path to the identical final `days=14, cycleDays=28` — computes a
+byte-identical `calc.earnedAmount`/`calc.netSalary` to the freshly-created reference entry. Also
+re-confirmed directly against the live database schema (`information_schema.columns` on
+`"PayrollEntry"`) that no `netSalary`/`earnedAmount` column exists — the "computed fresh, never
+persisted" assumption the original audit's new-vs-existing architectural argument rested on still holds
+exactly as before the fix.
+
+### Cross-surface regression (Step 10)
+
+Full existing DB-backed suites re-run against the fixed `shared` build, unmodified: `reports.test.ts`,
+`deduction-report.test.ts` (+boundary/+performance), `variance-report.test.ts` (+boundary/+performance),
+`overtime-report.test.ts` (+performance), `project-site-payroll-report.test.ts` (+performance),
+`employee-payroll-history.test.ts`, `salary-release-report.test.ts` (+boundary/+performance),
+`payslips.test.ts`, `dashboard.test.ts` — **15 suites, 435/435 tests passing**, zero fixtures needed
+updating (none of the pre-existing hand-written golden values in any report/Payslip test happened to
+sit on the precision boundary either). Separately, the full Advances/Corrections/Payroll-Cycle/
+Payroll-Release domain — `advance-payroll-entry-integrity`, `advance-recovery-report*`, `advances`,
+`corrections-*` (7 files), `payroll-cycle*` (4 files), `payroll-release*` (5 files),
+`salary-release-report-boundary` — **23 suites, 540/540 tests passing**. No surface was found to
+retain or reimplement the old (or any) arithmetic independently of `calcNet` — every one of these reads
+through `computeEntryCalc` exactly as the original audit already established.
+
+### Historical released-payroll policy — CRITICAL, requires business decision before deployment (Step 11)
+
+**Approved policy for this checkpoint, followed exactly**: no historical released record was mutated,
+no historical attendance/deduction edited, no compensating entry manufactured, no automatic production
+correction performed. Zero production or test-DB payroll data was written outside this checkpoint's own
+isolated test fixtures (created and cleaned up by each test's own `cleanTestData()`/`afterAll`).
+
+**The critical question this checkpoint was asked to answer directly: does deploying this fix cause an
+old RELEASED payroll/Payslip/report to display a different value even though no database row changes?
+YES.** This follows directly from the architecture both this and the prior checkpoint already
+established and re-confirmed in Step 9 above: `netSalary`/`earnedAmount`/every calculated figure is
+**never stored** on `PayrollEntry` — `docs/architecture/database/payroll-entry.md §12` states this
+applies "identically" whether an entry is Draft or released, and explicitly extends it to Corrections'
+own baseline reconstruction ("the *current effective* value … is likewise always calculated on read …
+never cached on this row"). Concretely: any already-`released` `PayrollEntry` whose stored
+`grossPay`/`days`/`cycleDays` (with `otRate`/`leaveRate` left `null`) happens to sit on this exact
+rounding boundary will, the moment this fix deploys, display **PKR 0.01-0.02 higher** than it displayed
+before — on the Payroll Entry grid, its Payslip (if regenerated), Employee Payroll History, the Salary
+Release Report, and every other read surface — with **zero corresponding database write**, because
+there is nothing to write: the stored inputs (which genuinely never change post-release, confirmed by
+this codebase's own existing immutability proof — `payroll-entry.service.ts`'s `assertEntryEditable`
+blocks every mutation path the instant `released = true`) are unchanged; only the *function applied to
+them* changed.
+
+**This checkpoint found a real, pre-existing documentation/architecture gap while establishing the
+above** — `salary-release-report.service.ts`'s own doc comment (lines 52-53) titles its
+`originalReleasedAmount` field **"frozen, financial-correctness-critical — proof of immutability after
+release,"** and the "proof" it offers is a thorough, correct trace of every write path confirming the
+*stored input columns* (`grossPay`, `allowance`, `advanceDeduction`, …) never change post-release. That
+proof is accurate and remains true after this fix — but it silently assumes "the inputs don't change"
+is the same guarantee as "the displayed value doesn't change," which this checkpoint's own fix
+disproves: the formula applied to those genuinely-frozen inputs can itself be corrected later,
+retroactively moving a value its own doc comment calls "frozen." **This naming/documentation gap
+predates this checkpoint** (it was already present when the Salary Release Report was built) — it did
+not cause the rounding defect, but it means the codebase currently has no mechanism, and arguably no
+prior awareness, that "released" was never actually a value-freeze, only an input-freeze.
+
+**This is presented as a business/architecture decision, not decided here**: (a) accept this as a
+permanent, documented historical-display characteristic (the actual money that moved at the time of
+release was computed and paid correctly *by the standard in effect at that time* — a since-corrected
+software defect does not retroactively change what was actually transferred — and "fixing" the display
+of a specific old entry without any corresponding real-world payment adjustment could itself mislead a
+reader into thinking a different amount was originally paid); or (b) treat this as requiring an actual
+schema change (persisting an as-released snapshot of every calculated component at the moment of
+release) — a materially larger change than this checkpoint's "smallest root-cause fix" scope, needing
+its own separate design and approval; or (c) a targeted Correction-workflow reconciliation for
+whichever *specific* historical entries turn out to be affected, once production data can actually be
+examined (Steps 12-13 below — not yet possible). **No historical entry has been identified as actually
+affected** — that requires the production reconciliation this checkpoint still could not perform (same
+access gap as the original audit).
+
+### Production blast-radius analysis and historical exposure audit (Steps 12-13) — NOT PERFORMED, still no production access
+
+Identical gap to the original audit: `backend/.env`'s `DATABASE_URL` points only at a local Postgres
+(`payroll_manual`); no production database credentials, read replica, or API token were available in
+this environment; `claude-in-chrome`'s tab-context check found no pre-existing authenticated production
+session. **No August Draft `PayrollEntry` was read, and no historical released cycle was examined —
+this checkpoint cannot report exact/mismatch counts, affected employee/site/unit identifiers, aggregate
+historical difference, or a maximum observed production difference, for either August Draft entries or
+any previously-released cycle.** Per this checkpoint's own Step 14 deployment gate, this alone is
+sufficient to withhold a deployment recommendation regardless of how clean the code-level verification
+is.
+
+### Deployment safety decision (Step 14)
+
+Per the checkpoint's own explicit gate — deployment requires ALL of: zero unexplained mismatches at
+10,000 cases (✅ met), zero at 100,000 boundary-biased cases (✅ met), no new financial regression
+(✅ met — Steps 8-10), August production blast radius quantified (❌ **not met** — no production
+access), historical released-payroll behavior understood (✅ understood and documented above, but
+**not yet decided** by the business owner — Step 11), deployment will not silently rewrite/reinterpret
+immutable released history in an unacceptable way (⏸ **cannot be certified — this is the business
+owner's decision, not a technical one, per Step 11**), full CI trustworthy and green (see Step 15/CI
+below) — **two of six required gates are not met. Deployment is NOT cleared.** The code fix itself is
+complete, independently verified correct at both 10,000 and 100,000 case scale, and does not regress
+any other component — but merging/deploying it is a separate decision this checkpoint does not make
+unilaterally, exactly as instructed.
+
+### Full authoritative gate (Step 15)
+
+`shared` build: clean (`tsc -p tsconfig.json`). `backend` typecheck: clean (`tsc -p tsconfig.json
+--noEmit`). `backend` lint (`eslint tests/calc-net-independent-reference.test.ts
+tests/calc-net-old-vs-new-differential.test.ts tests/calc-net-new-vs-existing-precision-regression.test.ts`):
+0 errors, 0 warnings. `backend` build: clean (`tsc -p tsconfig.build.json`). Targeted DB-backed suites
+re-run and green as detailed in Steps 9-10 above (`payroll-entry.test.ts` 18/18;
+`calc-net.test.ts`/`working-days-cycle-days-guard.test.ts`/`corrections-calculation.test.ts` 88/88;
+reports/payslip/dashboard 15 suites/435 tests; Advances/Corrections/Cycle/Release domain 23 suites/540
+tests). `frontend` typecheck: clean. `frontend` lint: 0 errors (6 pre-existing, unrelated
+`react-refresh` warnings, unchanged from before this checkpoint). `frontend` test (`vitest run`): 72
+files/1080 tests passing. `frontend` build: clean. `git diff --check`: clean (no whitespace errors).
+[Full six-shard-equivalent single-process backend suite and real GitHub Actions CI: see the immediately
+following update once available.]
+
+### Git workflow (Step 16)
+
+Branch: `fix/calcnet-precision-rounding`, created from `main` at `05977c4` (unchanged since the prior
+checkpoint). Draft PR only — **not merged, not deployed, not tagged.**
+
+### Documentation (Step 17)
+
+This entry and `docs/SESSION_HANDOFF.md`'s matching addendum. Salary Release remains explicitly blocked
+— historical salaries are not called "wrong": the exposure is unquantified, framed throughout as PKR
+0.01-0.02 per affected component when it occurs, understatement-only, and this record explicitly
+declines to extrapolate any observed trigger rate to "N% of employees" or "N affected historical
+entries" absent actual production data.
+
+---
+
 ## 2. Remaining work (by phase, per `docs/IMPLEMENTATION_PLAN.md`)
 
 | Phase | Scope | Status |
