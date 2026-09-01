@@ -263,6 +263,35 @@ export function useAddWorkLine(cycleId: string) {
   });
 }
 
+/** Payroll Deputation Sync — "Apply current assignment" (2026-09-01 business decision). Explicit,
+ * opt-in action a Payroll Staff/Master Admin user triggers per entry; never a cascade from Employee
+ * Registry (`use-employees.ts`'s own `useUpdateEmployee` still invalidates only the Employees query
+ * key — this action is the only thing that ever touches a Draft entry's Site/Unit after a transfer).
+ * The response is the one exception to `MutationEntryResponse`'s usual "server never returns
+ * `site`/`employee`, so the merge preserves whatever's cached" rule: this is the one action where
+ * `siteId` itself just changed, so the backend's response includes the *new* full `site` row, and
+ * this merge replaces it — `employee` is still preserved from cache (unaffected; the employee's own
+ * record didn't change, only this entry's attribution did). */
+type ApplyEmployeeAssignmentResponse = Omit<PayrollEntry, 'employee'>;
+
+export function useApplyEmployeeAssignment(cycleId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, version }: { id: string; version: number }) =>
+      apiRequest<{ entry: ApplyEmployeeAssignmentResponse }>(
+        `/api/v1/payroll-entries/${id}/apply-employee-assignment`,
+        { method: 'POST', body: { version }, timeoutMs: PAYROLL_ENTRY_MUTATION_TIMEOUT_MS },
+      ),
+    onSuccess: (data) => {
+      queryClient.setQueryData<PayrollEntry[]>(payrollEntriesQueryKey(cycleId), (previous) =>
+        previous?.map((entry) =>
+          entry.id === data.entry.id ? { ...entry, ...data.entry, employee: entry.employee } : entry,
+        ),
+      );
+    },
+  });
+}
+
 /** Removes a `PayrollEntryWorkLine` — rejected server-side (400) if it would leave the entry with
  * zero lines (§12a); the Split by {unitLabel} modal also disables the affordance client-side for
  * that case, so this 400 should be unreachable in practice, the same defense-in-depth pattern as

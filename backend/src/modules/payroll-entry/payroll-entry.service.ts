@@ -594,7 +594,11 @@ export async function listPayrollEntries(currentUser: SessionUser, filters: List
     prisma.payrollEntry.findMany({
       where,
       include: {
-        employee: true,
+        // Payroll Deputation Sync (2026-09-01) — nested `site`/`unit`, not just the plain `employee:
+        // true` this used before, so the grid can compare the employee's *current* assignment against
+        // this entry's own `site`/`workLines[0].unit` without a second round trip or a client-side
+        // id→name lookup table. Two extra small joined rows per entry, not a new query shape.
+        employee: { include: { site: true, unit: true } },
         site: true,
         bank: true,
         // Phase 4 Checkpoint 5 (Advances) — the small linked-balance indicator surfaced under
@@ -622,7 +626,8 @@ export async function getPayrollEntry(currentUser: SessionUser, id: string) {
   const entry = await prisma.payrollEntry.findUnique({
     where: { id },
     include: {
-      employee: true,
+      // Payroll Deputation Sync (2026-09-01) — see `listPayrollEntries`'s identical comment above.
+      employee: { include: { site: true, unit: true } },
       site: true,
       bank: true,
       // Phase 4 Checkpoint 5 (Advances) — the small linked-balance indicator surfaced under
@@ -952,6 +957,156 @@ export async function updatePayrollEntry(
       },
     });
   });
+  return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
+}
+
+/**
+ * Payroll Deputation Sync — "Apply current assignment" (2026-09-01 business decision). Explicit,
+ * opt-in payroll action, deliberately **not** a cascade from `updateEmployee`:
+ * `docs/architecture/database/payroll-entry.md`'s "An `Employee` update never cascades into an
+ * existing `PayrollEntry`, in either direction, ever" remains the frozen rule — Employee Registry
+ * transfers still write only `Employee`/`EmployeeTransferHistory`/`employee.transferred`, exactly as
+ * before. This is instead a Payroll Staff-initiated action (`payroll:entry`, the same permission
+ * that already gates every other Payroll Entry write) that copies the employee's *current*
+ * Site/Unit onto this one Draft entry's `siteId` and its sole work line's `siteId`/`unitId`, only
+ * when doing so is genuinely unambiguous:
+ *
+ * - the entry must be editable (`assertEntryEditable` — unreleased, no `payoutOutcome`, cycle not
+ *   Archived; a released entry's historical attribution is never touched, no exception);
+ * - the actor must hold site access to *both* the entry's current site and the employee's new
+ *   site — moving payroll attribution into (or out of) a site the actor cannot otherwise manage
+ *   would be an RBAC bypass this action must not open;
+ * - the entry must have exactly one work line — a split/multi-unit allocation is a deliberate
+ *   attendance decision (§12a) this action must never silently collapse or reassign, so it is
+ *   rejected outright with a message pointing at editing the correct line directly instead;
+ * - that one line must carry zero `days` and zero `otHours` — genuine attendance already recorded
+ *   under the current Site/Unit must never be silently moved (falsifying project costing), so this
+ *   is rejected outright too, never a "confirm anyway" warning.
+ *
+ * Both the employee and the work line are re-read fresh *inside* the write transaction, immediately
+ * before the write, guarded by the entry's own optimistic-locking `version` the same way every other
+ * mutation here is — a concurrent attendance edit or a second sync attempt loses the race cleanly
+ * (`conflict`), never a silent partial state.
+ */
+export async function applyEmployeeAssignmentToDraftPayrollEntry(
+  currentUser: SessionUser,
+  id: string,
+  expectedVersion: number,
+  requestMeta: RequestMeta,
+) {
+  const existing = await getEntryForMutation(id);
+  assertSiteAccess(currentUser, existing.siteId);
+  assertEntryEditable(existing);
+
+  const employee = await prisma.employee.findUniqueOrThrow({ where: { id: existing.employeeId } });
+  assertSiteAccess(currentUser, employee.siteId);
+
+  if (existing.workLines.length !== 1) {
+    throw badRequest(
+      'This entry has more than one work line (a split allocation across units) — apply the new assignment to the correct line directly instead of using this action.',
+    );
+  }
+
+  const line = existing.workLines[0];
+  if (!line) {
+    throw notFound('Payroll entry work line not found');
+  }
+
+  if (employee.siteId === existing.siteId && employee.unitId === line.unitId) {
+    throw badRequest("This payroll entry already matches the employee's current assignment.");
+  }
+
+  if (line.days.greaterThan(0) || line.otHours.greaterThan(0)) {
+    throw badRequest(
+      'This work line already has attendance recorded under its current Site/Unit — applying the new assignment would misattribute that attendance. Edit the work line directly if it genuinely belongs to the new assignment.',
+    );
+  }
+
+  await assertUnitBelongsToSite(employee.unitId, employee.siteId);
+
+  const previousSiteId = existing.siteId;
+  const previousUnitId = line.unitId;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const freshEmployee = await tx.employee.findUniqueOrThrow({ where: { id: existing.employeeId } });
+    const freshLine = await tx.payrollEntryWorkLine.findUniqueOrThrow({ where: { id: line.id } });
+
+    // Re-validated against `freshEmployee`, not the outer `employee` read above — a second,
+    // concurrent transfer between that outer read and this transaction could otherwise apply a
+    // site the actor was never authorized for: the outer check only proves access to whatever
+    // site the employee happened to be at when this request started, not to whatever site they
+    // are at the instant this write actually commits. This is the same "trust only what's read
+    // inside the transaction" rule `freshLine`'s attendance re-check already follows.
+    assertSiteAccess(currentUser, freshEmployee.siteId);
+
+    if (freshLine.days.greaterThan(0) || freshLine.otHours.greaterThan(0)) {
+      throw conflict('This work line was edited by someone else and now has attendance recorded — reload and try again');
+    }
+
+    const guarded = await tx.payrollEntry.updateMany({
+      where: { id, version: expectedVersion },
+      data: { siteId: freshEmployee.siteId, version: { increment: 1 } },
+    });
+    if (guarded.count === 0) {
+      throw conflict('This payroll entry was changed by someone else — reload and try again');
+    }
+
+    await tx.payrollEntryWorkLine.update({
+      where: { id: line.id },
+      data: { siteId: freshEmployee.siteId, unitId: freshEmployee.unitId },
+    });
+
+    await recordAuditLog(
+      {
+        actorUserId: currentUser.id,
+        action: 'payroll_entry.assignment_synced',
+        entityType: 'PayrollEntry',
+        entityId: id,
+        metadata: {
+          cycleId: existing.cycleId,
+          employeeId: existing.employeeId,
+          workLineId: line.id,
+          previousSiteId,
+          previousUnitId,
+          newSiteId: freshEmployee.siteId,
+          newUnitId: freshEmployee.unitId,
+          origin: 'employee_registry_transfer_sync',
+        },
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+      },
+      tx,
+    );
+
+    // Unlike every other work-line/entry mutation's own response `include`, this one also loads
+    // `site: true` — this is the one action where `PayrollEntry.siteId` itself just changed, so the
+    // frontend cache (which otherwise always preserves its previously-cached `site` object across a
+    // mutation response, since no other action ever changes it, `use-payroll-entries.ts`'s own
+    // `mergeEntry` doc comment) needs the *new* site's full row, not just its id, to replace it with.
+    return tx.payrollEntry.findUniqueOrThrow({
+      where: { id },
+      include: {
+        workLines: WORK_LINES_INCLUDE,
+        releaseSnapshot: RELEASE_SNAPSHOT_CALC_SELECT,
+        site: true,
+        employee: {
+          select: {
+            cnic: true,
+            employeeCode: true,
+            designation: true,
+            bankId: true,
+            branchCode: true,
+            accountNumber: true,
+            iban: true,
+            grossPay: true,
+            name: true,
+            fatherName: true,
+          },
+        },
+      },
+    });
+  });
+
   return withReleaseBlockReasons(withCalc(withLiveMasterData(updated)));
 }
 
