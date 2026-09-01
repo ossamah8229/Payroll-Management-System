@@ -353,9 +353,11 @@ describe('Payroll Deputation Sync — Apply current assignment to Draft payroll 
       const originalFindUniqueOrThrow = prisma.employee.findUniqueOrThrow.bind(prisma.employee);
       const spy = jest.spyOn(prisma.employee, 'findUniqueOrThrow');
       let sawFirstCall = false;
-      spy.mockImplementation(async (...args: Parameters<typeof prisma.employee.findUniqueOrThrow>) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await (originalFindUniqueOrThrow as any)(...args);
+      // The real Prisma method returns a `Prisma__EmployeeClient` (a thenable with extra chainable
+      // relation-fetch methods), not a bare `Promise` — the mock only needs to satisfy `await`, so
+      // it's cast at the assignment boundary rather than reproducing that whole interface here.
+      spy.mockImplementation((async (...args: Parameters<typeof prisma.employee.findUniqueOrThrow>) => {
+        const result = await originalFindUniqueOrThrow(...args);
         if (!sawFirstCall) {
           // This is the route's own outer, pre-transaction read (staff has access to siteB, the
           // site this result still reflects) — immediately after it resolves, a second transfer
@@ -365,7 +367,7 @@ describe('Payroll Deputation Sync — Apply current assignment to Draft payroll 
           await prisma.employee.update({ where: { id: entry.employeeId }, data: { siteId: siteC.id, unitId: unitC.id } });
         }
         return result;
-      });
+      }) as unknown as typeof prisma.employee.findUniqueOrThrow);
 
       try {
         const applyRes = await staff.agent
