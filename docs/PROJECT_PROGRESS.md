@@ -17145,3 +17145,137 @@ unmerged, superseded. Production healthy (backend + frontend both live at the me
 applied cleanly, zero fabricated snapshots). Salary Release and Finalize both untouched — the first
 genuine production `PayrollEntryReleaseSnapshot` row will be created the moment a real Salary
 Release is eventually authorized and performed, not before.
+
+---
+
+## Payroll Deputation Sync — PR #22 Merge, Manual Local UAT, and Production Cutover (2026-09-01)
+
+Branch `feat/draft-payroll-assignment-sync`, PR #22: the explicit, opt-in "Apply current
+assignment" Payroll Entry action — reconciles a Draft `PayrollEntry`'s Site/Unit against the
+employee's *current* Employee Registry assignment, only when unambiguous (single work line, zero
+`days`/`otHours`, entry still editable). Deliberately **not** a cascade from Employee Registry —
+`docs/architecture/database/payroll-entry.md`'s "an `Employee` update never cascades into an
+existing `PayrollEntry`" rule stays frozen; reporting stays `PayrollEntry`-based, unchanged.
+
+### Qualification
+
+Qualified PR HEAD `643ca92` (base `28871e4`). Pre-merge CI (run `33515612960`) passed clean:
+Backend 6/6 + build, Frontend, E2E all SUCCESS — no exception needed. Diff confined to
+`payroll-entry.routes.ts`/`.service.ts` + their tests, `payroll-entry-row.tsx`,
+`use-payroll-entries.ts`, `shared/src` schemas — zero touch to CalcNet, schema/migrations, release
+immutability, or reporting's `PayrollEntry`-based source of truth.
+
+**RBAC TOCTOU fix, verified present before merge**: `applyEmployeeAssignmentToDraftPayrollEntry`
+re-reads the employee fresh *inside* the write transaction and re-runs `assertSiteAccess` against
+that fresh read, rather than trusting the pre-transaction check alone — closes a race where a
+concurrent transfer between the outer read and the transaction's commit could otherwise apply a
+site the actor was never authorized for. Deterministic regression test present
+(`sync-rbac-toctou`, `backend/tests/payroll-entry-employee-assignment-sync.test.ts`).
+
+### Merge
+
+Merged with a normal merge commit: `48419f66ea75fb98fd934923ebeebf0976eacfdc`, parents
+`28871e49d23ff30007d6070ec530c8fd70837b1f` (prior `main`) / `643ca928b9a42e9a7a5d9e7e49e98a70f17395f8`
+(PR HEAD) — confirmed via `gh pr view`/`git log`, no squash/rebase/admin bypass.
+
+### Post-merge CI — genuine first-attempt failure, honestly recorded
+
+Post-merge run `33518827315` against `48419f6` did **not** pass clean on its first attempt: the
+`Backend` job's shard 4/6 failed on `tests/backup-packages.test.ts`'s `"rejects an HTTP-level
+concurrent generation race cleanly — no duplicate version, no crash"` test (`Expected: 201,
+Received: 409` — both racing requests hit `409`, neither succeeded). Investigated before any rerun:
+zero file overlap between PR #22's diff and `backup-packages.service.ts`/its tests;
+`backup-packages.test.ts` has a **documented, repeated history** of non-deterministic failures
+under full 6-shard CI load in this project (three prior distinct-test instances recorded earlier in
+this file, each confirmed non-reproducible in isolation — e.g. "confirmed non-reproducible at 38/38
+on an isolated rerun"); this specific symptom (both racers losing) has no prior KI entry, so it is
+**not** the same thing as this file's already-`KI-5` (a `backup-packages.test.ts` timestamp-
+redaction flake, root-caused, different test) and **not** KI-10 (Payslips query-count). Only the
+failed job was rerun, against the identical merge SHA — shard 4/6 passed clean on rerun, Backend
+6/6 + build green, Frontend and E2E both SUCCESS. Final run conclusion: **SUCCESS**. See "Backup
+Packages concurrency-race reliability follow-up" below — recorded as a new, distinct, still-open
+symptom, not folded into KI-5 or KI-10.
+
+### Manual local UAT (before production deployment)
+
+Built a fully isolated local UAT environment from merge commit `48419f6` before authorizing
+production deployment: disposable Postgres database `payroll_local_uat` (separate from both
+`payroll_dev` and the developer's persistent `payroll_manual`), backend on port 4101, frontend on
+port 5273 (temporary, untracked `frontend/vite.uat.config.ts`), 12 synthetic employees
+(`UAT Employee 01`–`12`) across three synthetic sites (`UAT Site Alpha/Beta/Gamma`, five units) and
+one synthetic Draft cycle, seeded entirely through the real HTTP API (login → create sites/units/
+employees → create cycle → transfer/attendance/split/release actions) via a temporary, untracked
+`backend/scripts/seed-uat-fixtures.ts` — never direct-Prisma writes for anything the application
+itself validates. Covered all seven eligibility shapes: safe cross-site mismatch (Apply available),
+safe same-site unit-only mismatch (Apply available), existing-attendance mismatch (Apply correctly
+blocked), split-work-line mismatch (Apply correctly blocked), a genuinely released historical entry
+(26/30 days, `PAID`, frozen at its original Site/Unit — Apply correctly blocked), an already-
+matching entry (no mismatch badge), and a financially-varied but still-eligible entry (allowance/
+advance-deduction set, mismatch present, Apply available). Verified against the frontend's actual
+`hasAssignmentMismatch`/`canApplyAssignment` logic (`payroll-entry-row.tsx`), not just the backend
+service. User confirmed: manual UAT result **"everything is working as intended."** Zero production
+contact during UAT (confirmed via `pg_stat_activity`: 0 connections to `payroll_manual` or any
+production database at any point). UAT environment fully torn down after testing: UAT
+frontend/backend processes killed by exact PID (identified by port 5273/4101, never a broad
+process-kill), `payroll_local_uat` dropped (name verified before drop; `payroll_manual`/`payroll_dev`
+confirmed untouched, before and after), both temporary files removed, working tree left clean.
+
+### Production deployment
+
+`origin/main` reconfirmed at exactly `48419f6` immediately before deployment (no later commit),
+ancestry and merge parents reconfirmed. Both Render services have `autoDeploy: yes` /
+`autoDeployTrigger: commit` on `main` — deployment had already fired automatically at merge time
+(2026-09-01T14:19:55Z), confirmed via the Render CLI (authenticated, read/deploy-status access
+only), not assumed from elapsed time:
+
+- **Backend** (`payroll-management-api`): deploy `dep-dabdu2uk1f9s73finlr0`, status **live**, commit
+  `48419f66ea75fb98fd934923ebeebf0976eacfdc` — matches the merge SHA exactly. Startup log:
+  `npx prisma migrate deploy` → "29 migrations found in prisma/migrations" → **"No pending
+  migrations to apply."** — confirms PR #22 introduced zero schema change, exactly as expected.
+  `/health` → `{"status":"ok"}` (200).
+- **Frontend** (`payroll-management-app`): deploy `dep-dabdu2uk1f9s73finm5g`, status **live**, same
+  commit `48419f6`. Root URL 200.
+- Both `https://payroll-management-api-wlic.onrender.com/health` and
+  `https://payroll-management-app-qa3x.onrender.com/` independently curled 200 after deploy.
+
+**Authenticated in-app production smoke: NOT DIRECTLY VERIFIED — no production login credentials
+available in this environment.** Disclosed, not worked around — no attempt was made to guess/obtain
+credentials, and no mismatch was manufactured against a real employee. The mutation path itself was
+already validated end-to-end by the local UAT above.
+
+### Zero payroll mutations
+
+No Employee Registry edit, Apply Current Assignment, attendance/work-line edit, Advance/Correction
+change, Hold/unhold, Release, Release All, or Finalize was performed against production at any point
+in this checkpoint. Software deployment does not constitute authorization for Salary Release — that
+remains a separate, not-yet-made business decision. No tag was created.
+
+### Backup Packages concurrency-race reliability follow-up (new, open, not KI-5, not KI-10)
+
+`tests/backup-packages.test.ts`'s `"rejects an HTTP-level concurrent generation race cleanly"` test
+failed once, under full 6-shard CI load, with both racing requests returning `409` (i.e. neither
+succeeded) — a different failure shape than the test's own designed "exactly one `201`, the other
+`409`" race resolution. Passed clean on an immediate same-SHA rerun. Zero code overlap with PR #22.
+Not yet root-caused. Recorded here as a distinct, still-open reliability symptom in an
+already-documented-flaky file — explicitly **not** relabeled as `KI-5` (a different, already
+root-caused timestamp-redaction test in the same file) or `KI-10` (Payslips query-count, a wholly
+different suite). Worth a dedicated root-cause pass before it recurs on a release-blocking run;
+deliberately not investigated further here, per this checkpoint's own scope.
+
+### Deferred work (recorded, not started this checkpoint)
+
+1. **Manage Payroll Deputation** — a future, fuller mid-cycle Site/Unit reassignment workflow for
+   employees with existing attendance, OT, multiple work lines, or genuine mid-cycle allocation —
+   deliberately out of scope for this action, which only ever touches the single safe shape above.
+2. **Bulk assignment-mismatch readiness audit** — a read-only reporting capability, needed before
+   Salary Release, to enumerate every `Employee.siteId/unitId != PayrollEntry(/primary work line)`
+   mismatch across a Draft cycle for payroll-staff review and classification (intentional
+   deputation vs. sync-required) — not implemented this checkpoint.
+
+### Final state
+
+`main` == `origin/main` at `48419f66ea75fb98fd934923ebeebf0976eacfdc`. PR #22 merged. Production
+healthy (backend + frontend both live at the merge SHA, migration a clean no-op as expected, zero
+payroll mutations). Salary Release and Finalize both untouched. No-cascade architecture preserved;
+Employee Registry assignment and payroll-period assignment remain two separate concepts, reconciled
+only by this one explicit, narrowly-eligible action — never automatically.
