@@ -13,7 +13,8 @@ import {
 import type { Bank } from '@/hooks/use-banks';
 import type { Employee } from '@/hooks/use-employees';
 import { usePayrollEntryEditor } from '@/hooks/use-payroll-entry-editor';
-import type { PayrollEntry } from '@/hooks/use-payroll-entries';
+import { useApplyEmployeeAssignment, type PayrollEntry } from '@/hooks/use-payroll-entries';
+import { ApiError } from '@/lib/api-client';
 import {
   PAYROLL_COLUMNS,
   ROW_ACTION_WIDTH,
@@ -92,6 +93,43 @@ function PayrollEntryRowImpl({
   const [isSplitOpen, setIsSplitOpen] = useState(false);
   const unitLabel = entry.site.unitLabel;
   const unitCount = entry.workLines.length;
+
+  // Payroll Deputation Sync (2026-09-01 business decision) — a later Employee Registry transfer
+  // never cascades into this already-created entry (`payroll-entry.md §12`'s frozen "never
+  // cascades" rule), so the two can legitimately diverge; this is purely a display/action
+  // affordance, never a silent auto-correction. `hasAssignmentMismatch` drives the badge (shown
+  // for *any* divergence, including a split entry this action can't safely resolve on its own);
+  // `canApplyAssignment` additionally requires the one shape this action is willing to touch — a
+  // single work line with no attendance recorded yet (mirrors the backend's own eligibility check
+  // in `applyEmployeeAssignmentToDraftPayrollEntry`, never trusted client-side alone).
+  const primaryWorkLine = entry.workLines[0];
+  const hasAssignmentMismatch =
+    entry.employee.siteId !== entry.siteId || (primaryWorkLine ? entry.employee.unitId !== primaryWorkLine.unitId : false);
+  const canApplyAssignment =
+    hasAssignmentMismatch &&
+    editable &&
+    unitCount === 1 &&
+    primaryWorkLine !== undefined &&
+    Number(primaryWorkLine.days) === 0 &&
+    Number(primaryWorkLine.otHours) === 0;
+  const applyAssignment = useApplyEmployeeAssignment(cycleId);
+  const handleApplyAssignment = useCallback(() => {
+    if (
+      !window.confirm(
+        `Move this payroll entry to the employee's current assignment (${entry.employee.site.name} / ${entry.employee.unit.code ?? entry.employee.unit.name})? This only changes where this cycle's payroll is attributed — it does not affect Net Salary.`,
+      )
+    ) {
+      return;
+    }
+    applyAssignment.mutate(
+      { id: entry.id, version: entry.version },
+      {
+        onError: (error) => {
+          window.alert(error instanceof ApiError ? error.message : 'Could not apply the current assignment — please try again.');
+        },
+      },
+    );
+  }, [applyAssignment, entry.employee.site.name, entry.employee.unit.code, entry.employee.unit.name, entry.id, entry.version]);
 
   // Reports this row's live effective values to the totals store on every change (not just on
   // save) — this is what makes the sticky totals row "update live while editing" per the
@@ -298,7 +336,25 @@ function PayrollEntryRowImpl({
     // way to change it.
     designation: <ReadOnlyCell colId="designation">{entry.designation}</ReadOnlyCell>,
 
-    site: <ReadOnlyCell colId="site">{entry.site.name}</ReadOnlyCell>,
+    // Payroll Deputation Sync (2026-09-01) — the amber dot is purely informational (never
+    // "error" wording; a mismatch can be a legitimate, still-unreflected deputation, not a
+    // defect), matching this row's own `Badge tone="amber"` "Needs Attention" convention above.
+    // Native `title` tooltip, same mechanism `SaveStatusIndicator`/that badge already use — no new
+    // interactive popover pattern introduced just for this.
+    site: (
+      <ReadOnlyCell colId="site">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate">{entry.site.name}</span>
+          {hasAssignmentMismatch && (
+            <span
+              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+              title={`This payroll entry still belongs to the previous assignment.\nPayroll assignment: ${entry.site.name} / ${primaryWorkLine?.unit.code ?? primaryWorkLine?.unit.name ?? '—'}\nCurrent employee assignment: ${entry.employee.site.name} / ${entry.employee.unit.code ?? entry.employee.unit.name}${!canApplyAssignment ? '\n(Split allocation or existing attendance — use the work-line editor to reconcile.)' : ''}`}
+              aria-hidden
+            />
+          )}
+        </span>
+      </ReadOnlyCell>
+    ),
     // "Deputed Branch" — the deputed branch/site code for this entry's primary work line, its
     // own `unit` relation. Never `entry.employee.unit` (the employee's *current* default unit,
     // which would silently rewrite a released entry's historical branch). Labeled "Deputed
@@ -620,6 +676,19 @@ function PayrollEntryRowImpl({
         )}
         {canMarkEmployeeLeft && !entry.employee.dateOfLeaving && (
           <DropdownMenuItem onSelect={() => onMarkLeftEmployee(entry.employee)}>Mark as Left</DropdownMenuItem>
+        )}
+        {/* Payroll Deputation Sync (2026-09-01) — reuses `canMarkEmployeeLeft` as its permission
+            gate deliberately, not a new prop: both actions are governed by the exact same
+            `payroll:entry` permission (`payroll-entry-page.tsx`'s `canMarkEmployeeLeft = hasPermission(user,
+            PERMISSIONS.PAYROLL_ENTRY)`), so a third boolean thread carrying the identical value
+            down through the grid would be pure duplication. Only offered when
+            `canApplyAssignment` — the safe, unambiguous shape — is true; a split/attendance
+            mismatch still shows the badge above but never this one-click action (Manage Payroll
+            Deputation for that case is a future, separate workflow). */}
+        {canMarkEmployeeLeft && canApplyAssignment && (
+          <DropdownMenuItem onSelect={handleApplyAssignment} disabled={applyAssignment.isPending}>
+            Apply current assignment
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

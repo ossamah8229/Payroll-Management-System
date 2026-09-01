@@ -118,6 +118,15 @@ export const updateWorkLineSchema = z.object({
 
 export type UpdateWorkLineInput = z.infer<typeof updateWorkLineSchema>;
 
+/** Payroll Deputation Sync — "Apply current assignment" (2026-09-01). No fields beyond the
+ * optimistic-locking `version` — the action always applies the employee's *current* Site/Unit,
+ * never a caller-supplied one, so there is nothing else for the caller to submit. */
+export const applyEmployeeAssignmentSchema = z.object({
+  version: z.number().int(),
+});
+
+export type ApplyEmployeeAssignmentInput = z.infer<typeof applyEmployeeAssignmentSchema>;
+
 /**
  * "Copy to All" (Phase 3 Checkpoint 4, `docs/architecture/database/schema-invariants.md` §23's
  * "bulk writes over row-by-row loops" rule) — pushes one value to every currently-filtered

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   addWorkLineSchema,
+  applyEmployeeAssignmentSchema,
   bulkUpdatePayrollEntriesSchema,
   createPayrollEntrySchema,
   PERMISSIONS,
@@ -13,6 +14,7 @@ import { badRequest } from '../../common/http-error';
 import { recordAuditLog } from '../audit-log/audit-log.service';
 import {
   addWorkLine,
+  applyEmployeeAssignmentToDraftPayrollEntry,
   bulkUpdatePayrollEntries,
   createPayrollEntry,
   deletePayrollEntry,
@@ -191,6 +193,27 @@ payrollEntriesRouter.delete('/:id', requirePermission(PERMISSIONS.PAYROLL_ENTRY)
     next(error);
   }
 });
+
+/** Payroll Deputation Sync — "Apply current assignment" (2026-09-01). Explicit, opt-in payroll
+ * action gated on the same `payroll:entry` permission as every other Payroll Entry write — never a
+ * cascade from Employee Registry (`employees:edit` is neither checked nor sufficient here). */
+payrollEntriesRouter.post(
+  '/:id/apply-employee-assignment',
+  requirePermission(PERMISSIONS.PAYROLL_ENTRY),
+  async (req, res, next) => {
+    try {
+      const id = requireIdParam(req.params.id);
+      const input = applyEmployeeAssignmentSchema.parse(req.body);
+      const entry = await applyEmployeeAssignmentToDraftPayrollEntry(req.currentUser!, id, input.version, {
+        ipAddress: req.ip ?? null,
+        userAgent: req.get('user-agent') ?? null,
+      });
+      res.status(200).json({ entry });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 payrollEntriesRouter.post(
   '/:id/work-lines',

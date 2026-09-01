@@ -55,6 +55,7 @@ export type { CreatePayrollCycleInput } from './schemas/payroll-cycle';
 
 export {
   addWorkLineSchema,
+  applyEmployeeAssignmentSchema,
   bulkUpdatePayrollEntriesSchema,
   createPayrollEntrySchema,
   entryWorkLineSeedSchema,
@@ -63,6 +64,7 @@ export {
 } from './schemas/payroll-entry';
 export type {
   AddWorkLineInput,
+  ApplyEmployeeAssignmentInput,
   BulkUpdatePayrollEntriesInput,
   CreatePayrollEntryInput,
   EntryWorkLineSeedInput,
