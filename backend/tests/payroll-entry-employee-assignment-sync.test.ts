@@ -150,6 +150,32 @@ describe('Payroll Deputation Sync — Apply current assignment to Draft payroll 
     expect(secondApply.status).toBe(400);
   });
 
+  it('applies a same-site, different-unit transfer just as correctly as a cross-site one', async () => {
+    const admin = await masterAdminAgent('sync-same-site-admin@test.local');
+    const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site Same-Site A m2b');
+    const otherUnit = await prisma.projectUnit.create({ data: { siteId: siteA.id, name: 'Test Site Same-Site A m2b Unit 2', code: 'U-2' } });
+    const employee = await prisma.employee.create({
+      data: { name: 'Same-Site Unit Transfer Employee', designation: 'Guard', siteId: siteA.id, unitId: unitA.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin, 11);
+    const entry = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employee.id } });
+
+    const transferRes = await admin.agent
+      .patch(`/api/v1/employees/${employee.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ unitId: otherUnit.id, transferReason: 'Department change, same site' });
+    expect(transferRes.status).toBe(200);
+
+    const applyRes = await admin.agent
+      .post(`/api/v1/payroll-entries/${entry.id}/apply-employee-assignment`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: entry.version });
+
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.entry.siteId).toBe(siteA.id);
+    expect(applyRes.body.entry.workLines[0].unitId).toBe(otherUnit.id);
+  });
+
   it('rejects the sync when the entry has more than one work line — a split allocation is never silently collapsed', async () => {
     const admin = await masterAdminAgent('sync-split-admin@test.local');
     const { unitB, entry } = await setUpTransferredEmployeeWithDraftEntry(admin, 3);
@@ -305,6 +331,58 @@ describe('Payroll Deputation Sync — Apply current assignment to Draft payroll 
         .set('x-csrf-token', staff.csrfToken)
         .send({ version: entry.version });
       expect(applyRes.status).toBe(403);
+    });
+
+    // Hostile-review finding (PR #22 qualification gate) — the outer `assertSiteAccess` check
+    // that runs before the transaction is authorized against whatever the employee's site
+    // happens to be at the *start* of this request; the transaction then re-reads the employee a
+    // second time and writes *that* (freshest) site. If a second, independent transfer commits in
+    // the narrow window between those two reads, the outer check alone would have authorized
+    // access to a site that is no longer the one actually being written. Forces that exact
+    // interleaving deterministically (rather than relying on real concurrency/timing) by making
+    // the transaction's own `employee.findUniqueOrThrow` re-read trigger the second transfer as a
+    // side effect, so it always lands strictly after the route's own outer RBAC check has already
+    // run and strictly before the write. Proves the fix: `assertSiteAccess` re-checked *inside*
+    // the transaction against the freshly re-read employee, not just the outer one.
+    it('re-validates site access against the freshest employee state read inside the transaction, not just the outer pre-transaction read', async () => {
+      const admin = await masterAdminAgent('sync-rbac-toctou-admin@test.local');
+      const { siteA, siteB, entry } = await setUpTransferredEmployeeWithDraftEntry(admin, 12);
+      const { site: siteC, unit: unitC } = await makeSiteWithUnit('Test Site TOCTOU C m12');
+      const staff = await payrollStaffAgent('sync-rbac-toctou@test.local', [siteA.id, siteB.id]);
+
+      const originalFindUniqueOrThrow = prisma.employee.findUniqueOrThrow.bind(prisma.employee);
+      const spy = jest.spyOn(prisma.employee, 'findUniqueOrThrow');
+      let sawFirstCall = false;
+      spy.mockImplementation(async (...args: Parameters<typeof prisma.employee.findUniqueOrThrow>) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = await (originalFindUniqueOrThrow as any)(...args);
+        if (!sawFirstCall) {
+          // This is the route's own outer, pre-transaction read (staff has access to siteB, the
+          // site this result still reflects) — immediately after it resolves, a second transfer
+          // (to a site staff has no access to) is committed directly, so the transaction's own
+          // re-read below is guaranteed to see siteC, never siteB.
+          sawFirstCall = true;
+          await prisma.employee.update({ where: { id: entry.employeeId }, data: { siteId: siteC.id, unitId: unitC.id } });
+        }
+        return result;
+      });
+
+      try {
+        const applyRes = await staff.agent
+          .post(`/api/v1/payroll-entries/${entry.id}/apply-employee-assignment`)
+          .set('x-csrf-token', staff.csrfToken)
+          .send({ version: entry.version });
+
+        // Must be rejected — staff was never granted access to siteC, the site actually being
+        // written by the time the transaction runs, even though the outer check (against the
+        // stale siteB read) would have allowed it.
+        expect(applyRes.status).toBe(403);
+      } finally {
+        spy.mockRestore();
+      }
+
+      const untouched = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+      expect(untouched.siteId).toBe(entry.siteId);
     });
   });
 });

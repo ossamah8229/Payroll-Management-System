@@ -1031,6 +1031,14 @@ export async function applyEmployeeAssignmentToDraftPayrollEntry(
     const freshEmployee = await tx.employee.findUniqueOrThrow({ where: { id: existing.employeeId } });
     const freshLine = await tx.payrollEntryWorkLine.findUniqueOrThrow({ where: { id: line.id } });
 
+    // Re-validated against `freshEmployee`, not the outer `employee` read above — a second,
+    // concurrent transfer between that outer read and this transaction could otherwise apply a
+    // site the actor was never authorized for: the outer check only proves access to whatever
+    // site the employee happened to be at when this request started, not to whatever site they
+    // are at the instant this write actually commits. This is the same "trust only what's read
+    // inside the transaction" rule `freshLine`'s attendance re-check already follows.
+    assertSiteAccess(currentUser, freshEmployee.siteId);
+
     if (freshLine.days.greaterThan(0) || freshLine.otHours.greaterThan(0)) {
       throw conflict('This work line was edited by someone else and now has attendance recorded — reload and try again');
     }
