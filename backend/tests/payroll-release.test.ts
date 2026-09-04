@@ -362,6 +362,38 @@ describe('Phase 4 Checkpoint 2 — Finance Role and Salary Release foundation', 
     expect(stillDraft.hold).toBe(true);
   });
 
+  it('releases eligible employees when the frontend expectedVersions payload excludes a held employee in the same Unit', async () => {
+    const admin = await masterAdminAgent('release-hold-expected-version-admin@test.local');
+    const { site, units } = await makeSiteWithUnits('Test Site Release Hold Expected Version', ['Alpha']);
+    const cycle = await makeDraftCycle(admin, 10);
+    const heldEmployee = await makeEmployee(site.id, units[0]!.id, 'Held Expected Version');
+    const eligibleEmployee = await makeEmployee(site.id, units[0]!.id, 'Eligible Expected Version');
+    const heldEntry = await createEntry(admin, cycle.id, heldEmployee.id);
+    const eligibleEntry = await createEntry(admin, cycle.id, eligibleEmployee.id);
+
+    const holdRes = await admin.agent
+      .patch(`/api/v1/payroll-entries/${heldEntry.id}`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ version: heldEntry.version, hold: true });
+    expect(holdRes.status).toBe(200);
+
+    const release = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/units/${units[0]!.id}/release`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({ expectedVersions: [{ entryId: eligibleEntry.id, version: eligibleEntry.version }] });
+
+    expect(release.status).toBe(201);
+    expect(release.body.releasedEntryCount).toBe(1);
+
+    const [heldAfter, eligibleAfter] = await Promise.all([
+      prisma.payrollEntry.findUniqueOrThrow({ where: { id: heldEntry.id } }),
+      prisma.payrollEntry.findUniqueOrThrow({ where: { id: eligibleEntry.id } }),
+    ]);
+    expect(heldAfter.hold).toBe(true);
+    expect(heldAfter.released).toBe(false);
+    expect(eligibleAfter.released).toBe(true);
+  });
+
   it('rejects releasing a Unit whose cycle is not Draft', async () => {
     const admin = await masterAdminAgent('release-nondraft-admin@test.local');
     const { units } = await makeSiteWithUnits('Test Site Release NonDraft', ['Alpha']);

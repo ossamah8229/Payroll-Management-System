@@ -59,11 +59,13 @@ export function useUnitReleaseStatus(cycleId: string | undefined, siteId: string
 
 export interface ReleaseProjectUnitVariables {
   unitId: string;
-  /** Phase 7E durability checkpoint (A4) — the `{entryId, version}` pairs of every entry the
-   * Salary Release page currently shows as touching this Unit, so the backend can reject the
-   * release outright if any of them changed since this page last loaded (`payroll-release.service.ts`'s
-   * own doc comment on `releaseProjectUnit`). Optional — omitting it (or an empty array) releases
-   * exactly as before this checkpoint. */
+  /** Phase 7E durability checkpoint (A4) — the `{entryId, version}` pairs of every currently-live
+   * release candidate at this Unit, so the backend can reject the release outright if any of them
+   * changed since this page last loaded (`payroll-release.service.ts`'s own doc comment on
+   * `releaseProjectUnit`). Held/released/resolved entries are not candidates and must not be sent;
+   * if a candidate becomes Held after this read, its previously-sent pair still triggers the
+   * intended stale-state 409. Optional — omitting it (or an empty array) releases exactly as before
+   * this checkpoint. */
   expectedVersions?: { entryId: string; version: number }[];
 }
 

@@ -34,6 +34,7 @@ import {
   type UnitReleaseStatus,
 } from '@/hooks/use-payroll-release';
 import { usePayrollEntryCycleSaveSummary } from '@/lib/payroll-entry-save-status-store';
+import { expectedVersionsForUnit } from './salary-release-candidates';
 
 const selectClassName =
   'flex h-9 w-full max-w-xs rounded border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent-mid focus:ring-2 focus:ring-accent-light';
@@ -535,15 +536,6 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
   // own), rather than introducing a second read endpoint just for this Unit-scoped slice.
   const entriesForVersionCheck = usePayrollEntries(cycle?.id);
 
-  function expectedVersionsForUnit(unitId: string): { entryId: string; version: number }[] {
-    return (entriesForVersionCheck.data ?? [])
-      .filter(
-        (entry) =>
-          !entry.released && entry.payoutOutcome === null && entry.workLines.some((line) => line.unitId === unitId),
-      )
-      .map((entry) => ({ entryId: entry.id, version: entry.version }));
-  }
-
   const canRelease = user.permissions.includes(PERMISSIONS.PAYROLL_RELEASE);
   const canFinalize = user.permissions.includes(PERMISSIONS.PAYROLL_CYCLE_MANAGE);
   const cycleLabel = cycle ? formatCycleLabel(cycle) : '';
@@ -555,7 +547,7 @@ export function SalaryReleasePage({ user }: { user: SessionUser }) {
     try {
       const result = await releaseUnit.mutateAsync({
         unitId: confirming.unit.id,
-        expectedVersions: expectedVersionsForUnit(confirming.unit.id),
+        expectedVersions: expectedVersionsForUnit(entriesForVersionCheck.data ?? [], confirming.unit.id),
       });
       const parts: string[] = [];
       if (result.releasedEntryCount > 0) {
