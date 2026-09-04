@@ -85,6 +85,7 @@ vi.mock('@/hooks/use-payroll-entries', async (importOriginal) => {
 });
 
 const { SalaryReleasePage } = await import('./salary-release-page');
+const { expectedVersionsForUnit } = await import('./salary-release-candidates');
 const { payrollEntrySaveStatusStore } = await import('@/lib/payroll-entry-save-status-store');
 
 const testUser: SessionUser = {
@@ -98,6 +99,52 @@ const testUser: SessionUser = {
   siteIds: [testSite.id],
   themeAccentColor: '#000000',
 };
+
+function versionEntry(overrides: {
+  id: string;
+  version: number;
+  hold?: boolean;
+  released?: boolean;
+  payoutOutcome?: 'NO_PAY_DUE' | 'RECOVERY_DUE' | null;
+  unitId?: string;
+}) {
+  return {
+    id: overrides.id,
+    version: overrides.version,
+    hold: overrides.hold ?? false,
+    released: overrides.released ?? false,
+    payoutOutcome: overrides.payoutOutcome ?? null,
+    workLines: [{ unitId: overrides.unitId ?? unitStatus.unit.id }],
+  } as Parameters<typeof expectedVersionsForUnit>[0][number];
+}
+
+describe('Salary Release page — expected-version candidate alignment', () => {
+  it('excludes held entries while retaining eligible entries in the same Unit', () => {
+    const entries = [
+      versionEntry({ id: 'held-entry', version: 4, hold: true }),
+      versionEntry({ id: 'eligible-entry', version: 7 }),
+    ];
+
+    expect(expectedVersionsForUnit(entries, unitStatus.unit.id)).toEqual([
+      { entryId: 'eligible-entry', version: 7 },
+    ]);
+  });
+
+  it('still includes every live candidate version so genuine post-load changes remain protected', () => {
+    const entries = [
+      versionEntry({ id: 'eligible-entry-1', version: 2 }),
+      versionEntry({ id: 'eligible-entry-2', version: 9 }),
+      versionEntry({ id: 'released-entry', version: 3, released: true }),
+      versionEntry({ id: 'resolved-entry', version: 5, payoutOutcome: 'NO_PAY_DUE' }),
+      versionEntry({ id: 'other-unit-entry', version: 6, unitId: 'unit-2' }),
+    ];
+
+    expect(expectedVersionsForUnit(entries, unitStatus.unit.id)).toEqual([
+      { entryId: 'eligible-entry-1', version: 2 },
+      { entryId: 'eligible-entry-2', version: 9 },
+    ]);
+  });
+});
 
 function renderPage() {
   const queryClient = new QueryClient();
