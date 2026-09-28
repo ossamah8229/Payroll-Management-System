@@ -63,6 +63,18 @@ describe('Bulk Assignment-Mismatch Readiness Audit', () => {
     });
   }
 
+  /** A site-scoped user holding `payroll:view` alone (Finance's read-only grant), never
+   * `payroll:entry` — dedicated `TEST_`-prefixed role for the same reason as `noAccessAgent`. */
+  async function viewOnlyAgent(email: string, siteIds: string[]) {
+    return createAuthenticatedAgent(app, {
+      email,
+      password: PASSWORD,
+      roleCode: 'TEST_AMR_VIEW_ONLY',
+      permissionKeys: [PERMISSIONS.PAYROLL_VIEW],
+      siteIds,
+    });
+  }
+
   async function makeSiteWithUnit(name: string) {
     const site = await prisma.projectSite.create({ data: { name } });
     const unit = await prisma.projectUnit.create({ data: { siteId: site.id, name: `${name} Unit`, code: 'U-1' } });
@@ -369,6 +381,78 @@ describe('Bulk Assignment-Mismatch Readiness Audit', () => {
 
     const res = await fetchAudit(staffA, cycle.id, { siteIds: siteA.id });
     expect(res.status).toBe(403);
+  });
+
+  it('REGRESSION: scopes on PayrollEntry.siteId only — an entry still at Site B whose employee moved INTO Site A never reaches a Site-A-only user, in the list or the export', async () => {
+    const admin = await masterAdminAgent('amr-inbound-scope-admin@test.local');
+    const { site: siteA, unit: unitA } = await makeSiteWithUnit('Test Site AMR Inbound A');
+    const { site: siteB, unit: unitB } = await makeSiteWithUnit('Test Site AMR Inbound B');
+    const employee = await prisma.employee.create({
+      data: { name: 'AMR Inbound Transfer Employee', designation: 'Guard', siteId: siteB.id, unitId: unitB.id, grossPay: '30000' },
+    });
+    const cycle = await makeDraftCycle(admin, 1, 2905);
+    const entry = await prisma.payrollEntry.findFirstOrThrow({ where: { cycleId: cycle.id, employeeId: employee.id } });
+    expect(entry.siteId).toBe(siteB.id);
+
+    // The employee's *current* assignment is now Site A; the Draft entry stays attributed to Site B.
+    await transferEmployee(admin, employee.id, siteA.id, unitA.id);
+    const unchanged = await prisma.payrollEntry.findUniqueOrThrow({ where: { id: entry.id } });
+    expect(unchanged.siteId).toBe(siteB.id);
+
+    // Positive control: it is a genuine mismatch candidate the report does surface.
+    const masterRes = await fetchAudit(admin, cycle.id);
+    expect(masterRes.body.total).toBe(1);
+    expect(masterRes.body.rows[0].payrollSiteId).toBe(siteB.id);
+    expect(masterRes.body.rows[0].currentEmployeeSiteId).toBe(siteA.id);
+
+    // Site-A-only: never visible — neither Employee.siteId nor "either site" grants access.
+    const staffA = await payrollStaffAgent('amr-inbound-staff-a@test.local', [siteA.id]);
+    const listA = await fetchAudit(staffA, cycle.id);
+    expect(listA.status).toBe(200);
+    expect(listA.body.total).toBe(0);
+    expect(listA.body.rows).toEqual([]);
+    expect(listA.body.totals.matchingCount).toBe(0);
+
+    const filteredA = await fetchAudit(staffA, cycle.id, { siteIds: siteA.id });
+    expect(filteredA.status).toBe(200);
+    expect(filteredA.body.total).toBe(0);
+
+    const exportA = await staffA.agent.get(`/api/v1/reports/assignment-mismatch-readiness/export?cycleId=${cycle.id}&format=csv`);
+    expect(exportA.status).toBe(200);
+    expect(exportA.text.trim().split('\n')).toHaveLength(1); // header row only
+    expect(exportA.text).not.toContain('AMR Inbound Transfer Employee');
+
+    // Site-B-only: sees it — access follows the entry's own payroll Site.
+    const staffB = await payrollStaffAgent('amr-inbound-staff-b@test.local', [siteB.id]);
+    const listB = await fetchAudit(staffB, cycle.id);
+    expect(listB.body.total).toBe(1);
+    expect(listB.body.rows[0].payrollEntryId).toBe(entry.id);
+
+    const exportB = await staffB.agent.get(`/api/v1/reports/assignment-mismatch-readiness/export?cycleId=${cycle.id}&format=csv`);
+    expect(exportB.status).toBe(200);
+    expect(exportB.text).toContain('AMR Inbound Transfer Employee');
+  });
+
+  it('admits a payroll:view-only user (no payroll:entry), still site-scoped, for both list and export', async () => {
+    const admin = await masterAdminAgent('amr-view-only-admin@test.local');
+    const { site, cycle, entry, employee } = await setUpDraftEntry(admin, 1, 'Test Site AMR View Only');
+    const { site: siteElsewhere, unit: unitElsewhere } = await makeSiteWithUnit('Test Site AMR View Only Elsewhere');
+    await transferEmployee(admin, employee.id, siteElsewhere.id, unitElsewhere.id);
+
+    const viewer = await viewOnlyAgent('amr-view-only@test.local', [site.id]);
+    const list = await fetchAudit(viewer, cycle.id);
+    expect(list.status).toBe(200);
+    expect(list.body.total).toBe(1);
+    expect(list.body.rows[0].payrollEntryId).toBe(entry.id);
+
+    const exportRes = await viewer.agent.get(`/api/v1/reports/assignment-mismatch-readiness/export?cycleId=${cycle.id}&format=csv`);
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.text.trim().split('\n')).toHaveLength(2);
+
+    const otherSiteViewer = await viewOnlyAgent('amr-view-only-other@test.local', [siteElsewhere.id]);
+    const otherList = await fetchAudit(otherSiteViewer, cycle.id);
+    expect(otherList.status).toBe(200);
+    expect(otherList.body.total).toBe(0);
   });
 
   // --- Pagination / export parity -----------------------------------------------------------

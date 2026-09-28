@@ -239,7 +239,7 @@ export function ReportsAssignmentMismatchReadinessPage({ user }: { user: Session
     >
       <div className="flex flex-col gap-4">
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-col items-stretch gap-3">
             <PayrollPageToolbar
               title="Assignment Mismatch Readiness"
               badge={cycle && <PayrollCycleStatusBadge cycle={cycle} />}
@@ -330,6 +330,12 @@ export function ReportsAssignmentMismatchReadinessPage({ user }: { user: Session
                 </>
               }
             />
+            {/* Informational only — a mismatch is not necessarily an error, and this page offers no
+                action to change it (approved pre-PR copy, 2026-09-28 review). */}
+            <p className="text-xs text-text-muted" data-testid="amr-explanation">
+              Current employee assignment differs from payroll assignment. A mismatch may be intentional, for
+              example a payroll deputation or recorded attendance allocation.
+            </p>
           </CardHeader>
           <CardContent className="p-0">
             {isLoading && (

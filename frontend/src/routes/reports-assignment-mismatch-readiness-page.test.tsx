@@ -222,6 +222,15 @@ describe('ReportsAssignmentMismatchReadinessPage — strictly read-only (no muta
     expect(badge).toBeTruthy();
     expect(screen.queryByRole('button', { name: /yes/i })).toBeNull();
   });
+
+  it('explains, neutrally, that a mismatch may be intentional', () => {
+    mockReport(fullReport());
+    renderPage();
+    const explanation = screen.getByTestId('amr-explanation');
+    expect(explanation.textContent).toMatch(/current employee assignment differs from payroll assignment/i);
+    expect(explanation.textContent).toMatch(/may be intentional.*payroll deputation or recorded attendance allocation/i);
+    expect(explanation.textContent).not.toMatch(/stale|incorrect|error|wrong/i);
+  });
 });
 
 describe('ReportsAssignmentMismatchReadinessPage — rendering', () => {
