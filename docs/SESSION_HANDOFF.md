@@ -28,7 +28,7 @@ be enough to resume correctly without re-deriving context from scratch — per
 > pre-existing per-row grid indicator's own primary-line-only simplification, which itself is
 > unchanged). **No mutation surface added**: no Apply/classification/sync action on this report,
 > `applyEmployeeAssignmentToDraftPayrollEntry` and the Payroll Entry grid's own row action are
-> completely untouched. No schema/migration change. 14 new backend integration tests + frontend
+> completely untouched. No schema/migration change. 16 new backend integration tests + frontend
 > hook/page tests + one new E2E spec (`32-assignment-mismatch-readiness.spec.ts`), all passing.
 > Full 6-shard backend suite **1,961/1,961**, frontend **1,112/1,112**, root
 > `typecheck`/`lint`/`build` all clean. One pre-existing, unrelated intermittent flake hit once on

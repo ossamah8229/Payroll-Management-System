@@ -17331,7 +17331,7 @@ to a separate, later, separately-authorized phase.
 
 ### Tests
 
-- Backend: 14 new integration tests
+- Backend: 16 new integration tests
   (`backend/tests/assignment-mismatch-readiness.test.ts`) — Site-only/Unit-only/combined mismatch,
   the split-entry "primary line matches, secondary diverges" regression, Held inclusion,
   released/`payoutOutcome`-resolved exclusion, non-Draft-cycle rejection (400), RBAC 403 (a
