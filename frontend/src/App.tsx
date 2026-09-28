@@ -86,6 +86,11 @@ const ReportsSalaryReleaseReportPage = lazy(() =>
 const ReportsVarianceReportPage = lazy(() =>
   import('@/routes/reports-variance-report-page').then((m) => ({ default: m.ReportsVarianceReportPage })),
 );
+const ReportsAssignmentMismatchReadinessPage = lazy(() =>
+  import('@/routes/reports-assignment-mismatch-readiness-page').then((m) => ({
+    default: m.ReportsAssignmentMismatchReadinessPage,
+  })),
+);
 
 /** Gates any route that requires an authenticated session, redirecting to /login otherwise. This
  * loading state (the session fetch) is unrelated to a lazy route's own code-loading state, but
@@ -690,6 +695,24 @@ const routes: RouteObject[] = [
         {(user) => (
           <RequirePermission user={user} permission={PERMISSIONS.REPORTS_VIEW}>
             <ReportsVarianceReportPage user={user} />
+          </RequirePermission>
+        )}
+      </RequireSession>
+    ),
+  },
+  // Bulk Assignment-Mismatch Readiness Audit (approved 2026-09-28 architecture review) — gated on
+  // `payroll:entry` OR `payroll:view`, the same `VIEW_PERMISSIONS` gate the Payroll Entry grid
+  // itself uses, not `reports:view`. Always scoped to the single current Draft cycle
+  // (`useCurrentPayrollCycle`) — no `:cycleId` path segment, matching Variance Report's own
+  // "no meaningful cycle-nested path variant" precedent for a report that isn't addressed by one
+  // ordinary required cycle picked from a historical list.
+  {
+    path: '/reports/assignment-mismatch-readiness',
+    element: (
+      <RequireSession>
+        {(user) => (
+          <RequirePermission user={user} permission={[PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.PAYROLL_VIEW]}>
+            <ReportsAssignmentMismatchReadinessPage user={user} />
           </RequirePermission>
         )}
       </RequireSession>

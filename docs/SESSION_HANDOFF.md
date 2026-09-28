@@ -17,8 +17,36 @@ be enough to resume correctly without re-deriving context from scratch — per
 
 ## 0. Current state (authoritative as of 2026-07-19 — read this section first)
 
-> **Update, 2026-09-01 (latest) — PR #22 (Payroll Deputation Sync: explicit "Apply current
-> assignment" action) MERGED AND DEPLOYED TO PRODUCTION. Salary Release still NOT authorized.**
+> **Update, 2026-09-28 (latest) — Bulk Assignment-Mismatch Readiness Audit IMPLEMENTED on branch
+> `codex/assignment-mismatch-readiness` (base `origin/main` @ `2b97f43`), STOP BEFORE MERGE.**
+> Implements the read-only reporting capability deferred at the end of the PR #22 checkpoint below:
+> a strictly read-only Reports-page audit enumerating every Draft `PayrollEntry` whose
+> Site/Unit attribution no longer matches the employee's current Employee Registry assignment —
+> `GET /api/v1/reports/assignment-mismatch-readiness` (+ `/export`), gated `payroll:entry` OR
+> `payroll:view` (the same gate the Payroll Entry grid itself uses), scoped to the single current
+> Draft cycle, evaluating every work line (not just the primary — closes a real gap in the
+> pre-existing per-row grid indicator's own primary-line-only simplification, which itself is
+> unchanged). **No mutation surface added**: no Apply/classification/sync action on this report,
+> `applyEmployeeAssignmentToDraftPayrollEntry` and the Payroll Entry grid's own row action are
+> completely untouched. No schema/migration change. 14 new backend integration tests + frontend
+> hook/page tests + one new E2E spec (`32-assignment-mismatch-readiness.spec.ts`), all passing.
+> Full 6-shard backend suite **1,961/1,961**, frontend **1,112/1,112**, root
+> `typecheck`/`lint`/`build` all clean. One pre-existing, unrelated intermittent flake hit once on
+> shard 4 and confirmed non-reproducible on two immediate reruns (a suite untouched by this
+> branch's diff); one pre-existing stale-fixture data-hygiene gap found and cleared in the shared
+> local `payroll_dev` test database (three weeks-old orphaned `Bank` rows from an unrelated test
+> file whose own cleanup regex doesn't match its own fixture codes) — cleared via a scoped delete
+> of exactly those three rows, confined to the disposable local test database, never
+> `payroll_manual`, never production. **Zero production access, zero payroll mutation, of any
+> kind, this checkpoint.** Full record: `docs/PROJECT_PROGRESS.md`'s own "Bulk Assignment-Mismatch
+> Readiness Audit — Implemented on Branch, Not Yet Merged" entry (end of file) — not duplicated
+> here in full. **Not merged, not deployed — awaiting review.**
+>
+> ---
+>
+> **Update, 2026-09-01 (superseded by the entry above for status purposes) — PR #22 (Payroll
+> Deputation Sync: explicit "Apply current assignment" action) MERGED AND DEPLOYED TO PRODUCTION.
+> Salary Release still NOT authorized.**
 > Qualified candidate `643ca92` (base `28871e4`); pre-merge CI clean (Backend/Frontend/E2E all
 > SUCCESS). Merge commit `48419f66ea75fb98fd934923ebeebf0976eacfdc` (parents
 > `28871e4`/`643ca92`). **Post-merge CI (run `33518827315`) did not pass clean on its first
