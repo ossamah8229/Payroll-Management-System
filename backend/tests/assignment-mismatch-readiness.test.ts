@@ -333,6 +333,45 @@ describe('Bulk Assignment-Mismatch Readiness Audit', () => {
     expect(res.body.error.message).toMatch(/Draft/i);
   });
 
+  it('rejects an ARCHIVED cycle with 400 and returns no rows — even one that held a genuine mismatch while Draft', async () => {
+    const admin = await masterAdminAgent('amr-archived-admin@test.local');
+    const { unit, employee, cycle } = await setUpDraftEntry(admin, 10, 'Test Site AMR Archived');
+    const { site: siteElsewhere, unit: unitElsewhere } = await makeSiteWithUnit('Test Site AMR Archived Elsewhere');
+    await transferEmployee(admin, employee.id, siteElsewhere.id, unitElsewhere.id);
+
+    // Positive control: while Draft, the mismatch is surfaced.
+    const draftRes = await fetchAudit(admin, cycle.id);
+    expect(draftRes.status).toBe(200);
+    expect(draftRes.body.total).toBe(1);
+
+    // Draft -> Released -> Archived through the real lifecycle endpoints.
+    const releaseRes = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/units/${unit.id}/release`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(releaseRes.status).toBe(201);
+    const finalizeRes = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/finalize`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(finalizeRes.status).toBe(200);
+    const rolloverRes = await admin.agent
+      .post(`/api/v1/payroll-cycles/${cycle.id}/archive-and-create-next`)
+      .set('x-csrf-token', admin.csrfToken)
+      .send({});
+    expect(rolloverRes.status).toBe(201);
+
+    const cyclesRes = await admin.agent.get('/api/v1/payroll-cycles');
+    const archived = (cyclesRes.body.cycles as { id: string; status: string }[]).find((c) => c.id === cycle.id);
+    expect(archived?.status).toBe('ARCHIVED');
+
+    const res = await fetchAudit(admin, cycle.id);
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/Draft/i);
+    expect(res.body.rows).toBeUndefined();
+    expect(res.body.total).toBeUndefined();
+  });
+
   // --- RBAC / site-scoping -------------------------------------------------------------------
 
   it('403s a user holding neither payroll:entry nor payroll:view', async () => {

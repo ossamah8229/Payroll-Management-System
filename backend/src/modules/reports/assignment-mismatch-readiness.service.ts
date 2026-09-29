@@ -345,9 +345,10 @@ const SHAPE_LABEL: Record<AssignmentMismatchShape, string> = {
 /** Flat, read-only column set — no financial field of any kind (this report has none), no
  * classification/review-state field (no such state exists — this checkpoint is read-only). Values
  * are read verbatim off the same `AssignmentMismatchReadinessRow` objects the list endpoint
- * returns, never resummed or reformatted differently (Principle 6). Multi-line entries list every
- * mismatched Unit's own name in the "Payroll Unit(s)" column, semicolon-separated, so a split
- * entry's own per-line divergence survives the flattened export. */
+ * returns, never resummed or reformatted differently (Principle 6). The "Payroll Unit(s)" column
+ * lists every work line's own Unit (code, else name), semicolon-separated in work-line order, with
+ * each mismatched Unit marked by a trailing ` *` — so a split entry's own per-line divergence
+ * survives the flattened export. */
 export const ASSIGNMENT_MISMATCH_READINESS_EXPORT_HEADERS = [
   'Employee Code',
   'Employee Name',
