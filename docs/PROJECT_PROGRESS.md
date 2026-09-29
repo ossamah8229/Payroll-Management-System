@@ -17313,7 +17313,8 @@ to a separate, later, separately-authorized phase.
 - Held entries are included, flagged `held: true` — `hold` never affects Draft editability, only
   release-sweep eligibility (`payroll-entry.service.ts`'s own frozen rule, unchanged). Released and
   `payoutOutcome`-resolved entries are excluded outright, never shown, never implied to need a fix.
-  A non-Draft `cycleId` is rejected with 400.
+  A non-Draft `cycleId` is rejected with 400. Archived cycles are explicitly rejected too, because
+  the report is limited to actionable Draft payroll cycles.
 - Frontend: new Reports catalogue card + dedicated page (`/reports/assignment-mismatch-readiness`),
   scoped to the single current Draft cycle (`useCurrentPayrollCycle` — only one Draft cycle ever
   exists system-wide, `docs/architecture/workflows/payroll-lifecycle.md` §4), with Site/Unit/
@@ -17331,11 +17332,11 @@ to a separate, later, separately-authorized phase.
 
 ### Tests
 
-- Backend: 16 new integration tests
+- Backend: 17 new integration tests
   (`backend/tests/assignment-mismatch-readiness.test.ts`) — Site-only/Unit-only/combined mismatch,
   the split-entry "primary line matches, secondary diverges" regression, Held inclusion,
-  released/`payoutOutcome`-resolved exclusion, non-Draft-cycle rejection (400), RBAC 403 (a
-  dedicated zero-permission `TEST_`-prefixed role, not the real shared `PAYROLL_STAFF` role — see
+  released/`payoutOutcome`-resolved exclusion, non-Draft-cycle rejection (400, RELEASED and
+  ARCHIVED), RBAC 403 (a dedicated zero-permission `TEST_`-prefixed role, not the real shared `PAYROLL_STAFF` role — see
   the test file's own doc comment on why that real role can't be trusted to hold zero permissions
   in this shared local database), site-scoping, explicit-filter-to-inaccessible-site rejection
   (403), pagination/export row-count parity, shape/safe-shape-only filtering.

@@ -28,8 +28,9 @@ be enough to resume correctly without re-deriving context from scratch — per
 > pre-existing per-row grid indicator's own primary-line-only simplification, which itself is
 > unchanged). **No mutation surface added**: no Apply/classification/sync action on this report,
 > `applyEmployeeAssignmentToDraftPayrollEntry` and the Payroll Entry grid's own row action are
-> completely untouched. No schema/migration change. 16 new backend integration tests + frontend
-> hook/page tests + one new E2E spec (`32-assignment-mismatch-readiness.spec.ts`).
+> completely untouched. No schema/migration change. Archived cycles are explicitly rejected (400),
+> because the report is limited to actionable Draft payroll cycles. 17 new backend integration
+> tests + frontend hook/page tests + one new E2E spec (`32-assignment-mismatch-readiness.spec.ts`).
 > Full 6-shard backend suite **1,963/1,963**, frontend **1,118/1,118** (1,113 before the
 > pagination-label fix), E2E **192 passed / 8 skipped / 0 failed** (the 8 skips are pre-existing
 > conditional `test.skip` guards in other specs; all 3 spec-32 tests ran and passed), root
