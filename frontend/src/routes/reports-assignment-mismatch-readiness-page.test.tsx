@@ -284,6 +284,16 @@ describe('ReportsAssignmentMismatchReadinessPage — rendering', () => {
     expect(splitBadge).toBeTruthy();
   });
 
+  it('labels the pagination row count "entry" for one row and "entries" for several', () => {
+    mockReport(fullReport({ total: 1 }));
+    renderPage();
+    expect(screen.getByText('Showing 1–1 of 1 entry')).toBeTruthy();
+    cleanup();
+    mockReport(fullReport({ total: 2, rows: [row({ payrollEntryId: 'entry-a' }), row({ payrollEntryId: 'entry-b' })] }));
+    renderPage();
+    expect(screen.getByText('Showing 1–2 of 2 entries')).toBeTruthy();
+  });
+
   it('renders the stat cards from the totals payload', () => {
     mockReport(fullReport({ totals: totals({ matchingCount: 3, siteMismatchCount: 2, unitOnlyMismatchCount: 1, heldCount: 1 }) }));
     renderPage();

@@ -467,6 +467,7 @@ export function ReportsAssignmentMismatchReadinessPage({ user }: { user: Session
                       total={report.data.total}
                       onPageChange={setPage}
                       disabled={report.isFetching}
+                      itemLabelSingular="entry"
                       itemLabelPlural="entries"
                     />
                   </>

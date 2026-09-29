@@ -27,6 +27,9 @@ export function ReportPagination({
   // trailing "s", matching the original hardcoded "site"/"sites" split exactly, so the default
   // preserves every existing caller's rendered text byte-for-byte.
   itemLabelPlural = 'sites',
+  // Optional explicit singular — for nouns whose singular is not the plural minus a trailing "s"
+  // (e.g. "entries" -> "entry"). Omitted, the derived singular above applies unchanged.
+  itemLabelSingular,
 }: {
   page: number;
   pageSize: number;
@@ -34,11 +37,12 @@ export function ReportPagination({
   onPageChange: (page: number) => void;
   disabled?: boolean;
   itemLabelPlural?: string;
+  itemLabelSingular?: string;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = Math.min(total, page * pageSize);
-  const itemLabel = total === 1 ? itemLabelPlural.slice(0, -1) : itemLabelPlural;
+  const itemLabel = total === 1 ? (itemLabelSingular ?? itemLabelPlural.slice(0, -1)) : itemLabelPlural;
 
   return (
     <div className="flex items-center justify-between gap-3 border-t border-border px-[18px] py-2.5 print:hidden">

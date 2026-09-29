@@ -165,7 +165,10 @@ test.describe('Assignment Mismatch Readiness — Master User', () => {
     await openSiteFilterAndSelect(page, `E2E Site ${label}`);
     const table = page.getByTestId('amr-table');
     await expect(table.getByText(`E2E Employee ${label}`)).toBeVisible();
-    await expect(table.getByText('Split')).toBeVisible();
+    // Scoped to this fixture's own row and matched exactly — a bare substring "Split" also hits this
+    // fixture's own "E2E AMR Split Second Unit" name in the Payroll Unit(s) cell.
+    const row = table.getByRole('row').filter({ hasText: `E2E Employee ${label}` });
+    await expect(row.getByRole('cell', { name: 'Split', exact: true })).toBeVisible();
     await assertNoMutationControls(page);
   });
 });
