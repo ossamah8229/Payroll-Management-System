@@ -351,7 +351,7 @@ export function ReportsEmployeePayrollHistoryPage({ user }: { user: SessionUser 
       subtitle="One employee's cross-cycle original payroll results — corrections and settlements live in the detail view"
     >
       <div className="flex flex-col gap-4">
-        <Card>
+        <Card className="overflow-visible">
           <CardHeader>
             <PayrollPageToolbar
               title="Employee Payroll History"

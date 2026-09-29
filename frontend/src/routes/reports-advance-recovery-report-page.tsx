@@ -388,7 +388,7 @@ export function ReportsAdvanceRecoveryReportPage({ user }: { user: SessionUser }
       subtitle="Track current Advance balances and payroll-cycle recovery history."
     >
       <div className="flex flex-col gap-4">
-        <Card>
+        <Card className="overflow-visible">
           <CardHeader>
             <PayrollPageToolbar
               title="Advance Recovery Report"
