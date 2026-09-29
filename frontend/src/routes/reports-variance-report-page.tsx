@@ -411,7 +411,7 @@ export function ReportsVarianceReportPage({ user }: { user: SessionUser }) {
       subtitle="Employee-level Net Salary comparison between two payroll cycles — New/Departed/Continued, transfers, and correction context."
     >
       <div className="flex flex-col gap-4">
-        <Card>
+        <Card className="overflow-visible">
           <CardHeader>
             <PayrollPageToolbar
               title="Variance / Month-on-Month Report"

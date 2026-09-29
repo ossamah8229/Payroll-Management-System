@@ -321,7 +321,7 @@ export function StatementsPage({ user }: { user: SessionUser }) {
             describe how the on-screen view was found, not something a printed Statement needs to
             show alongside its data; matches `PayrollPageToolbar`'s own identical treatment of
             filters on every other print-enabled page. */}
-        <Card className="print:hidden">
+        <Card className="overflow-visible print:hidden">
           <CardHeader>
             <CardTitle>Select Statement</CardTitle>
           </CardHeader>
