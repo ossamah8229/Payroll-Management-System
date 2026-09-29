@@ -17351,7 +17351,8 @@ to a separate, later, separately-authorized phase.
 
 ### Verification
 
-Full 6-shard backend suite: **1,961/1,961 passed** (421 + 338 + 183 + 331 + 341 + 347). One
+Full 6-shard backend suite: **1,961/1,961 passed** (421 + 338 + 183 + 331 + 341 + 347) at the
+initial feature commit; **1,963/1,963** after `573506f` added two backend tests. One
 pre-existing, unrelated intermittent flake observed on shard 4's first run, confirmed
 non-reproducible on two immediate reruns (331/331 both times) — the failing suite is untouched by
 this branch's diff; not investigated further, consistent with this project's own documented
@@ -17363,7 +17364,8 @@ match (`'TESTBANK'` starts with `'TE'`, not `'TB'`) — the three stale rows wer
 `2026-09-01`, over three weeks old, unrelated to this branch's own work. Cleared via a direct
 delete of those three specific rows only (`prisma.bank.deleteMany({ where: { code: { in: [...] } } })`),
 confined entirely to the disposable local test database — never `payroll_manual`, never
-production. Full frontend suite: **1,112/1,112 passed** (75 files). Full root `typecheck`/`lint`/
+production. Full frontend suite: **1,112/1,112 passed** (75 files) at the initial feature commit;
+**1,113/1,113** after `573506f`; **1,118/1,118** (76 files) after the pagination-label fix below. Full root `typecheck`/`lint`/
 `build` all clean across every workspace (zero errors; the only lint warnings present are
 pre-existing, in files this branch never touches). Diff reviewed line-by-line for accidental
 mutation paths, schema changes, or financial-calculation changes: none found — confirmed by direct
@@ -17372,6 +17374,19 @@ grep (`.create(`/`.update(`/`.delete(`/`.upsert(`/`updateMany`/`deleteMany`/`cre
 two new `router.get` routes registered, and the frontend page's only `onClick` handlers are Clear
 Filters (local state), Export (a GET download), Try Again (refetch), and column-sort toggle (local
 state).
+
+E2E: the first full Playwright run had two deterministic failures in
+`32-assignment-mismatch-readiness.spec.ts`, fixed in `4386dd6` — (1) the page passed only
+`itemLabelPlural="entries"` to `ReportPagination`, whose derived singular rendered "Showing 1–1 of
+1 entrie"; fixed by a new optional `itemLabelSingular` prop (the page passes "entry"), with every
+existing caller that omits it rendering byte-for-byte unchanged text, locked by new
+`report-pagination.test.tsx` unit tests plus a page test; (2) the split-entry test's substring
+`getByText('Split')` also matched the fixture's own "E2E AMR Split Second Unit" name — replaced by
+an exact `role=cell` "Split" match scoped to the fixture employee's row, with no production UI
+change. After the fix: full E2E suite **192 passed, 8 skipped, 0 failed** (the 8 skips are
+pre-existing conditional `test.skip` guards in other specs; all 3 spec-32 tests ran and passed),
+root `typecheck`/`lint`/`build` clean again. Backend not rerun — no backend or shared source
+changed by the fix.
 
 ### Not done this checkpoint (by design, per the approved scope)
 

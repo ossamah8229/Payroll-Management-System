@@ -29,9 +29,15 @@ be enough to resume correctly without re-deriving context from scratch — per
 > unchanged). **No mutation surface added**: no Apply/classification/sync action on this report,
 > `applyEmployeeAssignmentToDraftPayrollEntry` and the Payroll Entry grid's own row action are
 > completely untouched. No schema/migration change. 16 new backend integration tests + frontend
-> hook/page tests + one new E2E spec (`32-assignment-mismatch-readiness.spec.ts`), all passing.
-> Full 6-shard backend suite **1,961/1,961**, frontend **1,112/1,112**, root
-> `typecheck`/`lint`/`build` all clean. One pre-existing, unrelated intermittent flake hit once on
+> hook/page tests + one new E2E spec (`32-assignment-mismatch-readiness.spec.ts`).
+> Full 6-shard backend suite **1,963/1,963**, frontend **1,118/1,118** (1,113 before the
+> pagination-label fix), E2E **192 passed / 8 skipped / 0 failed** (the 8 skips are pre-existing
+> conditional `test.skip` guards in other specs; all 3 spec-32 tests ran and passed), root
+> `typecheck`/`lint`/`build` all clean. The first E2E run had two deterministic spec-32 failures,
+> fixed in `4386dd6`: pagination rendered "1 entrie" (fixed via a new optional
+> `ReportPagination` `itemLabelSingular` prop — existing callers unchanged), and a substring
+> `getByText('Split')` selector also matched a fixture Unit name (now an exact row-scoped
+> `role=cell` match). One pre-existing, unrelated intermittent flake hit once on
 > shard 4 and confirmed non-reproducible on two immediate reruns (a suite untouched by this
 > branch's diff); one pre-existing stale-fixture data-hygiene gap found and cleared in the shared
 > local `payroll_dev` test database (three weeks-old orphaned `Bank` rows from an unrelated test
