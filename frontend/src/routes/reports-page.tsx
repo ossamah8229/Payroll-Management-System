@@ -102,14 +102,28 @@ const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
     // reports:view alone (frozen Checkpoint 1A backend decision) — no OR gate, unlike Salary
     // Release Report's own entry immediately above.
   },
+  {
+    title: 'Assignment Mismatch Readiness',
+    description:
+      'Draft payroll entries whose Site/Unit attribution no longer matches the employee’s current Employee Registry assignment — read-only, for review before Salary Release.',
+    to: '/reports/assignment-mismatch-readiness',
+    available: true,
+    // Bulk Assignment-Mismatch Readiness Audit (approved 2026-09-28 architecture review) — the
+    // exact same `payroll:entry OR payroll:view` gate the Payroll Entry grid itself uses
+    // (`payroll-entry.routes.ts`'s `VIEW_PERMISSIONS`), not `reports:view` alone: the approved
+    // audience is whoever can already see this same mismatch as a per-row amber indicator there.
+    requiredPermission: [PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.PAYROLL_VIEW],
+  },
 ];
 
 export function ReportsPage({ user }: { user: SessionUser }) {
-  // Widened from `reports:view` alone (Checkpoint 1B, Salary Release Report) so a payroll:view-only
-  // Finance user can reach the catalogue shell itself — every individual card below still
+  // Widened from `reports:view` alone (Checkpoint 1B, Salary Release Report — added `payroll:view`
+  // so a Finance user can reach the shell; Bulk Assignment-Mismatch Readiness Audit — added
+  // `payroll:entry` so a hypothetical custom role holding only that permission, without
+  // `reports:view`, can still reach the shell for its own card) — every individual card below still
   // independently gates on its own real requirement via `isCatalogueEntryVisible`, so this widened
   // top-level check alone can never expose a card such a user isn't actually authorized to open.
-  const canView = hasAnyPermission(user, [PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW]);
+  const canView = hasAnyPermission(user, [PERMISSIONS.REPORTS_VIEW, PERMISSIONS.PAYROLL_VIEW, PERMISSIONS.PAYROLL_ENTRY]);
 
   if (!canView) {
     return (

@@ -17270,7 +17270,9 @@ deliberately not investigated further here, per this checkpoint's own scope.
 2. **Bulk assignment-mismatch readiness audit** — a read-only reporting capability, needed before
    Salary Release, to enumerate every `Employee.siteId/unitId != PayrollEntry(/primary work line)`
    mismatch across a Draft cycle for payroll-staff review and classification (intentional
-   deputation vs. sync-required) — not implemented this checkpoint.
+   deputation vs. sync-required) — not implemented this checkpoint. **Implemented on branch
+   `codex/assignment-mismatch-readiness`, not yet merged — see this file's own "Bulk
+   Assignment-Mismatch Readiness Audit" entry below.**
 
 ### Final state
 
@@ -17279,3 +17281,125 @@ healthy (backend + frontend both live at the merge SHA, migration a clean no-op 
 payroll mutations). Salary Release and Finalize both untouched. No-cascade architecture preserved;
 Employee Registry assignment and payroll-period assignment remain two separate concepts, reconciled
 only by this one explicit, narrowly-eligible action — never automatically.
+
+## Bulk Assignment-Mismatch Readiness Audit — Implemented on Branch, Not Yet Merged (2026-09-28)
+
+Branch `codex/assignment-mismatch-readiness`, base `origin/main` @
+`2b97f43539ba7f840654197deb4e76461b05923e` (PR #23 merge). Implements the read-only reporting
+capability recorded as deferred work in the "Payroll Deputation Sync — PR #22" checkpoint above:
+a strictly read-only, Draft-cycle-scoped audit enumerating every `PayrollEntry` whose
+payroll-period Site/Unit attribution (`PayrollEntry.siteId`/`PayrollEntryWorkLine.unitId`) no
+longer matches the employee's current Employee Registry assignment (`Employee.siteId`/`.unitId`),
+for payroll-staff review before Salary Release. Approved architecture review authorized this exact
+scope; classification workflow, bulk Apply, and automatic synchronization are explicitly deferred
+to a separate, later, separately-authorized phase.
+
+### What shipped
+
+- Backend: `GET /api/v1/reports/assignment-mismatch-readiness` (list) and its `/export` sibling
+  (CSV/XLSX), gated on `payroll:entry` OR `payroll:view` — the same `VIEW_PERMISSIONS` gate the
+  Payroll Entry grid itself uses, not `reports:view`. New
+  `assignment-mismatch-readiness.service.ts`: fetches every unreleased, `payoutOutcome`-unresolved
+  entry for one Draft cycle (already site-scoped), evaluates the mismatch predicate in application
+  memory (comparing across `PayrollEntry`/`PayrollEntryWorkLine` vs. `Employee`, which cannot be
+  expressed as a single Prisma `WHERE` across relations — mirrors Variance Report's own established
+  precedent for the identical class of problem), then applies shape/held/safe-shape-only filters,
+  sort, pagination, and totals over that materialized set.
+- The predicate evaluates **every** work line, not only the primary one — a split entry whose
+  primary line matches but a secondary line diverges still surfaces. This is a deliberate
+  correctness improvement over the pre-existing per-row Payroll Entry grid indicator's own
+  primary-line-only simplification (that indicator itself is unchanged, still primary-line-only,
+  by design — out of this checkpoint's scope).
+- Held entries are included, flagged `held: true` — `hold` never affects Draft editability, only
+  release-sweep eligibility (`payroll-entry.service.ts`'s own frozen rule, unchanged). Released and
+  `payoutOutcome`-resolved entries are excluded outright, never shown, never implied to need a fix.
+  A non-Draft `cycleId` is rejected with 400. Archived cycles are explicitly rejected too, because
+  the report is limited to actionable Draft payroll cycles.
+- Frontend: new Reports catalogue card + dedicated page (`/reports/assignment-mismatch-readiness`),
+  scoped to the single current Draft cycle (`useCurrentPayrollCycle` — only one Draft cycle ever
+  exists system-wide, `docs/architecture/workflows/payroll-lifecycle.md` §4), with Site/Unit/
+  Shape/Held/Safe-shape-only filters, sortable columns, server-side pagination, and CSV/XLSX
+  export. Reports catalogue page-level gate widened to include `payroll:entry` (alongside the
+  existing `reports:view`/`payroll:view`) so a role holding only that permission can still reach
+  the shell — mirrors the exact precedent Salary Release Report's own `payroll:view` widening set.
+- **No mutation surface added.** No Apply/classification/sync action exists on this report — the
+  informational-only `safeOneClickShape` badge mirrors (never imports, never changes)
+  `applyEmployeeAssignmentToDraftPayrollEntry`'s own eligibility check. The pre-existing "Apply
+  current assignment" row action on the Payroll Entry grid, and that action's own implementation,
+  are completely untouched by this branch.
+- No schema/migration change — every field the predicate needs was already loaded by
+  `listPayrollEntries`'s existing includes.
+
+### Tests
+
+- Backend: 17 new integration tests
+  (`backend/tests/assignment-mismatch-readiness.test.ts`) — Site-only/Unit-only/combined mismatch,
+  the split-entry "primary line matches, secondary diverges" regression, Held inclusion,
+  released/`payoutOutcome`-resolved exclusion, non-Draft-cycle rejection (400, RELEASED and
+  ARCHIVED), RBAC 403 (a dedicated zero-permission `TEST_`-prefixed role, not the real shared `PAYROLL_STAFF` role — see
+  the test file's own doc comment on why that real role can't be trusted to hold zero permissions
+  in this shared local database), site-scoping, explicit-filter-to-inaccessible-site rejection
+  (403), pagination/export row-count parity, shape/safe-shape-only filtering.
+- Frontend: hook tests (URL builders, `enabled` gating, stable query keys) and page tests (RBAC for
+  both `payroll:entry`-only and `payroll:view`-only, an explicit strictly-no-mutation-control
+  assertion, empty states — no Draft cycle / no mismatches — stat cards, split-line multi-row
+  rendering, filter wiring).
+- E2E: `tests/e2e/specs/32-assignment-mismatch-readiness.spec.ts` — real-browser navigation, Site
+  filter narrowing, split-entry Shape rendering, an explicit no-mutation-control assertion,
+  pagination text, CSV export content (and absence of any financial column), and a Site-scoping
+  test (a site-scoped user sees only their own mismatch; the other Site is never offered as a
+  filter option). Runs only against the harness's own disposable, isolated E2E database.
+
+### Verification
+
+Full 6-shard backend suite: **1,961/1,961 passed** (421 + 338 + 183 + 331 + 341 + 347) at the
+initial feature commit; **1,963/1,963** after `573506f` added two backend tests. One
+pre-existing, unrelated intermittent flake observed on shard 4's first run, confirmed
+non-reproducible on two immediate reruns (331/331 both times) — the failing suite is untouched by
+this branch's diff; not investigated further, consistent with this project's own documented
+flake-handling precedent (e.g. the Backup Packages concurrency-race follow-up recorded above). One
+pre-existing stale-fixture data-hygiene gap found and cleared in the shared local `payroll_dev`
+database: `payroll-entry-import-export.test.ts` creates Banks with hardcoded codes
+`TESTBANK`/`ORIGBANK`/`CORRBANK` that `cleanTestData()`'s own `'TB'`-prefix cleanup rule doesn't
+match (`'TESTBANK'` starts with `'TE'`, not `'TB'`) — the three stale rows were dated
+`2026-09-01`, over three weeks old, unrelated to this branch's own work. Cleared via a direct
+delete of those three specific rows only (`prisma.bank.deleteMany({ where: { code: { in: [...] } } })`),
+confined entirely to the disposable local test database — never `payroll_manual`, never
+production. Full frontend suite: **1,112/1,112 passed** (75 files) at the initial feature commit;
+**1,113/1,113** after `573506f`; **1,118/1,118** (76 files) after the pagination-label fix below. Full root `typecheck`/`lint`/
+`build` all clean across every workspace (zero errors; the only lint warnings present are
+pre-existing, in files this branch never touches). Diff reviewed line-by-line for accidental
+mutation paths, schema changes, or financial-calculation changes: none found — confirmed by direct
+grep (`.create(`/`.update(`/`.delete(`/`.upsert(`/`updateMany`/`deleteMany`/`createMany`/
+`$transaction`/`router.post|patch|put|delete`) across every new/changed file, zero matches; only
+two new `router.get` routes registered, and the frontend page's only `onClick` handlers are Clear
+Filters (local state), Export (a GET download), Try Again (refetch), and column-sort toggle (local
+state).
+
+E2E: the first full Playwright run had two deterministic failures in
+`32-assignment-mismatch-readiness.spec.ts`, fixed in `4386dd6` — (1) the page passed only
+`itemLabelPlural="entries"` to `ReportPagination`, whose derived singular rendered "Showing 1–1 of
+1 entrie"; fixed by a new optional `itemLabelSingular` prop (the page passes "entry"), with every
+existing caller that omits it rendering byte-for-byte unchanged text, locked by new
+`report-pagination.test.tsx` unit tests plus a page test; (2) the split-entry test's substring
+`getByText('Split')` also matched the fixture's own "E2E AMR Split Second Unit" name — replaced by
+an exact `role=cell` "Split" match scoped to the fixture employee's row, with no production UI
+change. After the fix: full E2E suite **192 passed, 8 skipped, 0 failed** (the 8 skips are
+pre-existing conditional `test.skip` guards in other specs; all 3 spec-32 tests ran and passed),
+root `typecheck`/`lint`/`build` clean again. Backend not rerun — no backend or shared source
+changed by the fix.
+
+### Not done this checkpoint (by design, per the approved scope)
+
+No classification/review-state field or persistence, no bulk Apply, no automatic synchronization,
+no change to `applyEmployeeAssignmentToDraftPayrollEntry`'s eligibility predicate or
+implementation, no change to `calcNet`, release behavior, Finalize, or Salary Release. No
+production access of any kind this checkpoint — implemented and verified entirely against
+local/disposable databases (`payroll_dev` for backend integration tests, a Playwright-managed
+disposable database for E2E). **Not merged, not deployed, no tag created** — awaiting review.
+
+### Current state
+
+Branch `codex/assignment-mismatch-readiness` (base `origin/main` @ `2b97f43`), feature + docs
+committed on the branch, not merged into `main`. Production untouched — `payroll_manual` and
+production were never accessed this checkpoint.

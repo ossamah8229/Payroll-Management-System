@@ -5,6 +5,9 @@ import {
   advanceRecoveryReportEmployeeLookupQuerySchema,
   advanceRecoveryReportExportQuerySchema,
   advanceRecoveryReportListQuerySchema,
+  ASSIGNMENT_MISMATCH_READINESS_EXPORT_MAX_ROWS,
+  assignmentMismatchReadinessExportQuerySchema,
+  assignmentMismatchReadinessListQuerySchema,
   DEDUCTION_REPORT_EXPORT_MAX_ROWS,
   deductionReportExportQuerySchema,
   deductionReportListQuerySchema,
@@ -27,6 +30,7 @@ import {
   varianceReportExportQuerySchema,
   varianceReportListQuerySchema,
   type AdvanceRecoveryReportExportLimitError,
+  type AssignmentMismatchReadinessExportLimitError,
   type DeductionReportExportLimitError,
   type EmployeePayrollHistoryExportLimitError,
   type OvertimeReportExportLimitError,
@@ -86,6 +90,12 @@ import {
   getVarianceReportList,
   searchVarianceReportEmployees,
 } from './variance-report.service';
+import {
+  buildAssignmentMismatchReadinessExportData,
+  exportAssignmentMismatchReadinessToCsv,
+  exportAssignmentMismatchReadinessToXlsx,
+  getAssignmentMismatchReadinessList,
+} from './assignment-mismatch-readiness.service';
 
 function requireCycleIdQuery(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) {
@@ -904,6 +914,90 @@ reportsRouter.get('/variance/export', VARIANCE_REPORT_PERMISSION, async (req, re
     });
 
     const filename = `variance-report.${query.format}`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      query.format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Bulk Assignment-Mismatch Readiness Audit (approved 2026-09-28 architecture review). Gated by
+ * `payroll:entry` OR `payroll:view` — the exact same `VIEW_PERMISSIONS` gate the Payroll Entry
+ * grid itself uses (`payroll-entry.routes.ts`), not `reports:view` — this is the same audience that
+ * already sees this same mismatch surfaced as a per-row amber indicator there. Strictly read-only:
+ * no route below ever writes to `PayrollEntry`, `PayrollEntryWorkLine`, or `Employee` — see
+ * `assignment-mismatch-readiness.service.ts`'s own top-of-module doc comment.
+ */
+const ASSIGNMENT_MISMATCH_READINESS_PERMISSION = requirePermission([PERMISSIONS.PAYROLL_ENTRY, PERMISSIONS.PAYROLL_VIEW]);
+
+reportsRouter.get('/assignment-mismatch-readiness', ASSIGNMENT_MISMATCH_READINESS_PERMISSION, async (req, res, next) => {
+  try {
+    const query = assignmentMismatchReadinessListQuerySchema.parse(req.query);
+    const report = await getAssignmentMismatchReadinessList(req.currentUser!, query);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.viewed',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: {
+        reportType: 'assignment_mismatch_readiness',
+        cycleId: query.cycleId,
+        page: report.page,
+        pageSize: report.pageSize,
+        total: report.total,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Preflight-counts before generating any CSV/XLSX output, mirroring every other report's own
+ * export route. Always the complete filtered dataset — no `page`/`pageSize` accepted at all. */
+reportsRouter.get('/assignment-mismatch-readiness/export', ASSIGNMENT_MISMATCH_READINESS_PERMISSION, async (req, res, next) => {
+  try {
+    const query = assignmentMismatchReadinessExportQuerySchema.parse(req.query);
+    const data = await buildAssignmentMismatchReadinessExportData(req.currentUser!, query);
+
+    if (data.totalMatching > ASSIGNMENT_MISMATCH_READINESS_EXPORT_MAX_ROWS) {
+      const errorBody: AssignmentMismatchReadinessExportLimitError = {
+        code: 'EXPORT_ROW_LIMIT_EXCEEDED',
+        matchingCount: data.totalMatching,
+        maxRows: ASSIGNMENT_MISMATCH_READINESS_EXPORT_MAX_ROWS,
+        message: `This export matches ${data.totalMatching} rows, which exceeds the ${ASSIGNMENT_MISMATCH_READINESS_EXPORT_MAX_ROWS}-row limit for a single export. Narrow your filters (site, unit, shape, or held) and try again.`,
+      };
+      res.status(413).json({ error: errorBody });
+      return;
+    }
+
+    const { buffer, rowCount } =
+      query.format === 'xlsx'
+        ? await exportAssignmentMismatchReadinessToXlsx(data.rows)
+        : exportAssignmentMismatchReadinessToCsv(data.rows);
+
+    await recordAuditLog({
+      actorUserId: req.currentUser!.id,
+      action: 'report.exported',
+      entityType: 'PayrollCycle',
+      entityId: query.cycleId,
+      metadata: { reportType: 'assignment_mismatch_readiness', format: query.format, cycleId: query.cycleId, rowCount },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+    });
+
+    const filename = `assignment-mismatch-readiness.${query.format}`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader(
       'Content-Type',
